@@ -1068,20 +1068,14 @@ def test_signalled_dirty_run_does_not_classify_stderr_authentication_words(
     assert (root / "src/partial.py").exists()
 
 
-def test_subprocess_capture_retains_trailing_failure_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            args=[],
-            returncode=1,
-            stdout="start" + "x" * 1_000_010 + "usage limit reached",
-            stderr="private stderr",
-        )
-
-    monkeypatch.setattr(subprocess, "run", run)
+def test_subprocess_capture_retains_trailing_failure_marker(tmp_path: Path) -> None:
     invocation = SubprocessCodexCommandRunner().run(
-        ("unused",),
+        (
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('start' + 'x' * 1_000_010 + 'usage limit reached'); "
+            "sys.exit(1)",
+        ),
         cwd=tmp_path,
         environment={},
         stdin="",
@@ -1092,24 +1086,21 @@ def test_subprocess_capture_retains_trailing_failure_marker(
     assert invocation.stdout.endswith("usage limit reached")
 
 
-def test_subprocess_timeout_retains_bounded_partial_capture(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise subprocess.TimeoutExpired(
-            cmd="unused", timeout=1, output=b"partial stdout", stderr=b"partial stderr\xff"
-        )
-
-    monkeypatch.setattr(subprocess, "run", run)
+def test_subprocess_timeout_retains_bounded_partial_capture(tmp_path: Path) -> None:
     invocation = SubprocessCodexCommandRunner().run(
-        ("unused",),
+        (
+            sys.executable,
+            "-c",
+            "import os,time; os.write(1,b'partial stdout'); "
+            "os.write(2,b'partial stderr\\xff'); time.sleep(10)",
+        ),
         cwd=tmp_path,
         environment={},
         stdin="",
-        timeout_seconds=1,
+        timeout_seconds=0.2,
     )
     assert invocation.timed_out
-    assert invocation.returncode == -1
+    assert invocation.returncode < 0
     assert invocation.stdout == "partial stdout"
     assert invocation.stderr == "partial stderr\ufffd"
 

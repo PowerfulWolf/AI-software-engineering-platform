@@ -19,9 +19,37 @@ SUPERVISOR_LOCK_OWNER_FILE="$SUPERVISOR_LOCK_DIR/owner"
 LOG_FILE="$SERVICE_STATE_DIR/ase-console.log"
 APPLY_REQUEST_FILE="$SERVICE_STATE_DIR/configuration-apply.request"
 APPLY_STATE_FILE="$SERVICE_STATE_DIR/configuration-apply.json"
+LIFECYCLE_HELPER="$SCRIPT_DIR/ase-console-lifecycle.py"
+LIFECYCLE_PYTHON="$PROJECT_ROOT/.venv/bin/python"
+SHUTDOWN_TIMEOUT=${ASE_SHUTDOWN_TIMEOUT_SECONDS:-300}
 
 usage() {
-  echo "Usage: $0 {start|stop|restart|status|logs}"
+  echo "Usage: $0 {start|stop|restart|resume|status|logs}"
+}
+
+lifecycle() {
+  if [ ! -x "$LIFECYCLE_PYTHON" ] || [ ! -f "$LIFECYCLE_HELPER" ] || [ -L "$LIFECYCLE_HELPER" ]; then
+    echo "受控重启组件不可用，请先完成 uv sync；未停止原服务。" >&2
+    return 1
+  fi
+  "$LIFECYCLE_PYTHON" "$LIFECYCLE_HELPER" "$@"
+}
+
+with_replacement_lock() {
+  require_safe_state_dir
+  if [ "$1" = start ] && [ ! -x "$SERVICE_EXECUTABLE" ]; then
+    echo "error: $SERVICE_EXECUTABLE is missing; run 'uv sync' first" >&2
+    return 2
+  fi
+  lifecycle locked "$@"
+}
+
+controlled_stop_child() {
+  current_pid=$1
+  shutdown_request=$(lifecycle request "$current_pid" SHUTDOWN "$SHUTDOWN_TIMEOUT") || return 1
+  echo "正在安全收尾；暂停新操作，等待当前执行和记录保存完成。"
+  lifecycle wait "$current_pid" "$shutdown_request" || return 1
+  rm -f "$PID_FILE"
 }
 
 require_safe_state_dir() {
@@ -154,6 +182,7 @@ PY
 }
 
 launch_child() {
+  previous_instance=$(lifecycle instance-id) || return 1
   # Keep values loaded from runtime.env inside the child-launch subshell. The
   # long-lived supervisor must not retain a secret that a later save removes.
   (
@@ -162,6 +191,7 @@ launch_child() {
     # or unsafe runtime.env explicitly instead of continuing with stale input.
     load_runtime_environment || exit 1
     export ASE_CONFIG="$CONFIG_FILE"
+    export ASE_SERVICE_STATE_DIR="$SERVICE_STATE_DIR"
     : >>"$LOG_FILE"
     child_pid=$(launch_detached "$SERVICE_EXECUTABLE") || exit 1
     # Local Workers cannot renew their leases while macOS is idle-asleep.
@@ -351,8 +381,8 @@ write_apply_state() {
   apply_request_id=$1
   apply_status=$2
   case "$apply_status" in
-    SUCCEEDED) apply_summary='Configuration was applied.' ;;
-    FAILED) apply_summary='Configuration remains saved but the Console could not be restarted. Use the service script to inspect status and retry safely.' ;;
+    SUCCEEDED) apply_summary='配置已应用, 服务已安全重启。' ;;
+    FAILED) apply_summary='配置已保存, 但控制台未完成重启。请查看服务状态; 若当前工作尚未收尾, 可稍后重试或解除安全停止。' ;;
     *) return 1 ;;
   esac
   umask 077
@@ -369,14 +399,17 @@ read_apply_state_status() {
   pending_summary='Configuration apply is in progress.'
   succeeded_summary='Configuration was applied.'
   failed_summary='Configuration remains saved but the Console could not be restarted. Use the service script to inspect status and retry safely.'
+  pending_summary_zh='配置已保存, 正在等待当前工作安全收尾后重启服务。'
+  succeeded_summary_zh='配置已应用, 服务已安全重启。'
+  failed_summary_zh='配置已保存, 但控制台未完成重启。请查看服务状态; 若当前工作尚未收尾, 可稍后重试或解除安全停止。'
   case "$apply_state_body" in
-    "{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$pending_summary\",\"status\":\"PENDING\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$pending_summary\", \"status\": \"PENDING\"}")
+    "{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$pending_summary\",\"status\":\"PENDING\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$pending_summary\", \"status\": \"PENDING\"}"|"{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$pending_summary_zh\",\"status\":\"PENDING\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$pending_summary_zh\", \"status\": \"PENDING\"}")
       printf '%s\n' PENDING
       ;;
-    "{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$succeeded_summary\",\"status\":\"SUCCEEDED\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$succeeded_summary\", \"status\": \"SUCCEEDED\"}")
+    "{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$succeeded_summary\",\"status\":\"SUCCEEDED\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$succeeded_summary\", \"status\": \"SUCCEEDED\"}"|"{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$succeeded_summary_zh\",\"status\":\"SUCCEEDED\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$succeeded_summary_zh\", \"status\": \"SUCCEEDED\"}")
       printf '%s\n' SUCCEEDED
       ;;
-    "{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$failed_summary\",\"status\":\"FAILED\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$failed_summary\", \"status\": \"FAILED\"}")
+    "{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$failed_summary\",\"status\":\"FAILED\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$failed_summary\", \"status\": \"FAILED\"}"|"{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$failed_summary_zh\",\"status\":\"FAILED\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$failed_summary_zh\", \"status\": \"FAILED\"}")
       printf '%s\n' FAILED
       ;;
     *) return 1 ;;
@@ -388,16 +421,26 @@ stop_child_for_apply() {
   if ! is_our_process "$current_pid" && ! is_managed_process "$current_pid"; then
     return 1
   fi
-  kill -TERM "$current_pid"
-  remaining=80
-  while kill -0 "$current_pid" 2>/dev/null && [ "$remaining" -gt 0 ]; do
-    sleep 0.25
-    remaining=$((remaining - 1))
-  done
-  if kill -0 "$current_pid" 2>/dev/null; then
-    return 1
+  controlled_stop_child "$current_pid"
+}
+
+apply_configuration() {
+  apply_request_id=$1
+  [ -f "$APPLY_REQUEST_FILE" ] && [ ! -L "$APPLY_REQUEST_FILE" ] || return 0
+  [ "$(sed -n '1p' "$APPLY_REQUEST_FILE")" = "$apply_request_id" ] || return 1
+  [ "$(read_apply_state_status "$apply_request_id" 2>/dev/null)" = PENDING ] || return 0
+  rm -f "$APPLY_REQUEST_FILE"
+  if stop_child_for_apply; then
+    if launch_child; then sleep 1; fi
+    if [ "${started_pid:-}" ] && is_our_process "$started_pid" && \
+      lifecycle started "$started_pid" "$previous_instance"; then
+      write_apply_state "$apply_request_id" SUCCEEDED
+    else
+      write_apply_state "$apply_request_id" FAILED
+    fi
+  else
+    write_apply_state "$apply_request_id" FAILED
   fi
-  rm -f "$PID_FILE"
 }
 
 supervise_service() {
@@ -416,6 +459,8 @@ supervise_service() {
     pending_request_id=$(sed -n \
       -e 's/^{"request_id":"\(configuration_apply_[0-9a-f]\{32\}\)","safe_summary":"Configuration apply is in progress.","status":"PENDING"}$/\1/p' \
       -e 's/^{"request_id": "\(configuration_apply_[0-9a-f]\{32\}\)", "safe_summary": "Configuration apply is in progress.", "status": "PENDING"}$/\1/p' \
+      -e 's/^{"request_id":"\(configuration_apply_[0-9a-f]\{32\}\)","safe_summary":"配置已保存, 正在等待当前工作安全收尾后重启服务。","status":"PENDING"}$/\1/p' \
+      -e 's/^{"request_id": "\(configuration_apply_[0-9a-f]\{32\}\)", "safe_summary": "配置已保存, 正在等待当前工作安全收尾后重启服务。", "status": "PENDING"}$/\1/p' \
       "$APPLY_STATE_FILE")
     if [ -n "$pending_request_id" ] && \
       [ "$(read_apply_state_status "$pending_request_id" 2>/dev/null)" = "PENDING" ]; then
@@ -441,21 +486,9 @@ supervise_service() {
                 sleep 0.25
                 continue
                 ;;
-              PENDING) rm -f "$APPLY_REQUEST_FILE" ;;
+              PENDING) ;;
             esac
-            if stop_child_for_apply; then
-              if launch_child; then
-                sleep 1
-              fi
-              if [ "${started_pid:-}" ] && is_our_process "$started_pid"; then
-                write_apply_state "$apply_request_id" SUCCEEDED
-              else
-                rm -f "$PID_FILE"
-                write_apply_state "$apply_request_id" FAILED
-              fi
-            else
-              write_apply_state "$apply_request_id" FAILED
-            fi
+            lifecycle locked apply "$apply_request_id" || true
             ;;
         esac
       else
@@ -483,6 +516,11 @@ start_service() {
     echo "error: PID file does not identify a managed ase-console; no process replaced" >&2
     exit 1
   fi
+  if current_pid=$(read_pid 2>/dev/null); then
+    lifecycle dead "$current_pid" || return 1
+  else
+    lifecycle initial || return 1
+  fi
   if [ ! -x "$SERVICE_EXECUTABLE" ]; then
     echo "error: $SERVICE_EXECUTABLE is missing; run 'uv sync' first" >&2
     exit 2
@@ -495,6 +533,7 @@ start_service() {
     tail -n 30 "$LOG_FILE" >&2 || true
     exit 1
   fi
+  lifecycle started "$started_pid" "$previous_instance" || return 1
   if ! start_supervisor; then
     stop_child_for_apply || true
     echo "error: ase-console supervisor could not be started safely" >&2
@@ -507,11 +546,13 @@ start_service() {
 stop_service() {
   require_safe_state_dir
   if ! current_pid=$(read_pid 2>/dev/null); then
+    lifecycle initial || return 1
     stop_supervisor
     echo "ase-console is not running"
     return 0
   fi
   if ! process_exists "$current_pid"; then
+    lifecycle dead "$current_pid" || return 1
     rm -f "$PID_FILE"
     stop_supervisor
     echo "ase-console is not running (removed stale PID $current_pid)"
@@ -522,23 +563,23 @@ stop_service() {
     echo "remove the stale PID file after inspecting it: $PID_FILE" >&2
     exit 1
   fi
-  stop_supervisor
   if ! is_our_process "$current_pid"; then
     managed_executable=$(read_managed_executable)
     echo "stopping managed ase-console from $managed_executable"
   fi
-  kill -TERM "$current_pid"
-  remaining=80
-  while kill -0 "$current_pid" 2>/dev/null && [ "$remaining" -gt 0 ]; do
-    sleep 0.25
-    remaining=$((remaining - 1))
-  done
-  if kill -0 "$current_pid" 2>/dev/null; then
-    echo "error: ase-console did not stop within 20 seconds; process left intact" >&2
-    exit 1
-  fi
-  rm -f "$PID_FILE"
+  controlled_stop_child "$current_pid" || return 1
+  stop_supervisor
   echo "ase-console stopped"
+}
+
+resume_service() {
+  current_pid=$(read_pid 2>/dev/null) || return 1
+  if ! is_our_process "$current_pid" && ! is_managed_process "$current_pid"; then
+    echo "服务身份无法核实；未修改服务。" >&2
+    return 1
+  fi
+  resume_request=$(lifecycle request "$current_pid" RESUME "$SHUTDOWN_TIMEOUT") || return 1
+  lifecycle wait "$current_pid" "$resume_request"
 }
 
 status_service() {
@@ -546,12 +587,14 @@ status_service() {
   if current_pid=$(read_pid 2>/dev/null); then
     if is_our_process "$current_pid"; then
       echo "ase-console is running (pid $current_pid)"
+      lifecycle status "$current_pid" || return 1
       echo "log: $LOG_FILE"
       return 0
     fi
     if is_managed_process "$current_pid"; then
       managed_executable=$(read_managed_executable)
       echo "ase-console is running from $managed_executable (pid $current_pid)"
+      lifecycle status "$current_pid" || return 1
       echo "log: $LOG_FILE"
       return 0
     fi
@@ -561,11 +604,17 @@ status_service() {
 }
 
 case "${1:-}" in
-  start) start_service ;;
-  stop) stop_service ;;
-  restart)
-    stop_service
-    start_service
+  start|stop|restart|resume) with_replacement_lock "$1" ;;
+  locked)
+    lifecycle verify-lock || exit 1
+    case "${2:-}" in
+      start) start_service ;;
+      stop) stop_service ;;
+      restart) stop_service && start_service ;;
+      resume) resume_service ;;
+      apply) apply_configuration "${3:-}" ;;
+      *) exit 2 ;;
+    esac
     ;;
   status) status_service ;;
   supervise) supervise_service ;;

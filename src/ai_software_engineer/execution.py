@@ -18,6 +18,12 @@ from pydantic import Field, StrictBool, StrictInt
 from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.git import WorkspacePolicy
+from ai_software_engineer.owned_processes import (
+    OwnedProcessesUncertain,
+    OwnedProcessObservation,
+    finish_owned_process,
+    observe_owned_process,
+)
 
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 _DEFAULT_ENVIRONMENT_ALLOWLIST = ("PATH", "LANG", "LC_ALL")
@@ -150,6 +156,7 @@ class SubprocessCommandExecutor:
         )
         started = time.monotonic()
         process: subprocess.Popen[bytes] | None = None
+        ownership: OwnedProcessObservation | None = None
         collectors: tuple[_OutputCollector, _OutputCollector] | None = None
         drain_threads: tuple[threading.Thread, threading.Thread] | None = None
         try:
@@ -164,6 +171,7 @@ class SubprocessCommandExecutor:
                 start_new_session=True,
                 pass_fds=self._execution_guard.inherited_fds if self._execution_guard else (),
             )
+            ownership = observe_owned_process(process, kind="tool")
             if process.stdout is None or process.stderr is None:
                 raise CommandExecutionError("command output pipes were not created")
             collectors = (
@@ -201,25 +209,20 @@ class SubprocessCommandExecutor:
         except subprocess.TimeoutExpired as error:
             duration_ms = _duration_ms(started)
             if process is not None:
-                _terminate_process_group(process)
-            if drain_threads is not None:
-                _join_drain_threads(drain_threads)
+                _finish_owned_command(process, drain_threads, collectors, ownership, terminate=True)
             raise CommandTimedOut(authorized, duration_ms) from error
         except OSError as error:
             if process is not None:
-                _terminate_process_group(process)
+                _finish_owned_command(process, drain_threads, collectors, ownership, terminate=True)
             raise CommandExecutionError("command could not start") from error
         except BaseException:
             if process is not None:
-                _terminate_process_group(process)
-            if drain_threads is not None:
-                _join_drain_threads(drain_threads)
+                _finish_owned_command(process, drain_threads, collectors, ownership, terminate=True)
             raise
 
         if collectors is None or drain_threads is None:
             raise CommandExecutionError("command output capture was not initialized")
-        _ensure_process_group_stopped(process)
-        _join_drain_threads(drain_threads)
+        _finish_owned_command(process, drain_threads, collectors, ownership, terminate=False)
         stdout_text, stdout_truncated = collectors[0].result()
         stderr_text, stderr_truncated = collectors[1].result()
         return CommandResult(
@@ -274,7 +277,8 @@ class _OutputCollector:
         self._max_output_bytes = max_output_bytes
         self._buffer = bytearray()
         self._truncated = False
-        self._error: OSError | None = None
+        self._error: OSError | ValueError | None = None
+        self._eof = False
 
     def drain(self, stream: BinaryIO) -> None:
         try:
@@ -284,10 +288,15 @@ class _OutputCollector:
                     self._buffer.extend(chunk[:remaining])
                 if len(chunk) > remaining:
                     self._truncated = True
-        except OSError as error:
+            self._eof = True
+        except (OSError, ValueError) as error:
             self._error = error
         finally:
             stream.close()
+
+    @property
+    def drain_complete(self) -> bool:
+        return self._eof and self._error is None
 
     def result(self) -> tuple[str, bool]:
         if self._error is not None:
@@ -297,6 +306,42 @@ class _OutputCollector:
 
 def _duration_ms(started: float) -> int:
     return max(0, int((time.monotonic() - started) * 1000))
+
+
+def _record_owned_stop(ownership: OwnedProcessObservation | None) -> None:
+    if ownership is not None:
+        try:
+            ownership.stopped(output_drained=True)
+        except OwnedProcessesUncertain as error:
+            raise CommandExecutionUncertain("owned command stop remains unknown") from error
+
+
+def _finish_owned_command(
+    process: subprocess.Popen[bytes],
+    drain_threads: tuple[threading.Thread, threading.Thread] | None,
+    collectors: tuple[_OutputCollector, _OutputCollector] | None,
+    ownership: OwnedProcessObservation | None,
+    *,
+    terminate: bool,
+) -> None:
+    try:
+        if terminate:
+            _terminate_process_group(process)
+        else:
+            _ensure_process_group_stopped(process)
+        if drain_threads is not None:
+            _join_drain_threads(drain_threads)
+            if collectors is None or not all(value.drain_complete for value in collectors):
+                raise CommandExecutionUncertain("owned command output EOF remains unknown")
+        else:
+            # Capture setup failed after spawn. No reader ran; verify actual EOF
+            # within the cleanup bound instead of claiming descriptor-close proof.
+            finish_owned_process(process, ownership, output_drained=False)
+        _record_owned_stop(ownership)
+    except BaseException:
+        if ownership is not None:
+            ownership.uncertain()
+        raise
 
 
 def _join_drain_threads(threads: tuple[threading.Thread, threading.Thread]) -> None:
@@ -340,6 +385,13 @@ def _ensure_process_group_stopped(process: subprocess.Popen[bytes]) -> None:
             os.killpg(process.pid, 0)
         except ProcessLookupError:
             return
+        except PermissionError as error:
+            # macOS can expose an unreaped descendant group as EPERM briefly.
+            # Only a later ESRCH proves stop; timeout stays uncertain.
+            if time.monotonic() >= deadline:
+                raise CommandExecutionUncertain("owned command group state is unknown") from error
+            time.sleep(0.01)
+            continue
         except OSError as error:
             raise CommandExecutionUncertain("owned command group state is unknown") from error
         try:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Event, get_ident
+from threading import Event, Thread, get_ident
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from starlette.types import Message, Scope
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.config import ProductionConfig, ProductionConfigError
 from ai_software_engineer.domain.model import WirePayload
+from ai_software_engineer.knowledge.index import KnowledgeIndexWorker
 from ai_software_engineer.multi_directory.attachments import RequirementScreenshot
 from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
 from ai_software_engineer.team_workspace import TeamWorkspace
@@ -31,11 +33,18 @@ from ai_software_engineer.web_console import (
     create_console_app,
     transport,
 )
-from ai_software_engineer.web_console.administration import SettingsSnapshot
+from ai_software_engineer.web_console.administration import AdministrationError, SettingsSnapshot
+from ai_software_engineer.web_console.core import ProjectConsole
 from ai_software_engineer.web_console.host import production_console_app
-from ai_software_engineer.web_console.models import CONSOLE_INTENT_ADAPTER, ConsoleAction
+from ai_software_engineer.web_console.models import (
+    CONSOLE_INTENT_ADAPTER,
+    ConsoleAction,
+    ConsoleCommandResult,
+)
+from ai_software_engineer.web_console.shutdown import ShutdownResult, ShutdownState
 from ai_software_engineer.web_console.store import ConsoleOperationStore
 from ai_software_engineer.web_console.transport import _screenshot_body
+from tests.web_console.test_core import _create_intent, _Executor
 
 
 class _Console:
@@ -47,9 +56,17 @@ class _Console:
     def start(self) -> None:
         self.started = True
 
-    def close(self, *, timeout: float = 5.0) -> None:
-        assert timeout == 5.0
+    def begin_shutdown(self) -> ShutdownResult:
+        return ShutdownResult(state=ShutdownState.DRAINING, safe_summary="测试服务排空中。")
+
+    def await_shutdown(self, timeout: float) -> ShutdownResult:
         self.closed = True
+        return ShutdownResult(state=ShutdownState.READY, safe_summary="测试服务已收尾。")
+
+    def cancel_shutdown(self, *, before_resume: Callable[[], None] | None = None) -> ShutdownResult:
+        if before_resume is not None:
+            before_resume()
+        return ShutdownResult(state=ShutdownState.RUNNING, safe_summary="测试服务恢复。")
 
     def submit(self, intent: ConsoleIntent, *, idempotency_key: str) -> ConsoleOperation:
         return self.store.submit(
@@ -966,3 +983,132 @@ def test_knowledge_upload_is_async_and_failed_job_has_safe_retry(
         )
         assert "sk-do-not-log" not in str(failed)
         assert "sk-do-not-log" not in caplog.text
+
+
+def test_cancelled_http_write_retains_worker_until_real_finish(tmp_path: Path) -> None:
+    entered, release = Event(), Event()
+
+    class HeldChooser:
+        def choose(self) -> tuple[str, ...]:
+            entered.set()
+            assert release.wait(3)
+            return (str(tmp_path),)
+
+    async def exercise() -> None:
+        app = create_console_app(
+            _Console(), _Reader(), team_id="team_test", directory_chooser=HeldChooser()
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://127.0.0.1:8765"
+        ) as client:
+            request = asyncio.create_task(client.post("/api/v1/admin/directories/select"))
+            try:
+                assert await asyncio.to_thread(entered.wait, 1)
+                request.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await request
+                app.state.console_shutdown.begin_shutdown()
+                refused = await asyncio.to_thread(app.state.console_shutdown.await_shutdown, 0.01)
+                assert refused.state is ShutdownState.REFUSED
+                assert client is not None
+                assert (await client.get("/api/v1/console")).status_code == 200
+                blocked = await client.put("/api/v1/admin/settings", json={})
+                assert blocked.status_code == 503
+                assert blocked.json()["error"]["code"] == "SERVICE_DRAINING"
+            finally:
+                release.set()
+            stopped = await asyncio.to_thread(app.state.console_shutdown.await_shutdown, 1)
+            assert stopped.state is ShutdownState.READY
+
+    asyncio.run(exercise())
+
+
+def test_index_tick_store_failure_does_not_silently_pass(tmp_path: Path) -> None:
+    config = ProductionConfig.model_validate(
+        {
+            "platform_root": str(tmp_path / "platform"),
+            "team_id": "team_test",
+            "team_name": "Test",
+            "model_routes": [{"provider": "codex", "model": "fixture", "kind": "codex_cli"}],
+        }
+    )
+    TeamWorkspace.initialize(config.platform_root, team_id=config.team_id, name=config.team_name)
+    administration = LocalConsoleAdministration(
+        runtime_config=config, config_path=tmp_path / "config.json", environment={}
+    )
+    indexer = administration._knowledge_indexer(None)
+
+    def fail() -> None:
+        raise OSError("private index bytes")
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(indexer, "tick", fail)
+        monkeypatch.setattr(administration, "_knowledge_indexer", lambda _: indexer)
+        with pytest.raises(AdministrationError, match="知识索引记录尚未可靠保存"):
+            administration.tick_knowledge_indexes()
+
+
+def test_index_start_failure_cannot_start_delivery_dispatcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = ProductionConfig.default().model_copy(update={"platform_root": tmp_path / "platform"})
+    administration = LocalConsoleAdministration(
+        runtime_config=config, config_path=tmp_path / "config", environment={}
+    )
+    console = _Console()
+
+    def fail(_: object) -> None:
+        raise RuntimeError("cannot start index worker")
+
+    monkeypatch.setattr(KnowledgeIndexWorker, "start", fail)
+    app = create_console_app(console, _Reader(), team_id="team_test", administration=administration)
+    with (
+        pytest.raises(RuntimeError, match="cannot start index"),
+        TestClient(app, base_url="http://127.0.0.1:8765"),
+    ):
+        pass
+    assert console.started is False
+    assert console.closed is True
+
+
+def test_startup_error_waits_for_started_operation_to_persist(tmp_path: Path) -> None:
+    entered, release, finished = Event(), Event(), Event()
+
+    class HeldExecutor(_Executor):
+        def execute(self, intent: object) -> ConsoleCommandResult:
+            entered.set()
+            assert release.wait(3)
+            return super().execute(intent)
+
+    class StartupFailureConsole(ProjectConsole):
+        def start(self) -> None:
+            super().start()
+            assert entered.wait(1)
+            raise RuntimeError("startup fixture failure after dispatch")
+
+    store = InMemoryConsoleOperationStore("team_test")
+    console = StartupFailureConsole(store=store, executor=HeldExecutor())
+    operation = console.submit(_create_intent(tmp_path), idempotency_key="queued-before-startup")
+    app = create_console_app(console, _Reader(), team_id="team_test")
+
+    def start() -> None:
+        try:
+            with (
+                pytest.raises(RuntimeError, match="startup fixture failure"),
+                TestClient(app, base_url="http://127.0.0.1:8765"),
+            ):
+                pass
+        finally:
+            finished.set()
+
+    thread = Thread(target=start)
+    thread.start()
+    try:
+        assert entered.wait(1)
+        assert not finished.is_set()
+        assert store.get(operation.operation_id).status.value == "RUNNING"
+    finally:
+        release.set()
+        thread.join(timeout=3)
+    assert finished.is_set()
+    assert store.get(operation.operation_id).status.value == "SUCCEEDED"

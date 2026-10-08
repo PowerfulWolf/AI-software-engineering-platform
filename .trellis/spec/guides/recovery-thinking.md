@@ -46,3 +46,26 @@ The full collector pass must include the succeeding Coder, QA and Review calls. 
 inherit the baseline digest but their immutable queue boundaries may bind later candidate SHAs.
 Authenticate the exact consumption epoch through the immutable parent chain; do not rewrite
 verifier candidate sources to the rescued Coder input. A helper-only lookup can miss this seam.
+
+### Controlled restart is a conjunction, not a timeout guess (2026-10-08)
+
+Before recommending a service restart, trace admission → actual worker → result/evidence persistence →
+queue/lease finish → owned process group and pipe stop → exact service-instance proof → replacement.
+`Thread.join(timeout)` returning, a daemon disappearing, a leader PID exiting and a stopped provider
+request are separate facts. None alone establishes that the service can abandon its work safely.
+
+Close admission before waiting, retain HTTP writer ownership through actual threadpool completion even
+after caller cancellation, and keep already claimed Operations responsible for their authorized
+remaining roles. An unknown child stop or failed final write must survive as a blocker even when the
+dispatcher thread has ended. Treat known store failures as sticky; only a pure wait deadline permits
+reopening admission. Do not classify deliberate service shutdown as provider failure, quota refund,
+QA FAIL or user approval.
+
+Signals, configuration apply, command-line restart, background indexing, directory choosers and native
+verification tools all share this boundary. Binding a port or publishing the trusted identity must
+precede starting delivery workers, so failed startup cannot abandon already claimed work. A private
+READY file needs exact request/instance/PID and durable publication; a stale success marker or dead PID
+is insufficient. Test the real service process and inherited replacement lock, not only local classes.
+
+Old binaries do not gain a new close protocol when disk code changes. Document the one-time maintenance
+upgrade and leave missing historical Run facts untouched. See `../core/controlled-service-restart.md`.

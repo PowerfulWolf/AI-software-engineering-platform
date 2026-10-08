@@ -425,11 +425,15 @@ v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kube
 ./scripts/ase-console-service.sh logs
 ./scripts/ase-console-service.sh restart
 ./scripts/ase-console-service.sh stop
+./scripts/ase-console-service.sh resume   # 安全停止超时且原服务仍在时解除排空
 ```
 
 多个代码检出目录会共用默认的本机 Console 状态目录。启动器在 PID 记录中同时保存实际可执行文件；
 从另一个已更新检出目录执行 `restart` 时，会先验证并停止原受管实例，再从当前目录启动，避免把正常
-进程误报为 stale PID。真正无关或身份不匹配的进程仍不会收到信号。
+进程误报为 stale PID。真正无关或身份不匹配的进程仍不会收到信号。`restart` 先停止新写入，等待已接纳的
+Operation、模型/工具执行、索引和记录保存完成；收到精确实例、请求、PID 对应的 `READY` 且原服务退出后
+才启动替代服务。超时、保存失败或没有可靠握手记录时会拒绝重启，保留原服务与现场。
+首次从旧版本升级的方法与异常处理见 [受控重启说明](docs/operations/controlled-service-restart.md)。
 
 浏览器提交的操作先以 append-only 事实保存为 `QUEUED`，后台执行时变为 `RUNNING`，最后变为
 `SUCCEEDED`、`FAILED` 或 `INTERRUPTED`。Host 重启不会静默重放不确定的模型调用；用户在同一页面

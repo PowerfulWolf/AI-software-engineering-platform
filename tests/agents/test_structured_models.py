@@ -59,7 +59,7 @@ def test_codex_structured_command_binds_verified_images(
         output.write_text(json.dumps({"result": "ok"}), encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     client = CodexCliStructuredModelClient(
         repository_root=repository,
         model="gpt-test",
@@ -100,7 +100,7 @@ def test_codex_structured_command_uses_explicit_local_proxy(
         )
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     client = CodexCliStructuredModelClient(
         repository_root=repository,
         model="gpt-test",
@@ -136,7 +136,7 @@ def test_codex_structured_proxy_uses_only_named_key_and_hides_stderr_secret(
         environments.append(kwargs["env"])  # type: ignore[arg-type]
         return subprocess.CompletedProcess(command, 1, "", "error: test-proxy-secret rejected")
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     client = CodexCliStructuredModelClient(
         repository_root=repository,
         model="gpt-test",
@@ -182,7 +182,7 @@ def test_codex_structured_command_mounts_additional_requirement_baselines(
         output.write_text(json.dumps({"result": "ok"}), encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     client = CodexCliStructuredModelClient(
         repository_root=primary,
         additional_repository_roots=(additional,),
@@ -251,7 +251,7 @@ def test_codex_structured_image_rejects_symlink_before_provider_call(
     alias = tmp_path / "alias.png"
     alias.symlink_to(screenshot)
     monkeypatch.setattr(
-        "ai_software_engineer.agents.structured.subprocess.run",
+        "ai_software_engineer.agents.structured.run_structured_command",
         lambda *_args, **_kwargs: pytest.fail("provider must not be called"),
     )
     client = CodexCliStructuredModelClient(
@@ -288,7 +288,7 @@ def test_structured_cli_failure_preserves_safe_cause_not_stdout(
     def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, 1, "PROMPT usage limit PRIVATE", stderr)
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
     with pytest.raises(StructuredModelError) as raised:
         client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
@@ -309,7 +309,7 @@ def test_provider_diagnostic_is_redacted_before_truncation(
         "https://host/secret-path?key=another-secret\x1b[0m " + "x" * 600
     )
     monkeypatch.setattr(
-        "ai_software_engineer.agents.structured.subprocess.run",
+        "ai_software_engineer.agents.structured.run_structured_command",
         lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "PRIVATE", diagnostic),
     )
     client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
@@ -334,7 +334,7 @@ def test_structured_process_boundary_failures_have_safe_diagnostics(
         Path(command[command.index("--output-last-message") + 1]).write_text("secret invalid JSON")
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
     with pytest.raises(StructuredModelError) as raised:
         client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
@@ -355,7 +355,7 @@ def test_local_cli_execution_limit_does_not_switch_provider_route(
     def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(command, cast(int, kwargs["timeout"]))
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     backup = _StaticClient()
     first = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
     client = FallbackStructuredModelClient(
@@ -387,7 +387,7 @@ def test_cli_transcript_is_not_provider_failure_evidence(
             )
         return subprocess.CompletedProcess(command, 1, "", transcript)
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
     with pytest.raises(StructuredModelError) as raised:
         client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
@@ -426,7 +426,7 @@ def test_cli_json_provider_events_are_classified(
             raise subprocess.TimeoutExpired(command, 1, output=output, stderr="")
         return subprocess.CompletedProcess(command, 1, output, "")
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
     with pytest.raises(StructuredModelError) as raised:
         client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
@@ -451,7 +451,7 @@ def test_cli_json_model_text_is_not_a_provider_event(
     def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(command, 1, output=output, stderr="")
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
     with pytest.raises(StructuredModelError) as raised:
         client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
@@ -464,7 +464,7 @@ def test_cli_timeout_with_explicit_provider_failure_uses_transient_fallback(
     def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(command, cast(int, kwargs["timeout"]), stderr=b"HTTP 504")
 
-    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.structured.run_structured_command", run)
     backup = _StaticClient()
     client = FallbackStructuredModelClient(
         (

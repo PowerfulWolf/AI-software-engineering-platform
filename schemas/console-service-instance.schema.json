@@ -1,0 +1,63 @@
+{
+  "$defs": {
+    "ServiceState": {
+      "enum": [
+        "STARTING",
+        "RUNNING",
+        "DRAINING",
+        "READY",
+        "REFUSED"
+      ],
+      "title": "ServiceState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "instance_id": {
+      "pattern": "^console_instance_[a-f0-9]{32}$",
+      "title": "Instance Id",
+      "type": "string"
+    },
+    "pid": {
+      "exclusiveMinimum": 1,
+      "title": "Pid",
+      "type": "integer"
+    },
+    "state": {
+      "$ref": "#/$defs/ServiceState",
+      "default": "RUNNING"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "safe_summary": {
+      "title": "Safe Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "instance_id",
+    "pid",
+    "started_at",
+    "updated_at",
+    "safe_summary"
+  ],
+  "title": "ServiceInstance",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/console-service-instance.schema.json"
+}

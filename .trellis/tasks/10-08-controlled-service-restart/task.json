@@ -1,0 +1,10 @@
+{
+  "id": "controlled-service-restart-20261008",
+  "title": "完整受控服务关闭与重启",
+  "status": "completed",
+  "owner": "codex",
+  "created_at": "2026-10-08",
+  "baseline": "0d07e75",
+  "completed_at": "2026-10-08",
+  "verification": "verification.md"
+}

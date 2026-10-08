@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import os
+import signal
 import socket
 import subprocess
 import threading
 import time
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from pathlib import Path
 
 from ai_software_engineer.manager.python_mysql_resources import IsolatedMysqlResource
+from ai_software_engineer.owned_processes import (
+    OwnedProcessesUncertain,
+    current_owned_operation,
+    finish_owned_process,
+    observe_owned_process,
+)
 
 # Versioned trusted implementation, never interpolated SQL or model-provided shell.
 MYSQL_RELAY = (
@@ -24,6 +31,8 @@ class MysqlUnixProxy:
         if resource.container_id is None or endpoint.name != "mysql.sock":
             raise ValueError("proxy requires the exact created resource and socket")
         self._resource, self._endpoint = resource, endpoint
+        self._owned_operation = current_owned_operation()
+        self._cleanup_uncertain = threading.Event()
         self._stop = threading.Event()
         self._slots = threading.BoundedSemaphore(32)
         self._lock = threading.Lock()
@@ -58,8 +67,13 @@ class MysqlUnixProxy:
             worker.start()
 
     def _bridge(self, client: socket.socket) -> None:
+        with self._owned_operation.activate() if self._owned_operation else nullcontext():
+            self._bridge_owned(client)
+
+    def _bridge_owned(self, client: socket.socket) -> None:
         process: subprocess.Popen[bytes] | None = None
         upstream: threading.Thread | None = None
+        observation = None
         try:
             process = subprocess.Popen(
                 (
@@ -77,6 +91,7 @@ class MysqlUnixProxy:
                 env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
                 start_new_session=True,
             )
+            observation = observe_owned_process(process, kind="tool")
             assert process.stdin is not None and process.stdout is not None
             with self._lock:
                 self._processes.add(process)
@@ -111,15 +126,23 @@ class MysqlUnixProxy:
                 client.shutdown(socket.SHUT_RDWR)
             client.close()
             if process is not None:
-                if process.poll() is None:
-                    process.kill()
-                with suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=5)
-                if process.stdout is not None:
-                    process.stdout.close()
-                if process.stdin is not None:
-                    with suppress(OSError, ValueError):
-                        process.stdin.close()
+                try:
+                    finish_owned_process(process, None, output_drained=False)
+                    if upstream is not None:
+                        upstream.join(timeout=1)
+                        if upstream.is_alive():
+                            raise OwnedProcessesUncertain("MySQL proxy pipe worker did not stop")
+                    if observation is not None:
+                        observation.stopped(output_drained=True)
+                    if process.stdout is not None:
+                        process.stdout.close()
+                    if process.stdin is not None:
+                        with suppress(OSError, ValueError):
+                            process.stdin.close()
+                except OwnedProcessesUncertain:
+                    self._cleanup_uncertain.set()
+                    if observation is not None:
+                        observation.uncertain()
                 with self._lock:
                     self._processes.discard(process)
             if upstream is not None:
@@ -137,10 +160,20 @@ class MysqlUnixProxy:
                 with suppress(OSError):
                     client.shutdown(socket.SHUT_RDWR)
             for process in self._processes:
-                if process.poll() is None:
-                    process.kill()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    # A reaped-zombie race is not proof either way. The bridge
+                    # still must independently verify its owned group and pipe.
+                    pass
+                except OSError:
+                    self._cleanup_uncertain.set()
         self._thread.join(timeout=max(0, deadline - time.monotonic()))
         for worker in self._workers:
             worker.join(timeout=max(0, deadline - time.monotonic()))
         if self._thread.is_alive() or any(worker.is_alive() for worker in self._workers):
             raise RuntimeError("MySQL proxy did not terminate within its cleanup bound")
+        if self._cleanup_uncertain.is_set():
+            raise OwnedProcessesUncertain("MySQL proxy owned execution stop remains unknown")

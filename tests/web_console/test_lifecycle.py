@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from ai_software_engineer.web_console.lifecycle import (
+    CONFIGURATION_APPLY_SUMMARIES,
     ApplyConfigurationRequest,
     ConfigurationApplyError,
     ConfigurationApplyState,
@@ -17,6 +18,20 @@ from ai_software_engineer.web_console.lifecycle import (
     FileConfigurationLifecycle,
     PsSupervisorProcessProbe,
 )
+
+
+def test_new_configuration_apply_uses_chinese_and_preserves_legacy_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lifecycle = _lifecycle(tmp_path, monkeypatch)
+    current = lifecycle.request("a" * 64)
+    assert current.safe_summary == CONFIGURATION_APPLY_SUMMARIES[ConfigurationApplyStatus.PENDING]
+    old = ConfigurationApplyState(
+        request_id="configuration_apply_" + "b" * 32,
+        status=ConfigurationApplyStatus.SUCCEEDED,
+        safe_summary="Configuration was applied.",
+    )
+    assert old.safe_summary == "Configuration was applied."
 
 
 class _SupervisorProcessProbe:

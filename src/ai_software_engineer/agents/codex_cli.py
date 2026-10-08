@@ -68,6 +68,11 @@ from ai_software_engineer.git import (
     WorkspacePolicyError,
 )
 from ai_software_engineer.git.mutation import MutationInventoryRejected, WorkspaceMutationInventory
+from ai_software_engineer.owned_processes import (
+    OwnedProcessesUncertain,
+    OwnedProcessKind,
+    observe_owned_process,
+)
 from ai_software_engineer.redaction import redact_text
 
 
@@ -147,8 +152,14 @@ class CodexCommandRunner(Protocol):
 class SubprocessCodexCommandRunner:
     """Execute Codex without a shell and bound execution time."""
 
-    def __init__(self, execution_guard: ExecutionGuard | None = None) -> None:
+    def __init__(
+        self,
+        execution_guard: ExecutionGuard | None = None,
+        *,
+        process_kind: OwnedProcessKind = "native",
+    ) -> None:
         self._execution_guard = execution_guard
+        self._process_kind = process_kind
 
     def run(
         self,
@@ -159,34 +170,8 @@ class SubprocessCodexCommandRunner:
         stdin: str,
         timeout_seconds: float,
     ) -> CodexInvocationResult:
-        if self._execution_guard is not None:
-            return self._run_owned(
-                argv, cwd=cwd, environment=environment, stdin=stdin, timeout_seconds=timeout_seconds
-            )
-        try:
-            completed = subprocess.run(
-                argv,
-                cwd=cwd,
-                env=dict(environment),
-                input=stdin,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            return CodexInvocationResult(
-                returncode=-1,
-                timed_out=True,
-                stdout=_bounded(_process_text(error.stdout)),
-                stderr=_bounded(_process_text(error.stderr)),
-            )
-        except OSError as error:
-            raise CodexCliError("Codex CLI process could not be started") from error
-        return CodexInvocationResult(
-            returncode=completed.returncode,
-            stdout=_bounded(completed.stdout),
-            stderr=_bounded(completed.stderr),
+        return self._run_owned(
+            argv, cwd=cwd, environment=environment, stdin=stdin, timeout_seconds=timeout_seconds
         )
 
     def _run_owned(
@@ -200,8 +185,12 @@ class SubprocessCodexCommandRunner:
         observer: Callable[[CodexInvocationResult], None] | None = None,
     ) -> CodexInvocationResult:
         guard = self._execution_guard
-        assert guard is not None
-        guard.check()
+
+        def check_owner() -> None:
+            if guard is not None:
+                guard.check()
+
+        check_owner()
         started = time.monotonic()
         # The child inherits the Task lock. Even if the host is killed, another
         # Worker cannot reuse this worktree while the executor still owns it.
@@ -214,7 +203,7 @@ class SubprocessCodexCommandRunner:
             with tempfile.TemporaryFile(mode="w+b") as prompt:
                 prompt.write(stdin.encode("utf-8"))
                 prompt.seek(0)
-                guard.check()
+                check_owner()
                 process = subprocess.Popen(
                     argv,
                     cwd=cwd,
@@ -223,21 +212,29 @@ class SubprocessCodexCommandRunner:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    errors="replace",
                     start_new_session=True,
-                    pass_fds=guard.inherited_fds,
+                    pass_fds=guard.inherited_fds if guard is not None else (),
                 )
+                ownership = observe_owned_process(process, kind=self._process_kind)
         except OSError as error:
             raise CodexCliError("Codex CLI process could not start") from error
 
         def stop() -> tuple[str, str]:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGTERM)
             try:
-                return process.communicate(timeout=1)
-            except subprocess.TimeoutExpired:
                 with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-                return process.communicate()
+                    os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    return process.communicate(timeout=1)
+                except subprocess.TimeoutExpired:
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    return process.communicate(timeout=1)
+            except (subprocess.TimeoutExpired, OSError) as error:
+                if ownership is not None:
+                    ownership.uncertain()
+                # Escaped descendants can retain pipes after the group dies.
+                raise CodexExecutionUnconfirmed("原执行输出收尾停止状态无法确认") from error
 
         def stopped(kind: str) -> NativeProcessStop | None:
             # communicate() reaps the leader, but descendants can survive it.
@@ -254,8 +251,8 @@ class SubprocessCodexCommandRunner:
                         stopped_at=datetime.now(UTC),
                     )
                 except PermissionError:
-                    return None
-                with suppress(ProcessLookupError):
+                    pass
+                with suppress(ProcessLookupError, PermissionError):
                     os.killpg(process.pid, sent)
                 deadline = time.monotonic() + 1
                 while time.monotonic() < deadline:
@@ -270,7 +267,7 @@ class SubprocessCodexCommandRunner:
                             stopped_at=datetime.now(UTC),
                         )
                     except PermissionError:
-                        return None
+                        pass
                     time.sleep(0.02)
             return None
 
@@ -280,12 +277,22 @@ class SubprocessCodexCommandRunner:
             nonlocal observed
             observed = True
             if observer is not None:
-                observer(result)
+                try:
+                    observer(result)
+                except BaseException:
+                    if ownership is not None:
+                        ownership.uncertain()
+                    raise
+            if ownership is not None:
+                try:
+                    ownership.stopped(output_drained=True)
+                except OwnedProcessesUncertain as error:
+                    raise CodexExecutionUnconfirmed("原执行进程停止状态无法确认") from error
             return result
 
         try:
             while True:
-                guard.check()
+                check_owner()
                 if time.monotonic() - started >= timeout_seconds:
                     stdout, stderr = stop()
                     proof = stopped("local_execution_limit")
@@ -296,11 +303,11 @@ class SubprocessCodexCommandRunner:
                             process.returncode, _bounded(stdout), _bounded(stderr), True, proof
                         )
                     )
-                    guard.check()
+                    check_owner()
                     return result
                 try:
                     stdout, stderr = process.communicate(timeout=0.2)
-                    guard.check()
+                    check_owner()
                     proof = stopped("completed" if process.returncode == 0 else "failed")
                     if proof is None:
                         raise CodexExecutionUnconfirmed("原执行进程停止状态无法确认")
@@ -309,12 +316,21 @@ class SubprocessCodexCommandRunner:
                             process.returncode, _bounded(stdout), _bounded(stderr), False, proof
                         )
                     )
-                    guard.check()
+                    check_owner()
                     return result
                 except subprocess.TimeoutExpired:
                     continue
+        except CodexExecutionUnconfirmed:
+            if ownership is not None:
+                ownership.uncertain()
+            raise
         except BaseException:
-            stdout, stderr = stop()
+            try:
+                stdout, stderr = stop()
+            except BaseException:
+                if ownership is not None:
+                    ownership.uncertain()
+                raise
             proof = stopped("completed" if process.returncode == 0 else "failed")
             if proof is not None and not observed:
                 publish(
@@ -322,6 +338,8 @@ class SubprocessCodexCommandRunner:
                         process.returncode, _bounded(stdout), _bounded(stderr), False, proof
                     )
                 )
+            elif proof is None and ownership is not None:
+                ownership.uncertain()
             raise
 
     def run_observed(
@@ -335,14 +353,6 @@ class SubprocessCodexCommandRunner:
         observer: Callable[[CodexInvocationResult], None],
     ) -> CodexInvocationResult:
         """Publish owned stop facts before returning to the artifact adapter."""
-        if self._execution_guard is None:
-            return self.run(
-                argv,
-                cwd=cwd,
-                environment=environment,
-                stdin=stdin,
-                timeout_seconds=timeout_seconds,
-            )
         return self._run_owned(
             argv,
             cwd=cwd,

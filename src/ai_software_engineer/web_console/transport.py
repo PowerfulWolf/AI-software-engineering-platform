@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import secrets
 from _thread import LockType
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, nullcontext
+from contextvars import ContextVar
 from importlib.resources import files
 from threading import Lock
 from typing import Protocol
 
 from fastapi import FastAPI, Request
-from fastapi.concurrency import run_in_threadpool
+from fastapi.concurrency import run_in_threadpool as _threadpool
 from fastapi.responses import JSONResponse, Response
 from pydantic import TypeAdapter, ValidationError
 from starlette.middleware.base import RequestResponseEndpoint
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.domain.identity import ProjectId, TeamId
@@ -51,16 +56,91 @@ from .lifecycle import (
     ConfigurationLifecycle,
 )
 from .models import ConsoleAction, ConsoleIntent, ConsoleOperation, IdempotencyKey
+from .service_lifecycle import (
+    ConsoleShutdownCoordinator,
+    OwnedProcessShutdownPort,
+)
+from .shutdown import (
+    ServiceDraining,
+    ServiceWriteGate,
+    ServiceWriteLease,
+    ShutdownResult,
+    ShutdownState,
+)
 from .store import ConsoleOperationConflict, ConsoleOperationNotFound
 
 _MAX_REQUEST_BYTES = 64_000
 _MAX_SPEC_REQUEST_BYTES = 512_000
 _OPERATION_CONTRACT_VERSION = 2
+_LOGGER = logging.getLogger(__name__)
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
 }
+_WRITE_LEASE: ContextVar[ServiceWriteLease | None] = ContextVar("console_write_lease", default=None)
+
+
+async def run_in_threadpool[ResultT](
+    function: Callable[..., ResultT], *arguments: object, **keywords: object
+) -> ResultT:
+    """Retain admitted mutation ownership until the actual synchronous worker returns."""
+    parent = _WRITE_LEASE.get()
+    if parent is None:
+        return await _threadpool(function, *arguments, **keywords)
+    retained = parent.retain()
+
+    def execute() -> ResultT:
+        try:
+            return function(*arguments, **keywords)
+        finally:
+            retained.release()
+
+    task = asyncio.create_task(_threadpool(execute))
+
+    def consume_result(completed: asyncio.Task[ResultT]) -> None:
+        if not completed.cancelled():
+            completed.exception()
+
+    task.add_done_callback(consume_result)
+    return await asyncio.shield(task)
+
+
+class _ServiceWriteMiddleware:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        gate: ServiceWriteGate,
+        owned_processes: OwnedProcessShutdownPort | None = None,
+    ) -> None:
+        self._app = app
+        self._gate = gate
+        self._owned_processes = owned_processes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] in {"GET", "HEAD", "OPTIONS"}:
+            await self._app(scope, receive, send)
+            return
+        try:
+            lease = self._gate.acquire_write()
+        except ServiceDraining as error:
+            response = _error(503, error.code, error.safe_summary)
+            _security_headers(response)
+            await response(scope, receive, send)
+            return
+        token = _WRITE_LEASE.set(lease)
+        try:
+            ownership = (
+                self._owned_processes.operation_scope("http_write_" + secrets.token_hex(16))
+                if self._owned_processes is not None
+                else nullcontext()
+            )
+            with ownership:
+                await self._app(scope, receive, send)
+        finally:
+            _WRITE_LEASE.reset(token)
+            lease.release()
 
 
 class TeamReader(Protocol):
@@ -69,7 +149,11 @@ class TeamReader(Protocol):
 
 class ConsoleApplication(Protocol):
     def start(self) -> None: ...
-    def close(self, *, timeout: float = 5.0) -> None: ...
+    def begin_shutdown(self) -> ShutdownResult: ...
+    def await_shutdown(self, timeout: float) -> ShutdownResult: ...
+    def cancel_shutdown(
+        self, *, before_resume: Callable[[], None] | None = None
+    ) -> ShutdownResult: ...
     def submit(self, intent: ConsoleIntent, *, idempotency_key: str) -> ConsoleOperation: ...
     def get(self, operation_id: str) -> ConsoleOperation: ...
     def list_operations(self) -> tuple[ConsoleOperation, ...]: ...
@@ -92,6 +176,7 @@ def create_console_app(
     configuration_port_override: int | None = None,
     directory_chooser: DirectoryChooser | None = None,
     delivery_ready: bool = True,
+    owned_processes: OwnedProcessShutdownPort | None = None,
 ) -> FastAPI:
     if isinstance(port, bool) or not 1 <= port <= 65535:
         raise ValueError("invalid console server port")
@@ -111,18 +196,36 @@ def create_console_app(
         if isinstance(administration, LocalConsoleAdministration)
         else None
     )
+    write_gate = ServiceWriteGate()
+    shutdown = ConsoleShutdownCoordinator(
+        console=console,
+        write_gate=write_gate,
+        knowledge_worker=knowledge_worker,
+        owned_processes=owned_processes,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        console.start()
-        if knowledge_worker is not None:
-            knowledge_worker.start()
         try:
+            # Start the ancillary worker before allowing queued delivery claims.
+            # All startup work is owned by this same final drain, including failures.
+            if knowledge_worker is not None:
+                knowledge_worker.start()
+            console.start()
             yield
         finally:
-            if knowledge_worker is not None:
-                knowledge_worker.close()
-            console.close()
+            shutdown.begin_shutdown()
+            announced = False
+            while True:
+                stopped = await asyncio.to_thread(shutdown.await_shutdown, 5.0)
+                if stopped.state is ShutdownState.READY:
+                    break
+                # Startup/lifespan failure cannot abandon an already started operation.
+                # Normal shutdown enters here only after the Host verified READY.
+                if not announced:
+                    _LOGGER.warning("服务尚未安全收尾, 保留本实例等待处理。")
+                    announced = True
+                await asyncio.sleep(1)
 
     app = FastAPI(
         title="AI Software Engineer Console",
@@ -131,6 +234,8 @@ def create_console_app(
         openapi_url=None,
         lifespan=lifespan,
     )
+    app.state.console_shutdown = shutdown
+    app.add_middleware(_ServiceWriteMiddleware, gate=write_gate, owned_processes=owned_processes)
 
     @app.middleware("http")
     async def protect_loopback(request: Request, call_next: RequestResponseEndpoint) -> Response:

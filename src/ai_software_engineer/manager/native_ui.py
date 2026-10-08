@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import signal
 import subprocess
 import tempfile
 import time
@@ -21,6 +19,11 @@ from ai_software_engineer.manager.verification_environment import (
     SwiftSandboxCapability,
     discover_swift_sandbox_capability,
     swift_sandbox_command,
+)
+from ai_software_engineer.owned_processes import (
+    finish_owned_process,
+    observe_owned_process,
+    run_owned_subprocess,
 )
 
 
@@ -236,11 +239,12 @@ def _build_driver(
         "-o",
         str(driver),
     )
-    compiled = subprocess.run(
+    compiled = run_owned_subprocess(
         driver_command,
         cwd=source,
         env=environment,
         capture_output=True,
+        text=True,
         timeout=60,
         check=False,
     )
@@ -250,7 +254,7 @@ def _build_driver(
 
 
 def _read_session(driver: Path, scratch: Path, environment: dict[str, str]) -> NativeUiSession:
-    session_check = subprocess.run(
+    session_check = run_owned_subprocess(
         [str(driver), "--session-check"],
         cwd=scratch,
         env=environment,
@@ -327,7 +331,7 @@ def run_native_ui(
     evidence_bytes = 0
     launch_argv = (str(binary), capability.scenario.mock_argument)
     # GUI process output is discarded, never a model instruction/evidence injection channel.
-    with subprocess.Popen(
+    process = subprocess.Popen(
         ["/usr/bin/sandbox-exec", "-p", profile, *launch_argv],
         cwd=scratch,
         env=environment,
@@ -335,98 +339,93 @@ def run_native_ui(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
-    ) as process:
-        try:
-            # Let AppKit register its window/AX server before the first attachment attempt.
-            time.sleep(2)
-            for index, step in enumerate(capability.scenario.steps):
-                deadline = time.monotonic() + (15 if index == 0 else 3)
-                while True:
-                    if guard is not None:
-                        guard.check()
-                    returncode = process.poll()
-                    if returncode is not None:
-                        results.append(
-                            NativeUiResult(
-                                step=step,
-                                output=NativeUiOutput(
-                                    pid=process.pid,
-                                    action=step.action,
-                                    nodes=(),
-                                    error="PROCESS_EXITED",
-                                    diagnostics=NativeUiDiagnostics(
-                                        launch_argv=launch_argv,
-                                        process_running=False,
-                                        process_returncode=returncode,
-                                    ),
+    )
+    observation = observe_owned_process(process, kind="tool")
+    try:
+        # Let AppKit register its window/AX server before the first attachment attempt.
+        time.sleep(2)
+        for index, step in enumerate(capability.scenario.steps):
+            deadline = time.monotonic() + (15 if index == 0 else 3)
+            while True:
+                if guard is not None:
+                    guard.check()
+                returncode = process.poll()
+                if returncode is not None:
+                    results.append(
+                        NativeUiResult(
+                            step=step,
+                            output=NativeUiOutput(
+                                pid=process.pid,
+                                action=step.action,
+                                nodes=(),
+                                error="PROCESS_EXITED",
+                                diagnostics=NativeUiDiagnostics(
+                                    launch_argv=launch_argv,
+                                    process_running=False,
+                                    process_returncode=returncode,
                                 ),
-                            )
-                        )
-                        return tuple(results)
-                    response = subprocess.run(
-                        [str(driver)],
-                        input=json.dumps(
-                            {
-                                "pid": process.pid,
-                                "window_title": capability.scenario.window_title,
-                                "step": step.to_wire(),
-                            }
-                        ),
-                        cwd=scratch,
-                        env=environment,
-                        capture_output=True,
-                        text=True,
-                        timeout=20,
-                        check=False,
-                    )
-                    if len(response.stdout) > 2_000_000:
-                        raise NativeUiUnavailable("native UI evidence exceeded the bound")
-                    try:
-                        output = NativeUiOutput.model_validate_json(response.stdout)
-                    except ValueError as error:
-                        raise NativeUiUnavailable(
-                            "native UI driver returned invalid evidence"
-                        ) from error
-                    if output.pid != process.pid or output.action != step.action:
-                        raise NativeUiUnavailable("native UI result does not belong to this action")
-                    returncode = process.poll()
-                    output = output.model_copy(
-                        update={
-                            "diagnostics": (output.diagnostics or NativeUiDiagnostics()).model_copy(
-                                update={
-                                    "launch_argv": launch_argv,
-                                    "process_running": returncode is None,
-                                    "process_returncode": returncode,
-                                },
                             ),
-                        }
+                        )
                     )
-                    # A press is never retried: an uncertain side effect must not be replayed.
-                    if (
-                        step.action == "snapshot"
-                        and output.error == "WINDOW_UNAVAILABLE"
-                        and time.monotonic() < deadline
-                    ):
-                        time.sleep(0.2)
-                        continue
-                    try:
-                        results.append(NativeUiResult(step=step, output=output))
-                    except ValueError as error:
-                        raise NativeUiUnavailable(
-                            "native UI evidence does not match the approved snapshot"
-                        ) from error
-                    evidence_bytes += len(response.stdout.encode("utf-8"))
-                    if evidence_bytes > 4_000_000:
-                        raise NativeUiUnavailable("native UI evidence exceeded the sequence bound")
-                    break
-                if output.error is not None:
-                    break
-        finally:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=5)
+                    return tuple(results)
+                response = run_owned_subprocess(
+                    [str(driver)],
+                    input=json.dumps(
+                        {
+                            "pid": process.pid,
+                            "window_title": capability.scenario.window_title,
+                            "step": step.to_wire(),
+                        }
+                    ),
+                    cwd=scratch,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                if len(response.stdout) > 2_000_000:
+                    raise NativeUiUnavailable("native UI evidence exceeded the bound")
+                try:
+                    output = NativeUiOutput.model_validate_json(response.stdout)
+                except ValueError as error:
+                    raise NativeUiUnavailable(
+                        "native UI driver returned invalid evidence"
+                    ) from error
+                if output.pid != process.pid or output.action != step.action:
+                    raise NativeUiUnavailable("native UI result does not belong to this action")
+                returncode = process.poll()
+                output = output.model_copy(
+                    update={
+                        "diagnostics": (output.diagnostics or NativeUiDiagnostics()).model_copy(
+                            update={
+                                "launch_argv": launch_argv,
+                                "process_running": returncode is None,
+                                "process_returncode": returncode,
+                            },
+                        ),
+                    }
+                )
+                # A press is never retried: an uncertain side effect must not be replayed.
+                if (
+                    step.action == "snapshot"
+                    and output.error == "WINDOW_UNAVAILABLE"
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.2)
+                    continue
+                try:
+                    results.append(NativeUiResult(step=step, output=output))
+                except ValueError as error:
+                    raise NativeUiUnavailable(
+                        "native UI evidence does not match the approved snapshot"
+                    ) from error
+                evidence_bytes += len(response.stdout.encode("utf-8"))
+                if evidence_bytes > 4_000_000:
+                    raise NativeUiUnavailable("native UI evidence exceeded the sequence bound")
+                break
+            if output.error is not None:
+                break
+    finally:
+        finish_owned_process(process, observation, output_drained=True)
     return tuple(results)

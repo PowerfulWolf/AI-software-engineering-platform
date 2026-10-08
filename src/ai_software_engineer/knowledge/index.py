@@ -6,10 +6,9 @@ import fcntl
 import hashlib
 import os
 from collections.abc import Callable
-from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 
 from ai_software_engineer.knowledge.index_models import (
     KnowledgeChunkCache,
@@ -450,7 +449,7 @@ class IndexedKnowledgeRetrieval:
 
 
 class KnowledgeIndexWorker:
-    """One service-owned daemon; a stop event bounds shutdown waiting."""
+    """One owned worker; stop admission before joining its actual current tick."""
 
     def __init__(self, tick: Callable[[], None], *, interval: float = 2.0) -> None:
         if not 0.1 <= interval <= 60:
@@ -459,29 +458,76 @@ class KnowledgeIndexWorker:
         self.interval = interval
         self._stop = Event()
         self._thread: Thread | None = None
+        self._lifecycle = Lock()
+        self._failure = False
 
     def start(self) -> None:
-        if self._thread is None:
-            self._thread = Thread(target=self._run, name="knowledge-indexer", daemon=True)
-            self._thread.start()
+        with self._lifecycle:
+            if self._failure:
+                return
+            if self._thread is None or not self._thread.is_alive():
+                self._stop.clear()
+                self._thread = Thread(target=self._run, name="knowledge-indexer", daemon=True)
+                try:
+                    self._thread.start()
+                except BaseException:
+                    if self._thread.ident is None:
+                        self._thread = None
+                    else:
+                        self._failure = True
+                        self._stop.set()
+                    raise
+
+    @property
+    def is_alive(self) -> bool:
+        with self._lifecycle:
+            return self._thread is not None and self._thread.is_alive()
+
+    def begin_shutdown(self) -> None:
+        with self._lifecycle:
+            self._stop.set()
+
+    def cancel_shutdown(self) -> None:
+        with self._lifecycle:
+            self._stop.clear()
+        self.start()
+
+    @property
+    def shutdown_failed(self) -> bool:
+        with self._lifecycle:
+            return self._failure
 
     def _run(self) -> None:
-        while not self._stop.is_set():
-            # Durable job status carries safe errors; never log parser/document payloads.
-            with suppress(
-                KnowledgeError,
-                KnowledgeDocumentError,
-                KnowledgeSelectionError,
-                OSError,
-                ValueError,
-            ):
-                self.tick()
-            self._stop.wait(self.interval)
+        try:
+            while True:
+                with self._lifecycle:
+                    if self._stop.is_set():
+                        return
+                # A thrown tick has not proved durable completion. Keep the service
+                # online for inspection instead of silently accepting a join as READY.
+                try:
+                    self.tick()
+                except BaseException:
+                    with self._lifecycle:
+                        self._failure = True
+                        self._stop.set()
+                    return
+                self._stop.wait(self.interval)
+        finally:
+            with self._lifecycle:
+                if not self._stop.is_set() and not self._failure:
+                    # RESUME may arrive just after the old worker chose to return.
+                    # Hand the resumed admission to one successor, never lose the tick loop.
+                    self._thread = Thread(target=self._run, name="knowledge-indexer", daemon=True)
+                    self._thread.start()
 
-    def close(self, *, timeout: float = 5.0) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=max(0, timeout))
+    def close(self, *, timeout: float = 5.0) -> bool:
+        self.begin_shutdown()
+        with self._lifecycle:
+            thread = self._thread
+        if thread is not None:
+            thread.join(timeout=max(0, timeout))
+        return not self.shutdown_failed and (thread is None or not thread.is_alive())
 
 
 def retrieval_for_project(project: ProjectWorkspace) -> IndexedKnowledgeRetrieval:

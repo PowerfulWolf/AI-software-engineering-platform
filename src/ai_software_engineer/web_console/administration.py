@@ -519,11 +519,14 @@ class LocalConsoleAdministration:
             None,
             *(project.manifest.project_id for project in team.project_registry().discover()),
         )
+        failed = False
         for project_id in scopes:
             try:
                 self._knowledge_indexer(project_id).tick()
             except Exception:
-                continue
+                failed = True
+        if failed:
+            raise AdministrationError("知识索引记录尚未可靠保存, 不能确认安全停止。")
 
     def import_document(self, *, filename: str, content: bytes) -> KnowledgeDocumentView:
         team = self._team()

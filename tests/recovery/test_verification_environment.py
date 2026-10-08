@@ -47,6 +47,7 @@ from ai_software_engineer.recovery.verification_execution import BoundSwiftVerif
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
     CandidateVerificationPlan,
+    VerificationCapability,
 )
 from ai_software_engineer.swift_verification import SWIFT_VERIFICATION_COMMANDS
 from tests.orchestration.test_retry import ScriptedAdapter
@@ -168,7 +169,7 @@ def _admitted(
     environment_error: bool = False,
     business_failure: bool = False,
     native_ui: NativeUiCapability | None = None,
-    executor_capability=None,
+    executor_capability: VerificationCapability | None = None,
 ) -> tuple[
     CandidateVerificationPlan,
     FileRecoveryStore,

@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`controlled-service-restart.md`](controlled-service-restart.md): complete Host admission drain,
+  real durable completion, process-stop proof, signal handling and exact private restart handshake.
+
 - [`legacy-execution-rescue.md`](legacy-execution-rescue.md): exact human engineering rescue of
   legacy unknown local Coder executions, OS containment and complete preserved workspace.
 

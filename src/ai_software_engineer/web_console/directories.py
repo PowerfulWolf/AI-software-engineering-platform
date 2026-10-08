@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol
+
+from ai_software_engineer.owned_processes import OwnedProcessesUncertain, run_owned_subprocess
+
+_CHOOSER_ENVIRONMENT = (
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_RUNTIME_DIR",
+)
 
 
 class DirectorySelectionError(RuntimeError):
@@ -19,6 +35,21 @@ class DirectoryChooser(Protocol):
 
 class NativeDirectoryChooser:
     """Open a fixed native folder dialog without accepting browser-side commands."""
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: int = 120,
+        environment: Mapping[str, str] | None = None,
+    ) -> None:
+        if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 120:
+            raise ValueError("native directory chooser timeout must be 1-120 seconds")
+        self._timeout = timeout_seconds
+        variables = os.environ if environment is None else environment
+        self._environment = {
+            name: variables[name] for name in _CHOOSER_ENVIRONMENT if name in variables
+        }
+        self._environment.setdefault("PATH", os.defpath)
 
     def choose(self) -> tuple[str, ...]:
         if sys.platform == "darwin":
@@ -66,13 +97,19 @@ class NativeDirectoryChooser:
         else:
             raise DirectorySelectionError("Directory selection is unsupported on this platform.")
         try:
-            result = subprocess.run(
+            result = run_owned_subprocess(
                 command,
+                cwd=Path.cwd(),
+                env=self._environment,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=self._timeout,
                 check=False,
             )
+        except OwnedProcessesUncertain as error:
+            raise DirectorySelectionError(
+                "目录选择执行的停止状态无法确认, 已保留服务等待核验。"
+            ) from error
         except (OSError, subprocess.TimeoutExpired) as error:
             raise DirectorySelectionError(
                 "The native directory chooser could not complete."

@@ -4,10 +4,8 @@ import hashlib
 import json
 import os
 import selectors
-import signal
 import subprocess
 import time
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -17,6 +15,7 @@ from ai_software_engineer.domain import AgentPermissions
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
+from ai_software_engineer.owned_processes import finish_owned_process, observe_owned_process
 from ai_software_engineer.redaction import redact_text
 
 
@@ -78,6 +77,8 @@ def _git(root: Path, *arguments: str, limit: int = 2_000_000) -> bytes:
         )
     except OSError as error:
         raise WorkspacePolicyError("candidate source Git could not start") from error
+    observation = observe_owned_process(process, kind="tool")
+    output_drained = False
     assert process.stdout is not None and process.stderr is not None
     output, errors = bytearray(), bytearray()
     deadline = time.monotonic() + 30
@@ -102,16 +103,16 @@ def _git(root: Path, *arguments: str, limit: int = 2_000_000) -> bytes:
                         )
             if process.wait(timeout=max(0.01, deadline - time.monotonic())) != 0:
                 raise WorkspacePolicyError("candidate source Git objects could not be read")
+            output_drained = True
         return bytes(output)
     except (OSError, subprocess.SubprocessError) as error:
         raise WorkspacePolicyError("candidate source Git objects could not be read") from error
     finally:
-        if process.poll() is None:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=5)
-        process.stdout.close()
-        process.stderr.close()
+        try:
+            finish_owned_process(process, observation, output_drained=output_drained)
+        finally:
+            process.stdout.close()
+            process.stderr.close()
 
 
 def _tree(root: Path, revision: str) -> dict[str, _Blob]:

@@ -32,6 +32,16 @@ class ConfigurationApplyStatus(StrEnum):
     FAILED = "FAILED"
 
 
+CONFIGURATION_APPLY_SUMMARIES = {
+    ConfigurationApplyStatus.PENDING: "配置已保存, 正在等待当前工作安全收尾后重启服务。",
+    ConfigurationApplyStatus.SUCCEEDED: "配置已应用, 服务已安全重启。",
+    ConfigurationApplyStatus.FAILED: (
+        "配置已保存, 但控制台未完成重启。请查看服务状态; "
+        "若当前工作尚未收尾, 可稍后重试或解除安全停止。"
+    ),
+}
+
+
 class ApplyConfigurationRequest(DomainModel):
     """An intentionally empty browser command."""
 
@@ -51,7 +61,10 @@ class ConfigurationApplyState(DomainModel):
                 "Use the service script to inspect status and retry safely."
             ),
         }
-        if self.safe_summary != expected[self.status]:
+        if self.safe_summary not in {
+            expected[self.status],
+            CONFIGURATION_APPLY_SUMMARIES[self.status],
+        }:
             raise ValueError("configuration apply summary must use the safe fixed text")
         return self
 
@@ -161,7 +174,7 @@ class FileConfigurationLifecycle:
             state = ConfigurationApplyState(
                 request_id=request_id,
                 status=ConfigurationApplyStatus.PENDING,
-                safe_summary="Configuration apply is in progress.",
+                safe_summary=CONFIGURATION_APPLY_SUMMARIES[ConfigurationApplyStatus.PENDING],
             )
             self._write_state(state)
             self._publish_request(state)
@@ -205,10 +218,7 @@ class FileConfigurationLifecycle:
             failed = ConfigurationApplyState(
                 request_id=state.request_id,
                 status=ConfigurationApplyStatus.FAILED,
-                safe_summary=(
-                    "Configuration remains saved but the Console could not be restarted. "
-                    "Use the service script to inspect status and retry safely."
-                ),
+                safe_summary=CONFIGURATION_APPLY_SUMMARIES[ConfigurationApplyStatus.FAILED],
             )
             self._write_state(failed)
             raise ConfigurationApplyError("Configuration apply service is unavailable.") from error

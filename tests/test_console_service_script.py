@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -23,14 +25,20 @@ def _launcher(tmp_path: Path, *, executable: bool = True) -> tuple[Path, dict[st
     scripts.mkdir(parents=True)
     launcher = scripts / SCRIPT.name
     shutil.copy2(SCRIPT, launcher)
+    shutil.copy2(SCRIPT.with_name("ase-console-lifecycle.py"), scripts)
     launcher.chmod(0o755)
     if executable:
         service = project / ".venv" / "bin" / "ase-console"
         service.parent.mkdir(parents=True)
+        interpreter = service.parent / "python"
+        interpreter.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        interpreter.chmod(0o755)
         service.write_text(
             f"#!{sys.executable}\n"
             "import os\n"
             "import signal\n"
+            "import time\n"
+            "from datetime import UTC, datetime\n"
             "from pathlib import Path\n"
             "capture = os.environ.get('ASE_TEST_ENV_CAPTURE')\n"
             "if capture:\n"
@@ -41,10 +49,33 @@ def _launcher(tmp_path: Path, *, executable: bool = True) -> tuple[Path, dict[st
             "    process_path.mkdir(parents=True, exist_ok=True)\n"
             "    command_path = process_path / f'{os.getpid()}.command'\n"
             "    command_path.write_text(str(Path(__file__).resolve()))\n"
+            "from ai_software_engineer.web_console.service_lifecycle import (\n"
+            "    ServiceLifecycleStore, ServiceInstance, ServiceShutdownResult,\n"
+            "    ServiceState, ServiceShutdownAction,\n"
+            ")\n"
             "def raise_exit():\n"
             "    raise SystemExit(0)\n"
             "signal.signal(signal.SIGTERM, lambda *_: raise_exit())\n"
-            "signal.pause()\n",
+            "store = ServiceLifecycleStore.from_environment(os.environ)\n"
+            "instance = ServiceInstance.new(pid=os.getpid(), at=datetime.now(UTC))\n"
+            "store.publish_instance(instance)\n"
+            "handled = None\n"
+            "while True:\n"
+            "    request = store.read_request()\n"
+            "    if request and request.matches(instance) and request.request_id != handled:\n"
+            "        handled = request.request_id\n"
+            "        if request.action == ServiceShutdownAction.RESUME:\n"
+            "            state = ServiceState.RUNNING\n"
+            "        elif (store.root / 'test-busy').exists():\n"
+            "            state = ServiceState.REFUSED\n"
+            "        else:\n"
+            "            state = ServiceState.READY\n"
+            "        instance = instance.with_state(state, at=datetime.now(UTC))\n"
+            "        store.publish_instance(instance)\n"
+            "        store.write_result(ServiceShutdownResult.for_request(\n"
+            "            request, state=state, at=datetime.now(UTC)))\n"
+            "        if state == ServiceState.READY: break\n"
+            "    time.sleep(.02)\n",
             encoding="utf-8",
         )
         service.chmod(0o755)
@@ -80,8 +111,14 @@ def _launcher(tmp_path: Path, *, executable: bool = True) -> tuple[Path, dict[st
         )
         ps.chmod(0o755)
     environment = {
-        **os.environ,
+        **{
+            name: os.environ[name]
+            for name in ("HOME", "PATH", "LANG", "LC_ALL", "TMPDIR")
+            if name in os.environ
+        },
         "ASE_SERVICE_STATE_DIR": str(tmp_path / "state"),
+        "PYTHONPATH": str(SCRIPT.parents[1] / "src"),
+        "ASE_SHUTDOWN_TIMEOUT_SECONDS": "0.25",
     }
     if executable:
         environment["ASE_TEST_SERVICE_EXECUTABLE"] = str(service)
@@ -100,7 +137,7 @@ def _run(
         check=False,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=15,
         env=environment,
     )
 
@@ -167,7 +204,7 @@ def test_background_service_survives_starting_session_termination(tmp_path: Path
         _run(launcher, environment, "stop")
 
 
-def test_service_launcher_restart_recovers_from_dead_pid_record(tmp_path: Path) -> None:
+def test_service_launcher_restart_refuses_unproven_dead_pid_record(tmp_path: Path) -> None:
     launcher, environment = _launcher(tmp_path)
     state = Path(environment["ASE_SERVICE_STATE_DIR"])
     state.mkdir()
@@ -178,13 +215,135 @@ def test_service_launcher_restart_recovers_from_dead_pid_record(tmp_path: Path) 
     try:
         restarted = _run(launcher, environment, "restart")
 
-        assert restarted.returncode == 0, restarted.stderr
-        assert "removed stale PID" in restarted.stdout
-        assert "ase-console started" in restarted.stdout
-        assert pid_file.read_text(encoding="utf-8").strip() != dead_pid
-        assert _run(launcher, environment, "status").returncode == 0
+        assert restarted.returncode == 1
+        assert "未留下安全收尾证明" in restarted.stderr
+        assert "ase-console started" not in restarted.stdout
+        assert pid_file.read_text(encoding="utf-8").strip() == dead_pid
+        assert _run(launcher, environment, "status").returncode == 1
     finally:
         _run(launcher, environment, "stop")
+
+
+def test_restart_refused_keeps_service_supervisor_and_can_resume(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    try:
+        assert _run(launcher, environment, "start").returncode == 0
+        pid_record = (state / "ase-console.pid").read_bytes()
+        supervisor_record = (state / "ase-console-supervisor.pid").read_bytes()
+        (state / "test-busy").touch()
+        refused = _run(launcher, environment, "restart")
+        assert refused.returncode == 1
+        assert "尚未确认安全收尾" in refused.stderr
+        assert (state / "ase-console.pid").read_bytes() == pid_record
+        assert (state / "ase-console-supervisor.pid").read_bytes() == supervisor_record
+        assert _run(launcher, environment, "status").returncode == 0
+        resumed = _run(launcher, environment, "resume")
+        assert resumed.returncode == 0, resumed.stderr
+        assert "可以接收新操作" in resumed.stdout
+        (state / "test-busy").unlink()
+        assert _run(launcher, environment, "restart").returncode == 0
+        assert (state / "ase-console.pid").read_bytes() != pid_record
+    finally:
+        (state / "test-busy").unlink(missing_ok=True)
+        _run(launcher, environment, "stop")
+
+
+def test_restart_rejects_old_host_without_handshake_and_sends_no_signal(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    instance_bytes: bytes | None = None
+    try:
+        assert _run(launcher, environment, "start").returncode == 0
+        pid_record = (state / "ase-console.pid").read_bytes()
+        instance_bytes = (state / "console-service-instance.json").read_bytes()
+        (state / "console-service-instance.json").unlink()
+        refused = _run(launcher, environment, "restart")
+        assert refused.returncode == 1
+        assert "未发送停服信号" in refused.stderr
+        pid = int(pid_record.splitlines()[0])
+        os.kill(pid, 0)
+        assert (state / "ase-console.pid").read_bytes() == pid_record
+    finally:
+        # Restore the unmodified isolated fixture identity for ordinary cleanup.
+        if instance_bytes is not None:
+            instance_path = state / "console-service-instance.json"
+            instance_path.write_bytes(instance_bytes)
+            instance_path.chmod(0o600)
+        _run(launcher, environment, "stop")
+
+
+def test_concurrent_replacement_lock_refuses_without_touching_running_host(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    try:
+        assert _run(launcher, environment, "start").returncode == 0
+        pid_record = (state / "ase-console.pid").read_bytes()
+        lock = state / "console-service-replacement.lock"
+        with lock.open("rb") as owner:
+            fcntl.flock(owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            refused = _run(launcher, environment, "restart")
+            assert refused.returncode == 1
+            assert "已有服务控制操作正在执行" in refused.stderr
+            assert not (state / "console-service-shutdown.request.json").exists()
+            assert (state / "ase-console.pid").read_bytes() == pid_record
+        # Direct internal entry cannot bypass the shared inherited lock.
+        bypass = _run(launcher, environment, "locked", "restart")
+        assert bypass.returncode == 1
+        assert (state / "ase-console.pid").read_bytes() == pid_record
+    finally:
+        _run(launcher, environment, "stop")
+
+
+def test_missing_pid_record_does_not_stop_live_supervisor(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    pid_record: bytes | None = None
+    try:
+        assert _run(launcher, environment, "start").returncode == 0
+        pid_record = (state / "ase-console.pid").read_bytes()
+        supervisor_record = (state / "ase-console-supervisor.pid").read_bytes()
+        (state / "ase-console.pid").unlink()
+        refused = _run(launcher, environment, "restart")
+        assert refused.returncode == 1
+        assert "旧服务仍在运行" in refused.stderr
+        assert (state / "ase-console-supervisor.pid").read_bytes() == supervisor_record
+        os.kill(int(supervisor_record.splitlines()[0]), 0)
+    finally:
+        if pid_record is not None:
+            (state / "ase-console.pid").write_bytes(pid_record)
+        _run(launcher, environment, "stop")
+
+
+def test_stale_ready_cannot_authorize_dead_service_replacement(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from ai_software_engineer.web_console.service_lifecycle import (
+        ServiceInstance,
+        ServiceLifecycleStore,
+        ServiceShutdownRequest,
+        ServiceShutdownResult,
+        ServiceState,
+    )
+
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    state.mkdir()
+    now = datetime.now(UTC)
+    instance = ServiceInstance.new(pid=99999999, at=now).with_state(ServiceState.READY, at=now)
+    request = ServiceShutdownRequest.new(instance, at=now)
+    stale_request = ServiceShutdownRequest.new(instance, at=now)
+    store = ServiceLifecycleStore(state)
+    store.publish_instance(instance)
+    store.write_request(request)
+    store.write_result(
+        ServiceShutdownResult.for_request(stale_request, state=ServiceState.READY, at=now)
+    )
+    (state / "ase-console.pid").write_text("99999999\n")
+    refused = _run(launcher, environment, "restart")
+    assert refused.returncode == 1
+    assert "未留下安全收尾证明" in refused.stderr
+    assert (state / "ase-console.pid").read_text() == "99999999\n"
 
 
 def test_service_launcher_restart_never_signals_live_foreign_pid(tmp_path: Path) -> None:
@@ -527,7 +686,7 @@ def test_service_supervisor_consumes_one_configuration_apply_request(
         )
         (state / "configuration-apply.request").write_text(request_id + "\n", encoding="ascii")
 
-        deadline = time.monotonic() + 6
+        deadline = time.monotonic() + 15
         result: dict[str, str] = {}
         while time.monotonic() < deadline:
             result = json.loads((state / "configuration-apply.json").read_text())
@@ -536,7 +695,7 @@ def test_service_supervisor_consumes_one_configuration_apply_request(
             time.sleep(0.1)
 
         assert result["status"] == "SUCCEEDED"
-        assert result["safe_summary"] == "Configuration was applied."
+        assert result["safe_summary"] == "配置已应用, 服务已安全重启。"
         restarted_pid = (state / "ase-console.pid").read_text().splitlines()[0]
         assert restarted_pid != original_pid
         assert not (state / "configuration-apply.request").exists()
@@ -627,7 +786,7 @@ def test_restart_preserves_replacement_supervisor_record_and_applyability(
             encoding="utf-8",
         )
         (state / "configuration-apply.request").write_text(request_id + "\n", encoding="ascii")
-        deadline = time.monotonic() + 6
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             result = json.loads((state / "configuration-apply.json").read_text())
             if result["status"] != "PENDING":
@@ -695,7 +854,7 @@ def test_service_supervisor_does_not_retain_removed_runtime_value(tmp_path: Path
         )
         (state / "configuration-apply.request").write_text(request_id + "\n", encoding="ascii")
 
-        deadline = time.monotonic() + 6
+        deadline = time.monotonic() + 15
         result: dict[str, str] = {}
         while time.monotonic() < deadline:
             result = json.loads((state / "configuration-apply.json").read_text())
@@ -744,7 +903,7 @@ def test_service_supervisor_records_safe_failure_without_rolling_back_runtime(
         )
         (state / "configuration-apply.request").write_text(request_id + "\n", encoding="ascii")
 
-        deadline = time.monotonic() + 6
+        deadline = time.monotonic() + 15
         result: dict[str, str] = {}
         while time.monotonic() < deadline:
             result = json.loads((state / "configuration-apply.json").read_text())
@@ -753,7 +912,7 @@ def test_service_supervisor_records_safe_failure_without_rolling_back_runtime(
             time.sleep(0.1)
 
         assert result["status"] == "FAILED"
-        assert result["safe_summary"].startswith("Configuration remains saved")
+        assert result["safe_summary"].startswith("配置已保存")
         assert "secret" not in json.dumps(result)
         assert runtime_environment.read_text(encoding="utf-8") == runtime_body
     finally:
@@ -790,7 +949,7 @@ def test_service_supervisor_reconciles_claimed_pending_request_as_failed(
                 break
             time.sleep(0.05)
         assert result["status"] == "FAILED"
-        assert "Configuration remains saved" in result["safe_summary"]
+        assert "配置已保存" in result["safe_summary"]
     finally:
         _run(launcher, environment, "stop")
 
@@ -829,7 +988,7 @@ def test_service_supervisor_records_failure_when_runtime_environment_cannot_load
             encoding="utf-8",
         )
         (state / "configuration-apply.request").write_text(request_id + "\n", encoding="ascii")
-        deadline = time.monotonic() + 4
+        deadline = time.monotonic() + 15
         result: dict[str, str] = {}
         while time.monotonic() < deadline:
             result = json.loads((state / "configuration-apply.json").read_text())

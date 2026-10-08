@@ -1366,7 +1366,7 @@ launcher for one trusted local Host; it is not a system boot service or multi-in
 ### 2. Signatures
 
 ```text
-./scripts/ase-console-service.sh start|stop|restart|status|logs
+./scripts/ase-console-service.sh start|stop|restart|resume|status|logs
 ASE_SERVICE_STATE_DIR=/absolute/path   # optional
 XDG_STATE_HOME=/absolute/path          # optional fallback
 ```
@@ -1389,25 +1389,26 @@ configuration-apply.json = request_id + PENDING/SUCCEEDED/FAILED + fixed safe_su
   default, then loads sibling `runtime.env` with export semantics before launching. Existing process
   environment remains available and the managed file wins for its declared names. It redirects stdio,
   records the child PID and verifies that the same executable remains alive after startup.
-- `stop` sends TERM only when the PID is numeric, alive and its process command identifies this
-  repository's executable, or when line 2 identifies a live `*/.venv/bin/ase-console` previously
-  written by this launcher in another checkout sharing the same state directory. The latter is a
-  managed checkout handoff: `restart` stops the verified old executable and starts the current
-  repository executable. Python entry points may appear in the process table as the same repository's
-  `.venv/bin/python*` followed by relative `.venv/bin/ase-console`; that exact same-project form is
-  equivalent to the absolute entry point. It must not authorize a different virtualenv or an arbitrary
-  Python process. A numeric PID with no live process is a safe stale record: `stop` removes
-  only that PID file and succeeds, allowing `restart` to continue. It waits up to 20 seconds and never
-  escalates to KILL automatically.
+- `stop` first verifies the managed executable, then publishes a local typed shutdown request bound
+  to the live service instance/PID. It sends no termination signal. The service stops admitting new
+  writes/Operations, finishes admitted work and persists exact `READY` before setting Uvicorn exit.
+  The launcher requires matching request/instance/PID and actual exit before removing its PID record.
+  Timeout, store failure, missing handshake, mismatched nonce or uncertain owned processes preserve
+  the old service/PID and refuse replacement. `resume` releases a timeout-only drain while alive;
+  persistence failure is sticky. See [controlled-service-restart.md](controlled-service-restart.md).
+  Managed checkout handoff still uses line 2's exact `*/.venv/bin/ase-console`. Same-repository
+  `.venv/bin/python* .venv/bin/ase-console` remains a valid process identity, not stop proof.
+  Dead PID alone never authorizes restart; its exact durable READY/request must also validate.
 - `start` writes both PID and executable identity, treats a verified managed process from another
   checkout as already running, and never overwrites a live unverified PID record with a second
   process. It also starts one supervisor whose PID and exact script path must match its live command;
   a stale/foreign supervisor record is never signaled or overwritten. `status` reports the recorded
   executable when another checkout owns the managed process.
-- The supervisor consumes a valid apply request once, verifies the managed child, uses only TERM with
-  the same 20-second bound, and starts a replacement from the saved config/runtime environment. Child
+- The supervisor consumes a valid apply request once under the shared replacement lock, verifies
+  the managed child, completes the same instance-bound controlled handshake, then starts a
+  replacement from the saved config/runtime environment. Child
   launch sources `runtime.env` in a subshell so removed managed values do not remain in supervisor
-  memory. Before signaling, it requires the regular lifecycle state file to exactly encode the same
+  memory. Before shutdown request publication, it requires the regular apply state file to exactly encode the same
   request ID with the fixed `PENDING` summary; missing, malformed, symlink, mismatched or non-pending
   state is never authorization to signal. Terminal state publication is atomic and contains only fixed
   safe text. A supervisor takes an atomic directory ownership lock and writes its PID/script identity
@@ -1420,7 +1421,8 @@ configuration-apply.json = request_id + PENDING/SUCCEEDED/FAILED + fixed safe_su
   stop/load/launch interruption likewise records `FAILED`, including malformed or symlinked runtime.env.
   Supervisor shutdown waits boundedly, and trap cleanup removes the PID record only while it
   still names that supervisor, preventing an old process from deleting its replacement's identity.
-- `restart` is exact `stop` followed by `start`; `status` is read-only apart from preparing its safe
+- `restart` holds one OS-released flock across controlled `stop` and `start`; CLI and apply cannot
+  race replacement. `status` is read-only apart from preparing its safe
   state directory; `logs` tails the last 100 lines and follows the file.
 - The state directory must be absolute, not `/`, and not a symlink. PID-file symlinks are rejected.
   A stale or foreign PID never receives a signal.
@@ -1437,9 +1439,9 @@ configuration-apply.json = request_id + PENDING/SUCCEEDED/FAILED + fixed safe_su
 | Missing config/runtime.env | start setup surface using visible defaults; do not synthesize either file |
 | runtime.env symlink/non-file | reject before starting child |
 | Existing matching live PID | idempotent start |
-| Missing PID on stop | report not running; success |
+| Missing PID on stop | verify lifecycle instance; if it still runs or lacks exact READY, preserve supervisor and refuse |
 | Non-numeric PID | send no signal; report stopped without trusting the record |
-| Numeric PID with no live process | remove only the stale PID file; report stopped; allow restart |
+| Numeric PID with no live process | require exact READY handshake; otherwise preserve record and refuse replacement |
 | Live PID uses same-project `.venv/bin/python* .venv/bin/ase-console` | recognize it as the recorded repository executable; status/stop/restart work normally |
 | Live PID and recorded executable identify another checkout's managed Console | `restart` stops that exact process, then starts the current checkout |
 | Live PID has no valid recorded executable or command does not match it | send no signal; retain PID file; fail safely |
@@ -1458,9 +1460,10 @@ configuration-apply.json = request_id + PENDING/SUCCEEDED/FAILED + fixed safe_su
   the canonical runtime file, then use `status`/`logs` for operations.
 - Good: one valid pending apply request replaces one verified child and records `SUCCEEDED`; replaying
   its terminal identity does not replace the child again.
-- Base: stopping an already stopped service is idempotent; a dead numeric PID is cleaned without
-  signaling any process, then `restart` starts a fresh child. A legacy one-line PID remains valid for
-  the checkout whose exact executable is running, but cannot authorize a cross-checkout handoff.
+- Base: stopping an already stopped service is idempotent only after lifecycle proof or explicit first-start state.
+  A dead numeric PID with no exact READY is preserved and requires the one-time old-version upgrade path; it never
+  authorizes a fresh child. A legacy one-line PID remains valid for the checkout whose exact executable is running,
+  but cannot authorize a cross-checkout handoff.
 - Bad: use a PID file without process identity validation, retain sourced secrets in the long-lived
   supervisor, hard-code DSN in the script, source an arbitrary/symlink runtime file, treat every
   `ase-console` command as managed, or issue `kill -9` after a fixed delay.

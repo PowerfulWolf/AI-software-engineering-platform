@@ -2,12 +2,12 @@
 
 import os
 import selectors
-import signal
 import subprocess
 import time
 from collections.abc import Mapping
-from contextlib import suppress
 from pathlib import Path
+
+from ai_software_engineer.owned_processes import finish_owned_process, observe_owned_process
 
 
 def bounded_verification_command(
@@ -28,6 +28,8 @@ def bounded_verification_command(
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
+    observation = observe_owned_process(process, kind="tool")
+    output_drained = False
     assert process.stdout is not None and process.stderr is not None
     deadline = time.monotonic() + timeout
     output, errors = bytearray(), bytearray()
@@ -57,13 +59,13 @@ def bounded_verification_command(
                         raise ValueError("verification command output exceeds bound")
         if process.wait(timeout=max(0.01, deadline - time.monotonic())):
             raise ValueError("verification command failed")
+        output_drained = True
         return bytes(output)
     finally:
-        # The leader may have exited while a descendant still holds either pipe.
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=5)
-        process.stdout.close()
-        process.stderr.close()
-        if process.stdin is not None:
-            process.stdin.close()
+        try:
+            finish_owned_process(process, observation, output_drained=output_drained)
+        finally:
+            process.stdout.close()
+            process.stderr.close()
+            if process.stdin is not None:
+                process.stdin.close()

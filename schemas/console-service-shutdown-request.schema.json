@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "ServiceShutdownAction": {
+      "enum": [
+        "SHUTDOWN",
+        "RESUME"
+      ],
+      "title": "ServiceShutdownAction",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "request_id": {
+      "pattern": "^console_shutdown_[a-f0-9]{32}$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "instance_id": {
+      "pattern": "^console_instance_[a-f0-9]{32}$",
+      "title": "Instance Id",
+      "type": "string"
+    },
+    "pid": {
+      "exclusiveMinimum": 1,
+      "title": "Pid",
+      "type": "integer"
+    },
+    "action": {
+      "$ref": "#/$defs/ServiceShutdownAction",
+      "default": "SHUTDOWN"
+    },
+    "state": {
+      "const": "REQUESTED",
+      "default": "REQUESTED",
+      "title": "State",
+      "type": "string"
+    },
+    "requested_at": {
+      "format": "date-time",
+      "title": "Requested At",
+      "type": "string"
+    },
+    "timeout_seconds": {
+      "default": 300.0,
+      "maximum": 3600,
+      "minimum": 0.01,
+      "title": "Timeout Seconds",
+      "type": "number"
+    }
+  },
+  "required": [
+    "request_id",
+    "instance_id",
+    "pid",
+    "requested_at"
+  ],
+  "title": "ServiceShutdownRequest",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/console-service-shutdown-request.schema.json"
+}
