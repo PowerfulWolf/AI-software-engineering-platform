@@ -142,6 +142,13 @@ requestChapterNavigation(request)     // read-only scroll controls
   Sticky header keeps close/reading controls; nonsticky title/status may wrap fully without
   filling the viewport. Overview signature includes raw `item.status` as well as presentation,
   since a changed delivery phase can have an unchanged WAITING/RUNNING presentation.
+- Requirement chapter navigation uses the actual scroll-container padding. Above 1180px, the
+  internally scrolling `#detail.request-detail-panel` and its nav share `--detail-panel-padding`:
+  sticky top and inline margins negate that value, while inline padding preserves button alignment.
+  The opaque nav background reaches the container's inner top/side borders without exposing old
+  content. At 1180px and below, the detail follows page scroll and nav stays `top:0`; never apply
+  the negative top in that mode. Check 1440/1024/390 geometry and real screenshots using the existing
+  requirement-detail browser fixture. Task dialog already has a zero-padding sticky header.
 - Current engineering wait uses keyed `.engineering-wait-panel` section, never an outer disclosure.
   Investigation, missing facts and permitted decisions remain visible in current; only exact identity
   reference is folded. Optional baseline discovery stays in `details.engineering-baseline-panel`;

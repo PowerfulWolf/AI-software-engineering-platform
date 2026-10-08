@@ -646,9 +646,10 @@ main[data-page="requests"] #detail {
 }
 .request-detail-panel {
   --detail-section-space: 18px;
+  --detail-panel-padding: 20px;
 }
 #detail.request-detail-panel {
-  padding: 20px;
+  padding: var(--detail-panel-padding);
   background: #f4f6fa;
   overflow-wrap: anywhere;
   scrollbar-gutter: stable;
@@ -719,6 +720,13 @@ main[data-page="requests"] #detail {
   border-bottom: 1px solid #d3dce9;
   background: #f4f6fa;
   overflow: visible;
+}
+@media (min-width: 1181px) {
+  main[data-page="requests"] #detail.request-detail-panel .request-chapter-nav {
+    top: calc(-1 * var(--detail-panel-padding));
+    margin-inline: calc(-1 * var(--detail-panel-padding));
+    padding-inline: var(--detail-panel-padding);
+  }
 }
 .request-chapter-nav .request-chapter-link {
   min-width: 0;
