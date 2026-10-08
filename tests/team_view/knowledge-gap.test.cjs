@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { webcrypto } = require("node:crypto");
+const { supportedActions } = require("./console-capabilities-fixture.cjs");
 
 class Element {
   constructor(tag) {
@@ -34,7 +35,7 @@ function harness(fetcher) {
   const context = vm.createContext({
     document: { getElementById: get, createElement: tag => new Element(tag), createTextNode: s => s, querySelectorAll: () => [] },
     fetch: fetcher, crypto: webcrypto, TextEncoder, setTimeout: () => 0, clearTimeout() {},
-    AbortController, structuredClone,
+    AbortController, structuredClone, supportedActions,
   });
   const source = fs.readFileSync(path.join(__dirname, "../../src/ai_software_engineer/team_view/app.js"), "utf8");
   vm.runInContext(source.replace(/\nrefresh\(\);\nsetInterval\(refresh, 5000\);\s*$/, "\n"), context);
@@ -42,6 +43,7 @@ function harness(fetcher) {
     snapshot = {team_id: "team_test", requests: [{id: "r1", project_id: "project_test", title: "Requirement", stage: "WAITING_HUMAN", checkpoint_sha256: "checkpoint-a", scopes: [], documents: [], dialogue: []}], tasks: [], agents: [], projects: []};
     selected = {kind: "request", id: "r1"}; page = "requests";
     consoleAvailable = true; consoleDeliveryReady = true; operationsAvailable = true; consoleTeamId = "team_test";
+    consoleOperationContractVersion = 1; consoleSupportedActions = [...supportedActions];
     renderDetail();
   `, context);
   return { context, get, detail: () => get("detail"), render: () => vm.runInContext("renderDetail()", context) };

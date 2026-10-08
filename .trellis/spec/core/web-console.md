@@ -721,6 +721,60 @@ plan = RecoveryPlan.model_validate_json(Path(plan_file).read_text())
 _, plan = host.recovery_entry(project_id).open_plan(Path(plan_file))
 ```
 
+## Console operation contract (2026-10-08)
+
+### Scope / Trigger
+
+更新 checkout 后，旧 Python 进程仍持有启动时的 `ConsoleIntent`。此前 static GET 每次读取当前
+磁盘资源，新 HANDLE 按钮会发送旧 union 不认识的 action，得到 422 英文“Operation input is invalid.”。
+生产只读检查与隔离旧/新 transport differential 均能定位此原因；这不是 Manager 恢复条件不足。
+
+### Signatures / Contracts
+
+`create_console_app()` 启动时一次读取并保留三个静态资源的 bytes。后续 GET `/`、`/app.js`、
+`/style.css` 始终返回本次启动所绑定的内容。GET `/api/v1/console` 保持 `schema_version=v0.2`，
+增加 `operation_contract_version=1` 和由当前 `ConsoleAction` 推导的 `supported_actions`。
+清单是兼容性声明，不是权限或审批；原团队、Project、digest、operator、policy 验证全部保持。
+
+浏览器 `submitOperation(intent)` 在 POST 之前检查契约版本和 action 支持。缺失、不同版本、
+未列出 action 时没有 POST、Operation、审批、恢复或重试预算变化。工程等待卡片直接显示中文
+空闲重启/刷新建议；能力事实纳入 incremental signature，404/失败清空旧 capability，不保留陈旧准入。
+
+### Validation & Error Matrix
+
+| 边界 | 行为 |
+|---|---|
+| 缺失/不同 operation contract、action 不支持 | UI 阻止提交，提示当前操作和角色结束、服务空闲时重启后刷新 |
+| 同一进程启动后磁盘三资源改变 | 继续返回已冻结旧 bytes，不能混入新控件 |
+| 合法 HANDLE 完整 envelope | HTTP 202，先 typed 校验再持久化，精确幂等重放 |
+| HTTP `intent` 的未知 union action | 409 `OPERATION_NOT_SUPPORTED`，不回显 action 或 payload，不创建操作 |
+| 支持 action 下字段缺失/非法/额外 stop 布尔值 | 422 `INVALID_REQUEST` 中文，原工作和预算保留 |
+| 合法请求后 `console.submit` 内部记录 ValidationError | 503 `OPERATION_STATE_INVALID` 中文，不误称用户输入错误，不暴露内部输入 |
+
+### Good / Base / Bad Cases
+
+Good：同一启动资源与动作 manifest，完整 HANDLE 经真实 HTTP 和 FileConsoleOperationStore 封存，
+关闭并重新打开 store 后原 Operation 仍可验证。Base：新页面遇旧服务没有 manifest，提示更新服务，
+保留原需求和进度。Bad：把 `delivery_ready=true` 当作所有新 action 都受支持，或浏览器 mock 202
+作为真实服务受理证据。
+
+### Tests Required / Wrong vs Correct
+
+`tests/web_console/test_transport.py` 核验静态资源启动绑定、manifest 与真实 union 一致、完整合法
+HANDLE 202+FileStore reopen+幂等、unknown action 和额外 authority 字段拒绝、内部校验错误区分。
+`tests/team_view/operation-capabilities.test.cjs` 和浏览器工程等待核验旧服务零 POST、兼容服务精确
+提交、unsupported action、轮询清除失效能力和中文错误。禁止写真实 ASE 来复现截图。
+
+Wrong：新代码在磁盘上、刷新出现按钮就发送新动作；受理失败一律说输入有误。
+Correct：服务启动时绑定 UI；先检查本次运行支持的动作；再进入已有 typed HTTP 审批/执行路径。
+
+### 存量数据处置
+
+此输入校验失败发生在 Operation 创建之前，不需要改库、清空工作区或重建需求。等待服务空闲，
+由用户执行 `./scripts/ase-console-service.sh restart` 后刷新原需求，再请求“让平台处理中断”。
+代码加载成功不等于旧第 6 轮可恢复：仍按真实停止/claim/现场/原授权判断。回滚前空闲停止服务，
+撤本轮代码并重启，保留全部 immutable 历史；不回滚业务 Task 或预算。
+
 ## Scenario: singleton Team, Project, document knowledge and production settings administration
 
 ### 1. Scope / Trigger
@@ -1000,7 +1054,11 @@ catalog-route path without silently changing per-Agent model policy.
 
 ### Settings page/server contract version
 
-1. Scope / Trigger: `team_view/app.js` is served from files while a running `ase-console` retains
+自 2026-10-08 起，生产 Console 的 `create_console_app()` 在启动时冻结 `index.html`、`app.js`
+和 `style.css` 字节。下面的磁盘热读描述是此前的 failure mode；更新前端文件后也要等服务空闲
+重启加载，单独刷新不会把新页面混入旧进程。具体操作握手见“Console operation contract”。
+
+1. Scope / Trigger: before startup asset binding, `team_view/app.js` was served from files while a running `ase-console` retained
    imported Python models. A checkout update can therefore pair a new browser Settings form with an
    old `ProductionConfig` validator even after browser refresh. `DomainModel(extra="forbid")` then
    reports a generic 422 for every save, including an unchanged draft.

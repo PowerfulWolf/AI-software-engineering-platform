@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
+const { operationManifest } = require("../console-capabilities-fixture.cjs");
 const assets = path.resolve(__dirname, "../../../src/ai_software_engineer/team_view");
 const operation = (status = "QUEUED", overrides = {}) => ({
   operation_id: "operation_fixture", status, updated_at: "2026-09-21T00:00:00Z",
@@ -19,7 +20,8 @@ async function ui(t, options = {}) {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], "no unhandled browser errors"));
-  const state = { ready: options.ready ?? true, operations: options.operations || [], reads: [] };
+  const state = { ready: options.ready ?? true, operations: options.operations || [], reads: [],
+    operationManifest: options.operationManifest === undefined ? structuredClone(operationManifest) : options.operationManifest };
   const team = { schema_version: "v0.2", as_of: "2026-09-21T00:00:00Z", team_id: "team_fixture", team_name: "Fixture",
     selected_project_id: "project_fixture", projects: [{ id: "project_fixture", name: "Fixture project" }], agents: [], tasks: [],
     requests: [{ id: "request_fixture", title: "Fixture request", project_id: "project_fixture", stage: "READY_FOR_DISCUSSION",
@@ -44,7 +46,8 @@ async function ui(t, options = {}) {
       return route.fulfill({ json: { project_id: "project_fixture" } });
     const api = {
       "/api/v1/team": team,
-      "/api/v1/console": { schema_version: "v0.2", team_id: "team_fixture", delivery_ready: state.ready },
+      "/api/v1/console": { schema_version: "v0.2", team_id: "team_fixture", delivery_ready: state.ready,
+        ...(state.operationManifest || {}) },
       "/api/v1/operations": state.operations,
       "/api/v1/admin/settings": { settings_contract_version: options.settingsContractVersion ?? 2, config, config_path: "/fixture/production.json", config_source: "saved", restart_required: false, secret_status: [] },
       "/api/v1/admin/projects": team.projects,

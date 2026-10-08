@@ -8,6 +8,7 @@ from threading import Event, get_ident
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import Message, Scope
@@ -24,18 +25,22 @@ from ai_software_engineer.web_console import (
     ConfigurationApplyStatus,
     ConsoleIntent,
     ConsoleOperation,
+    FileConsoleOperationStore,
     InMemoryConsoleOperationStore,
     LocalConsoleAdministration,
     create_console_app,
+    transport,
 )
 from ai_software_engineer.web_console.administration import SettingsSnapshot
 from ai_software_engineer.web_console.host import production_console_app
+from ai_software_engineer.web_console.models import CONSOLE_INTENT_ADAPTER, ConsoleAction
+from ai_software_engineer.web_console.store import ConsoleOperationStore
 from ai_software_engineer.web_console.transport import _screenshot_body
 
 
 class _Console:
-    def __init__(self) -> None:
-        self.store = InMemoryConsoleOperationStore("team_test")
+    def __init__(self, store: ConsoleOperationStore | None = None) -> None:
+        self.store = store if store is not None else InMemoryConsoleOperationStore("team_test")
         self.started = False
         self.closed = False
 
@@ -345,6 +350,117 @@ def test_web_transport_composes_assets_snapshot_and_durable_submission(tmp_path:
         assert "img-src 'self' blob: data:" in submitted.headers["content-security-policy"]
 
     assert console.started and console.closed
+
+
+def test_console_operation_manifest_reports_the_running_action_contract() -> None:
+    app = create_console_app(_Console(), _Reader(), team_id="team_test", port=8765)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        info = client.get("/api/v1/console")
+    assert info.status_code == 200
+    assert info.json()["operation_contract_version"] == 1
+    assert set(info.json()["supported_actions"]) == {action.value for action in ConsoleAction}
+    assert set(info.json()["supported_actions"]) == set(
+        CONSOLE_INTENT_ADAPTER.json_schema()["discriminator"]["mapping"]
+    )
+
+
+def test_static_assets_remain_bound_to_the_started_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("index.html", "app.js", "style.css"):
+        (tmp_path / name).write_bytes(b"startup " + name.encode())
+    monkeypatch.setattr(transport, "files", lambda _: tmp_path)
+    app = create_console_app(_Console(), _Reader(), team_id="team_test", port=8765)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        assert client.get("/app.js").content == b"startup app.js"
+        (tmp_path / "app.js").write_bytes(b"new UI expects new HANDLE schema")
+        (tmp_path / "index.html").write_bytes(b"new markup")
+        (tmp_path / "style.css").write_bytes(b"new stylesheet")
+        assert client.get("/app.js").content == b"startup app.js"
+        assert client.get("/").content == b"startup index.html"
+        assert client.get("/style.css").content == b"startup style.css"
+
+
+def _wait_payload() -> dict[str, object]:
+    return {
+        "idempotency_key": "browser-wait-0001",
+        "intent": {
+            "action": "HANDLE_DELIVERY_WAIT",
+            "project_id": "project_web",
+            "delivery_id": "delivery_multi_fixture",
+            "expected_checkpoint_sha256": "a" * 64,
+            "work_item_id": "work_original",
+            "expected_disposition_sha256": "b" * 64,
+            "expected_task_intent_sha256": "c" * 64,
+            "expected_source_revision": "d" * 40,
+            "expected_checkpoint_sequence": 6,
+        },
+    }
+
+
+def test_http_handle_wait_validates_and_durably_accepts_the_exact_browser_envelope(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "console-operations"
+    console = _Console(FileConsoleOperationStore(root, team_id="team_test"))
+    app = create_console_app(console, _Reader(), team_id="team_test", port=8765)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        submitted = client.post("/api/v1/operations", json=_wait_payload())
+        assert submitted.status_code == 202, submitted.text
+        assert submitted.json()["intent"] == _wait_payload()["intent"]
+        assert submitted.json()["status"] == "QUEUED"
+        assert len(client.get("/api/v1/operations").json()) == 1
+        replay = client.post("/api/v1/operations", json=_wait_payload())
+        assert replay.json() == submitted.json()
+    reopened = FileConsoleOperationStore(root, team_id="team_test")
+    assert reopened.get(submitted.json()["operation_id"]).to_wire() == submitted.json()
+
+
+def test_http_unknown_action_reports_service_mismatch_without_echo_or_submission() -> None:
+    console = _Console()
+    app = create_console_app(console, _Reader(), team_id="team_test", port=8765)
+    payload = _wait_payload()
+    payload["intent"] = {"action": "FUTURE_ACTION_PRIVATE_INPUT"}
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        rejected = client.post("/api/v1/operations", json=payload)
+    assert rejected.status_code == 409
+    assert rejected.json()["error"]["code"] == "OPERATION_NOT_SUPPORTED"
+    assert "服务" in rejected.json()["error"]["message"]
+    assert "FUTURE_ACTION_PRIVATE_INPUT" not in rejected.text
+    assert console.list_operations() == ()
+
+
+def test_http_internal_record_validation_is_not_reported_as_invalid_browser_input() -> None:
+    class InvalidRecordConsole(_Console):
+        def submit(self, intent: ConsoleIntent, *, idempotency_key: str) -> ConsoleOperation:
+            TypeAdapter(int).validate_python("PRIVATE_INTERNAL_RECORD")
+            raise AssertionError("validation unexpectedly succeeded")
+
+    console = InvalidRecordConsole()
+    app = create_console_app(console, _Reader(), team_id="team_test", port=8765)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        rejected = client.post("/api/v1/operations", json=_wait_payload())
+    assert rejected.status_code == 503
+    assert rejected.json()["error"]["code"] == "OPERATION_STATE_INVALID"
+    assert "平台" in rejected.json()["error"]["message"]
+    assert "PRIVATE_INTERNAL_RECORD" not in rejected.text
+    assert console.list_operations() == ()
+
+
+def test_http_handle_wait_still_rejects_input_authority_and_localizes_failure() -> None:
+    console = _Console()
+    app = create_console_app(console, _Reader(), team_id="team_test", port=8765)
+    payload = _wait_payload()
+    intent = payload["intent"]
+    assert isinstance(intent, dict)
+    intent["process_stopped"] = True
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        rejected = client.post("/api/v1/operations", json=payload)
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "INVALID_REQUEST"
+    assert "未受理" in rejected.json()["error"]["message"]
+    assert "process_stopped" not in rejected.text
+    assert console.list_operations() == ()
 
 
 def test_directory_picker_and_requirement_screenshot_use_local_bounded_endpoints(

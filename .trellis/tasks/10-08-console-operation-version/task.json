@@ -1,0 +1,11 @@
+{
+  "id": "console-operation-version-20261008",
+  "title": "新页面与运行服务操作契约一致性",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "owner": "codex",
+  "created_at": "2026-10-08",
+  "baseline": "8b31c96",
+  "verification": "verification.md",
+  "deployment": "pending_user_idle_restart"
+}

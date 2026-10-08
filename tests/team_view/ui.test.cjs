@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const path = require("node:path");
+const { operationManifest } = require("./console-capabilities-fixture.cjs");
 
 class Element {
   constructor(tag) {
@@ -892,6 +893,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
             schema_version: "v0.2",
             team_id: "team_fixture",
             delivery_ready: deliveryReady,
+            ...operationManifest,
           }),
         };
       if (url === "/api/v1/operations" && options.method === "POST") {

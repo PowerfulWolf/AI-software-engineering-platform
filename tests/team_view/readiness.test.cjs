@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { operationManifest } = require("./console-capabilities-fixture.cjs");
 
 class Element {
   constructor(tag) {
@@ -122,7 +123,7 @@ async function browser(options = {}) {
         if (state.consoleInvalidJson)
           return { ok: true, json: async () => { throw new SyntaxError("invalid JSON"); } };
         return response({ schema_version: "v0.2", team_id: config.team_id,
-          delivery_ready: state.ready });
+          delivery_ready: state.ready, ...operationManifest });
       }
       if (url === "/api/v1/operations") {
         if (request.method === "POST" && options.operationPost)

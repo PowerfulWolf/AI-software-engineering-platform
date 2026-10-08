@@ -15,6 +15,8 @@ let consoleAvailable = null;
 let consoleConnectionFailed = false;
 let consoleTeamId = null;
 let consoleDeliveryReady = null;
+let consoleOperationContractVersion = null;
+let consoleSupportedActions = null;
 let administrationAvailable = null;
 let administrationProjects = [];
 let knowledgeDocuments = [];
@@ -51,6 +53,13 @@ let settingsSaveResult = null;
 const settingsContractVersion = 2;
 const settingsVersionMismatchMessage =
   "设置页面与当前服务版本不匹配。请重启 Web Console 后刷新页面，再保存配置。";
+const consoleOperationContractVersionExpected = 1;
+const consoleOperationVersionMismatchMessage =
+  "页面暂不能提交后续新操作：页面与服务版本不匹配。请在当前操作和角色执行结束、服务空闲时重启 Web Console 并刷新页面；原需求和已保存进度保留。";
+function consoleSupportsOperation(action) {
+  return consoleOperationContractVersion === consoleOperationContractVersionExpected &&
+    Array.isArray(consoleSupportedActions) && consoleSupportedActions.includes(action);
+}
 const configurationApplyStorageKey = "ase-configuration-apply";
 const configurationApplyTimeoutMs = 30000;
 let configurationApplyPending = readConfigurationApplyPending();
@@ -122,7 +131,8 @@ function renderView(container, key, facts, build, incremental) {
   renderedSurfaces.set(container, {key, signature: JSON.stringify(facts())});
 }
 function pollingControlFacts() {
-  return [consoleAvailable, consoleTeamId, consoleDeliveryReady, operationsAvailable,
+  return [consoleAvailable, consoleTeamId, consoleDeliveryReady, consoleOperationContractVersion,
+    consoleSupportedActions, operationsAvailable,
     snapshot?.team_id, currentProjectId(), projectSwitchPending()];
 }
 function pollingContentFacts() {
@@ -753,6 +763,12 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
     facts.platform = "已检查原执行和保留进度，现有规则要求工程授权者确认所列方案后继续。";
     facts.user = "需要工程授权者确认按页面所列方案继续；不需要手工核验内部记录。";
   }
+  if (consoleAvailable === true && !consoleSupportsOperation("HANDLE_DELIVERY_WAIT")) {
+    if (!active && !decision && !handling) {
+      facts.platform = "当前页面的处理操作未获当前服务支持，请先更新运行中的服务。";
+      facts.user = consoleOperationVersionMismatchMessage;
+    } else facts.user += " " + consoleOperationVersionMismatchMessage;
+  }
   return facts;
 }
 async function copyEngineeringWaitReport(request, handling) {
@@ -822,15 +838,16 @@ function engineeringWaitBox(request, task, step) {
   } else if (canControlCurrentTeam() && !running) {
     const canResolve = engineeringWaitCanResolve(request, step, proof);
     const actions = viewBlock(el("div", undefined, "engineering-wait-actions"), "engineering-wait-actions",
-      [bound, proof, handling, canResolve, canControlCurrentTeam()]);
-    if (!canResolve && !["NEEDS_AUTHORIZATION", "PLATFORM_ATTENTION", "BUDGET_EXHAUSTED", "WAITING_PREREQUISITES"].includes(handling?.status))
+      [bound, proof, handling, canResolve, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
+    if (consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve &&
+      !["NEEDS_AUTHORIZATION", "PLATFORM_ATTENTION", "BUDGET_EXHAUSTED", "WAITING_PREREQUISITES"].includes(handling?.status))
       actions.append(deliveryButton("让平台处理中断", () => submitEngineeringWaitOperation({
         ...bound, action: "HANDLE_DELIVERY_WAIT",
       }), "primary"));
-    actions.append(deliveryButton(proof || handling ? "重新检查状态" : "调查工程等待", () =>
+    if (consoleSupportsOperation("INSPECT_DELIVERY_WAIT")) actions.append(deliveryButton(proof || handling ? "重新检查状态" : "调查工程等待", () =>
       submitEngineeringWaitOperation({...bound, action: "INSPECT_DELIVERY_WAIT"}),
       "secondary"));
-    if (canResolve)
+    if (canResolve && consoleSupportsOperation("RESOLVE_DELIVERY_WAIT"))
       for (const kind of proof.permitted_resolutions || []) {
         const title = engineeringResolutionLabels[kind];
         if (title) actions.append(deliveryButton(title, () => submitEngineeringWaitOperation({
@@ -1701,6 +1718,7 @@ function humanizeBlockingText(value) {
   const text = String(value || "").trim();
   if (!text) return "暂未记录具体原因。";
   const exact = {
+    "Operation input is invalid.": "本次请求未被受理，不是原需求新增的阻塞。页面与服务的操作契约可能不匹配，或提交内容不符合当前契约。请在当前操作和角色执行结束、服务空闲时重启 Web Console 并刷新页面；原需求和已保存进度保留。如仍无法提交，请携带处理报告核对请求字段。",
     "The console host stopped before the operation completed.": "服务在本次操作完成前已停止，操作已中断。已保存的交付进度和审批仍保留。",
     "Designer did not publish a verified planning handoff": "设计到计划的交接尚未通过校验，当前交付已阻塞。由工程团队核验具体原因并处理。",
     "Prepare every selected directory.": "准备所有已选择的代码目录。",
@@ -3102,6 +3120,8 @@ async function submitOperation(intent) {
   try {
     if (!canControlCurrentTeam())
       throw new Error("交付控制状态暂不可用，请刷新后重试。");
+    if (!consoleSupportsOperation(intent.action))
+      throw new Error("本次请求未被受理，不是原需求新增的阻塞。" + consoleOperationVersionMismatchMessage);
     const response = await fetch("/api/v1/operations", {
       method: "POST",
       cache: "no-store",
@@ -3135,7 +3155,7 @@ async function submitOperation(intent) {
     operationNotice = {
       kind: "error",
       title: `${label(intent.action)} · 操作未被接受`,
-      message: error instanceof Error ? error.message : "操作未被接受。",
+      message: humanizeBlockingText(error instanceof Error ? error.message : "操作未被接受。"),
     };
     renderNotification();
     return null;
@@ -8260,6 +8280,8 @@ async function refreshConsoleInfo(signal) {
       consoleConnectionFailed = false;
       consoleTeamId = null;
       consoleDeliveryReady = null;
+      consoleOperationContractVersion = null;
+      consoleSupportedActions = null;
       return;
     }
     if (!response.ok) throw new Error("console unavailable");
@@ -8274,11 +8296,20 @@ async function refreshConsoleInfo(signal) {
     consoleConnectionFailed = false;
     consoleTeamId = info.team_id;
     consoleDeliveryReady = info.delivery_ready;
+    const actions = info.supported_actions;
+    const validManifest = Number.isInteger(info.operation_contract_version) &&
+      info.operation_contract_version >= 1 && Array.isArray(actions) && actions.length <= 64 &&
+      actions.every(action => typeof action === "string" && /^[A-Z][A-Z0-9_]{0,99}$/.test(action)) &&
+      new Set(actions).size === actions.length;
+    consoleOperationContractVersion = validManifest ? info.operation_contract_version : null;
+    consoleSupportedActions = validManifest ? [...actions] : null;
   } catch {
     consoleAvailable = null;
     consoleConnectionFailed = true;
     consoleTeamId = null;
     consoleDeliveryReady = null;
+    consoleOperationContractVersion = null;
+    consoleSupportedActions = null;
   }
 }
 async function refreshOperations(signal) {
@@ -8356,6 +8387,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
     timeout = setTimeout(() => controller.abort(), 40000);
   const priorConsoleReady = consoleDeliveryReady;
   const priorConsoleTeam = consoleTeamId;
+  const priorConsoleCapabilities = JSON.stringify([consoleOperationContractVersion, consoleSupportedActions]);
   const priorSettings = JSON.stringify(settingsSnapshot);
   const priorRuntimeStatus = JSON.stringify(runtimeStatusSnapshot);
   const priorOperations = JSON.stringify(operations);
@@ -8374,6 +8406,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
   };
   const systemViewsChanged = () =>
     priorConsoleTeam !== consoleTeamId || priorConsoleReady !== consoleDeliveryReady ||
+    priorConsoleCapabilities !== JSON.stringify([consoleOperationContractVersion, consoleSupportedActions]) ||
     priorOperationsAvailable !== operationsAvailable ||
     priorSettings !== JSON.stringify(settingsSnapshot) ||
     priorRuntimeStatus !== JSON.stringify(runtimeStatusSnapshot);

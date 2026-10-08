@@ -50,11 +50,12 @@ from .lifecycle import (
     ConfigurationApplyView,
     ConfigurationLifecycle,
 )
-from .models import ConsoleIntent, ConsoleOperation, IdempotencyKey
+from .models import ConsoleAction, ConsoleIntent, ConsoleOperation, IdempotencyKey
 from .store import ConsoleOperationConflict, ConsoleOperationNotFound
 
 _MAX_REQUEST_BYTES = 64_000
 _MAX_SPEC_REQUEST_BYTES = 512_000
+_OPERATION_CONTRACT_VERSION = 1
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -97,6 +98,13 @@ def create_console_app(
     expected_host = f"127.0.0.1:{port}"
     expected_origin = f"http://{expected_host}"
     command_team_id = TypeAdapter(TeamId).validate_python(team_id)
+    # Python command schemas are fixed for this process. Bind its UI to the
+    # same start rather than hot-reading a newer checkout with unsupported UI.
+    assets = {
+        route: (files("ai_software_engineer.team_view").joinpath(name).read_bytes(), content_type)
+        for route, (name, content_type) in _ASSETS.items()
+    }
+    supported_actions = tuple(action.value for action in ConsoleAction)
     snapshot_gate = Lock()
     knowledge_worker = (
         KnowledgeIndexWorker(administration.tick_knowledge_indexes)
@@ -139,9 +147,9 @@ def create_console_app(
     @app.get("/app.js")
     @app.get("/style.css")
     async def asset(request: Request) -> Response:
-        name, content_type = _ASSETS[request.url.path]
+        content, content_type = assets[request.url.path]
         return Response(
-            files("ai_software_engineer.team_view").joinpath(name).read_bytes(),
+            content,
             media_type=content_type,
         )
 
@@ -197,6 +205,8 @@ def create_console_app(
                 "schema_version": "v0.2",
                 "team_id": command_team_id,
                 "delivery_ready": delivery_ready,
+                "operation_contract_version": _OPERATION_CONTRACT_VERSION,
+                "supported_actions": supported_actions,
             }
         )
 
@@ -853,13 +863,38 @@ def create_console_app(
             return _error(413, "REQUEST_TOO_LARGE", "Request is too large.")
         try:
             command = SubmitOperation.model_validate_json(body)
+        except ValidationError as error:
+            if any(
+                item["type"] == "union_tag_invalid" and item["loc"] == ("intent",)
+                for item in error.errors(
+                    include_url=False, include_context=False, include_input=False
+                )
+            ):
+                return _error(
+                    409,
+                    "OPERATION_NOT_SUPPORTED",
+                    "当前服务不支持此操作。请在当前操作和角色执行结束、服务空闲时重启 Web Console, "
+                    "再刷新页面; 原需求和已保存进度保留。",
+                )
+            return _error(
+                422,
+                "INVALID_REQUEST",
+                "操作请求未受理: 提交内容不符合当前服务要求。请刷新需求后重试; "
+                "若仍失败, 由平台检查请求与服务版本。原交付进度保留。",
+            )
+        try:
             value = await run_in_threadpool(
                 console.submit,
                 command.intent,
                 idempotency_key=command.idempotency_key,
             )
         except ValidationError:
-            return _error(422, "INVALID_REQUEST", "Operation input is invalid.")
+            return _error(
+                503,
+                "OPERATION_STATE_INVALID",
+                "平台当前操作记录未通过校验, 请由平台维护者核对记录; "
+                "不要反复提交。原交付进度保留。",
+            )
         except ConsoleCommandRejected as error:
             return _error(503, error.code, error.safe_summary)
         except ConsoleOperationConflict as error:

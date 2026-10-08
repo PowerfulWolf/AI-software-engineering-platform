@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { supportedActions } = require("./console-capabilities-fixture.cjs");
 
 class Element {
   constructor(tag) {
@@ -45,13 +46,14 @@ function fixture() {
 
 function harness() {
   const data = fixture();
-  const context = vm.createContext({document: {createElement: tag => new Element(tag)}, data});
+  const context = vm.createContext({document: {createElement: tag => new Element(tag)}, data, supportedActions});
   const source = fs.readFileSync(path.join(__dirname, "../../src/ai_software_engineer/team_view/app.js"), "utf8");
   // Load the actual UI functions without starting navigation, polling or network work.
   vm.runInContext(source.slice(0, source.indexOf('for (const target of ["team"')), context);
   vm.runInContext(`snapshot = {team_id: "team_current", selected_project_id: "project_current",
     projects: [], agents: [], tasks: [data.task], requests: [data.request]};
     consoleTeamId = "team_current"; consoleAvailable = true; consoleDeliveryReady = true;
+    consoleOperationContractVersion = 1; consoleSupportedActions = [...supportedActions];
     operationsAvailable = true; globalThis.submitted = [];
     submitOperation = async intent => { submitted.push(intent); return {operation_id: "accepted"}; };
     renderDetail = () => {}; renderNotification = () => {};`, context);
