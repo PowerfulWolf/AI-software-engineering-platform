@@ -33,6 +33,7 @@ from ai_software_engineer.manager.baseline_models import (
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.execution_baseline import ExecutionBaselineService
+from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
 from ai_software_engineer.recovery.models import digest
 from tests.domain.factories import make_task
 from tests.git.test_worktree import _create_fixture_repository, _git
@@ -57,6 +58,9 @@ class Collector:
 
     def execution_scope(self) -> nullcontext[None]:
         return nullcontext()
+
+    def bind_legacy_observation(self, containment: LegacyExecutionContainment) -> None:
+        assert self.facts.legacy_containment == containment
 
 
 @dataclass(frozen=True)

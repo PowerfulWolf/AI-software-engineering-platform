@@ -35,6 +35,8 @@ UPDATED = {
     "BaselinePurpose",
     "LegacyExecutionContainment",
     "LocalBootObservation",
+    "LegacyLocalExecutionSurvey",
+    "LegacyRescuePreparation",
 }
 
 
@@ -58,10 +60,15 @@ def main() -> None:
         for name in UPDATED & definitions.keys():
             if name in nodes:
                 definitions[name] = nodes[name]
+        if "ConsoleCommandResult" in definitions:
+            definitions["ConsoleCommandResult"]["properties"]["legacy_rescue_preparation"] = nodes[
+                "ConsoleCommandResult"
+            ]["properties"]["legacy_rescue_preparation"]
         if "ProposeExecutionBaselineIntent" in definitions:
             for model, field in (
                 (ProposeExecutionBaselineIntent, "purpose"),
                 (ExecuteExecutionBaselineIntent, "confirm_legacy_containment"),
+                (ExecuteExecutionBaselineIntent, "confirm_local_execution_stopped"),
             ):
                 source = model.model_json_schema()
                 definitions[model.__name__]["properties"][field] = source["properties"][field]
@@ -111,7 +118,107 @@ def refs(value: object) -> set[str]:
 
 def guards(node: dict[str, object]) -> None:
     title = node.get("title")
-    if title == "BaselineExecutionReservation":
+    if title == "LegacyExecutionContainment":
+        node["allOf"] = [
+            {
+                "if": {
+                    "required": ["method"],
+                    "properties": {"method": {"const": "operator_confirmed_local_stop"}},
+                },
+                "then": {
+                    "required": ["local_execution_survey"],
+                    "properties": {
+                        "local_execution_survey": {
+                            "type": "object",
+                            "properties": {"blockers": {"maxItems": 0}},
+                        }
+                    },
+                },
+                "else": {"properties": {"local_execution_survey": {"type": "null"}}},
+            }
+        ]
+    elif title in {"BaselineOperatorAuthorization", "ExecuteExecutionBaselineIntent"}:
+        existing = node.get("allOf", [])
+        assert isinstance(existing, list)
+        exclusive = {
+            "not": {
+                "required": ["confirm_legacy_containment", "confirm_local_execution_stopped"],
+                "properties": {
+                    "confirm_legacy_containment": {"const": True},
+                    "confirm_local_execution_stopped": {"const": True},
+                },
+            }
+        }
+        if exclusive not in existing:
+            node["allOf"] = [*existing, exclusive]
+    elif title == "ConsoleCommandResult":
+        existing = node.get("allOf", [])
+        assert isinstance(existing, list)
+        existing = [
+            guard
+            for guard in existing
+            if not (
+                isinstance(guard, dict)
+                and isinstance(guard.get("if"), dict)
+                and guard["if"].get("required") == ["legacy_rescue_preparation"]
+            )
+        ]
+        gate = {
+            "if": {
+                "required": ["legacy_rescue_preparation"],
+                "properties": {
+                    "legacy_rescue_preparation": {"type": "object"},
+                },
+            },
+            "then": {
+                "required": ["delivery_id", "checkpoint_sha256"],
+                "properties": {
+                    "delivery_id": {"type": "string"},
+                    "checkpoint_sha256": {"type": "string"},
+                    "execution_baseline_binding": {"type": "null"},
+                    "approval": {"type": "null"},
+                },
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {
+                                "legacy_rescue_preparation": {
+                                    "properties": {"status": {"const": "READY"}},
+                                }
+                            }
+                        },
+                        "then": {
+                            "required": ["execution_baseline_plan"],
+                            "properties": {
+                                "execution_baseline_plan": {
+                                    "type": "object",
+                                    "required": ["purpose"],
+                                    "properties": {"purpose": {"const": "legacy_workspace_rescue"}},
+                                }
+                            },
+                        },
+                    },
+                    {
+                        "if": {
+                            "properties": {
+                                "legacy_rescue_preparation": {
+                                    "properties": {"status": {"const": "WAITING"}},
+                                }
+                            }
+                        },
+                        "then": {
+                            "properties": {
+                                "execution_baseline_plan": {"type": "null"},
+                                "execution_baseline_binding": {"type": "null"},
+                                "approval": {"type": "null"},
+                            }
+                        },
+                    },
+                ],
+            },
+        }
+        node["allOf"] = [*existing, gate]
+    elif title == "BaselineExecutionReservation":
         node["allOf"] = [
             {
                 "if": {

@@ -72,7 +72,8 @@ test("legacy rescue is visible, preserves same demand and only proceeds after ex
   assert.equal(await card.evaluate(node => node.tagName), "SECTION");
   assert.match(await card.innerText(), /旧执行结果仍未知/);
   assert.match(await card.innerText(), /下一轮使用剩余工作额度/);
-  assert.match(await card.innerText(), /仅重启 ASE 服务不够/);
+  assert.match(await card.innerText(), /先由平台检查当前本机执行和保留进度/);
+  assert.doesNotMatch(await card.innerText(), /需重启原执行所在的整台电脑/);
   assert.equal(await card.getByRole("textbox").count(), 0, "a product user does not enter commit hashes");
   assert.doesNotMatch(await h.page.locator("#detail .engineering-wait-facts").innerText(), /将处理报告交给平台维护者/);
   await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
@@ -197,4 +198,115 @@ test("a prepared rescue can be prepared again after execution rejects changed fa
   await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).click();
   await h.close();
   assert.equal(submitted[3].expected_plan_sha256, fresh.plan_sha256);
+});
+
+function localPlanFor(fixture) {
+  const plan = planFor(fixture);
+  plan.dirty_capture.worktree_path = "/fixture/coder";
+  const containment = plan.facts.legacy_containment;
+  containment.method = "operator_confirmed_local_stop";
+  containment.boot.booted_at = "2026-10-01T00:00:00Z";
+  containment.local_execution_survey = {worktree_path: "/fixture/coder",
+    machine_sha256: containment.boot.machine_sha256, boot_session_sha256: containment.boot.boot_session_sha256,
+    account_sha256: "6".repeat(64), observed_at: "2026-10-06T00:00:00Z", scanner_version: "local-v1",
+    blockers: [], survey_sha256: "7".repeat(64)};
+  return plan;
+}
+
+test("local rescue shows auxiliary checks before a distinct exact human stop authorization", async t => {
+  const fixture = await rescueUi(t, 3);
+  const {h, request, card, submitted} = fixture;
+  await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
+  await h.close();
+  const plan = localPlanFor(fixture);
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+    checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.match(await card.innerText(), /该检查不能证明旧调用已经停止/);
+  assert.match(await card.innerText(), /本机检查时间/);
+  assert.match(await card.innerText(), /同一账户本地执行/);
+  assert.match(await card.innerText(), /原调用及全部派生工具已结束/);
+  assert.match(await card.innerText(), /此确认是独立人工工程授权/);
+  assert.doesNotMatch(await card.innerText(), /方案核验的整机启动|原执行之后已重启整台电脑/);
+  const checkbox = card.getByRole("checkbox", {name: "确认原调用及全部派生工具已结束"});
+  const approve = card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true});
+  assert.equal(await approve.isDisabled(), true);
+  await checkbox.check();
+  await checkbox.evaluate(node => {window.localRescueCheckbox = node; window.localRescueApproval = node.closest("div").querySelector("button");});
+  request.title += " · harmless polling";
+  await h.tick();
+  assert.equal(await checkbox.evaluate(node => node === window.localRescueCheckbox), true);
+  assert.equal(await checkbox.isChecked(), true);
+  assert.equal(submitted.length, 1);
+  await approve.click();
+  await h.close();
+  assert.equal(submitted[1].confirm_local_execution_stopped, true);
+  assert.equal(Object.hasOwn(submitted[1], "confirm_legacy_containment"), false);
+  assert.equal(Object.hasOwn(submitted[1], "local_execution_survey"), false);
+  assert.equal(submitted[1].expected_plan_sha256, plan.plan_sha256);
+  assert.match(submitted[1].reference, /全部派生工具已结束/);
+  await h.page.locator('#detail .request-history-fold[data-key^="operation-history:"] > summary').click();
+  await h.page.locator('#detail .request-history-fold .execution-history-entry').filter({hasText: "当次恢复方案"})
+    .locator("details > summary").click();
+  assert.match(await h.page.locator("#detail").innerText(), /当次本机检查/);
+  assert.doesNotMatch(await h.page.locator("#detail").innerText(), /当次整机启动/);
+});
+
+test("an unmet rescue prerequisite is a clear checked wait without approval and can be checked again", async t => {
+  const fixture = await rescueUi(t, 3);
+  const {h, request, task, step, card, submitted} = fixture;
+  await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
+  await h.close();
+  const preparation = {status: "WAITING", task_id: task.task_id, work_item_id: step.work_item_id,
+    source_revision: fixture.facts.source_revision, code: "LOCAL_EXECUTION_ACTIVE",
+    summary: "当前仍有本机执行占用保留的工作现场。", next_action: "等待原调用及派生工具结束后重新检查恢复前提。",
+    responsible_party: "平台执行服务"};
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+    checkpoint_sha256: request.checkpoint_sha256, legacy_rescue_preparation: preparation}});
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.match(await card.innerText(), /恢复前提尚未满足/);
+  assert.match(await card.innerText(), /当前仍有本机执行占用/);
+  assert.match(await card.innerText(), /处理方 · 平台执行服务/);
+  assert.match(await card.innerText(), /本次检查没有生成恢复方案、保存审批或启动 Coder/);
+  assert.equal(await card.getByRole("checkbox").count(), 0);
+  assert.equal(await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).count(), 0);
+  assert.equal(submitted.length, 1);
+  await card.getByRole("button", {name: "重新检查恢复前提", exact: true}).click();
+  await h.close();
+  assert.equal(submitted.length, 2);
+  assert.equal(submitted[1].action, "PROPOSE_EXECUTION_BASELINE");
+  assert.equal(Object.hasOwn(submitted[1], "confirm_local_execution_stopped"), false);
+});
+
+test("a local stop approval is withdrawn on version downgrade or changed survey", async t => {
+  const fixture = await rescueUi(t, 3);
+  const {h, request, card, submitted} = fixture;
+  await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
+  await h.close();
+  const plan = localPlanFor(fixture);
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+    checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  await card.getByRole("checkbox").check();
+  await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).evaluate(node => {window.localStaleApproval = node;});
+  h.state.operationManifest.operation_contract_version = 2;
+  await h.tick();
+  assert.equal(await card.getByRole("checkbox").count(), 0);
+  assert.match(await card.innerText(), /当前服务尚不支持此恢复路径/);
+  await h.page.evaluate(() => window.localStaleApproval.click());
+  assert.equal(submitted.length, 1);
+  await h.close();
+  h.state.operationManifest.operation_contract_version = 3;
+  await h.tick();
+  assert.equal(await card.getByRole("checkbox").isChecked(), false);
+  await card.getByRole("checkbox").check();
+  plan.plan_sha256 = "8".repeat(64);
+  plan.facts.legacy_containment.local_execution_survey.survey_sha256 = "9".repeat(64);
+  await h.tick();
+  assert.equal(await card.getByRole("checkbox").isChecked(), false);
+  await h.page.evaluate(() => window.localStaleApproval.click());
+  assert.equal(submitted.length, 1);
 });

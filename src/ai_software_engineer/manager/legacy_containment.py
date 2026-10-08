@@ -13,12 +13,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal, Protocol, Self
 
-from pydantic import AwareDatetime, model_validator
+from pydantic import AwareDatetime, Field, model_validator
 
 from ai_software_engineer.domain.artifact import Sha256
 from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.manager.legacy_local_execution import LegacyLocalExecutionSurvey
 from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
 from ai_software_engineer.work_queue.models import QueueClaim
@@ -134,6 +135,12 @@ class LegacyExecutionContainment(DomainModel):
     original_start: DeliveryInvocationStart
     original_claim: QueueClaim
     boot: LocalBootObservation
+    method: Literal["os_reboot", "operator_confirmed_local_stop"] = Field(
+        default="os_reboot", exclude_if=lambda value: value == "os_reboot"
+    )
+    local_execution_survey: LegacyLocalExecutionSurvey | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     containment_sha256: Sha256
 
     @model_validator(mode="after")
@@ -167,8 +174,22 @@ class LegacyExecutionContainment(DomainModel):
             )
         ):
             raise ValueError("旧执行救援缺少精确本机 Coder 调用和真实历史领取记录")
-        if self.boot.booted_at <= start.started_at:
-            raise ValueError(_PREREQUISITE)
+        if self.method == "os_reboot":
+            if self.local_execution_survey is not None:
+                raise ValueError("整机重启隔离记录不能混入本机人工停止调查")
+            if self.boot.booted_at <= start.started_at:
+                raise ValueError(_PREREQUISITE)
+        else:
+            survey = self.local_execution_survey
+            if survey is None:
+                raise ValueError("本机人工停止路径必须有完整的本机执行调查")
+            survey.require_idle()
+            if (
+                survey.machine_sha256 != self.boot.machine_sha256
+                or survey.boot_session_sha256 != self.boot.boot_session_sha256
+                or survey.observed_at < start.started_at
+            ):
+                raise ValueError("本机执行调查与原调用和当前机器边界不一致")
         return self
 
     def validate_integrity(self) -> None:

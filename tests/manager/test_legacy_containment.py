@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from subprocess import SubprocessError
 
 import pytest
 
@@ -31,6 +32,10 @@ from ai_software_engineer.manager.legacy_containment import (
     LegacyExecutionContainment,
     LocalBootObservation,
     TrustedLocalBootObserver,
+)
+from ai_software_engineer.manager.legacy_local_execution import (
+    LegacyLocalExecutionSurvey,
+    LegacyRescuePrerequisiteError,
 )
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.recovery.models import digest
@@ -381,3 +386,123 @@ def test_existing_original_runner_record_keeps_native_fact_handling_path(
     with pytest.raises(ValueError, match="已有现场或停止记录"):
         collector._legacy_containment(task, item)
     assert marker.read_text() == "existing original record must not be overwritten"
+
+
+def test_local_operator_prerequisite_can_use_the_existing_boot_without_faking_old_stop(
+    tmp_path: Path,
+) -> None:
+    _, _, _, original = legacy_fixture(tmp_path)
+    boot = BOOT.model_copy(update={"booted_at": STARTED - timedelta(days=1)})
+    survey = LegacyLocalExecutionSurvey.create(
+        worktree_path=str(tmp_path.resolve()),
+        machine_sha256=boot.machine_sha256,
+        boot_session_sha256=boot.boot_session_sha256,
+        account_sha256="c" * 64,
+        observed_at=STARTED + timedelta(days=1),
+        scanner_version="local-execution-v1",
+        blockers=(),
+    )
+    value = LegacyExecutionContainment.create(
+        **original.model_dump(mode="python", exclude={"boot", "containment_sha256"}),
+        boot=boot,
+        method="operator_confirmed_local_stop",
+        local_execution_survey=survey,
+    )
+    value.validate_integrity()
+    assert value.method == "operator_confirmed_local_stop"
+    assert value.original_start == original.original_start
+    assert "process_stop" not in value.to_wire()
+    assert "outcome" not in value.to_wire()
+
+
+@pytest.mark.parametrize("drift", ["missing", "machine", "boot", "observed_before", "digest"])
+def test_local_operator_prerequisite_rejects_missing_or_drifted_current_survey(
+    tmp_path: Path, drift: str
+) -> None:
+    _, _, _, original = legacy_fixture(tmp_path)
+    values: dict[str, object] = {
+        "worktree_path": str(tmp_path.resolve()),
+        "machine_sha256": BOOT.machine_sha256,
+        "boot_session_sha256": BOOT.boot_session_sha256,
+        "account_sha256": "c" * 64,
+        "observed_at": STARTED + timedelta(days=1),
+        "scanner_version": "local-execution-v1",
+        "blockers": (),
+    }
+    if drift in {"machine", "boot"}:
+        values["machine_sha256" if drift == "machine" else "boot_session_sha256"] = "d" * 64
+    elif drift == "observed_before":
+        values["observed_at"] = STARTED - timedelta(seconds=1)
+    survey = LegacyLocalExecutionSurvey.create(**values)
+    if drift == "digest":
+        survey = survey.model_copy(update={"survey_sha256": "e" * 64})
+    with pytest.raises(ValueError):
+        LegacyExecutionContainment.create(
+            **original.model_dump(mode="python", exclude={"containment_sha256"}),
+            method="operator_confirmed_local_stop",
+            local_execution_survey=None if drift == "missing" else survey,
+        )
+
+
+def test_os_reboot_default_keeps_exact_old_wire_digest(tmp_path: Path) -> None:
+    _, _, _, original = legacy_fixture(tmp_path)
+    wire = original.to_wire()
+    assert "method" not in wire and "local_execution_survey" not in wire
+    assert original.containment_sha256 == digest(
+        original.model_dump(mode="json", exclude={"containment_sha256"})
+    )
+    assert LegacyExecutionContainment.model_validate(wire) == original
+
+
+@pytest.mark.parametrize("error_type", [ValueError, OSError, SubprocessError])
+@pytest.mark.parametrize("failure_read", [0, 1, 2, 3])
+def test_os_observation_failure_preserves_initial_and_sealed_recovery_scene(
+    tmp_path: Path, error_type: type[Exception], failure_read: int
+) -> None:
+    collector, task, item, containment = legacy_fixture(tmp_path)
+    # Zero represents preparation before any observation is sealed. Later
+    # reads exercise both preflight and final rechecks of the same sealed plan.
+    if failure_read == 0:
+        collector._sealed_legacy_observation = None
+    else:
+        collector.bind_legacy_observation(containment)
+    original_sealed = collector._sealed_legacy_observation
+    draft = collector.state / "preserved-draft.txt"
+    draft.write_bytes(b"complete retained progress\nno destructive fallback\n")
+    before = {path: path.read_bytes() for path in collector.state.rglob("*") if path.is_file()}
+    original_task, original_item = task.to_wire(), item.to_wire()
+
+    class Observer:
+        calls = 0
+
+        def observe(self) -> LocalBootObservation:
+            self.calls += 1
+            if self.calls == max(1, failure_read):
+                raise error_type("private OS query payload must not be published")
+            return BOOT
+
+    observer = Observer()
+    collector.observer = observer
+    with pytest.raises(LegacyRescuePrerequisiteError) as failure:
+        collector._legacy_containment(task, item)
+    assert failure.value.code == "LEGACY_LOCAL_OBSERVATION_UNAVAILABLE"
+    assert failure.value.safe_message == (
+        "平台暂时无法读取可靠的本机身份和启动记录，不能准备旧执行恢复。"  # noqa: RUF001
+    )
+    assert failure.value.next_action == (
+        "请让平台维护者检查当前系统的只读查询能力和权限，修复后重新检查恢复前提；"  # noqa: RUF001
+        "不要清空工作区。"
+    )
+    assert "private OS query payload" not in str(failure.value)
+    assert "整机重启" not in failure.value.next_action
+    assert "整台电脑" not in failure.value.next_action
+    assert observer.calls == max(1, failure_read)
+    assert collector._sealed_legacy_observation == original_sealed
+    assert task.to_wire() == original_task and item.to_wire() == original_item
+    assert before == {
+        path: path.read_bytes() for path in collector.state.rglob("*") if path.is_file()
+    }
+    assert draft.read_bytes() == b"complete retained progress\nno destructive fallback\n"
+    assert not (collector.state / "invocations" / "invocation-outcomes").exists()
+    assert "process_stop" not in containment.to_wire()
+    assert "outcome" not in containment.to_wire()

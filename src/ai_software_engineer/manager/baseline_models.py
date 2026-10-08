@@ -225,6 +225,9 @@ class ExecutionBaselinePlan(DomainModel):
                 or self.conflicted
             ):
                 raise ValueError("legacy rescue cannot change source, input mode or retained draft")
+            survey = self.facts.legacy_containment.local_execution_survey
+            if survey is not None and survey.worktree_path != self.dirty_capture.worktree_path:
+                raise ValueError("本机调查与恢复方案封存的工作区不同")
         elif self.target_base_ref == expected_base or self.facts.legacy_containment is not None:
             raise ValueError(
                 "source rebind must select a different base without legacy containment"
@@ -263,12 +266,24 @@ class BaselineOperatorAuthorization(DomainModel):
     confirm_legacy_containment: Literal[True] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    confirm_local_execution_stopped: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     authorization_sha256: Sha256
 
     @model_validator(mode="after")
     def require_engineering(self) -> Self:
         self.principal.require_duty(OperatorDuty.ENGINEERING)
+        if self.confirm_legacy_containment and self.confirm_local_execution_stopped:
+            raise ValueError("两种旧执行恢复确认不能同时使用")
         return self
+
+    def require_plan_confirmation(self, plan: ExecutionBaselinePlan) -> None:
+        require_rescue_confirmation(
+            plan,
+            confirm_legacy_containment=self.confirm_legacy_containment,
+            confirm_local_execution_stopped=self.confirm_local_execution_stopped,
+        )
 
     def validate_integrity(self) -> None:
         type(self).model_validate(self.to_wire())
@@ -286,12 +301,14 @@ class BaselineOperatorAuthorization(DomainModel):
         reference: str,
         submitted_at: datetime,
         confirm_legacy_containment: Literal[True] | None = None,
+        confirm_local_execution_stopped: Literal[True] | None = None,
     ) -> Self:
         plan.validate_integrity()
-        if (plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE) != (
-            confirm_legacy_containment is True
-        ):
-            raise ValueError("旧执行救援需要明确确认同一本机整机重启、未迁移和可信时间依据")
+        require_rescue_confirmation(
+            plan,
+            confirm_legacy_containment=confirm_legacy_containment,
+            confirm_local_execution_stopped=confirm_local_execution_stopped,
+        )
         value = cls(
             task_id=plan.facts.task.id,
             task_intent_sha256=task_intent_sha256(plan.facts.task),
@@ -301,6 +318,7 @@ class BaselineOperatorAuthorization(DomainModel):
             reference=reference,
             submitted_at=submitted_at,
             confirm_legacy_containment=confirm_legacy_containment,
+            confirm_local_execution_stopped=confirm_local_execution_stopped,
             authorization_sha256="0" * 64,
         )
         return value.model_copy(
@@ -310,6 +328,30 @@ class BaselineOperatorAuthorization(DomainModel):
                 )
             }
         )
+
+
+def require_rescue_confirmation(
+    plan: ExecutionBaselinePlan,
+    *,
+    confirm_legacy_containment: Literal[True] | None,
+    confirm_local_execution_stopped: Literal[True] | None,
+) -> None:
+    """Keep human provenance declarations distinct from machine observations."""
+    containment = plan.facts.legacy_containment
+    if plan.purpose is not BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+        if confirm_legacy_containment is not None or confirm_local_execution_stopped is not None:
+            raise ValueError("旧执行救援确认只能用于对应的精确救援方案")
+        return
+    if containment is None:
+        raise ValueError("旧执行救援缺少完整的原调用和当前检查记录")
+    if containment.method == "operator_confirmed_local_stop":
+        if confirm_local_execution_stopped is not True or confirm_legacy_containment is not None:
+            raise ValueError(
+                "请明确确认原调用及全部派生工具已在同机同账户本地结束, "
+                "不会再修改现场; 接受原结果未知并批准保留进度另行执行。"
+            )
+    elif confirm_legacy_containment is not True or confirm_local_execution_stopped is not None:
+        raise ValueError("旧执行救援需要明确确认同一本机整机重启、未迁移和可信时间依据")
 
 
 class BaselineOperationStart(DomainModel):

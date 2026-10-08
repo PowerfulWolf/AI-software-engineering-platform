@@ -157,6 +157,19 @@ test("rescue API fields require contract two while original baseline actions rem
   }
 });
 
+test("a local stop authorization requires contract three at the public submit boundary", async () => {
+  for (const version of [1, 2, 3]) {
+    const h = harness();
+    Object.assign(h.context.info, {operation_contract_version: version,
+      supported_actions: ["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"]});
+    await h.refresh();
+    const result = await h.run(`submitOperation({action: "EXECUTE_EXECUTION_BASELINE",
+      project_id: data.request.project_id, delivery_id: data.request.id, confirm_local_execution_stopped: true})`);
+    assert.equal(result?.operation_id || null, version >= 3 ? "operation_accepted" : null);
+    assert.equal(h.posts().length, version >= 3 ? 1 : 0);
+  }
+});
+
 test("capability changes participate in rendering and failures clear previously supported commands", async () => {
   const h = harness();
   Object.assign(h.context.info, {operation_contract_version: 1, supported_actions: ["HANDLE_DELIVERY_WAIT"]});

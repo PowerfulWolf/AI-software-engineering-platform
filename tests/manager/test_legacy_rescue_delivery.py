@@ -65,6 +65,7 @@ from ai_software_engineer.manager import production_backend, production_delivery
 from ai_software_engineer.manager.baseline_production import (
     BaselineExecuteCommand,
     BaselineProposeCommand,
+    ProductionBaselineFactCollector,
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.delivery import ApproveProductSpec, StartProjectDelivery
@@ -72,6 +73,11 @@ from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
 from ai_software_engineer.manager.legacy_containment import (
     LocalBootObservation,
     TrustedLocalBootObserver,
+)
+from ai_software_engineer.manager.legacy_local_execution import (
+    LegacyLocalExecutionSurvey,
+    LegacyRescuePrerequisiteError,
+    TrustedLegacyLocalExecutionObserver,
 )
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
@@ -107,7 +113,14 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _ReportTempla
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    ("sealed_final", "crash_before_consumption"), [(False, False), (False, True), (True, False)]
+    ("sealed_final", "crash_before_consumption", "local_stop"),
+    [
+        (False, False, False),
+        (False, True, False),
+        (True, False, False),
+        (False, False, True),
+        (False, True, True),
+    ],
 )
 def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     tmp_path: Path,
@@ -115,6 +128,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     monkeypatch: pytest.MonkeyPatch,
     sealed_final: bool,
     crash_before_consumption: bool,
+    local_stop: bool,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -446,8 +460,42 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         "observe",
         lambda _: boot.model_copy(update={"booted_at": original_start.started_at}),
     )
-    with pytest.raises(ValueError, match="整台电脑"):
+
+    def incomplete_survey(
+        _self: TrustedLegacyLocalExecutionObserver,
+        *,
+        worktree_root: Path,
+        boot: LocalBootObservation,
+    ) -> LegacyLocalExecutionSurvey:
+        raise LegacyRescuePrerequisiteError(
+            code="LEGACY_LOCAL_SURVEY_INCOMPLETE",
+            safe_message="平台尚未完成本机执行核验。",
+            next_action="请修复本机读取能力后重新准备方案。",
+        )
+
+    monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", incomplete_survey)
+    with pytest.raises(LegacyRescuePrerequisiteError, match="本机执行核验"):
         host.propose_execution_baseline(command, project_id="project_test")
+    if local_stop:
+        boot = boot.model_copy(update={"booted_at": original_start.started_at - timedelta(days=1)})
+
+    def idle_survey(
+        _self: TrustedLegacyLocalExecutionObserver,
+        *,
+        worktree_root: Path,
+        boot: LocalBootObservation,
+    ) -> LegacyLocalExecutionSurvey:
+        return LegacyLocalExecutionSurvey.create(
+            worktree_path=str(worktree_root.resolve()),
+            machine_sha256=boot.machine_sha256,
+            boot_session_sha256=boot.boot_session_sha256,
+            account_sha256="c" * 64,
+            observed_at=datetime.now(UTC),
+            scanner_version="local-execution-v1",
+            blockers=(),
+        )
+
+    monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", idle_survey)
     monkeypatch.setattr(TrustedLocalBootObserver, "observe", lambda _: boot)
     if sealed_final:
         # A genuine sealed final is already a recoverable original result. It
@@ -519,6 +567,9 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert plan.input_mode is BaselineInputMode.PRESERVE_DRAFT and not plan.conflicted
     assert plan.facts.legacy_containment is not None
     assert plan.facts.legacy_containment.original_start == original_start
+    assert plan.facts.legacy_containment.method == (
+        "operator_confirmed_local_stop" if local_stop else "os_reboot"
+    )
     assert plan.complete_capture.patch.endswith("+unknown retained draft\n")
     assert {
         path.relative_to(unknown.workspace): path.read_bytes()
@@ -531,14 +582,56 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         task_id=frozen.id,
         expected_plan_sha256=plan.plan_sha256,
         reference="legacy-engineering-confirmation",
-        confirm_legacy_containment=True,
+        confirm_legacy_containment=None if local_stop else True,
+        confirm_local_execution_stopped=True if local_stop else None,
     )
     with pytest.raises(ValueError, match="明确确认"):
         host.execute_execution_baseline(
-            execute.model_copy(update={"confirm_legacy_containment": None}),
+            execute.model_copy(
+                update={
+                    "confirm_legacy_containment": None,
+                    "confirm_local_execution_stopped": None,
+                }
+            ),
             project_id="project_test",
         )
     assert len(calls) == 2
+    if local_stop:
+        with pytest.raises(ValueError, match="明确确认"):
+            host.execute_execution_baseline(
+                execute.model_copy(
+                    update={
+                        "confirm_legacy_containment": True,
+                        "confirm_local_execution_stopped": None,
+                    }
+                ),
+                project_id="project_test",
+            )
+
+        def active_survey(
+            _self: TrustedLegacyLocalExecutionObserver,
+            *,
+            worktree_root: Path,
+            boot: LocalBootObservation,
+        ) -> LegacyLocalExecutionSurvey:
+            return LegacyLocalExecutionSurvey.create(
+                **idle_survey(_self, worktree_root=worktree_root, boot=boot).model_dump(
+                    exclude={"survey_sha256", "blockers"}
+                ),
+                blockers=("WORKTREE_PROCESS_ACTIVE",),
+            )
+
+        monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", active_survey)
+        with pytest.raises(LegacyRescuePrerequisiteError, match="工作区"):
+            host.execute_execution_baseline(execute, project_id="project_test")
+        assert len(calls) == 2
+        assert not consumptions(host.work_queue, frozen.id)
+        assert {
+            path.relative_to(unknown.workspace): path.read_bytes()
+            for path in unknown.workspace.rglob("*")
+            if path.is_file()
+        } == workspace_bytes
+        monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", idle_survey)
     expected_binding = None
     # Pause dispatch while publication verifies exact no-mutation preservation.
     from ai_software_engineer.work_queue.dispatcher import (
@@ -556,8 +649,6 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         ),
     )
     if crash_before_consumption:
-        from ai_software_engineer.manager.baseline_production import ProductionBaselineFactCollector
-
         original_publish = ProductionBaselineFactCollector.publish_completion
 
         def fail_publication(*_args: object) -> None:
@@ -577,6 +668,18 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             }
         )
         monkeypatch.setattr(TrustedLocalBootObserver, "observe", lambda _: new_boot)
+        if local_stop:
+            monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", active_survey)
+            with pytest.raises(LegacyRescuePrerequisiteError, match="工作区"):
+                host.propose_execution_baseline(command, project_id="project_test")
+            assert not consumptions(host.work_queue, frozen.id)
+            assert len(calls) == 2
+            assert {
+                path.relative_to(unknown.workspace): path.read_bytes()
+                for path in unknown.workspace.rglob("*")
+                if path.is_file()
+            } == workspace_bytes
+            monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", idle_survey)
         assert host.propose_execution_baseline(command, project_id="project_test") == plan
     console.submit(
         ExecuteExecutionBaselineIntent.model_validate(
@@ -700,7 +803,21 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         if isinstance(event, HumanActionEvent) and event.action is HumanAction.SUPPLY_EVIDENCE
     )
     assert len(human_evidence) == 1
-    assert human_evidence[0].evidence_uri == baseline_store.patch_uri(plan.plan_sha256)
+    assert human_evidence[0].note is not None
+    if local_stop:
+        assert (
+            human_evidence[0].evidence_uri
+            == (
+                baseline_store.root
+                / baseline_store.records._name("baseline-authorities", plan.plan_sha256)
+            )
+            .absolute()
+            .as_uri()
+        )
+        assert "全部派生工具" in human_evidence[0].note
+        assert "已整机重启" not in human_evidence[0].note
+    else:
+        assert human_evidence[0].evidence_uri == baseline_store.patch_uri(plan.plan_sha256)
     timeline = engineering_history(sidecar, completed, plan.facts.scope, pending.delivery_id)
     assert any("原未知执行" in entry.summary for entry in timeline)
     assert any("下一轮使用原任务剩余工作额度" in entry.summary for entry in timeline)
@@ -715,6 +832,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             )
             .facts
         )
+        assert isinstance(collector, ProductionBaselineFactCollector)
         proofs = collector._invocations(
             completed,
             host.work_queue.items_for_task(completed.id),
@@ -737,6 +855,10 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             assert proof.proof_kind == "definitive_outcome"
             assert proof.outcome_sha256 is not None
     calls_before_replay = len(calls)
+    if local_stop:
+        # A consumed exact engineering decision cannot become a second attempt
+        # or an obsolete new wait merely because current OS queries are unavailable.
+        monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", incomplete_survey)
     assert host.execute_execution_baseline(execute, project_id="project_test") == binding
     assert len(calls) == calls_before_replay
     assert len(consumptions(host.work_queue, frozen.id)) == 1

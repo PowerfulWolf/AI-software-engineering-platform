@@ -32,15 +32,31 @@ class EngineeringHumanActionRecorder:
             authority = store.records.get(
                 "baseline-authorities", binding.plan_sha256, BaselineOperatorAuthorization
             )
+            plan = store.plan(binding.plan_sha256)
+            authority.validate_integrity()
+            authority.require_plan_confirmation(plan)
+            containment = plan.facts.legacy_containment
+            assert containment is not None
+            local = containment.method == "operator_confirmed_local_stop"
             event = HumanActionEvent(
                 event_id="evalevt_legacy_" + binding.binding_sha256[:32],
                 case_id=case_id,
                 task_id=task.id,
                 occurred_at=authority.submitted_at,
                 action=HumanAction.SUPPLY_EVIDENCE,
-                evidence_uri=store.patch_uri(binding.plan_sha256),
+                evidence_uri=(
+                    (store.root / store.records._name("baseline-authorities", binding.plan_sha256))
+                    .absolute()
+                    .as_uri()
+                    if local
+                    else store.patch_uri(binding.plan_sha256)
+                ),
                 note=(
-                    "工程人员确认原未知执行在本机且之后已整机重启, "
+                    "工程人员补充证据: 原调用及全部派生工具已在同机同账户本地结束, "
+                    "不会再修改现场; 平台完成当前本机检查并保留完整草稿后另行执行, "
+                    "原结果仍未知。"
+                    if local
+                    else "工程人员确认原未知执行在本机且之后已整机重启, "
                     "平台保留完整现场后另行执行; 原结果仍未知。"
                 ),
             )

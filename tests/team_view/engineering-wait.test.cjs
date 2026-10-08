@@ -578,7 +578,7 @@ test("legacy unknown execution offers a visible precise preservation path withou
   assert.match(text(rescue), /不会新建需求或丢弃原分支的合法草稿/);
   assert.match(text(rescue), /旧执行结果仍未知/);
   assert.match(text(rescue), /下一轮使用剩余工作额度/);
-  assert.match(text(rescue), /仅重启 ASE 服务不够/);
+  assert.match(text(rescue), /先由平台检查当前本机执行和保留进度/);
   assert.equal(descend(rescue).some(node => node.tagName === "INPUT"), false);
   await control(rescue, "准备保留进度的恢复方案").events.click();
   const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
@@ -684,7 +684,7 @@ test("current rescue advice and copied report replace vague maintenance requests
   assert.doesNotMatch(currentNotice, /将处理报告交给平台维护者/);
   await control(box, "复制处理报告").events.click();
   assert.match(h.context.copiedReport, /准备保留进度的恢复方案/);
-  assert.match(h.context.copiedReport, /仅重启 ASE 服务不够/);
+  assert.match(h.context.copiedReport, /先看平台检查结果/);
   assert.doesNotMatch(h.context.copiedReport, /将处理报告交给平台维护者/);
   h.context.panel = new Element("section");
   h.run("requestOperationHistory(panel, data.request)");

@@ -489,7 +489,15 @@ def engineering_history(
                         occurred_at=occurred_at,
                         task_id=task.id,
                         summary=(
-                            "工程人员确认原未知执行在本机且之后已整机重启, 批准保留完整草稿继续。"
+                            "工程人员确认原未知调用及全部派生工具已在同机同账户结束, "
+                            "批准保留完整草稿继续; 平台本机检查不是历史停止记录。"
+                            if baseline_plan.facts.legacy_containment is not None
+                            and baseline_plan.facts.legacy_containment.method
+                            == "operator_confirmed_local_stop"
+                            else (
+                                "工程人员确认原未知执行在本机且之后已整机重启, "
+                                "批准保留完整草稿继续。"
+                            )
                             if baseline_plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
                             else "原分支执行基线更新的精确工程授权已记录。"
                         ),

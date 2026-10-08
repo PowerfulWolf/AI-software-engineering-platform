@@ -145,9 +145,9 @@ class FileExecutionBaselineStore:
             "baseline-authorities", plan.plan_sha256, BaselineOperatorAuthorization
         )
         authority.validate_integrity()
+        authority.require_plan_confirmation(plan)
         if (
-            authority.confirm_legacy_containment is not True
-            or authority.authorization_sha256 != binding.authority_sha256
+            authority.authorization_sha256 != binding.authority_sha256
             or authority.plan_sha256 != plan.plan_sha256
             or authority.facts_sha256 != plan.facts.facts_sha256
             or authority.task_id != binding.task_id

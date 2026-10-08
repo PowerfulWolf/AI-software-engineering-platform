@@ -71,7 +71,7 @@ from .store import ConsoleOperationConflict, ConsoleOperationNotFound
 
 _MAX_REQUEST_BYTES = 64_000
 _MAX_SPEC_REQUEST_BYTES = 512_000
-_OPERATION_CONTRACT_VERSION = 2
+_OPERATION_CONTRACT_VERSION = 3
 _LOGGER = logging.getLogger(__name__)
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),

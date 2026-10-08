@@ -1,0 +1,10 @@
+{
+  "id": "local-legacy-rescue-20261008",
+  "title": "补齐无需整机重启的旧执行保留进度恢复",
+  "status": "completed",
+  "owner": "codex",
+  "created_at": "2026-10-08",
+  "baseline": "2167b2b",
+  "completed_at": "2026-10-08",
+  "verification": "verification.md"
+}

@@ -26,10 +26,11 @@ from ai_software_engineer.domain.delivery_resolution import (
     EngineeringDispositionRecord,
     InspectDeliveryWait,
 )
-from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
+from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding, FullGitRevision
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairRequest
+from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
 from ai_software_engineer.manager.baseline_production import (
     BaselineExecuteCommand,
@@ -305,6 +306,19 @@ class ConsoleApprovalRequest(DomainModel):
         return self
 
 
+class LegacyRescuePreparation(DomainModel):
+    """Bound prerequisite check, separate from human authorization and old Run outcome."""
+
+    status: Literal["READY", "WAITING"]
+    task_id: TaskId
+    work_item_id: NonEmptyStr
+    source_revision: FullGitRevision
+    code: Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]{0,99}$")]
+    summary: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+    next_action: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+    responsible_party: Literal["平台执行服务", "工程授权者"]
+
+
 class ConsoleCommandResult(DomainModel):
     project_id: ProjectId
     delivery_id: DeliveryId | None = None
@@ -321,6 +335,9 @@ class ConsoleCommandResult(DomainModel):
     engineering_disposition: EngineeringDispositionRecord | None = None
     execution_baseline_plan: ExecutionBaselinePlan | None = None
     execution_baseline_binding: ExecutionBaselineBinding | None = None
+    legacy_rescue_preparation: LegacyRescuePreparation | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_resource_result(self) -> Self:
@@ -328,6 +345,24 @@ class ConsoleCommandResult(DomainModel):
             raise ValueError("delivery result requires both delivery ID and checkpoint")
         if self.approval is not None and self.delivery_id is None:
             raise ValueError("approval can only belong to a delivery result")
+        preparation = self.legacy_rescue_preparation
+        if preparation is not None:
+            plan = self.execution_baseline_plan
+            if (
+                self.delivery_id is None
+                or self.execution_baseline_binding is not None
+                or self.approval is not None
+            ):
+                raise ValueError("rescue check requires a delivery and cannot execute a binding")
+            if (preparation.status == "READY") != (plan is not None):
+                raise ValueError("only a ready rescue check can include an exact plan")
+            if plan is not None and (
+                plan.purpose.value != "legacy_workspace_rescue"
+                or plan.facts.task.id != preparation.task_id
+                or plan.facts.work_item_id != preparation.work_item_id
+                or plan.dirty_capture.source_revision != preparation.source_revision
+            ):
+                raise ValueError("rescue check must bind its exact preserved workspace plan")
         return self
 
 
@@ -502,6 +537,7 @@ __all__ = [
     "HandleDeliveryWaitIntent",
     "IdempotencyKey",
     "InspectDeliveryWaitIntent",
+    "LegacyRescuePreparation",
     "OperationId",
     "ProductApprovalIntent",
     "ProductReplyIntent",

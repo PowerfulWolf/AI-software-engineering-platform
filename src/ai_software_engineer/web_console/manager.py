@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, cast
 
+from pydantic import ValidationError
+
 from ai_software_engineer.agents.diagnostics import safe_diagnostic
 from ai_software_engineer.agents.structured import StructuredModelError
 from ai_software_engineer.context.ports import ContextBudgetExceeded
@@ -36,6 +38,7 @@ from ai_software_engineer.manager.delivery import (
 from ai_software_engineer.manager.delivery_checkpoint import (
     ProjectDeliveryCheckpointError,
 )
+from ai_software_engineer.manager.legacy_local_execution import LegacyRescuePrerequisiteError
 from ai_software_engineer.manager.model_execution import ManagerExecutionRejected
 from ai_software_engineer.manager.python_verification import PythonMysqlSandboxCapability
 from ai_software_engineer.manager.verification_environment import SwiftSandboxCapability
@@ -76,6 +79,7 @@ from .models import (
     ExecuteExecutionBaselineIntent,
     HandleDeliveryWaitIntent,
     InspectDeliveryWaitIntent,
+    LegacyRescuePreparation,
     ProductApprovalIntent,
     ProductReplyIntent,
     ProposeExecutionBaselineIntent,
@@ -271,24 +275,75 @@ class ManagerConsoleAdapter:
                     mode="json", exclude={"action", "project_id", "expected_checkpoint_sha256"}
                 )
                 if isinstance(intent, ProposeExecutionBaselineIntent):
-                    plan = self._host.propose_execution_baseline(
-                        BaselineProposeCommand.model_validate(data),
-                        project_id=intent.project_id,
-                    )
+                    preparation: LegacyRescuePreparation | None = None
+                    try:
+                        plan = self._host.propose_execution_baseline(
+                            BaselineProposeCommand.model_validate(data),
+                            project_id=intent.project_id,
+                        )
+                    except LegacyRescuePrerequisiteError as error:
+                        if intent.purpose is not BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+                            raise
+                        preparation = LegacyRescuePreparation(
+                            status="WAITING",
+                            task_id=intent.task_id,
+                            work_item_id=intent.expected_work_item_id,
+                            source_revision=intent.expected_source_revision,
+                            code=error.code,
+                            summary=error.safe_message,
+                            next_action=error.next_action,
+                            responsible_party="平台执行服务",
+                        )
+                        return ConsoleCommandResult(
+                            project_id=intent.project_id,
+                            delivery_id=intent.delivery_id,
+                            checkpoint_sha256=current.checkpoint_sha256,
+                            stage="ENGINEERING_RESCUE_CHECK",
+                            next_action=preparation.next_action,
+                            legacy_rescue_preparation=preparation,
+                        )
+                    if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+                        containment = plan.facts.legacy_containment
+                        local = (
+                            containment is not None
+                            and containment.method == "operator_confirmed_local_stop"
+                        )
+                        preparation = LegacyRescuePreparation(
+                            status="READY",
+                            task_id=intent.task_id,
+                            work_item_id=intent.expected_work_item_id,
+                            source_revision=intent.expected_source_revision,
+                            code="LEGACY_RESCUE_PLAN_READY",
+                            summary=(
+                                "完整合法草稿已封存, 本机检查未发现占用执行; "
+                                "该检查不能证明旧调用已停止, 仍需独立人工工程确认。"
+                                if local
+                                else "完整合法草稿已封存, 平台已检查原调用之后的整机启动记录。"
+                            ),
+                            next_action=(
+                                "请由工程授权者确认原调用始终同机同账户本地、未迁移或远程, "
+                                "原调用及全部派生工具已结束且不会再修改现场; "
+                                "接受旧结果未知及剩余工作额度后, 批准精确方案。"
+                                if local
+                                else "请确认原执行在本机且原执行之后已整机重启, "
+                                "再批准保留进度继续。"
+                            ),
+                            responsible_party="工程授权者",
+                        )
                     return ConsoleCommandResult(
                         project_id=intent.project_id,
                         delivery_id=intent.delivery_id,
                         checkpoint_sha256=current.checkpoint_sha256,
                         stage="ENGINEERING_BASELINE_PLAN",
                         next_action=(
-                            "完整当前草稿已封存。请确认原执行在本机且原执行之后已整机重启, "
-                            "再批准保留进度继续。"
-                            if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                            preparation.next_action
+                            if preparation is not None
                             else "旧改动与目标代码存在冲突, 请提出明确的 Coder 适配计划。"
                             if plan.conflicted
                             else "工程基线计划已封存, 工程人员可决定在原分支继续。"
                         ),
                         execution_baseline_plan=plan,
+                        legacy_rescue_preparation=preparation,
                     )
                 binding = self._host.execute_execution_baseline(
                     BaselineExecuteCommand.model_validate(data),
@@ -455,6 +510,13 @@ class ManagerConsoleAdapter:
                 "MODEL_" + code,
                 safe_diagnostic(f"{error.result.role.value}: {detail}"),
             ) from error
+        except ValidationError as error:
+            raise ConsoleCommandRejected(
+                "COMMAND_REJECTED",
+                "平台无法核验本次操作所需的记录，请重新检查当前需求。",  # noqa: RUF001
+            ) from error
+        except LegacyRescuePrerequisiteError as error:
+            raise ConsoleCommandRejected(error.code, error.safe_message) from error
         except PlanTestMatrixError as error:
             raise ConsoleCommandRejected(
                 "PLANNER_TEST_MATRIX_REJECTED", _safe_summary(error)
@@ -831,6 +893,8 @@ def _summarize(
 
 
 def _safe_summary(error: Exception) -> str:
+    if isinstance(error, ValidationError):
+        return "平台无法核验本次操作所需的记录，请重新检查当前需求。"  # noqa: RUF001
     value = str(error).strip()
     if (
         not value

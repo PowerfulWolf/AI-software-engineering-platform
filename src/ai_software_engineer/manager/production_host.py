@@ -581,11 +581,14 @@ class TeamHost:
                     submitted_at=datetime.now(UTC),
                     reference=command.reference,
                     confirm_legacy_containment=command.confirm_legacy_containment,
+                    confirm_local_execution_stopped=command.confirm_local_execution_stopped,
                 )
             elif (
                 authority.principal != self._operator_principal
                 or authority.reference != command.reference
                 or authority.confirm_legacy_containment != command.confirm_legacy_containment
+                or authority.confirm_local_execution_stopped
+                != command.confirm_local_execution_stopped
             ):
                 raise ValueError("该执行基线已有不同主体或引用的工程决定")
             binding = service.execute(plan.plan_sha256, authority=authority)

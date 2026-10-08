@@ -7,6 +7,7 @@ an executor stopped, grant write paths, or replace original native instructions.
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -47,6 +48,7 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineExecutionReservation,
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
+    require_rescue_confirmation,
 )
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.manager.delivery_preflight import (
@@ -57,8 +59,14 @@ from ai_software_engineer.manager.dispatch import DeliveryAllocation
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.manager.legacy_containment import (
     LegacyExecutionContainment,
+    LocalBootObservation,
     LocalBootObserver,
     TrustedLocalBootObserver,
+)
+from ai_software_engineer.manager.legacy_local_execution import (
+    LegacyLocalExecutionObserver,
+    LegacyRescuePrerequisiteError,
+    TrustedLegacyLocalExecutionObserver,
 )
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
@@ -124,15 +132,25 @@ class BaselineExecuteCommand(DomainModel):
     confirm_legacy_containment: Literal[True] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    confirm_local_execution_stopped: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def distinct_confirmation(self) -> Self:
+        if self.confirm_legacy_containment and self.confirm_local_execution_stopped:
+            raise ValueError("两种旧执行恢复确认不能同时使用")
+        return self
 
     def require_plan(self, plan: ExecutionBaselinePlan) -> None:
         plan.validate_integrity()
         if (plan.facts.task.id, plan.plan_sha256) != (self.task_id, self.expected_plan_sha256):
             raise ValueError("工程决定未绑定当前需求和精确执行基线计划")
-        if (plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE) != (
-            self.confirm_legacy_containment is True
-        ):
-            raise ValueError("旧执行救援需明确确认原执行使用同一本机且已整机重启, 未迁移或远程执行")
+        require_rescue_confirmation(
+            plan,
+            confirm_legacy_containment=self.confirm_legacy_containment,
+            confirm_local_execution_stopped=self.confirm_local_execution_stopped,
+        )
 
 
 class BaselineInvocationProof(DomainModel):
@@ -267,6 +285,7 @@ class ProductionBaselineFactCollector:
         inputs: StoredCoderExecutionInputResolver,
         purpose: BaselinePurpose = BaselinePurpose.SOURCE_REBIND,
         observer: LocalBootObserver | None = None,
+        local_execution_observer: LegacyLocalExecutionObserver | None = None,
         route_root: Path | None = None,
     ) -> None:
         allocation.validate_integrity()
@@ -284,7 +303,69 @@ class ProductionBaselineFactCollector:
         self._idle_cursor: DictCursor | None = None
         self.purpose = purpose
         self.observer = observer if observer is not None else TrustedLocalBootObserver()
+        self.local_execution_observer = (
+            local_execution_observer
+            if local_execution_observer is not None
+            else TrustedLegacyLocalExecutionObserver()
+        )
+        self._sealed_legacy_observation: LegacyExecutionContainment | None = None
         self.route_root = route_root
+
+    def bind_legacy_observation(self, containment: LegacyExecutionContainment) -> None:
+        """Pin the approved evidence while collect independently checks it again."""
+        containment.validate_integrity()
+        if (
+            containment.scope != self.scope
+            or containment.requirement_id != self.requirement_id
+            or containment.dispatch_sha256 != self.allocation.dispatch_sha256
+        ):
+            raise ValueError("旧执行恢复观察不属于当前精确需求和分配")
+        self._sealed_legacy_observation = containment
+
+    def _observe_legacy_boot(self) -> LocalBootObservation:
+        try:
+            return self.observer.observe()
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            raise LegacyRescuePrerequisiteError(
+                code="LEGACY_LOCAL_OBSERVATION_UNAVAILABLE",
+                safe_message="平台暂时无法读取可靠的本机身份和启动记录，不能准备旧执行恢复。",  # noqa: RUF001
+                next_action="请让平台维护者检查当前系统的只读查询能力和权限，修复后重新检查恢复前提；不要清空工作区。",  # noqa: RUF001
+            ) from error
+
+    def _verify_legacy_observation(
+        self, containment: LegacyExecutionContainment, *, worktree_root: Path
+    ) -> None:
+        containment.validate_integrity()
+        boot = self._observe_legacy_boot()
+        if boot.machine_sha256 != containment.boot.machine_sha256 or (
+            not boot.same_boot(containment.boot) and boot.booted_at <= containment.boot.booted_at
+        ):
+            raise LegacyRescuePrerequisiteError(
+                code="LOCAL_IDENTITY_CHANGED",
+                safe_message="原执行所在电脑或启动依据已变化, 保留进度并重新准备恢复方案。",
+                next_action="由工程授权者核对原执行所在电脑; 确认后重新准备方案。",
+            )
+        if containment.method == "operator_confirmed_local_stop":
+            sealed = containment.local_execution_survey
+            assert sealed is not None
+            current = self.local_execution_observer.observe(worktree_root=worktree_root, boot=boot)
+            current.require_idle()
+            # A later real boot is acceptable to an already supplied local stop
+            # declaration. It does not replace the immutable observation or stop history.
+            if not sealed.same_boundary(
+                current, allow_new_boot=not boot.same_boot(containment.boot)
+            ):
+                raise LegacyRescuePrerequisiteError(
+                    code="LOCAL_IDENTITY_CHANGED",
+                    safe_message="当前工作区、电脑、账户或检查范围与恢复方案不一致。",
+                    next_action="保留原进度, 由工程授权者核对后重新准备恢复方案。",
+                )
+        if not boot.same_boot(self._observe_legacy_boot()):
+            raise LegacyRescuePrerequisiteError(
+                code="LOCAL_OBSERVATION_CHANGED",
+                safe_message="检查期间电脑启动会话发生变化, 恢复尚未安排。",
+                next_action="请等当前服务稳定后重新准备恢复方案。",
+            )
 
     @contextmanager
     def execution_scope(self) -> Iterator[None]:
@@ -316,17 +397,14 @@ class ProductionBaselineFactCollector:
                 raise ValueError("旧执行救援缺少原持锁执行和队列屏障")
             if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
                 containment = plan.facts.legacy_containment
-                observed = self.observer.observe()
                 if (
                     containment is None
                     or binding.legacy_containment_sha256 != containment.containment_sha256
-                    or observed.machine_sha256 != containment.boot.machine_sha256
-                    or (
-                        not containment.boot.same_boot(observed)
-                        and observed.booted_at <= containment.boot.booted_at
-                    )
                 ):
-                    raise ValueError("救援原电脑或启动时间依据发生变化, 原现场和工程决定保留")
+                    raise ValueError("救援绑定与原精确检查事实不同, 原现场和工程决定保留")
+                self._verify_legacy_observation(
+                    containment, worktree_root=Path(plan.dirty_capture.worktree_path)
+                )
                 self.git.verify_mutations(
                     plan.dirty_capture.to_capture(),
                     plan.facts.permissions,
@@ -341,8 +419,9 @@ class ProductionBaselineFactCollector:
                 if inventory != plan.before_inventory:
                     raise ValueError("救援封存后工作现场已变化, 保留文件并重新检查工程方案")
                 require_complete_legacy_inventory(self.git, plan.dirty_capture, inventory)
-                if not observed.same_boot(self.observer.observe()):
-                    raise ValueError("救援发布期间电脑启动会话发生变化, 原现场保留")
+                self._verify_legacy_observation(
+                    containment, worktree_root=Path(plan.dirty_capture.worktree_path)
+                )
 
         consume_baseline(
             self.queue,
@@ -738,8 +817,15 @@ class ProductionBaselineFactCollector:
                         legacy_containment=containment
                         if proof_kind == "legacy_execution_contained"
                         else None,
+                        # Current rescue facts retain their pre-binding proof
+                        # for exact crash replay. Historical traversal binds the
+                        # saved authority only after this invocation is superseded.
                         legacy_binding_sha256=historical_legacy[1].binding_sha256
-                        if proof_kind == "legacy_execution_contained" and historical_legacy
+                        if (
+                            proof_kind == "legacy_execution_contained"
+                            and historical_legacy
+                            and (legacy is None or legacy.original_start != start)
+                        )
                         else None,
                     )
                 )
@@ -903,15 +989,60 @@ class ProductionBaselineFactCollector:
         ):
             raise ValueError("原执行已有现场或停止记录, 请使用原执行记录处理路径")
         self._require_legacy_routes(start)
-        return LegacyExecutionContainment.create(
+        # Resolve only the original manager-owned checkout. A missing checkout is
+        # not rebuilt, and HTTP cannot select a process-survey root.
+        boot = self._observe_legacy_boot()
+        sealed: LegacyExecutionContainment | None = getattr(
+            self, "_sealed_legacy_observation", None
+        )
+        if sealed is not None:
+            if sealed.original_start != start or sealed.original_claim != claim:
+                raise ValueError("恢复方案的原调用或历史领取记录已变化")
+            worktree_path = Path(self.scope.repository_root)
+            if sealed.method == "operator_confirmed_local_stop":
+                worktree_path = self.git.recover(
+                    WorktreeSpec(
+                        task_id=task.id,
+                        role=AgentRole.CODER,
+                        attempt=1,
+                        source_revision=start.request.source_revision,
+                    )
+                ).path
+            self._verify_legacy_observation(sealed, worktree_root=worktree_path)
+            return sealed
+        survey = None
+        method: Literal["os_reboot", "operator_confirmed_local_stop"] = "os_reboot"
+        if boot.booted_at <= start.started_at:
+            worktree = self.git.recover(
+                WorktreeSpec(
+                    task_id=task.id,
+                    role=AgentRole.CODER,
+                    attempt=1,
+                    source_revision=start.request.source_revision,
+                )
+            )
+            survey = self.local_execution_observer.observe(worktree_root=worktree.path, boot=boot)
+            survey.require_idle()
+            if not boot.same_boot(self._observe_legacy_boot()):
+                raise LegacyRescuePrerequisiteError(
+                    code="LOCAL_OBSERVATION_CHANGED",
+                    safe_message="检查期间电脑启动会话发生变化, 恢复尚未安排。",
+                    next_action="请等当前服务稳定后重新准备恢复方案。",
+                )
+            method = "operator_confirmed_local_stop"
+        containment = LegacyExecutionContainment.create(
             scope=self.scope,
             requirement_id=self.requirement_id,
             dispatch_sha256=self.allocation.dispatch_sha256,
             task_intent_sha256=task_intent_sha256(task),
             original_start=start,
             original_claim=claim,
-            boot=self.observer.observe(),
+            boot=boot,
+            method=method,
+            local_execution_survey=survey,
         )
+        self._sealed_legacy_observation = containment
+        return containment
 
     def _require_legacy_routes(self, start: DeliveryInvocationStart) -> None:
         root = self.route_root
@@ -952,6 +1083,7 @@ class ProductionBaselineFactCollector:
                 "baseline-authorities", plan.plan_sha256, BaselineOperatorAuthorization
             )
             authority.validate_integrity()
+            authority.require_plan_confirmation(plan)
             containment.validate_integrity()
             if (
                 containment.original_claim != claim
@@ -963,7 +1095,6 @@ class ProductionBaselineFactCollector:
                 or binding.legacy_containment_sha256 != containment.containment_sha256
                 or binding.authority_source != "engineering_operator_decision"
                 or binding.authority_sha256 != authority.authorization_sha256
-                or authority.confirm_legacy_containment is not True
                 or authority.plan_sha256 != plan.plan_sha256
                 or authority.facts_sha256 != plan.facts.facts_sha256
                 or authority.task_id != task.id

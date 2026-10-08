@@ -1788,6 +1788,26 @@
         "boot": {
           "$ref": "#/$defs/LocalBootObservation"
         },
+        "method": {
+          "default": "os_reboot",
+          "enum": [
+            "os_reboot",
+            "operator_confirmed_local_stop"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "local_execution_survey": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LegacyLocalExecutionSurvey"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "containment_sha256": {
           "pattern": "^[a-f0-9]{64}$",
           "title": "Containment Sha256",
@@ -1805,6 +1825,111 @@
         "containment_sha256"
       ],
       "title": "LegacyExecutionContainment",
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "const": "operator_confirmed_local_stop"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "local_execution_survey"
+            ],
+            "properties": {
+              "local_execution_survey": {
+                "type": "object",
+                "properties": {
+                  "blockers": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "local_execution_survey": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "LegacyLocalExecutionBlocker": {
+      "enum": [
+        "CODEX_EXECUTION_ACTIVE",
+        "CODEX_WRAPPER_ACTIVE",
+        "WORKTREE_PROCESS_ACTIVE",
+        "PROCESS_SCAN_INCOMPLETE",
+        "PROCESS_STATE_UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "LegacyLocalExecutionSurvey": {
+      "additionalProperties": false,
+      "properties": {
+        "worktree_path": {
+          "minLength": 1,
+          "title": "Worktree Path",
+          "type": "string"
+        },
+        "machine_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Machine Sha256",
+          "type": "string"
+        },
+        "boot_session_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Boot Session Sha256",
+          "type": "string"
+        },
+        "account_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Account Sha256",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "scanner_version": {
+          "minLength": 1,
+          "title": "Scanner Version",
+          "type": "string"
+        },
+        "blockers": {
+          "items": {
+            "$ref": "#/$defs/LegacyLocalExecutionBlocker"
+          },
+          "title": "Blockers",
+          "type": "array"
+        },
+        "survey_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Survey Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "worktree_path",
+        "machine_sha256",
+        "boot_session_sha256",
+        "account_sha256",
+        "observed_at",
+        "scanner_version",
+        "blockers",
+        "survey_sha256"
+      ],
+      "title": "LegacyLocalExecutionSurvey",
       "type": "object"
     },
     "LocalBootObservation": {

@@ -11,10 +11,18 @@ engineering disposition, never reconstruction of the old execution.
   (`machine_sha256`, `boot_session_sha256`, `booted_at`), twice observed stable. The exact
   `LegacyExecutionContainment` embeds `original_start`, `original_claim`, native child
   `requirement_id`, `dispatch_sha256`, `scope`, `task_intent_sha256`, `boot`, `containment_sha256`.
+- `manager/legacy_local_execution.py`: `TrustedLegacyLocalExecutionObserver.observe(*,
+  worktree_root: Path, boot: LocalBootObservation) -> LegacyLocalExecutionSurvey`, with exact
+  worktree/device/account/boot/scanner boundary, observed time, bounded blocker enums and SHA.
+  `LegacyRescuePrerequisiteError(code, safe_message, next_action)` is a typed expected wait.
+  No original PID/argv/environment or historical stopped boolean is invented.
 - `manager/baseline_production.py`: `BaselineProposeCommand.purpose` and
   `BaselineExecuteCommand.confirm_legacy_containment: Literal[True] | None`.
   `BaselineOperatorAuthorization.for_plan(..., confirm_legacy_containment=True)` binds the
   human declarations to the exact plan/facts/principal digest, not to request text alone.
+- `method=operator_confirmed_local_stop` requires **only** the separate
+  `confirm_local_execution_stopped: Literal[True]`; `method=os_reboot` requires **only** the
+  existing `confirm_legacy_containment`. Both absent for source rebind; both present is invalid.
 - `manager/execution_baseline.py`: `ExecutionBaselineService.propose(target_base_ref,
   input_mode=preserve_draft, purpose=legacy_workspace_rescue)` captures full facts;
   `execute(plan_sha256, authority=BaselineOperatorAuthorization)` publishes once.
@@ -27,7 +35,11 @@ Console `POST /api/v1/operations` wraps the normal exact Project/Requirement che
 original `task_id`, `expected_task_revision`, `expected_task_intent_sha256`,
 `expected_work_item_id`, `expected_source_revision` and unchanged `target_base_ref`.
 Execution selects only `EXECUTE_EXECUTION_BASELINE`, exact `expected_plan_sha256`, human
-`reference` and `confirm_legacy_containment=true`. HTTP cannot assert boot facts or original stop.
+`reference` and the method's exact human confirmation. HTTP cannot assert boot/survey facts or
+original stop. Console contract 3 supports local-stop confirmation; contract 2 retains old reboot
+plans. `legacy_rescue_preparation` is typed READY with exact plan or WAITING without any plan,
+approval or binding. Expected incomplete/active observations return a successful check, not a
+failed delivery or Pydantic error. All ValidationError inputs are replaced with fixed safe Chinese.
 
 ## Persistence and replay
 
@@ -51,7 +63,8 @@ mutate source files, HEAD, index or branch. All current dirty bodies are capture
 Git, checked against frozen write/deny policy, and verified twice under Task lock and queue fence.
 
 An OS observer reads current stable local machine identity, boot-session identity and boot time.
-The observed boot must postdate the exact invocation start. This proves containment only together
+For `method=os_reboot` (the omitted legacy default), the observed boot must postdate the exact
+invocation start. This proves containment only together
 with a separate trusted engineering authorization explicitly attesting that the original native
 execution used this same local computer, was never migrated/remote, that a whole-computer reboot
 actually happened after the original execution, and that the time evidence is trusted. The original
@@ -62,6 +75,32 @@ Service restart, an expired lease, a free lock, absent PID or a process scan can
 condition. A second current OS observation must match before queue publication; caller-supplied
 OS booleans/dates/PIDs cannot bypass the observer. Original historical UNKNOWN/outcome gaps remain.
 
+### Current local survey and explicit supplied cessation evidence
+
+When boot does not postdate the original start, collect a fresh trusted survey over the current
+effective-account local execution boundary and the manager-owned original checkout. Fixed bounded
+OS queries inspect native Codex execution/wrappers and cwd/open workspace references. App-server
+identity alone is not native delivery execution. Unknown ownership/state, query denial/truncation,
+target-associated processes and incomplete coverage refuse preparation. Commands never signal
+discovered processes, read environment variables or publish raw arguments. The original exact
+request/claim must still prove native local routing; unknown fallback or remote boundaries refuse.
+
+This survey is **not** a historical process-stop proof. A trusted human with ENGINEERING duty
+supplies the missing facts by confirming the original invocation always ran on the same local
+computer/account, was never moved or remote, and the original invocation **and all its derived
+tools** have actually ended and cannot modify the workspace again. They accept UNKNOWN and
+authorize preserved-draft execution from remaining work allowance. Without that exact declaration
+no machine EngineeringAdmission may continue. Persist it in immutable authority and
+HumanActionEvent(SUPPLY_EVIDENCE) with the authority URI; preserve old reboot event bytes/notes.
+
+Before preparation completion, execution and new queue consumption, freshly recheck the survey,
+stable boot, all claims under Task lock/SQL fence and complete snapshots. Survey times and unrelated
+process changes do not invalidate a valid plan: independently verify the typed boundary and retain
+the sealed observation body/hash for exact facts comparison. Pin the approved observation before
+collect. A genuinely later same-device boot may be accepted on replay with fresh same-account/path
+survey; do not alter sealed proof. Already-consumed publication remains idempotent without rescanning
+obsolete inputs. Survey/capture worktree paths must match in the plan model itself.
+
 Unknown work is not refunded or classified as provider failure. Exact queue consumption keeps the
 old WorkItem/history and reserves a distinct next work attempt/WorkItem. New Run and Context require
 a real claim and the original permissions; independent QA/Review and same-candidate gates remain.
@@ -69,7 +108,8 @@ a real claim and the original permissions; independent QA/Review and same-candid
 ## Validation matrix
 | Case | Behavior |
 | --- | --- |
-| OS boot before/equal original start, unreadable OS identity | Preserve wait, explain prerequisite |
+| OS boot before/equal original start | Current local survey + new exact engineering cessation declaration |
+| Unreadable OS identity or incomplete survey / live execution | WAITING explanation, no plan or new invocation |
 | Original final result now exists | Reject rescue; use original result replay |
 | Missing original claim/start or nonlocal execution | Reject; no new invocation |
 | Rescue authorization without exact same-device attestation | Reject before queue/source effects |
@@ -98,7 +138,7 @@ QA/Review candidate sources; foreign, missing, cyclic or stale-epoch lineages re
 ## Good / base / bad
 - Good: old local UNKNOWN plus genuine same-device post-invocation reboot, explicit engineering
   confirmation and complete legal snapshot; next ordinary work attempt delivers same Task.
-- Base: only ASE service restarted; boot predates invocation, refuse with actionable Chinese advice.
+- Base: only ASE restarted; survey can prepare preserved draft but never becomes automatic stop proof.
 - Bad: inferred stop from lease/PID, invented provider refund, protected ignored input, automatic
   policy approval or new duplicate Task; refuse and preserve all files and historical records.
 

@@ -69,3 +69,11 @@ is insufficient. Test the real service process and inherited replacement lock, n
 
 Old binaries do not gain a new close protocol when disk code changes. Document the one-time maintenance
 upgrade and leave missing historical Run facts untouched. See `../core/controlled-service-restart.md`.
+
+For a legacy UNKNOWN local Coder whose stop facts were never sealed, an idle ASE service or expired
+lease is not a stop proof. The platform may perform a bounded, read-only current-account OS survey
+and seal a complete draft, but only an engineering principal may separately attest that the old call
+and every derived tool ended on the same local machine/account. A real later boot continues to
+support the old reboot proof; it never changes a local attestation into a reboot record. Survey
+failures are typed WAITING results with no plan or queue consumption, and the console distinguishes
+the survey from approval and subsequent execution.

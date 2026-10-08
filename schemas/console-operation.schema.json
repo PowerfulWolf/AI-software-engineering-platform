@@ -854,6 +854,17 @@
             }
           ],
           "default": null
+        },
+        "legacy_rescue_preparation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LegacyRescuePreparation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -889,6 +900,99 @@
             "approval": {
               "type": "null"
             }
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "legacy_rescue_preparation"
+            ],
+            "properties": {
+              "legacy_rescue_preparation": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "delivery_id",
+              "checkpoint_sha256"
+            ],
+            "properties": {
+              "delivery_id": {
+                "type": "string"
+              },
+              "checkpoint_sha256": {
+                "type": "string"
+              },
+              "execution_baseline_binding": {
+                "type": "null"
+              },
+              "approval": {
+                "type": "null"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "legacy_rescue_preparation": {
+                      "properties": {
+                        "status": {
+                          "const": "READY"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "execution_baseline_plan"
+                  ],
+                  "properties": {
+                    "execution_baseline_plan": {
+                      "type": "object",
+                      "required": [
+                        "purpose"
+                      ],
+                      "properties": {
+                        "purpose": {
+                          "const": "legacy_workspace_rescue"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "legacy_rescue_preparation": {
+                      "properties": {
+                        "status": {
+                          "const": "WAITING"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "execution_baseline_plan": {
+                      "type": "null"
+                    },
+                    "execution_baseline_binding": {
+                      "type": "null"
+                    },
+                    "approval": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            ]
           }
         }
       ]
@@ -3093,6 +3197,19 @@
           ],
           "default": null,
           "title": "Confirm Legacy Containment"
+        },
+        "confirm_local_execution_stopped": {
+          "anyOf": [
+            {
+              "const": true,
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confirm Local Execution Stopped"
         }
       },
       "required": [
@@ -3104,7 +3221,25 @@
         "expected_checkpoint_sha256"
       ],
       "title": "ExecuteExecutionBaselineIntent",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "confirm_legacy_containment",
+              "confirm_local_execution_stopped"
+            ],
+            "properties": {
+              "confirm_legacy_containment": {
+                "const": true
+              },
+              "confirm_local_execution_stopped": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
     },
     "ExecutionBaselineBinding": {
       "additionalProperties": false,
@@ -5423,6 +5558,26 @@
         "boot": {
           "$ref": "#/$defs/LocalBootObservation"
         },
+        "method": {
+          "default": "os_reboot",
+          "enum": [
+            "os_reboot",
+            "operator_confirmed_local_stop"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "local_execution_survey": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LegacyLocalExecutionSurvey"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "containment_sha256": {
           "pattern": "^[a-f0-9]{64}$",
           "title": "Containment Sha256",
@@ -5440,7 +5595,43 @@
         "containment_sha256"
       ],
       "title": "LegacyExecutionContainment",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "const": "operator_confirmed_local_stop"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "local_execution_survey"
+            ],
+            "properties": {
+              "local_execution_survey": {
+                "type": "object",
+                "properties": {
+                  "blockers": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "local_execution_survey": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "LocalBootObservation": {
       "additionalProperties": false,
@@ -6054,6 +6245,141 @@
       ],
       "title": "PlanExecutionWindow",
       "type": "object"
+    },
+    "LegacyRescuePreparation": {
+      "additionalProperties": false,
+      "description": "Bound prerequisite check, separate from human authorization and old Run outcome.",
+      "properties": {
+        "status": {
+          "enum": [
+            "READY",
+            "WAITING"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "code": {
+          "pattern": "^[A-Z][A-Z0-9_]{0,99}$",
+          "title": "Code",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "next_action": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Next Action",
+          "type": "string"
+        },
+        "responsible_party": {
+          "enum": [
+            "平台执行服务",
+            "工程授权者"
+          ],
+          "title": "Responsible Party",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "task_id",
+        "work_item_id",
+        "source_revision",
+        "code",
+        "summary",
+        "next_action",
+        "responsible_party"
+      ],
+      "title": "LegacyRescuePreparation",
+      "type": "object"
+    },
+    "LegacyLocalExecutionSurvey": {
+      "additionalProperties": false,
+      "properties": {
+        "worktree_path": {
+          "minLength": 1,
+          "title": "Worktree Path",
+          "type": "string"
+        },
+        "machine_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Machine Sha256",
+          "type": "string"
+        },
+        "boot_session_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Boot Session Sha256",
+          "type": "string"
+        },
+        "account_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Account Sha256",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "scanner_version": {
+          "minLength": 1,
+          "title": "Scanner Version",
+          "type": "string"
+        },
+        "blockers": {
+          "items": {
+            "$ref": "#/$defs/LegacyLocalExecutionBlocker"
+          },
+          "title": "Blockers",
+          "type": "array"
+        },
+        "survey_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Survey Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "worktree_path",
+        "machine_sha256",
+        "boot_session_sha256",
+        "account_sha256",
+        "observed_at",
+        "scanner_version",
+        "blockers",
+        "survey_sha256"
+      ],
+      "title": "LegacyLocalExecutionSurvey",
+      "type": "object"
+    },
+    "LegacyLocalExecutionBlocker": {
+      "enum": [
+        "CODEX_EXECUTION_ACTIVE",
+        "CODEX_WRAPPER_ACTIVE",
+        "WORKTREE_PROCESS_ACTIVE",
+        "PROCESS_SCAN_INCOMPLETE",
+        "PROCESS_STATE_UNKNOWN"
+      ],
+      "type": "string"
     }
   },
   "additionalProperties": false,

@@ -41,6 +41,7 @@ from ai_software_engineer.manager.baseline_models import (
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
+from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.recovery.models import digest
@@ -61,6 +62,8 @@ class BaselineFactCollector(Protocol):
     def completed_task(self, binding: ExecutionBaselineBinding) -> Task: ...
 
     def execution_scope(self) -> AbstractContextManager[None]: ...
+
+    def bind_legacy_observation(self, containment: LegacyExecutionContainment) -> None: ...
 
 
 class ExecutionBaselineService:
@@ -98,6 +101,11 @@ class ExecutionBaselineService:
                         and prior_containment is not None
                         and prior_containment.original_start == current_containment.original_start
                     ):
+                        self.facts.bind_legacy_observation(prior_containment)
+                        facts = self.facts.collect(target_base_ref)
+                        self._require_facts(facts)
+                        if facts != prior_plan.facts:
+                            raise ValueError("已批准的救援输入发生变化, 保留现场并等待工程检查")
                         self.git.manager.verify_mutations(
                             prior_plan.dirty_capture.to_capture(),
                             facts.permissions,
@@ -116,6 +124,16 @@ class ExecutionBaselineService:
                         require_complete_legacy_inventory(
                             self.git.manager, prior_plan.dirty_capture, inventory
                         )
+                        if (
+                            self.facts.collect(target_base_ref) != facts
+                            or capture_mutation_inventory(
+                                Path(prior_plan.dirty_capture.worktree_path)
+                            )
+                            != inventory
+                        ):
+                            raise ValueError(
+                                "检查期间已批准的救援现场发生变化, 保留文件并等待工程检查"
+                            )
                         # Keep the old exact authority reachable from Console:
                         # a failed proposal must not hide its retry button.
                         return prior_plan
@@ -236,11 +254,10 @@ class ExecutionBaselineService:
         plan: ExecutionBaselinePlan, authority: EngineeringAdmission | BaselineOperatorAuthorization
     ) -> tuple[Literal["organization_engineering_policy", "engineering_operator_decision"], str]:
         authority.validate_integrity()
-        if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE and (
-            not isinstance(authority, BaselineOperatorAuthorization)
-            or authority.confirm_legacy_containment is not True
-        ):
-            raise ValueError("旧执行救援需要工程人员确认原执行所在电脑已整机重启, 不能自动审批")
+        if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+            if not isinstance(authority, BaselineOperatorAuthorization):
+                raise ValueError("旧执行救援需要精确人工工程确认, 不能自动审批")
+            authority.require_plan_confirmation(plan)
         task = plan.facts.task
         if (
             authority.task_id != task.id
@@ -284,6 +301,8 @@ class ExecutionBaselineService:
                 if self.publish_completion is not None:
                     self.publish_completion(plan, prior_completion)
                 return prior_completion
+            if plan.facts.legacy_containment is not None:
+                self.facts.bind_legacy_observation(plan.facts.legacy_containment)
             current = self.facts.collect(plan.target_base_ref)
             self._require_facts(current)
             expected_previous = existing[-1] if existing else None
