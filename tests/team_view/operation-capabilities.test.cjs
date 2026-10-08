@@ -119,7 +119,7 @@ test("capability withdrawal preserves a recorded decision without calling it rej
 test("a matching manifest permits HANDLE while an unsupported action or contract cannot POST", async () => {
   for (const manifest of [
     {operation_contract_version: 1, supported_actions: ["INSPECT_DELIVERY_WAIT"]},
-    {operation_contract_version: 2, supported_actions: ["HANDLE_DELIVERY_WAIT"]},
+    {operation_contract_version: 0, supported_actions: ["HANDLE_DELIVERY_WAIT"]},
     {operation_contract_version: true, supported_actions: ["HANDLE_DELIVERY_WAIT"]},
     {operation_contract_version: 1, supported_actions: "HANDLE_DELIVERY_WAIT"},
     {operation_contract_version: 1, supported_actions: [null]},
@@ -130,14 +130,31 @@ test("a matching manifest permits HANDLE while an unsupported action or contract
     assert.equal(await h.submit("HANDLE_DELIVERY_WAIT"), null);
     assert.equal(h.posts().length, 0, JSON.stringify(manifest));
   }
-  const h = harness();
-  Object.assign(h.context.info, {operation_contract_version: 1, supported_actions: ["HANDLE_DELIVERY_WAIT"]});
-  await h.refresh();
-  assert.equal((await h.submit("HANDLE_DELIVERY_WAIT")).operation_id, "operation_accepted");
-  assert.equal(h.posts().length, 1);
-  assert.equal(JSON.parse(h.posts()[0].body).intent.action, "HANDLE_DELIVERY_WAIT");
-  assert.equal(await h.submit("CONTINUE_DELIVERY"), null, "the global submit guard also covers other actions");
-  assert.equal(h.posts().length, 1);
+  for (const version of [1, 2]) {
+    const h = harness();
+    Object.assign(h.context.info, {operation_contract_version: version, supported_actions: ["HANDLE_DELIVERY_WAIT"]});
+    await h.refresh();
+    assert.equal((await h.submit("HANDLE_DELIVERY_WAIT")).operation_id, "operation_accepted");
+    assert.equal(h.posts().length, 1);
+    assert.equal(JSON.parse(h.posts()[0].body).intent.action, "HANDLE_DELIVERY_WAIT");
+    assert.equal(await h.submit("CONTINUE_DELIVERY"), null, "the global submit guard also covers other actions");
+    assert.equal(h.posts().length, 1);
+  }
+});
+
+test("rescue API fields require contract two while original baseline actions remain version one compatible", async () => {
+  for (const version of [1, 2]) {
+    const h = harness();
+    Object.assign(h.context.info, {operation_contract_version: version,
+      supported_actions: ["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"]});
+    await h.refresh();
+    assert.equal(h.run("consoleSupportsOperation('PROPOSE_EXECUTION_BASELINE')"), true);
+    assert.equal(h.run("consoleSupportsLegacyRescue()"), version >= 2);
+    const result = await h.run(`submitOperation({action: "PROPOSE_EXECUTION_BASELINE",
+      project_id: data.request.project_id, delivery_id: data.request.id, purpose: "legacy_workspace_rescue"})`);
+    assert.equal(result?.operation_id || null, version >= 2 ? "operation_accepted" : null);
+    assert.equal(h.posts().length, version >= 2 ? 1 : 0);
+  }
 });
 
 test("capability changes participate in rendering and failures clear previously supported commands", async () => {

@@ -976,3 +976,18 @@ Task permissions change. Optional omitted fields preserve historical wire/digest
 ## 恢复计划的规范改动隔离
 
 `RecoveryPlan.quarantined_paths` 是 additive 可选字段，省略时旧 plan 与 approval digest 不变。非空时精确等于完整 capture 中所有 `.trellis` 路径、排序且唯一，并且必须 `input_mode=coder_reapply`。原规范改动只用于只读审计，完整旧补丁保留但隔离路径不得应用；新 Coder scope 没有规范写权限。旧同名路径自动纠正计划和未隔离的规范 capture 仍可读取校验，执行时要求重新提案。完整实现签名、错误矩阵、测试与存量操作见 `.trellis/spec/core/delivery-recovery.md`。
+
+## 遗留未知本机执行的独立工程救援（2026-10-08）
+
+`BaselinePurpose.LEGACY_WORKSPACE_RESCUE` 是独立人工工程处置。它通过真实原
+`DeliveryInvocationStart + QueueClaim`、可信本机 OS boot observation 与精确人工确认，
+封存当前全部合法草稿。只允许 unchanged execution base/source、`preserve_draft`；不写
+工作区文件、HEAD、index、branch，不补造原 outcome/stop/receipt/progress。主机身份未在旧
+Run 中保存，因此工程人员必须明确确认原执行同机本地、未迁移、执行之后已整机重启和
+可信时间；`EngineeringAdmission` 不可自动批准。所有默认新增字段从旧 wire 省略，旧摘要不变。
+
+完整 proof、plan、人工 authority、operation start 和 binding append-only。队列在 owner-fenced
+事务中保留原 UNKNOWN 历史、消耗下一次普通 work allowance、创建不同 WorkItem；真实新
+Run/Context/claim 与 QA/Review gates 保持。`HumanActionEvent(SUPPLY_EVIDENCE)` 进入原评估
+case，不把人工补证据算成自治。Console contract version=2 增加 purpose/confirmation 参数，
+版本 1 现有 actions 保持兼容。见 `.trellis/spec/core/legacy-execution-rescue.md`。

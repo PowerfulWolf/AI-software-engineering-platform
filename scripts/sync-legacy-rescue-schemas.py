@@ -1,0 +1,172 @@
+"""Refresh additive rescue contracts, retaining handwritten legacy wire gates."""
+
+import json
+from pathlib import Path
+
+from pydantic import TypeAdapter
+
+from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
+from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
+from ai_software_engineer.web_console.models import (
+    ConsoleOperation,
+    ExecuteExecutionBaselineIntent,
+    ProposeExecutionBaselineIntent,
+)
+from ai_software_engineer.work_queue.baseline import BaselineQueueConsumption
+from ai_software_engineer.work_queue.execution_store import (
+    AcceptedRoleArtifact,
+    QueuedRoleStep,
+    RoleQueueAdmission,
+)
+
+ROOT = Path(__file__).resolve().parents[1] / "schemas"
+MODELS = (
+    ExecutionBaselineBinding,
+    ExecutionBaselinePlan,
+    BaselineQueueConsumption,
+    ConsoleOperation,
+)
+UPDATED = {
+    "ExecutionBaselineBinding",
+    "ExecutionBaselinePlan",
+    "BaselineExecutionFacts",
+    "BaselineExecutionReservation",
+    "BaselineOperatorAuthorization",
+    "BaselinePurpose",
+    "LegacyExecutionContainment",
+    "LocalBootObservation",
+}
+
+
+def main() -> None:
+    generated = [model.model_json_schema() for model in MODELS]
+    nodes = {name: node for source in generated for name, node in source.get("$defs", {}).items()}
+    nodes.update(
+        {source["title"]: {k: v for k, v in source.items() if k != "$defs"} for source in generated}
+    )
+    for path in ROOT.glob("*.schema.json"):
+        document = json.loads(path.read_text())
+        before = json.dumps(document)
+        definitions = document.get("$defs", {})
+        for source in generated:
+            if (
+                document.get("title") == source.get("title")
+                and source["title"] != "ConsoleOperation"
+            ):
+                document = {**source, "$id": document["$id"], "$schema": document["$schema"]}
+                definitions = document.setdefault("$defs", {})
+        for name in UPDATED & definitions.keys():
+            if name in nodes:
+                definitions[name] = nodes[name]
+        if "ProposeExecutionBaselineIntent" in definitions:
+            for model, field in (
+                (ProposeExecutionBaselineIntent, "purpose"),
+                (ExecuteExecutionBaselineIntent, "confirm_legacy_containment"),
+            ):
+                source = model.model_json_schema()
+                definitions[model.__name__]["properties"][field] = source["properties"][field]
+        while True:
+            references = refs(document)
+            missing = references - definitions.keys()
+            if not missing:
+                break
+            for name in missing:
+                definitions[name] = nodes[name]
+            document["$defs"] = definitions
+        for node in [document, *definitions.values()]:
+            guards(node)
+        if json.dumps(document) != before:
+            path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
+    # Full historical traversal consumes this union too. Its exact schema
+    # previously omitted the existing QueuedWorkItem.wait_disposition contract.
+    queue_path = ROOT / "role-queue-execution.schema.json"
+    previous = json.loads(queue_path.read_text())
+    adapter: TypeAdapter[RoleQueueAdmission | QueuedRoleStep | AcceptedRoleArtifact] = TypeAdapter(
+        RoleQueueAdmission | QueuedRoleStep | AcceptedRoleArtifact
+    )
+    queue_document = {
+        **adapter.json_schema(),
+        "$id": previous["$id"],
+        "$schema": previous["$schema"],
+    }
+    if queue_document != previous:
+        queue_path.write_text(
+            json.dumps(queue_document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        )
+
+
+def refs(value: object) -> set[str]:
+    if isinstance(value, dict):
+        reference = value.get("$ref")
+        found = (
+            {reference[8:]}
+            if isinstance(reference, str) and reference.startswith("#/$defs/")
+            else set()
+        )
+        return found | set().union(*(refs(child) for child in value.values()))
+    if isinstance(value, list):
+        return set().union(*(refs(child) for child in value))
+    return set()
+
+
+def guards(node: dict[str, object]) -> None:
+    title = node.get("title")
+    if title == "BaselineExecutionReservation":
+        node["allOf"] = [
+            {
+                "if": {
+                    "required": ["retry_cause"],
+                    "properties": {"retry_cause": {"const": "legacy_execution_abandoned"}},
+                },
+                "then": {
+                    "required": [
+                        "original_run_id",
+                        "current_invocation_start_sha256",
+                        "containment_sha256",
+                    ],
+                    "properties": {
+                        "original_run_id": {"type": "string"},
+                        "current_invocation_start_sha256": {"type": "string"},
+                        "containment_sha256": {"type": "string"},
+                        "current_invocation_outcome_sha256": {"type": "null"},
+                        "interruption_receipt_sha256": {"type": "null"},
+                        "retry_failure": {"type": "null"},
+                        "reservation_already_applied": {"const": False},
+                    },
+                },
+            }
+        ]
+    elif title in {"ExecutionBaselinePlan", "ExecutionBaselineBinding"}:
+        properties: dict[str, object] = {"input_mode": {"const": "preserve_draft"}}
+        required = []
+        if title == "ExecutionBaselinePlan":
+            properties.update(
+                {
+                    "conflicted": {"const": False},
+                    "facts": {
+                        "required": ["legacy_containment"],
+                        "properties": {"legacy_containment": {"type": "object"}},
+                    },
+                }
+            )
+        else:
+            properties.update(
+                {
+                    "authority_source": {"const": "engineering_operator_decision"},
+                    "legacy_containment_sha256": {"type": "string"},
+                }
+            )
+            required = ["legacy_containment_sha256"]
+        node["allOf"] = [
+            {
+                "if": {
+                    "required": ["purpose"],
+                    "properties": {"purpose": {"const": "legacy_workspace_rescue"}},
+                },
+                "then": {"required": required, "properties": properties},
+            }
+        ]
+
+
+if __name__ == "__main__":
+    main()

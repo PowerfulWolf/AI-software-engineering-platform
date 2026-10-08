@@ -8,6 +8,14 @@
       "title": "BaselineInputMode",
       "type": "string"
     },
+    "BaselinePurpose": {
+      "enum": [
+        "source_rebind",
+        "legacy_workspace_rescue"
+      ],
+      "title": "BaselinePurpose",
+      "type": "string"
+    },
     "EngineeringScope": {
       "additionalProperties": false,
       "properties": {
@@ -85,6 +93,23 @@
       "default": "v1",
       "title": "Schema Version",
       "type": "string"
+    },
+    "purpose": {
+      "$ref": "#/$defs/BaselinePurpose",
+      "default": "source_rebind"
+    },
+    "legacy_containment_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Legacy Containment Sha256"
     },
     "scope": {
       "$ref": "#/$defs/EngineeringScope"
@@ -280,6 +305,36 @@
   ],
   "title": "ExecutionBaselineBinding",
   "type": "object",
+  "$id": "https://ai-software-engineer.local/schemas/execution-baseline.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/execution-baseline.schema.json"
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "purpose"
+        ],
+        "properties": {
+          "purpose": {
+            "const": "legacy_workspace_rescue"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "legacy_containment_sha256"
+        ],
+        "properties": {
+          "input_mode": {
+            "const": "preserve_draft"
+          },
+          "authority_source": {
+            "const": "engineering_operator_decision"
+          },
+          "legacy_containment_sha256": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ]
 }

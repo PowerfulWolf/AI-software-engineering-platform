@@ -30,6 +30,11 @@ class BaselineInputMode(StrEnum):
     CODER_REAPPLY = "coder_reapply"
 
 
+class BaselinePurpose(StrEnum):
+    SOURCE_REBIND = "source_rebind"
+    LEGACY_WORKSPACE_RESCUE = "legacy_workspace_rescue"
+
+
 class RetainedExecutionPatch(DomainModel):
     """Reference to complete old execution-base → candidate + dirty mutation bodies.
 
@@ -47,6 +52,13 @@ class ExecutionBaselineBinding(DomainModel):
 
     kind: Literal["execution_baseline_binding"] = "execution_baseline_binding"
     schema_version: Literal["v1"] = "v1"
+    purpose: BaselinePurpose = Field(
+        default=BaselinePurpose.SOURCE_REBIND,
+        exclude_if=lambda value: value is BaselinePurpose.SOURCE_REBIND,
+    )
+    legacy_containment_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     scope: EngineeringScope
     task_id: TaskId
     task_intent_sha256: Sha256
@@ -91,8 +103,25 @@ class ExecutionBaselineBinding(DomainModel):
         )
         if (self.sequence == 1) != (self.previous_binding_sha256 is None):
             raise ValueError("baseline binding must extend the exact previous record")
-        if self.execution_base_ref == self.prior_execution_base_ref:
-            raise ValueError("baseline binding must change the execution base")
+        if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+            if (
+                self.execution_base_ref != self.prior_execution_base_ref
+                or self.execution_source_revision != self.prior_source_revision
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.authority_source != "engineering_operator_decision"
+                or self.legacy_containment_sha256 is None
+                or self.superseded_implementation_artifact_id is not None
+            ):
+                raise ValueError(
+                    "legacy rescue must preserve the exact source under human authority"
+                )
+        elif (
+            self.execution_base_ref == self.prior_execution_base_ref
+            or self.legacy_containment_sha256 is not None
+        ):
+            raise ValueError(
+                "source rebind must change its execution base without legacy containment"
+            )
         if (
             self.input_mode is BaselineInputMode.CODER_REAPPLY
             and self.execution_source_revision != self.execution_base_ref

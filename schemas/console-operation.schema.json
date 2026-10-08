@@ -203,6 +203,17 @@
           ],
           "default": null
         },
+        "legacy_containment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LegacyExecutionContainment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "permissions": {
           "$ref": "#/$defs/AgentPermissions"
         },
@@ -258,10 +269,24 @@
           "enum": [
             "uninvoked",
             "local_execution_limit",
-            "provider_transient"
+            "provider_transient",
+            "legacy_execution_abandoned"
           ],
           "title": "Retry Cause",
           "type": "string"
+        },
+        "containment_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Containment Sha256"
         },
         "original_run_id": {
           "anyOf": [
@@ -338,7 +363,51 @@
         "retry_cause"
       ],
       "title": "BaselineExecutionReservation",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "retry_cause"
+            ],
+            "properties": {
+              "retry_cause": {
+                "const": "legacy_execution_abandoned"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "current_invocation_start_sha256",
+              "containment_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "current_invocation_start_sha256": {
+                "type": "string"
+              },
+              "containment_sha256": {
+                "type": "string"
+              },
+              "current_invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
+              "reservation_already_applied": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
     },
     "BaselineInputMode": {
       "enum": [
@@ -3011,6 +3080,19 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Expected Checkpoint Sha256",
           "type": "string"
+        },
+        "confirm_legacy_containment": {
+          "anyOf": [
+            {
+              "const": true,
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confirm Legacy Containment"
         }
       },
       "required": [
@@ -3039,6 +3121,23 @@
           "default": "v1",
           "title": "Schema Version",
           "type": "string"
+        },
+        "purpose": {
+          "$ref": "#/$defs/BaselinePurpose",
+          "default": "source_rebind"
+        },
+        "legacy_containment_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Legacy Containment Sha256"
         },
         "scope": {
           "$ref": "#/$defs/EngineeringScope"
@@ -3233,7 +3332,37 @@
         "binding_sha256"
       ],
       "title": "ExecutionBaselineBinding",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "legacy_workspace_rescue"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "legacy_containment_sha256"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "legacy_containment_sha256": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
     },
     "ExecutionBaselinePlan": {
       "additionalProperties": false,
@@ -3249,6 +3378,10 @@
           "default": "v1",
           "title": "Schema Version",
           "type": "string"
+        },
+        "purpose": {
+          "$ref": "#/$defs/BaselinePurpose",
+          "default": "source_rebind"
         },
         "facts": {
           "$ref": "#/$defs/BaselineExecutionFacts"
@@ -3320,7 +3453,42 @@
         "plan_sha256"
       ],
       "title": "ExecutionBaselinePlan",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "legacy_workspace_rescue"
+              }
+            }
+          },
+          "then": {
+            "required": [],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "conflicted": {
+                "const": false
+              },
+              "facts": {
+                "required": [
+                  "legacy_containment"
+                ],
+                "properties": {
+                  "legacy_containment": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "HandleDeliveryWaitIntent": {
       "additionalProperties": false,
@@ -4202,6 +4370,10 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Expected Checkpoint Sha256",
           "type": "string"
+        },
+        "purpose": {
+          "$ref": "#/$defs/BaselinePurpose",
+          "default": "source_rebind"
         }
       },
       "required": [
@@ -5204,6 +5376,683 @@
         "files"
       ],
       "title": "WorkspaceMutationInventory",
+      "type": "object"
+    },
+    "BaselinePurpose": {
+      "enum": [
+        "source_rebind",
+        "legacy_workspace_rescue"
+      ],
+      "title": "BaselinePurpose",
+      "type": "string"
+    },
+    "LegacyExecutionContainment": {
+      "additionalProperties": false,
+      "description": "Exact new engineering facts, separate from an original process-stop receipt.",
+      "properties": {
+        "kind": {
+          "const": "legacy_execution_containment_v1",
+          "default": "legacy_execution_containment_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "original_start": {
+          "$ref": "#/$defs/DeliveryInvocationStart"
+        },
+        "original_claim": {
+          "$ref": "#/$defs/QueueClaim"
+        },
+        "boot": {
+          "$ref": "#/$defs/LocalBootObservation"
+        },
+        "containment_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Containment Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "requirement_id",
+        "dispatch_sha256",
+        "task_intent_sha256",
+        "original_start",
+        "original_claim",
+        "boot",
+        "containment_sha256"
+      ],
+      "title": "LegacyExecutionContainment",
+      "type": "object"
+    },
+    "LocalBootObservation": {
+      "additionalProperties": false,
+      "description": "Stable boot identity, with raw device identifiers never stored or displayed.",
+      "properties": {
+        "machine_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Machine Sha256",
+          "type": "string"
+        },
+        "boot_session_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Boot Session Sha256",
+          "type": "string"
+        },
+        "booted_at": {
+          "format": "date-time",
+          "title": "Booted At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_sha256",
+        "boot_session_sha256",
+        "booted_at"
+      ],
+      "title": "LocalBootObservation",
+      "type": "object"
+    },
+    "DeliveryInvocationStart": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "delivery_invocation_start",
+          "default": "delivery_invocation_start",
+          "title": "Kind",
+          "type": "string"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "checkpoint_sequence": {
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "request": {
+          "$ref": "#/$defs/AgentRequest"
+        },
+        "lease_id": {
+          "minLength": 1,
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "start_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Start Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "checkpoint_sequence",
+        "request",
+        "lease_id",
+        "started_at",
+        "start_sha256"
+      ],
+      "title": "DeliveryInvocationStart",
+      "type": "object"
+    },
+    "QueueClaim": {
+      "additionalProperties": false,
+      "description": "Durable assignment/model/Lease bundle returned to one worker.",
+      "properties": {
+        "kind": {
+          "const": "queue_claim",
+          "default": "queue_claim",
+          "title": "Kind",
+          "type": "string"
+        },
+        "work_item": {
+          "$ref": "#/$defs/QueuedWorkItem"
+        },
+        "assignment": {
+          "$ref": "#/$defs/RoleAssignment"
+        },
+        "lease": {
+          "$ref": "#/$defs/TaskLease"
+        },
+        "model_selection": {
+          "$ref": "#/$defs/ModelSelection"
+        },
+        "worker_id": {
+          "pattern": "^worker_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Worker Id",
+          "type": "string"
+        },
+        "claimed_at": {
+          "format": "date-time",
+          "title": "Claimed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item",
+        "assignment",
+        "lease",
+        "model_selection",
+        "worker_id",
+        "claimed_at"
+      ],
+      "title": "QueueClaim",
+      "type": "object"
+    },
+    "QueuedWorkItem": {
+      "additionalProperties": false,
+      "description": "One executable delivery-role Run in the organization queue.",
+      "properties": {
+        "kind": {
+          "const": "work_item",
+          "default": "work_item",
+          "title": "Kind",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkItemStatus"
+        },
+        "priority": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "required_capabilities": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Required Capabilities",
+          "type": "array"
+        },
+        "preferred_agent_id": {
+          "anyOf": [
+            {
+              "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Agent Id"
+        },
+        "wait_reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait Reason"
+        },
+        "wait_disposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "available_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available At"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "attempt": {
+          "maximum": 400,
+          "minimum": 0,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "checkpoint_sequence": {
+          "default": 0,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "dispatch_sequence": {
+          "default": 0,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Dispatch Sequence",
+          "type": "integer"
+        },
+        "repository_scopes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Repository Scopes",
+          "type": "array"
+        },
+        "parent_work_item_id": {
+          "anyOf": [
+            {
+              "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Work Item Id"
+        }
+      },
+      "required": [
+        "task_id",
+        "repository_id",
+        "status",
+        "priority",
+        "risk",
+        "created_at",
+        "updated_at",
+        "id",
+        "role",
+        "attempt",
+        "repository_scopes"
+      ],
+      "title": "QueuedWorkItem",
+      "type": "object"
+    },
+    "AgentRequest": {
+      "additionalProperties": false,
+      "description": "Immutable input envelope supplied to one Agent adapter invocation.",
+      "properties": {
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "input_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Input Artifact Ids",
+          "type": "array"
+        },
+        "permissions": {
+          "$ref": "#/$defs/AgentPermissions"
+        },
+        "output_schema": {
+          "minLength": 1,
+          "title": "Output Schema",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "work_slice": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoderWorkSlice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "execution_baseline_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Baseline Sha256"
+        },
+        "execution_base_ref": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Base Ref"
+        },
+        "continuation_checkpoint_id": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuation Checkpoint Id"
+        },
+        "continuation_changed_paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Continuation Changed Paths",
+          "type": "array"
+        },
+        "expected_parent_artifact_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Parent Artifact Ids"
+        },
+        "expected_supersedes_by_kind": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "propertyNames": {
+                "$ref": "#/$defs/ArtifactKind"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Supersedes By Kind"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_id",
+        "role",
+        "attempt",
+        "source_revision",
+        "context_manifest_id",
+        "input_artifact_ids",
+        "permissions",
+        "output_schema",
+        "timeout_seconds"
+      ],
+      "title": "AgentRequest",
+      "type": "object"
+    },
+    "WorkItemStatus": {
+      "enum": [
+        "READY",
+        "LEASED",
+        "RUNNING",
+        "WAITING_HUMAN",
+        "WAITING_DEPENDENCY",
+        "RETRY_SCHEDULED",
+        "CLOSED"
+      ],
+      "title": "WorkItemStatus",
+      "type": "string"
+    },
+    "ArtifactKind": {
+      "enum": [
+        "plan",
+        "coder-progress",
+        "implementation-report",
+        "qa-report",
+        "review-report"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "CoderWorkSlice": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "coder_work_slice_v1",
+          "default": "coder_work_slice_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "plan_artifact_id": {
+          "minLength": 1,
+          "title": "Plan Artifact Id",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "window": {
+          "$ref": "#/$defs/PlanExecutionWindow"
+        },
+        "authorized_work_remaining": {
+          "minimum": 1,
+          "title": "Authorized Work Remaining",
+          "type": "integer"
+        },
+        "completed_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Completed Step Ids",
+          "type": "array"
+        },
+        "selected_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Selected Step Ids",
+          "type": "array"
+        },
+        "later_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Later Step Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "source_revision",
+        "plan_artifact_id",
+        "plan_sha256",
+        "window",
+        "authorized_work_remaining",
+        "completed_step_ids",
+        "selected_step_ids",
+        "later_step_ids"
+      ],
+      "title": "CoderWorkSlice",
+      "type": "object"
+    },
+    "RiskTier": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ],
+      "title": "RiskTier",
+      "type": "string"
+    },
+    "PlanExecutionWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "serial_coder_window_v1",
+          "default": "serial_coder_window_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "hard_seconds": {
+          "maximum": 3600,
+          "minimum": 2,
+          "title": "Hard Seconds",
+          "type": "integer"
+        },
+        "finalization_reserve_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Finalization Reserve Seconds",
+          "type": "integer"
+        },
+        "reserve_rework_attempts": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Reserve Rework Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hard_seconds",
+        "finalization_reserve_seconds"
+      ],
+      "title": "PlanExecutionWindow",
       "type": "object"
     }
   },

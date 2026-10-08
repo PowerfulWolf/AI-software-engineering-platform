@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`legacy-execution-rescue.md`](legacy-execution-rescue.md): exact human engineering rescue of
+  legacy unknown local Coder executions, OS containment and complete preserved workspace.
+
 - [Read memory lifecycle](read-memory-lifecycle.md): nested validation-error frame release,
   worker-owned snapshot admission and bounded serial/concurrent memory verification.
 

@@ -55,7 +55,7 @@ from .store import ConsoleOperationConflict, ConsoleOperationNotFound
 
 _MAX_REQUEST_BYTES = 64_000
 _MAX_SPEC_REQUEST_BYTES = 512_000
-_OPERATION_CONTRACT_VERSION = 1
+_OPERATION_CONTRACT_VERSION = 2
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),

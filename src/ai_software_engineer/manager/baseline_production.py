@@ -10,11 +10,12 @@ import hashlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pymysql.cursors import DictCursor
 
+from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, RouteAttemptOutcome
 from ai_software_engineer.agents.models import AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.domain.agent import AgentPermissions
@@ -29,6 +30,7 @@ from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.execution_baseline import (
     BaselineInputMode,
+    BaselinePurpose,
     ExecutionBaselineBinding,
     FullGitRevision,
 )
@@ -37,11 +39,13 @@ from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, DeliveryRe
 from ai_software_engineer.domain.task import Task, TaskId, task_matches_dispatch
 from ai_software_engineer.domain.workforce import RoleAssignment
 from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound
+from ai_software_engineer.git.mutation import capture_mutation_inventory
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSpec
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import (
     BaselineExecutionFacts,
     BaselineExecutionReservation,
+    BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
 )
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
@@ -51,6 +55,12 @@ from ai_software_engineer.manager.delivery_preflight import (
 )
 from ai_software_engineer.manager.dispatch import DeliveryAllocation
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
+from ai_software_engineer.manager.legacy_containment import (
+    LegacyExecutionContainment,
+    LocalBootObserver,
+    TrustedLocalBootObserver,
+)
+from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
 from ai_software_engineer.orchestration.continuation_models import ExecutionInterruptionReceipt
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
@@ -68,6 +78,10 @@ from ai_software_engineer.work_queue.worker import AcceptedArtifactStore, Worker
 
 
 class BaselineProposeCommand(DomainModel):
+    purpose: BaselinePurpose = Field(
+        default=BaselinePurpose.SOURCE_REBIND,
+        exclude_if=lambda value: value is BaselinePurpose.SOURCE_REBIND,
+    )
     delivery_id: DeliveryId
     task_id: TaskId
     expected_task_intent_sha256: Sha256
@@ -88,6 +102,7 @@ class BaselineProposeCommand(DomainModel):
             plan.dirty_capture.source_revision,
             plan.target_base_ref,
             plan.input_mode,
+            plan.purpose,
         ) != (
             self.task_id,
             self.expected_task_intent_sha256,
@@ -96,6 +111,7 @@ class BaselineProposeCommand(DomainModel):
             self.expected_source_revision,
             self.target_base_ref,
             self.input_mode,
+            self.purpose,
         ):
             raise ValueError("工程执行基线事实已变化, 请刷新后重新调查")
 
@@ -105,11 +121,18 @@ class BaselineExecuteCommand(DomainModel):
     task_id: TaskId
     expected_plan_sha256: Sha256
     reference: NonEmptyStr = Field(max_length=2000)
+    confirm_legacy_containment: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     def require_plan(self, plan: ExecutionBaselinePlan) -> None:
         plan.validate_integrity()
         if (plan.facts.task.id, plan.plan_sha256) != (self.task_id, self.expected_plan_sha256):
             raise ValueError("工程决定未绑定当前需求和精确执行基线计划")
+        if (plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE) != (
+            self.confirm_legacy_containment is True
+        ):
+            raise ValueError("旧执行救援需明确确认原执行使用同一本机且已整机重启, 未迁移或远程执行")
 
 
 class BaselineInvocationProof(DomainModel):
@@ -122,9 +145,36 @@ class BaselineInvocationProof(DomainModel):
     preflight_checkpoint_sha256s: tuple[Sha256, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
+    legacy_containment: LegacyExecutionContainment | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    legacy_binding_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     proof_kind: Literal[
-        "definitive_outcome", "owned_process_stopped", "unclaimed", "claimed_preflight"
+        "definitive_outcome",
+        "owned_process_stopped",
+        "unclaimed",
+        "claimed_preflight",
+        "legacy_execution_contained",
     ]
+
+    @model_validator(mode="after")
+    def validate_legacy(self) -> Self:
+        if self.proof_kind == "legacy_execution_contained":
+            containment = self.legacy_containment
+            if (
+                containment is None
+                or containment.original_start.work_item_id != self.work_item_id
+                or containment.original_start.start_sha256 != self.start_sha256
+                or self.outcome_sha256 is not None
+                or self.interruption_receipt_sha256 is not None
+            ):
+                raise ValueError("旧执行观察不能替代原结果或原停止记录")
+            containment.validate_integrity()
+        elif self.legacy_containment is not None or self.legacy_binding_sha256 is not None:
+            raise ValueError("旧执行隔离观察只能属于独立工程救援证明")
+        return self
 
 
 class BaselineQuiescenceProof(DomainModel):
@@ -215,6 +265,9 @@ class ProductionBaselineFactCollector:
         source_native_rules: tuple[NativeRuleSource, ...],
         runtime_manifest_sha256: str,
         inputs: StoredCoderExecutionInputResolver,
+        purpose: BaselinePurpose = BaselinePurpose.SOURCE_REBIND,
+        observer: LocalBootObserver | None = None,
+        route_root: Path | None = None,
     ) -> None:
         allocation.validate_integrity()
         self.allocation, self.scope, self.requirement_id = allocation, scope, requirement_id
@@ -229,6 +282,9 @@ class ProductionBaselineFactCollector:
         self.artifacts = AcceptedArtifactStore(artifacts, queue, allocation.task_id, self.guard)
         self._scope_held = False
         self._idle_cursor: DictCursor | None = None
+        self.purpose = purpose
+        self.observer = observer if observer is not None else TrustedLocalBootObserver()
+        self.route_root = route_root
 
     @contextmanager
     def execution_scope(self) -> Iterator[None]:
@@ -255,7 +311,46 @@ class ProductionBaselineFactCollector:
             raise ValueError("基线队列接续不属于当前需求和原批准范围")
         from ai_software_engineer.work_queue.baseline import consume_baseline
 
-        consume_baseline(self.queue, plan, binding, cursor=self._idle_cursor)
+        def validate_new_consumption() -> None:
+            if not self._scope_held or self._idle_cursor is None:
+                raise ValueError("旧执行救援缺少原持锁执行和队列屏障")
+            if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+                containment = plan.facts.legacy_containment
+                observed = self.observer.observe()
+                if (
+                    containment is None
+                    or binding.legacy_containment_sha256 != containment.containment_sha256
+                    or observed.machine_sha256 != containment.boot.machine_sha256
+                    or (
+                        not containment.boot.same_boot(observed)
+                        and observed.booted_at <= containment.boot.booted_at
+                    )
+                ):
+                    raise ValueError("救援原电脑或启动时间依据发生变化, 原现场和工程决定保留")
+                self.git.verify_mutations(
+                    plan.dirty_capture.to_capture(),
+                    plan.facts.permissions,
+                    denied_paths=plan.facts.denied_paths,
+                )
+                self.git.verify_mutations(
+                    plan.complete_capture.to_capture(),
+                    plan.facts.permissions,
+                    denied_paths=plan.facts.denied_paths,
+                )
+                inventory = capture_mutation_inventory(Path(plan.dirty_capture.worktree_path))
+                if inventory != plan.before_inventory:
+                    raise ValueError("救援封存后工作现场已变化, 保留文件并重新检查工程方案")
+                require_complete_legacy_inventory(self.git, plan.dirty_capture, inventory)
+                if not observed.same_boot(self.observer.observe()):
+                    raise ValueError("救援发布期间电脑启动会话发生变化, 原现场保留")
+
+        consume_baseline(
+            self.queue,
+            plan,
+            binding,
+            cursor=self._idle_cursor,
+            validate_new_consumption=validate_new_consumption,
+        )
 
     def collect(self, target_base_ref: str) -> BaselineExecutionFacts:
         if not self._scope_held:
@@ -317,6 +412,10 @@ class ProductionBaselineFactCollector:
         source = self.inputs.current(task, implementation=implementation, progress=progress)
         if step.boundary.source_revision != source.source_revision:
             raise ValueError("Coder 队列源版本与当前已接纳输入不一致")
+        if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE and (
+            target_base_ref != source.execution_base_ref or current_implementation is not None
+        ):
+            raise ValueError("旧执行救援只能保留原代码基线和草稿, 不能覆盖已接纳候选")
         target_rules = native_rules_at_revision(
             self.git, repository_id=self.scope.repository_id, revision=target_base_ref
         )
@@ -329,8 +428,13 @@ class ProductionBaselineFactCollector:
             if assignment.task_id == task.id
         )
         receipts = self._receipts(task)
-        invocation_proofs = self._invocations(task, items, receipts, assignments)
-        reservation = self._reservation(task, item, receipts)
+        legacy = (
+            self._legacy_containment(task, item)
+            if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+            else None
+        )
+        invocation_proofs = self._invocations(task, items, receipts, assignments, legacy=legacy)
+        reservation = self._reservation(task, item, receipts, legacy=legacy)
         proof = BaselineQuiescenceProof(
             task_id=task.id,
             task_revision=revision,
@@ -361,10 +465,17 @@ class ProductionBaselineFactCollector:
             source_native_rules_sha256=digest([rule.to_wire() for rule in frozen_rules]),
             target_native_rules_sha256=digest([rule.to_wire() for rule in target_rules]),
             source_artifact_ids=tuple(sorted(artifact.artifact_id for artifact in artifacts)),
-            implementation_artifact_id=implementation.artifact_id if implementation else None,
+            implementation_artifact_id=(
+                current_implementation.artifact_id
+                if legacy is not None and current_implementation is not None
+                else implementation.artifact_id
+                if legacy is None and implementation is not None
+                else None
+            ),
             progress_artifact_id=progress.artifact_id if progress else None,
             resolved_interruption_receipt_sha256s=resolved,
             continuation=reservation,
+            legacy_containment=legacy,
             permissions=self.permissions,
             denied_paths=task.constraints.denied_paths if task.constraints else (),
             facts_sha256="0" * 64,
@@ -506,6 +617,8 @@ class ProductionBaselineFactCollector:
         items: tuple[QueuedWorkItem, ...],
         receipts: tuple[ExecutionInterruptionReceipt, ...],
         assignments: tuple[RoleAssignment, ...],
+        *,
+        legacy: LegacyExecutionContainment | None = None,
     ) -> tuple[BaselineInvocationProof, ...]:
         root = self.state / "invocations"
         records = KnowledgeRecordStore(root, read_only=True) if root.is_dir() else None
@@ -591,9 +704,9 @@ class ProductionBaselineFactCollector:
                     outcome.validate_integrity()
                     if outcome.start != start:
                         raise ValueError("原调用结果未绑定精确启动记录")
-                    proof_kind: Literal["definitive_outcome", "owned_process_stopped"] = (
-                        "definitive_outcome"
-                    )
+                    proof_kind: Literal[
+                        "definitive_outcome", "owned_process_stopped", "legacy_execution_contained"
+                    ] = "definitive_outcome"
                 elif receipt is not None:
                     if (
                         receipt.request != start.request
@@ -603,7 +716,14 @@ class ProductionBaselineFactCollector:
                         raise ValueError("停机证明不属于精确原调用")
                     proof_kind = "owned_process_stopped"
                 else:
-                    raise ValueError("原调用结果或真实停机事实不完整, 保留现场等待工程调查")
+                    historical_legacy = self._historical_legacy(task, start, claim)
+                    containment = legacy if legacy and legacy.original_start == start else None
+                    if containment is None and historical_legacy is not None:
+                        containment = historical_legacy[0]
+                    if containment is None or containment.original_claim != claim:
+                        raise ValueError("原调用结果或真实停机事实不完整, 保留现场等待工程调查")
+                    containment.validate_integrity()
+                    proof_kind = "legacy_execution_contained"
                 result.append(
                     BaselineInvocationProof(
                         work_item_id=item.id,
@@ -615,6 +735,12 @@ class ProductionBaselineFactCollector:
                             marker.checkpoint_sha256 for marker in markers
                         ),
                         proof_kind=proof_kind,
+                        legacy_containment=containment
+                        if proof_kind == "legacy_execution_contained"
+                        else None,
+                        legacy_binding_sha256=historical_legacy[1].binding_sha256
+                        if proof_kind == "legacy_execution_contained" and historical_legacy
+                        else None,
                     )
                 )
                 continue
@@ -642,6 +768,8 @@ class ProductionBaselineFactCollector:
         task: Task,
         item: QueuedWorkItem,
         receipts: tuple[ExecutionInterruptionReceipt, ...],
+        *,
+        legacy: LegacyExecutionContainment | None = None,
     ) -> BaselineExecutionReservation:
         root = self.state / "invocations"
         records = KnowledgeRecordStore(root, read_only=True) if root.is_dir() else None
@@ -672,6 +800,25 @@ class ProductionBaselineFactCollector:
         if outcome is not None and outcome.result.status is AgentRunStatus.SUCCEEDED:
             raise ValueError("原调用已有成功结果, 需要先接纳封存结果, 不能用基线更新覆盖")
         failure = None
+        if legacy is not None:
+            legacy.validate_integrity()
+            if (
+                outcome is not None
+                or receipt is not None
+                or legacy.original_start != start
+                or task.attempts != start.request.attempt
+                or task.work_budget_exhausted
+                or start.request.attempt + 1 > task.max_attempts
+            ):
+                raise ValueError("旧执行救援不补充工作额度, 需要精确原执行和下一次工作预留")
+            return BaselineExecutionReservation(
+                current_attempt=start.request.attempt,
+                next_execution_attempt=start.request.attempt + 1,
+                retry_cause="legacy_execution_abandoned",
+                original_run_id=start.request.run_id,
+                current_invocation_start_sha256=start.start_sha256,
+                containment_sha256=legacy.containment_sha256,
+            )
         if receipt is not None:
             cause = receipt.cause
             error_code = receipt.original_error_code.value
@@ -717,6 +864,116 @@ class ProductionBaselineFactCollector:
             retry_failure=failure,
             reservation_already_applied=already,
         )
+
+    def _legacy_containment(self, task: Task, item: QueuedWorkItem) -> LegacyExecutionContainment:
+        disposition = item.wait_disposition
+        if (
+            item.status not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+            or disposition is None
+            or disposition.facts.classification not in {"EXECUTION_UNCERTAIN", "PLATFORM_BUG"}
+            or disposition.facts.task_intent_sha256 != task_intent_sha256(task)
+            or disposition.facts.checkpoint_sequence != item.checkpoint_sequence
+        ):
+            raise ValueError("旧执行救援只处理当前尚未确认结果的 Coder 等待")
+        root = self.state / "invocations"
+        if not root.is_dir():
+            raise ValueError("旧执行救援缺少真实原调用启动记录")
+        records = KnowledgeRecordStore(root, read_only=True)
+        start = records.get("invocation-starts", item.id, DeliveryInvocationStart)
+        start.validate_integrity()
+        if (
+            start.request.task_id != task.id
+            or start.request.role is not AgentRole.CODER
+            or start.request.permissions != self.permissions
+            or start.request.source_revision != disposition.facts.source_revision
+            or start.checkpoint_sequence != item.checkpoint_sequence
+        ):
+            raise ValueError("旧执行救援启动记录与当前原权限和等待版本不一致")
+        if records.find("invocation-outcomes", item.id, DeliveryInvocationOutcome) is not None:
+            raise ValueError("原调用结果已存在, 请先让平台处理原结果, 无需旧执行救援")
+        claim = self.queue.original_claim(start.lease_id)
+        capture_root = self.state / "continuations" / task.id
+        if any(
+            (capture_root / name).exists() or (capture_root / name).is_symlink()
+            for name in (
+                f"capture-start-{start.request.run_id}.json",
+                f"capture-stop-{start.request.run_id}.json",
+                f"receipt-{start.request.run_id}.json",
+            )
+        ):
+            raise ValueError("原执行已有现场或停止记录, 请使用原执行记录处理路径")
+        self._require_legacy_routes(start)
+        return LegacyExecutionContainment.create(
+            scope=self.scope,
+            requirement_id=self.requirement_id,
+            dispatch_sha256=self.allocation.dispatch_sha256,
+            task_intent_sha256=task_intent_sha256(task),
+            original_start=start,
+            original_claim=claim,
+            boot=self.observer.observe(),
+        )
+
+    def _require_legacy_routes(self, start: DeliveryInvocationStart) -> None:
+        root = self.route_root
+        if root is None or not root.is_dir():
+            return
+        routes = FileModelRouteAttemptStore(root, read_only=True).list_for_run(start.request.run_id)
+        for ordinal, route in enumerate(routes, start=1):
+            route.validate_integrity()
+            if route.route_index != ordinal or route.request_sha256 != digest(
+                start.request.to_wire()
+            ):
+                raise ValueError("原模型路由记录与完整原调用不一致")
+            if route.outcome is not RouteAttemptOutcome.FALLBACK:
+                raise ValueError("原模型已有封存最终结果, 请先处理原结果")
+            if route.route_kind != "codex_cli":
+                raise ValueError("旧执行救援只支持可由原电脑整机重启隔离的本机执行")
+        if routes:
+            # A sealed fallback describes the completed previous route, not the
+            # route which was entered afterwards. Missing next-route facts cannot
+            # be interpreted as a local native invocation.
+            raise ValueError("原执行发生过模型切换但后续路由尚未封存, 不能确认本机救援边界")
+
+    def _historical_legacy(
+        self, task: Task, start: DeliveryInvocationStart, claim: QueueClaim
+    ) -> tuple[LegacyExecutionContainment, ExecutionBaselineBinding] | None:
+        store = getattr(getattr(self, "inputs", None), "store", None)
+        if store is None:
+            return None
+        matches: list[tuple[LegacyExecutionContainment, ExecutionBaselineBinding]] = []
+        for binding in store.bindings_for_task(task.id):
+            if binding.purpose is not BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+                continue
+            plan = store.plan(binding.plan_sha256)
+            containment = plan.facts.legacy_containment
+            if containment is None or containment.original_start != start:
+                continue
+            authority = store.records.get(
+                "baseline-authorities", plan.plan_sha256, BaselineOperatorAuthorization
+            )
+            authority.validate_integrity()
+            containment.validate_integrity()
+            if (
+                containment.original_claim != claim
+                or containment.scope != self.scope
+                or containment.requirement_id != self.requirement_id
+                or containment.dispatch_sha256 != self.allocation.dispatch_sha256
+                or containment.task_intent_sha256 != task_intent_sha256(task)
+                or containment.original_start.request.permissions != self.permissions
+                or binding.legacy_containment_sha256 != containment.containment_sha256
+                or binding.authority_source != "engineering_operator_decision"
+                or binding.authority_sha256 != authority.authorization_sha256
+                or authority.confirm_legacy_containment is not True
+                or authority.plan_sha256 != plan.plan_sha256
+                or authority.facts_sha256 != plan.facts.facts_sha256
+                or authority.task_id != task.id
+                or authority.task_intent_sha256 != task_intent_sha256(task)
+            ):
+                raise ValueError("旧执行历史隔离记录缺少精确原事实和工程确认")
+            matches.append((containment, binding))
+        if len(matches) > 1:
+            raise ValueError("同一旧执行存在重复救援记录, 禁止重复预留")
+        return matches[0] if matches else None
 
     def _preflight_markers(
         self, task: Task, item: QueuedWorkItem, claims: tuple[QueueClaim, ...]

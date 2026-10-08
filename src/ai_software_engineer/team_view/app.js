@@ -57,8 +57,12 @@ const consoleOperationContractVersionExpected = 1;
 const consoleOperationVersionMismatchMessage =
   "页面暂不能提交后续新操作：页面与服务版本不匹配。请在当前操作和角色执行结束、服务空闲时重启 Web Console 并刷新页面；原需求和已保存进度保留。";
 function consoleSupportsOperation(action) {
-  return consoleOperationContractVersion === consoleOperationContractVersionExpected &&
+  return consoleOperationContractVersion >= consoleOperationContractVersionExpected &&
     Array.isArray(consoleSupportedActions) && consoleSupportedActions.includes(action);
+}
+function consoleSupportsLegacyRescue() {
+  return consoleOperationContractVersion >= 2 &&
+    consoleSupportsOperation("PROPOSE_EXECUTION_BASELINE") && consoleSupportsOperation("EXECUTE_EXECUTION_BASELINE");
 }
 const configurationApplyStorageKey = "ase-configuration-apply";
 const configurationApplyTimeoutMs = 30000;
@@ -699,7 +703,7 @@ async function submitEngineeringWaitOperation(intent) {
   }
   return submitOperation(intent);
 }
-function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false} = {}) {
+function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, legacyRescue = false} = {}) {
   if (historical) {
     target.append(el("p", "当次调查 · " + humanizeBlockingText(proof.next_action || "调查结果未提供处理建议。")),
       el("p", "这是该次调查保存的结果；当前原因与操作以页面上方为准。", "muted"));
@@ -709,6 +713,11 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
   }
   const missing = proof.missing || [];
   if (collectionFailed) target.append(el("p", engineeringCollectionFailureNotice, "error"));
+  if (legacyRescue) {
+    target.append(el("p", "旧执行没有留下完整结果、结束和现场记录，不能把它当作已完成，也不能靠重复调查补齐。"),
+      el("p", "可使用下方“保留进度的恢复方案”：平台检查当前电脑的真实启动记录并封存完整合法草稿；工程授权后才可继续同一需求。"));
+    return;
+  }
   if (missing.length) {
     target.append(el("strong", "当前尚未解决的事项"));
     const list = el("ul", undefined, "engineering-wait-issues");
@@ -763,6 +772,13 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
     facts.platform = "已检查原执行和保留进度，现有规则要求工程授权者确认所列方案后继续。";
     facts.user = "需要工程授权者确认按页面所列方案继续；不需要手工核验内部记录。";
   }
+  const task = engineeringWaitSteps(request).find(item => item.step.work_item_id === step.work_item_id)?.task;
+  if (!active && !decision && task && engineeringLegacyRescueFacts(request, task, step, proof, handling)) {
+    facts.platform = "可准备保留进度的恢复方案，检查当前电脑的真实启动记录并封存完整合法草稿；旧执行结果仍保持未知。";
+    facts.user = consoleSupportsLegacyRescue()
+      ? "点击“准备保留进度的恢复方案”。若电脑启动早于原执行，需要重启原执行所在的整台电脑后再检查；仅重启 ASE 服务不满足前提。"
+      : "当前服务尚不支持保留进度的恢复方案。请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。";
+  }
   if (consoleAvailable === true && !consoleSupportsOperation("HANDLE_DELIVERY_WAIT")) {
     if (!active && !decision && !handling) {
       facts.platform = "当前页面的处理操作未获当前服务支持，请先更新运行中的服务。";
@@ -773,19 +789,24 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
 }
 async function copyEngineeringWaitReport(request, handling) {
   const proof = handling.investigation;
+  const current = engineeringWaitSteps(request).find(({task, step}) =>
+    engineeringWaitHandling(request, step)?.handling_sha256 === handling.handling_sha256 &&
+    matchingEngineeringWaitProof(proof, request, step) && engineeringLegacyRescueFacts(request, task, step, proof, handling));
+  const rescue = Boolean(current);
   const missing = (proof?.missing || []).map(item => {
     const [title, owner, action, recheck] = engineeringProofMissingGuidance[item] || [
       "平台返回了未识别的检查项", "平台维护者", "平台需要修复这项检查结果；当前不能安全继续。",
       "平台修复检查结果后再检查。",
     ];
-    return ["待处理事项 · " + title, "处理方 · " + owner, "具体处理 · " + action,
-      "何时复查 · " + recheck].join("\n");
+    return ["待处理事项 · " + title, "处理方 · " + (rescue ? "ASE 平台与工程授权者" : owner),
+      "具体处理 · " + (rescue ? "使用需求详情中的“准备保留进度的恢复方案”，由平台检查整机启动记录并封存合法草稿；不补造原执行记录。" : action),
+      "何时复查 · " + (rescue ? "原执行所在整台电脑已重启且恢复方案支持服务已更新后再检查；仅重启 ASE 服务不够。" : recheck)].join("\n");
   });
   const report = ["ASE 交付处理报告", "需求 · " + request.title,
     ...(handling.collection_failed === true ? ["当前结果 · " + engineeringCollectionFailureNotice] : []),
     "本次处理 · " + humanizeBlockingText(handling.summary || "未提供处理说明"),
-    "用户操作 · " + humanizeBlockingText(handling.user_action || "无"),
-    "复查时机 · " + humanizeBlockingText(handling.recheck_when || "处理记录或执行前提更新后"),
+    "用户操作 · " + (rescue ? "在当前需求详情点击“准备保留进度的恢复方案”；平台核验后，由工程授权者确认同一电脑、本地执行及整机重启的前提，批准继续原需求。" : humanizeBlockingText(handling.user_action || "无")),
+    "复查时机 · " + (rescue ? "平台检查整机启动记录；启动早于原执行时，重启原执行所在整台电脑后再准备方案。" : humanizeBlockingText(handling.recheck_when || "处理记录或执行前提更新后")),
     ...missing,
     "任务 · " + handling.task_id,
     "工作项 · " + handling.work_item_id,
@@ -820,6 +841,7 @@ function engineeringWaitBox(request, task, step) {
   const handling = engineeringWaitHandling(request, step);
   const running = activeOperation(request.id, request.project_id);
   const facts = engineeringWaitCurrentFacts(request, step, proof, handling, decision, running);
+  const rescue = engineeringLegacyRescueFacts(request, task, step, proof, handling);
   const overview = viewBlock(el("dl", undefined, "engineering-wait-facts"), "engineering-wait-facts", facts);
   for (const [key, title] of [["happened", "发生了什么"], ["preservation", "开发进度"], ["platform", "平台可以做什么"], ["user", "你需要做什么"]]) {
     const row = el("div");
@@ -829,8 +851,8 @@ function engineeringWaitBox(request, task, step) {
   management.append(overview);
   if (proof) {
     const collectionFailed = handling?.collection_failed === true;
-    const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof", [proof, collectionFailed]);
-    appendEngineeringInvestigation(result, proof, {collectionFailed});
+    const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof", [proof, collectionFailed, Boolean(rescue)]);
+    appendEngineeringInvestigation(result, proof, {collectionFailed, legacyRescue: Boolean(rescue)});
     management.append(result);
   }
   if (decision) {
@@ -858,10 +880,11 @@ function engineeringWaitBox(request, task, step) {
   } else if (running) {
     management.append(el("p", "操作尚未结束；原等待只有在新的执行事实成立后才解除。", "muted"));
   }
-  if (proof || handling) management.append(viewBlock(el("p", handling?.recheck_when
-    ? "何时复查 · " + humanizeBlockingText(handling.recheck_when)
+  if (proof || handling) management.append(viewBlock(el("p", rescue
+    ? "何时复查 · 原执行所在整台电脑重启后，可重新准备恢复方案；仅重启 ASE 服务或重复调查不会补齐历史记录。"
+    : handling?.recheck_when ? "何时复查 · " + humanizeBlockingText(handling.recheck_when)
     : "只有原执行结束、平台记录修复或执行前提变化后，重新检查才有意义。重复调查不会补齐缺失记录。",
-  "muted engineering-wait-recheck"), "engineering-wait-recheck", [proof, handling]));
+  "muted engineering-wait-recheck"), "engineering-wait-recheck", [proof, handling, Boolean(rescue)]));
   if (handling?.status === "PLATFORM_ATTENTION") management.append(viewBlock(button("复制处理报告", () =>
     copyEngineeringWaitReport(request, handling), "secondary engineering-wait-report"), "engineering-wait-report", [request.title, handling]));
   const technical = viewGroup(engineeringDetails("调查绑定详情", step.work_item_id + ":binding"),
@@ -878,6 +901,7 @@ function engineeringWaitBox(request, task, step) {
     el("p", "处理报告摘要 · " + handling.handling_sha256, "paths"),
     el("p", "处理说明 · " + humanizeBlockingText(handling.summary || "未提供"), "muted"));
   appendEngineeringBaseline(management, request, task, step);
+  appendEngineeringLegacyRescue(management, request, task, step, proof, handling);
   management.append(technical);
   return management;
 }
@@ -897,14 +921,16 @@ function engineeringBaselineFacts(request, task, step) {
     expected_task_intent_sha256: task.task_intent_sha256, expected_task_revision: task.task_revision,
     expected_work_item_id: step.work_item_id, expected_source_revision: facts.source_revision};
 }
-function engineeringBaselinePlan(request, task, step) {
+function engineeringBaselinePlan(request, task, step, purpose = "source_rebind") {
   const bound = engineeringBaselineFacts(request, task, step);
   if (!bound) return null;
   const operation = [...operations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .find(item => item.intent.action === "PROPOSE_EXECUTION_BASELINE" &&
+      (item.intent.purpose || "source_rebind") === purpose &&
       sameEngineeringWaitIntent(item.intent, bound));
   const plan = operation?.status === "SUCCEEDED" ? operation.result?.execution_baseline_plan : null;
   if (!plan || operation.result.checkpoint_sha256 !== request.checkpoint_sha256 ||
+      (plan.purpose || "source_rebind") !== purpose ||
       !/^[a-f0-9]{64}$/.test(plan.plan_sha256 || "") ||
       plan.facts?.task?.id !== bound.task_id || plan.facts.task_revision !== bound.expected_task_revision ||
       plan.facts.work_item_id !== bound.expected_work_item_id ||
@@ -912,6 +938,142 @@ function engineeringBaselinePlan(request, task, step) {
       plan.target_base_ref !== operation.intent.target_base_ref || plan.input_mode !== operation.intent.input_mode ||
       !["preserve_draft", "coder_reapply"].includes(plan.input_mode)) return null;
   return plan;
+}
+function engineeringLegacyRescueFacts(request, task, step, proof = engineeringWaitProof(request, step),
+    handling = engineeringWaitHandling(request, step)) {
+  const baseline = engineeringBaselineFacts(request, task, step);
+  const required = ["OUTCOME_UNKNOWN", "STOP_UNRECORDED", "CHECKPOINT_UNAVAILABLE"];
+  if (!baseline || !proof || handling?.collection_failed === true ||
+      typeof proof.original_run_id !== "string" || !/^run_[a-z0-9_]+$/.test(proof.original_run_id) ||
+      proof.missing.length !== required.length || new Set(proof.missing).size !== required.length ||
+      !required.every(item => proof.missing.includes(item)) || proof.permitted_resolutions.length ||
+      engineeringWaitDecision(request, step, proof)) return null;
+  return {baseline, wait: engineeringWaitIntent(request, step), proof_sha256: proof.proof_sha256,
+    original_run_id: proof.original_run_id};
+}
+function engineeringLegacyRescuePlan(request, task, step, rescue) {
+  const plan = engineeringBaselinePlan(request, task, step, "legacy_workspace_rescue");
+  const containment = plan?.facts.legacy_containment;
+  const startedAt = containment?.original_start?.started_at;
+  const bootedAt = containment?.boot?.booted_at;
+  if (!plan || !rescue || plan.input_mode !== "preserve_draft" || plan.conflicted ||
+      plan.target_base_ref !== rescue.baseline.expected_source_revision ||
+      containment?.original_start?.request?.run_id !== rescue.original_run_id ||
+      containment?.original_start?.work_item_id !== rescue.baseline.expected_work_item_id ||
+      !Number.isFinite(Date.parse(startedAt)) || !Number.isFinite(Date.parse(bootedAt)) ||
+      Date.parse(bootedAt) <= Date.parse(startedAt) ||
+      ![containment?.containment_sha256, containment?.original_start?.start_sha256,
+        containment?.boot?.machine_sha256, containment?.boot?.boot_session_sha256]
+        .every(value => /^[a-f0-9]{64}$/.test(value || ""))) return null;
+  return plan;
+}
+function engineeringLegacyRescueExecuted(request, task, plan) {
+  return plan && operations.some(item => item.status === "SUCCEEDED" &&
+    item.intent.action === "EXECUTE_EXECUTION_BASELINE" && item.intent.project_id === request.project_id &&
+    item.intent.delivery_id === request.id && item.intent.task_id === task.task_id &&
+    item.intent.expected_plan_sha256 === plan.plan_sha256);
+}
+async function submitEngineeringLegacyRescueOperation(intent, originalRescue) {
+  const request = requestById(intent.delivery_id);
+  const current = request && engineeringWaitSteps(request).find(({task, step}) => {
+    const rescue = engineeringLegacyRescueFacts(request, task, step);
+    return rescue && sameEngineeringWaitIntent(rescue.baseline, originalRescue.baseline) &&
+      sameEngineeringWaitIntent(rescue.wait, originalRescue.wait) &&
+      rescue.proof_sha256 === originalRescue.proof_sha256 && rescue.original_run_id === originalRescue.original_run_id;
+  });
+  const rescue = current && engineeringLegacyRescueFacts(request, current.task, current.step);
+  const plan = current && engineeringLegacyRescuePlan(request, current.task, current.step, rescue);
+  const propose = intent.action === "PROPOSE_EXECUTION_BASELINE";
+  const execute = intent.action === "EXECUTE_EXECUTION_BASELINE";
+  if (!canControlCurrentTeam() || !consoleSupportsLegacyRescue()) {
+    operationNotice = {kind: "error", title: "恢复操作未被受理", message: consoleOperationVersionMismatchMessage};
+    renderNotification();
+    return null;
+  }
+  if (!current || activeOperation(request.id, request.project_id) ||
+      (!propose && !execute) || propose && (intent.purpose !== "legacy_workspace_rescue" ||
+        intent.target_base_ref !== rescue.baseline.expected_source_revision || intent.input_mode !== "preserve_draft") ||
+      execute && (!plan || plan.plan_sha256 !== intent.expected_plan_sha256 || intent.confirm_legacy_containment !== true ||
+        engineeringLegacyRescueExecuted(request, current.task, plan))) {
+    operationNotice = {kind: "error", title: "保留进度的恢复事实已变化",
+      message: "请查看当前需求并重新准备方案；旧方案或未确认的前提不能启动下一轮。"};
+    renderDetail();
+    renderNotification();
+    return null;
+  }
+  return submitOperation(intent);
+}
+function appendEngineeringLegacyRescue(target, request, task, step, proof, handling) {
+  const rescue = engineeringLegacyRescueFacts(request, task, step, proof, handling);
+  if (!rescue) return;
+  const plan = engineeringLegacyRescuePlan(request, task, step, rescue);
+  const planSha256 = plan?.plan_sha256;
+  const active = activeOperation(request.id, request.project_id);
+  const supported = consoleSupportsLegacyRescue();
+  const executed = engineeringLegacyRescueExecuted(request, task, plan);
+  const panel = viewGroup(el("section", undefined, "engineering-baseline-panel engineering-baseline-pending engineering-rescue-panel"),
+    "engineering-rescue:" + step.work_item_id);
+  panel.dataset.key = "engineering:" + step.work_item_id + ":rescue";
+  panel.append(viewBlock(el("h4", "保留进度的恢复方案", "engineering-baseline-title"), "rescue-title", true),
+    viewBlock(el("p", "这是同一需求的工程恢复，不会新建需求或丢弃原分支的合法草稿。旧执行结果仍未知；下一轮使用剩余工作额度，完成后继续独立 QA 和 Review。"),
+      "rescue-description", true));
+  if (plan) {
+    const containment = plan.facts.legacy_containment;
+    const summary = viewBlock(el("div"), "rescue-summary", plan);
+    summary.append(el("p", "平台已封存当前完整合法草稿并检查电脑启动记录。批准前仍不会启动下一轮，也不代表需求已完成。"),
+      el("p", "原执行开始 · " + time(containment.original_start.started_at)),
+      el("p", "方案核验的整机启动 · " + time(containment.boot.booted_at)));
+    const technical = engineeringDetails("恢复方案的工程绑定", step.work_item_id + ":rescue-plan");
+    technical.append(el("p", "计划摘要 · " + plan.plan_sha256, "paths"),
+      el("p", "原执行 · " + containment.original_start.request.run_id, "paths"),
+      el("p", "隔离观察摘要 · " + containment.containment_sha256, "paths"),
+      el("p", "原分支 · " + (plan.facts.task.branch_name || "未提供"), "paths"),
+      el("p", "保留代码基线 · " + plan.target_base_ref, "paths"));
+    summary.append(technical);
+    panel.append(summary);
+  }
+  if (executed) {
+    panel.append(viewBlock(el("p", "恢复工程决定已保存。旧执行历史仍保留，是否继续与最终验收以新的执行记录为准。", "muted"), "rescue-executed", plan.plan_sha256));
+  } else if (active) {
+    panel.append(viewBlock(el("p", active.intent.purpose === "legacy_workspace_rescue"
+      ? "平台正在检查恢复前提并封存当前草稿，请等待本次处理结果。"
+      : "当前操作尚未结束，恢复方案不会同时启动另一次执行。", "muted"), "rescue-active", active));
+  } else if (!supported) {
+    panel.append(viewBlock(el("p", "当前服务尚不支持此恢复路径。请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。", "muted"),
+      "rescue-unavailable", [consoleOperationContractVersion, consoleSupportedActions]));
+  } else if (canControlCurrentTeam()) {
+    const controls = viewBlock(el("div", undefined, "engineering-baseline-form"), "rescue-controls",
+      [rescue, plan, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
+    if (plan) {
+      const field = el("label", undefined, "settings-checkbox-control");
+      const confirmation = el("input");
+      confirmation.type = "checkbox";
+      confirmation.checked = false;
+      confirmation.setAttribute("aria-label", "确认原执行在同一电脑且已整机重启");
+      field.append(confirmation, el("span", "我以工程授权者身份确认：原执行一直在当前同一电脑本地运行，未迁移或远程执行；原执行之后已重启整台电脑，并认可平台显示的时间依据。"));
+      const approve = deliveryButton("批准保留进度并继续原需求", () => submitEngineeringLegacyRescueOperation({
+        action: "EXECUTE_EXECUTION_BASELINE", project_id: request.project_id, delivery_id: request.id,
+        expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id,
+        expected_plan_sha256: planSha256, confirm_legacy_containment: confirmation.checked === true,
+        reference: "工程授权者确认原执行同机本地且已整机重启，批准保留完整合法草稿继续原需求",
+      }, rescue), "primary");
+      approve.disabled = true;
+      confirmation.addEventListener("change", () => {approve.disabled = confirmation.checked !== true;});
+      controls.append(field, approve);
+      controls.append(deliveryButton("重新准备恢复方案", () => submitEngineeringLegacyRescueOperation({
+        ...rescue.baseline, action: "PROPOSE_EXECUTION_BASELINE", purpose: "legacy_workspace_rescue",
+        target_base_ref: rescue.baseline.expected_source_revision, input_mode: "preserve_draft",
+      }, rescue), "secondary"));
+    } else {
+      controls.append(el("p", "先由平台检查当前电脑的启动记录。若启动早于原执行，需重启原执行所在的整台电脑后再准备方案；仅重启 ASE 服务不够。", "muted"),
+        deliveryButton("准备保留进度的恢复方案", () => submitEngineeringLegacyRescueOperation({
+          ...rescue.baseline, action: "PROPOSE_EXECUTION_BASELINE", purpose: "legacy_workspace_rescue",
+          target_base_ref: rescue.baseline.expected_source_revision, input_mode: "preserve_draft",
+        }, rescue), "primary"));
+    }
+    panel.append(controls);
+  }
+  target.append(panel);
 }
 async function submitEngineeringBaselineOperation(intent, originalBound) {
   const request = requestById(intent.delivery_id);
@@ -941,9 +1103,10 @@ function appendEngineeringBaseline(target, request, task, step) {
   const planSha256 = plan?.plan_sha256;
   const targetBaseRef = plan?.target_base_ref;
   const inputMode = plan?.input_mode;
-  const active = activeOperation(request.id);
+  const active = activeOperation(request.id, request.project_id);
   const executed = plan && operations.some(item => item.status === "SUCCEEDED" &&
     item.intent.action === "EXECUTE_EXECUTION_BASELINE" && item.intent.task_id === task.task_id &&
+    item.intent.project_id === request.project_id &&
     item.intent.delivery_id === request.id && item.intent.expected_plan_sha256 === plan.plan_sha256);
   const fold = viewGroup(plan && !executed
     ? el("section", undefined, "engineering-baseline-panel engineering-baseline-pending")
@@ -1014,6 +1177,10 @@ function deliveryPhase(item) {
     QUEUED: "实现", DELIVERING: "实现", VERIFY_QA: "候选测试", VERIFY_REVIEW: "候选评审", INTEGRATING: "联合验收"}[status] || label(status);
 }
 function operationPurpose(operation) {
+  if (operation.intent.purpose === "legacy_workspace_rescue")
+    return "检查真实整机启动前提，封存同一需求的完整合法草稿，准备工程恢复方案。";
+  if (operation.intent.action === "EXECUTE_EXECUTION_BASELINE" && operation.intent.confirm_legacy_containment === true)
+    return "按精确工程决定保留进度继续同一需求，保留旧执行未知结果和完整历史。";
   return {
     PRODUCT_REPLY: "记录产品回复并继续梳理需求。",
     PRODUCT_APPROVAL: "确认本版产品规格并推进后续交付。",
@@ -1021,6 +1188,23 @@ function operationPurpose(operation) {
     RECOVER_DESIGN: "处理本次技术设计恢复。",
     RECHECK_DESIGN: "核对保留的设计问题与产品需求。",
   }[operation.intent.action] || null;
+}
+function operationActionLabel(operation) {
+  if (operation.intent.purpose === "legacy_workspace_rescue") return "准备保留进度的恢复方案";
+  if (operation.intent.action === "EXECUTE_EXECUTION_BASELINE" && operation.intent.confirm_legacy_containment === true)
+    return "批准保留进度并继续原需求";
+  return label(operation.intent.action);
+}
+function currentEngineeringRescueAdvice(operation, request) {
+  const handling = operation.result?.engineering_wait_handling;
+  if (!request || request.project_id !== operation.intent.project_id || !handling) return null;
+  const current = engineeringWaitSteps(request).find(({task, step}) =>
+    engineeringWaitHandling(request, step)?.handling_sha256 === handling.handling_sha256 &&
+    engineeringLegacyRescueFacts(request, task, step));
+  if (!current) return null;
+  return "原执行记录仍不完整，旧执行结果保持未知。" + (consoleSupportsLegacyRescue()
+    ? "请进入需求详情，点击“准备保留进度的恢复方案”。平台将检查整机启动记录并封存合法草稿；若启动早于原执行，需重启原执行所在的整台电脑后再准备方案。"
+    : "当前服务尚不支持保留进度的恢复方案，请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。");
 }
 function recordedOperationOutcome(operation) {
   if (operation.status !== "SUCCEEDED" || !deliveryOperationActions.has(operation.intent.action)) return null;
@@ -2941,7 +3125,7 @@ function operationNoticeFor(operation) {
       operationId: operation.operation_id,
       state: "ACTIVE",
       kind: "info",
-      title: `${context} · ${label(operation.intent.action)} · ${label(operation.status)}`,
+      title: `${context} · ${operationActionLabel(operation)} · ${label(operation.status)}`,
       message:
         operation.status === "QUEUED"
           ? operation.intent.action === "HANDLE_DELIVERY_WAIT"
@@ -2957,9 +3141,13 @@ function operationNoticeFor(operation) {
           : operation.intent.action === "RESOLVE_DELIVERY_WAIT"
             ? "工程团队正在记录精确处理决定并继续原交付。是否恢复及验收通过以新的执行记录为准。"
           : operation.intent.action === "PROPOSE_EXECUTION_BASELINE"
-            ? "工程团队正在核验原分支、完整草稿和目标代码版本，尚未改变交付或验收结论。"
+            ? operation.intent.purpose === "legacy_workspace_rescue"
+              ? "平台正在检查真实整机启动前提并封存完整合法草稿；尚未启动下一轮，也未改变旧执行的未知结果。"
+              : "工程团队正在核验原分支、完整草稿和目标代码版本，尚未改变交付或验收结论。"
           : operation.intent.action === "EXECUTE_EXECUTION_BASELINE"
-            ? "工程团队正在按精确计划更新原需求执行基线，交付进度以之后的角色执行记录为准。"
+            ? operation.intent.confirm_legacy_containment === true
+              ? "平台正在记录工程授权并保留进度继续同一需求；是否恢复和验收通过以新的角色执行记录为准。"
+              : "工程团队正在按精确计划更新原需求执行基线，交付进度以之后的角色执行记录为准。"
           : "交付流程正在执行。你可以关闭弹窗或页面，任务会继续运行。",
     };
   if (["FAILED", "INTERRUPTED"].includes(operation.status))
@@ -2968,7 +3156,7 @@ function operationNoticeFor(operation) {
       operationId: operation.operation_id,
       state: operation.status,
       kind: "error",
-      title: `${context} · ${label(operation.intent.action)} · ${label(operation.status)}`,
+      title: `${context} · ${operationActionLabel(operation)} · ${label(operation.status)}`,
       message: humanizeBlockingText(operation.error_summary || "操作未完成，请查看需求详情后处理。"),
       target,
       jumpLabel: target ? "打开需求工作区" : null,
@@ -2979,11 +3167,11 @@ function operationNoticeFor(operation) {
       operationId: operation.operation_id,
       state: "ACTION_REQUIRED",
       kind: "warning",
-      title: `${context} · ${label(operation.intent.action)} · 需要处理`,
+      title: `${context} · ${operationActionLabel(operation)} · 需要处理`,
       message: knowledgeApproved
         ? "知识解答已批准。请进入需求工作区继续原需求。"
         : operation.result?.engineering_wait_handling
-          ? [operation.result.engineering_wait_handling.summary, operation.result.engineering_wait_handling.user_action]
+          ? currentEngineeringRescueAdvice(operation, request) || [operation.result.engineering_wait_handling.summary, operation.result.engineering_wait_handling.user_action]
             .filter(Boolean).map(humanizeBlockingText).join("\n")
         : operation.result?.diagnostic
           ? humanizeBlockingText(operation.result.diagnostic)
@@ -3122,6 +3310,9 @@ async function submitOperation(intent) {
       throw new Error("交付控制状态暂不可用，请刷新后重试。");
     if (!consoleSupportsOperation(intent.action))
       throw new Error("本次请求未被受理，不是原需求新增的阻塞。" + consoleOperationVersionMismatchMessage);
+    if ((intent.purpose === "legacy_workspace_rescue" || intent.confirm_legacy_containment === true) &&
+        !consoleSupportsLegacyRescue())
+      throw new Error("本次恢复请求未被受理，不是原需求新增的阻塞。" + consoleOperationVersionMismatchMessage);
     const response = await fetch("/api/v1/operations", {
       method: "POST",
       cache: "no-store",
@@ -7595,14 +7786,14 @@ function requestOperationHistory(panel, request) {
     const outcome = recordedOperationOutcome(record);
     const item = viewBlock(el("li", undefined, "execution-history-entry"), "operation:" + record.operation_id, {record, progress});
     if (progress) {
-      item.append(el("strong", progress.title), el("p", "发起操作 · " + label(record.intent.action), "muted"));
+      item.append(el("strong", progress.title), el("p", "发起操作 · " + operationActionLabel(record), "muted"));
       if (progress.reason) item.append(el("p", "当前原因 · " + progress.reason));
       if (progress.responsibility) item.append(el("p", "处理方 · " + progress.responsibility, "muted"));
       if (progress.nextAction) item.append(el("p", "下一步 · " + progress.nextAction));
     } else if (outcome) {
-      item.append(el("strong", outcome.title, outcome.className), el("p", "发起操作 · " + label(record.intent.action), "muted"),
+      item.append(el("strong", outcome.title, outcome.className), el("p", "发起操作 · " + operationActionLabel(record), "muted"),
         el("p", "记录的是当次操作结束时的交付状态；当前进度请查看上方交付流程。", "muted"));
-    } else item.append(el("strong", label(record.intent.action)));
+    } else item.append(el("strong", operationActionLabel(record)));
     const purpose = operationPurpose(record);
     if (purpose) item.append(el("p", "操作目的 · " + purpose, "muted"));
     const status = el("p", "操作状态 · ", "muted");
@@ -7641,6 +7832,15 @@ function requestOperationHistory(panel, request) {
     if (decision) appendEngineeringExecutionDetails(item, technical, {
       ...decision, operator_id: decision.operator_principal?.operator_id,
     });
+    const rescuePlan = record.result?.execution_baseline_plan;
+    if (rescuePlan?.purpose === "legacy_workspace_rescue") {
+      item.append(el("p", "当次恢复方案 · 保留原需求分支的完整合法草稿，旧执行结果仍未知；方案本身不代表恢复执行或交付完成。"));
+      technical.append(el("p", "当次恢复计划摘要 · " + rescuePlan.plan_sha256, "paths"));
+      const containment = rescuePlan.facts?.legacy_containment;
+      if (containment) technical.append(el("p", "原执行开始 · " + time(containment.original_start?.started_at), "muted"),
+        el("p", "当次整机启动 · " + time(containment.boot?.booted_at), "muted"),
+        el("p", "隔离观察摘要 · " + containment.containment_sha256, "paths"));
+    }
     item.append(technical);
     list.append(item);
   }

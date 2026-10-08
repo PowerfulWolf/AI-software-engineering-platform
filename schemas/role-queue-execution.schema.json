@@ -80,6 +80,195 @@
       "title": "AgentRole",
       "type": "string"
     },
+    "DeliveryDisposition": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/DeliveryNextAction"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "facts": {
+          "$ref": "#/$defs/DeliveryFailureFacts"
+        },
+        "kind": {
+          "const": "delivery_disposition",
+          "default": "delivery_disposition",
+          "title": "Kind",
+          "type": "string"
+        },
+        "next_action": {
+          "minLength": 1,
+          "title": "Next Action",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "responsibility": {
+          "$ref": "#/$defs/DeliveryResponsibility"
+        },
+        "resume_condition": {
+          "enum": [
+            "fresh_role_claim",
+            "product_resolution",
+            "engineering_authorization",
+            "verified_prerequisites",
+            "verified_execution_resolution",
+            "none"
+          ],
+          "title": "Resume Condition",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_facts_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Facts Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "facts",
+        "source_facts_sha256",
+        "responsibility",
+        "action",
+        "reason",
+        "next_action",
+        "resume_condition"
+      ],
+      "title": "DeliveryDisposition",
+      "type": "object"
+    },
+    "DeliveryFailureFacts": {
+      "additionalProperties": false,
+      "description": "Facts from trusted application services, never model routing suggestions.",
+      "properties": {
+        "budget_available": {
+          "title": "Budget Available",
+          "type": "boolean"
+        },
+        "checkpoint_sequence": {
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "classification": {
+          "enum": [
+            "TRANSIENT_INFRA",
+            "INVALID_OUTPUT",
+            "QA_FINDING",
+            "VERIFICATION_INCONCLUSIVE",
+            "REVIEW_FINDING",
+            "POLICY_VIOLATION",
+            "REQUIREMENT_AMBIGUITY",
+            "BUDGET_EXHAUSTED",
+            "PLATFORM_BUG",
+            "EXECUTION_UNCERTAIN",
+            "ENVIRONMENT_UNAVAILABLE",
+            "ENGINEERING_AUTHORIZATION",
+            "SOURCE_PREPARATION_DRIFT"
+          ],
+          "title": "Classification",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "retry_authorized": {
+          "default": false,
+          "title": "Retry Authorized",
+          "type": "boolean"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "work_item_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Item Id"
+        }
+      },
+      "required": [
+        "task_id",
+        "role",
+        "classification",
+        "source_revision",
+        "task_intent_sha256",
+        "checkpoint_sequence",
+        "budget_available"
+      ],
+      "title": "DeliveryFailureFacts",
+      "type": "object"
+    },
+    "DeliveryNextAction": {
+      "enum": [
+        "RETRY",
+        "REMEDIATE_CANDIDATE",
+        "REQUEST_PRODUCT_DECISION",
+        "REQUEST_ENGINEERING_AUTHORIZATION",
+        "WAIT_DEPENDENCY",
+        "INVESTIGATE_EXECUTION",
+        "TERMINATE"
+      ],
+      "title": "DeliveryNextAction",
+      "type": "string"
+    },
+    "DeliveryResponsibility": {
+      "enum": [
+        "product",
+        "team",
+        "engineering"
+      ],
+      "title": "DeliveryResponsibility",
+      "type": "string"
+    },
     "QueueArtifactReceipt": {
       "additionalProperties": false,
       "description": "Immutable Artifact evidence accepted before a queue transition.",
@@ -257,6 +446,17 @@
           "format": "date-time",
           "title": "Updated At",
           "type": "string"
+        },
+        "wait_disposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "wait_reason": {
           "anyOf": [

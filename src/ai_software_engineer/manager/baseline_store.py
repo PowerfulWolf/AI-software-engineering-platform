@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from ai_software_engineer.domain.engineering_authority import EngineeringAdmission
-from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
+from ai_software_engineer.domain.execution_baseline import BaselinePurpose, ExecutionBaselineBinding
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import (
     BaselineOperationStart,
@@ -101,6 +101,7 @@ class FileExecutionBaselineStore:
                 raise ValueError("baseline binding has no exact admitted operation")
             if plan.facts.facts_sha256 != item.facts_sha256:
                 raise ValueError("baseline binding changed its source facts")
+            self._require_rescue_binding(item, plan)
             self.required_context(item)
             previous = item
         return selected
@@ -113,6 +114,7 @@ class FileExecutionBaselineStore:
                 raise ValueError("baseline sequence already has different immutable facts")
             return matched
         binding.require_predecessor(existing[-1] if existing else None)
+        self._require_rescue_binding(binding, self.plan(binding.plan_sha256))
         self.required_context(binding)
         return self.records.put(
             "baseline-bindings", f"{binding.task_id}:{binding.sequence}", binding
@@ -122,6 +124,37 @@ class FileExecutionBaselineStore:
         return (
             self.root / self.records._name("baseline-plans", plan_sha256)
         ).absolute().as_uri() + "#complete_capture.patch"
+
+    def _require_rescue_binding(
+        self, binding: ExecutionBaselineBinding, plan: ExecutionBaselinePlan
+    ) -> None:
+        if binding.purpose != plan.purpose:
+            raise ValueError("工程绑定与批准方案的处置目的不同")
+        if binding.purpose is not BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+            if binding.legacy_containment_sha256 is not None:
+                raise ValueError("普通基线绑定不能冒充旧执行救援")
+            return
+        containment = plan.facts.legacy_containment
+        if (
+            containment is None
+            or binding.legacy_containment_sha256 != containment.containment_sha256
+        ):
+            raise ValueError("旧执行救援缺少完整的原执行和新隔离证据")
+        containment.validate_integrity()
+        authority = self.records.get(
+            "baseline-authorities", plan.plan_sha256, BaselineOperatorAuthorization
+        )
+        authority.validate_integrity()
+        if (
+            authority.confirm_legacy_containment is not True
+            or authority.authorization_sha256 != binding.authority_sha256
+            or authority.plan_sha256 != plan.plan_sha256
+            or authority.facts_sha256 != plan.facts.facts_sha256
+            or authority.task_id != binding.task_id
+            or authority.task_intent_sha256 != binding.task_intent_sha256
+            or binding.authority_source != "engineering_operator_decision"
+        ):
+            raise ValueError("旧执行救援没有对应的精确人工工程确认")
 
     def required_context(self, binding: ExecutionBaselineBinding) -> str:
         binding.validate_integrity()
@@ -134,11 +167,20 @@ class FileExecutionBaselineStore:
             or binding.retained_patch.bytes != len(body)
             or binding.task_id != plan.facts.task.id
             or binding.input_mode != plan.input_mode
+            or binding.purpose != plan.purpose
         ):
             raise ValueError("complete retained baseline patch body changed")
         return (
-            "平台已按精确工程授权在同一需求分支更新代码执行基线。原需求范围与验收保持有效。\n"
-            f"原批准基线: {binding.approved_base_ref}\n新执行基线: {binding.execution_base_ref}\n"
+            (
+                "平台按人工工程决定保留了完整当前草稿, 代码基线和需求分支保持。"
+                "原调用结果仍是未知; 这些草稿是新执行的工程输入, 不是原调用进度或候选通过证明。\n"
+                if binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                else (
+                    "平台已按精确工程授权在同一需求分支更新代码执行基线。"
+                    "原需求范围与验收保持有效。\n"
+                )
+            )
+            + f"原批准基线: {binding.approved_base_ref}\n新执行基线: {binding.execution_base_ref}\n"
             f"执行输入: {binding.execution_source_revision}\n模式: {binding.input_mode.value}\n"
             "以下是原执行基线到原候选和草稿的完整已封存补丁; "
             "必须完整阅读并适配, 不能把它当作通过的候选或验收。\n"

@@ -541,3 +541,160 @@ test("stale baseline plans and QA stages cannot update the original coder branch
   h.step.role = "qa";
   assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"), "调查并保留原草稿"), undefined);
 });
+
+function legacyRescueFixture(h) {
+  baselineFixture(h);
+  const result = handling(h, "PLATFORM_ATTENTION", ["OUTCOME_UNKNOWN", "STOP_UNRECORDED", "CHECKPOINT_UNAVAILABLE"]);
+  result.source_revision = "c".repeat(40);
+  result.investigation.source_revision = "c".repeat(40);
+  result.investigation.original_run_id = "run_original";
+  h.run("consoleOperationContractVersion = 2");
+  return result;
+}
+function legacyRescuePlan(h) {
+  const plan = {plan_sha256: digest("1"), purpose: "legacy_workspace_rescue",
+    target_base_ref: "c".repeat(40), input_mode: "preserve_draft", conflicted: false,
+    dirty_capture: {source_revision: "c".repeat(40)}, facts: {task: {id: h.task.task_id,
+      branch_name: "ai/feature/original"}, task_revision: 4, work_item_id: h.step.work_item_id,
+      legacy_containment: {original_start: {request: {run_id: "run_original"}, work_item_id: h.step.work_item_id,
+        started_at: "2026-10-05T01:00:00Z", start_sha256: digest("2")},
+        boot: {booted_at: "2026-10-06T01:00:00Z", machine_sha256: digest("3"), boot_session_sha256: digest("4")},
+        containment_sha256: digest("5")}}};
+  h.context.rescuePlan = plan;
+  h.run(`operations.push({operation_id: "legacy_proposal", status: "SUCCEEDED", updated_at: "2026-10-06T02:00:00Z",
+    intent: {...engineeringBaselineFacts(data.request, data.task, data.step), action: "PROPOSE_EXECUTION_BASELINE",
+      purpose: "legacy_workspace_rescue", target_base_ref: rescuePlan.target_base_ref, input_mode: "preserve_draft"},
+    result: {checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: rescuePlan}});`);
+  return plan;
+}
+
+test("legacy unknown execution offers a visible precise preservation path without asking for a SHA", async () => {
+  const h = harness();
+  const result = legacyRescueFixture(h);
+  const original = JSON.stringify(result);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const rescue = descend(box).find(node => (node.className || "").includes("engineering-rescue-panel"));
+  assert.equal(rescue.tagName, "SECTION");
+  assert.match(text(rescue), /不会新建需求或丢弃原分支的合法草稿/);
+  assert.match(text(rescue), /旧执行结果仍未知/);
+  assert.match(text(rescue), /下一轮使用剩余工作额度/);
+  assert.match(text(rescue), /仅重启 ASE 服务不够/);
+  assert.equal(descend(rescue).some(node => node.tagName === "INPUT"), false);
+  await control(rescue, "准备保留进度的恢复方案").events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.equal(intent.purpose, "legacy_workspace_rescue");
+  assert.equal(intent.target_base_ref, h.step.wait_disposition.facts.source_revision);
+  assert.equal(intent.input_mode, "preserve_draft");
+  assert.equal(intent.expected_task_revision, 4);
+  assert.equal(Object.hasOwn(intent, "confirm_legacy_containment"), false, "preparation cannot attest for the user");
+  assert.equal(JSON.stringify(result), original, "current advice never rewrites a historical handling report");
+});
+
+test("engineering approval requires the explicit same computer and whole computer restart confirmation", async () => {
+  const h = harness();
+  legacyRescueFixture(h);
+  legacyRescuePlan(h);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const rescue = descend(box).find(node => (node.className || "").includes("engineering-rescue-panel"));
+  assert.match(text(rescue), /原执行开始/);
+  assert.match(text(rescue), /方案核验的整机启动/);
+  assert.match(text(rescue), /工程授权者身份/);
+  assert.match(text(rescue), /未迁移或远程执行/);
+  const approve = control(rescue, "批准保留进度并继续原需求");
+  const checkbox = descend(rescue).find(node => node.tagName === "INPUT" && node.type === "checkbox");
+  assert.equal(approve.disabled, true);
+  await approve.events.click();
+  assert.equal(h.run("submitted.length"), 0, "even a retained closure cannot bypass unchecked confirmation");
+  checkbox.checked = true;
+  checkbox.events.change();
+  assert.equal(approve.disabled, false);
+  await approve.events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.equal(intent.action, "EXECUTE_EXECUTION_BASELINE");
+  assert.equal(intent.confirm_legacy_containment, true);
+  assert.equal(intent.expected_plan_sha256, digest("1"));
+  assert.equal(Object.hasOwn(intent, "booted_at"), false, "the browser never supplies OS facts");
+  assert.equal(Object.hasOwn(intent, "operator_id"), false);
+  assert.equal(h.run("engineeringBaselinePlan(data.request, data.task, data.step)"), null,
+    "legacy preservation plans cannot become source update approvals");
+});
+
+test("source update plans cannot become rescue approvals and incorrect containment remains unapproved", () => {
+  for (const mutate of [
+    plan => {plan.purpose = "source_rebind";},
+    plan => {plan.facts.legacy_containment.original_start.request.run_id = "run_foreign";},
+    plan => {plan.facts.legacy_containment.boot.booted_at = "2026-10-04T01:00:00Z";},
+    plan => {plan.facts.legacy_containment.containment_sha256 = "invalid";},
+    plan => {plan.input_mode = "coder_reapply";},
+  ]) {
+    const h = harness();
+    legacyRescueFixture(h);
+    mutate(legacyRescuePlan(h));
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.equal(control(box, "批准保留进度并继续原需求"), undefined);
+  }
+});
+
+test("legacy rescue old controls cannot submit after exact facts or capability changes", async () => {
+  for (const mutation of [
+    'data.request.checkpoint_sha256 = "6".repeat(64)',
+    'data.task.task_revision = 5',
+    'data.step.wait_disposition_sha256 = "6".repeat(64)',
+    'operations[0].result.engineering_wait_handling.investigation.proof_sha256 = "6".repeat(64)',
+    'consoleOperationContractVersion = 1',
+    'consoleSupportedActions = ["PROPOSE_EXECUTION_BASELINE"]',
+  ]) {
+    const h = harness();
+    legacyRescueFixture(h);
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    const prepare = control(box, "准备保留进度的恢复方案");
+    h.run(mutation);
+    await prepare.events.click();
+    assert.equal(h.run("submitted.length"), 0, mutation);
+  }
+});
+
+test("legacy rescue approvals cannot resubmit a consumed plan or a changed original run", async () => {
+  for (const mutation of [
+    'rescuePlan.plan_sha256 = "6".repeat(64)',
+    'rescuePlan.facts.legacy_containment.original_start.request.run_id = "run_foreign"',
+    'operations.push({operation_id: "rescue_approved", status: "SUCCEEDED", intent: {action: "EXECUTE_EXECUTION_BASELINE", project_id: data.request.project_id, delivery_id: data.request.id, task_id: data.task.task_id, expected_plan_sha256: rescuePlan.plan_sha256}})',
+  ]) {
+    const h = harness();
+    legacyRescueFixture(h);
+    legacyRescuePlan(h);
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    const checkbox = descend(box).find(node => node.tagName === "INPUT" && node.type === "checkbox");
+    checkbox.checked = true;
+    const approval = control(box, "批准保留进度并继续原需求");
+    h.run(mutation);
+    await approval.events.click();
+    assert.equal(h.run("submitted.length"), 0, mutation);
+  }
+});
+
+test("current rescue advice and copied report replace vague maintenance requests while history remains honest", async () => {
+  const h = harness();
+  const result = legacyRescueFixture(h);
+  h.context.navigator = {clipboard: {writeText: async value => {h.context.copiedReport = value;}}};
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.doesNotMatch(text(box), /将处理报告交给平台维护者/);
+  const currentNotice = h.run("operationNoticeFor(operations[0]).message");
+  assert.match(currentNotice, /准备保留进度的恢复方案/);
+  assert.doesNotMatch(currentNotice, /将处理报告交给平台维护者/);
+  await control(box, "复制处理报告").events.click();
+  assert.match(h.context.copiedReport, /准备保留进度的恢复方案/);
+  assert.match(h.context.copiedReport, /仅重启 ASE 服务不够/);
+  assert.doesNotMatch(h.context.copiedReport, /将处理报告交给平台维护者/);
+  h.context.panel = new Element("section");
+  h.run("requestOperationHistory(panel, data.request)");
+  assert.match(text(h.context.panel), /当次用户操作 · 将处理报告交给平台维护者/);
+  assert.equal(result.user_action, "将处理报告交给平台维护者，无需自行确认内部执行记录。");
+  h.request.checkpoint_sha256 = digest("6");
+  assert.equal(h.run("currentEngineeringRescueAdvice(operations[0], data.request)"), null,
+    "a historical handling from an old checkpoint cannot gain current rescue advice");
+  h.request.checkpoint_sha256 = digest("a");
+  result.collection_failed = true;
+  assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"), "准备保留进度的恢复方案"), undefined,
+    "collection rejection cannot be transformed into a salvage approval");
+});

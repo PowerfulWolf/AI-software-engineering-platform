@@ -18,6 +18,7 @@ from ai_software_engineer.domain.engineering_authority import (
 from ai_software_engineer.domain.enums import TaskStatus
 from ai_software_engineer.domain.execution_baseline import (
     BaselineInputMode,
+    BaselinePurpose,
     CoderExecutionInput,
     ExecutionBaselineBinding,
     RetainedExecutionPatch,
@@ -30,6 +31,7 @@ from ai_software_engineer.git.baseline import (
     GitExecutionBaselineAdapter,
 )
 from ai_software_engineer.git.mutation import capture_mutation_inventory
+from ai_software_engineer.git.mutation_capture import WorktreeMutationCapture
 from ai_software_engineer.git.ports import WorktreeRef
 from ai_software_engineer.manager.baseline_models import (
     BaselineExecutionFacts,
@@ -39,6 +41,7 @@ from ai_software_engineer.manager.baseline_models import (
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
+from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.recovery.models import digest
 
@@ -78,12 +81,44 @@ class ExecutionBaselineService:
         target_base_ref: str,
         *,
         input_mode: BaselineInputMode = BaselineInputMode.PRESERVE_DRAFT,
+        purpose: BaselinePurpose = BaselinePurpose.SOURCE_REBIND,
     ) -> ExecutionBaselinePlan:
         with self.store.execution_lock(), self.facts.execution_scope():
             facts = self.facts.collect(target_base_ref)
             self._require_facts(facts)
             previous = self.store.bindings_for_task(facts.task.id)
             binding = previous[-1] if previous else None
+            if purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+                current_containment = facts.legacy_containment
+                for completed in previous:
+                    prior_plan = self.store.plan(completed.plan_sha256)
+                    prior_containment = prior_plan.facts.legacy_containment
+                    if (
+                        current_containment is not None
+                        and prior_containment is not None
+                        and prior_containment.original_start == current_containment.original_start
+                    ):
+                        self.git.manager.verify_mutations(
+                            prior_plan.dirty_capture.to_capture(),
+                            facts.permissions,
+                            denied_paths=facts.denied_paths,
+                        )
+                        self.git.manager.verify_mutations(
+                            prior_plan.complete_capture.to_capture(),
+                            facts.permissions,
+                            denied_paths=facts.denied_paths,
+                        )
+                        inventory = capture_mutation_inventory(
+                            Path(prior_plan.dirty_capture.worktree_path)
+                        )
+                        if inventory != prior_plan.before_inventory:
+                            raise ValueError("已批准的救援现场发生变化, 保留文件并等待工程检查")
+                        require_complete_legacy_inventory(
+                            self.git.manager, prior_plan.dirty_capture, inventory
+                        )
+                        # Keep the old exact authority reachable from Console:
+                        # a failed proposal must not hide its retry button.
+                        return prior_plan
             worktree = self.facts.source_worktree(facts)
             expected_base = (
                 binding.execution_base_ref if binding is not None else facts.task.base_ref
@@ -99,32 +134,51 @@ class ExecutionBaselineService:
             )
             before = capture_mutation_inventory(worktree.path)
             conflicted = False
-            try:
-                preview = self.git.preview(
-                    dirty=dirty,
-                    complete=complete,
-                    target_base=target_base_ref,
-                    permissions=facts.permissions,
-                    denied_paths=facts.denied_paths,
-                    input_mode=input_mode,
+            preview: BaselineGitPreview | None
+            if purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+                if (
+                    facts.legacy_containment is None
+                    or input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                    or target_base_ref != expected_base
+                    or worktree.head_revision
+                    != facts.legacy_containment.original_start.request.source_revision
+                ):
+                    raise ValueError("旧执行救援必须保留原代码版本和完整草稿, 不能更换基线")
+                require_complete_legacy_inventory(
+                    self.git.manager, CapturedMutations.from_capture(dirty), before
                 )
-            except BaselineGitConflict:
-                # Keep the exact refused preserve plan for audit. A separately
-                # proposed coder_reapply plan has a different digest/authority.
-                conflicted = True
                 preview = BaselineGitPreview(
-                    target_base_ref,
-                    self.git.manager._run_git(
-                        ("rev-parse", f"{target_base_ref}^{{tree}}"), cwd=worktree.path
+                    worktree.head_revision,
+                    self.git._tree_for_worktree(
+                        worktree.head_revision,
+                        worktree.path,
+                        facts.permissions,
+                        facts.denied_paths,
+                        worktree,
                     ),
-                    "",
+                    dirty.patch.decode("utf-8"),
                 )
+            else:
+                if facts.legacy_containment is not None:
+                    raise ValueError("遗留执行隔离证据只能用于独立救援决定")
+                preview = self._preview(dirty, complete, target_base_ref, facts, input_mode)
+                conflicted = preview is None
+                if preview is None:
+                    preview = BaselineGitPreview(
+                        target_base_ref,
+                        self.git.manager._run_git(
+                            ("rev-parse", f"{target_base_ref}^{{tree}}"), cwd=worktree.path
+                        ),
+                        "",
+                    )
             if (
                 self.facts.collect(target_base_ref) != facts
                 or capture_mutation_inventory(worktree.path) != before
             ):
                 raise ValueError("baseline source changed during exact proposal")
+            assert preview is not None
             plan = ExecutionBaselinePlan.create(
+                purpose=purpose,
                 facts=facts,
                 previous_binding=binding,
                 input_mode=input_mode,
@@ -138,6 +192,29 @@ class ExecutionBaselineService:
                 conflicted=conflicted,
             )
             return self.store.put_plan(plan)
+
+    def _preview(
+        self,
+        dirty: WorktreeMutationCapture,
+        complete: WorktreeMutationCapture,
+        target_base_ref: str,
+        facts: BaselineExecutionFacts,
+        input_mode: BaselineInputMode,
+    ) -> BaselineGitPreview | None:
+        try:
+            preview = self.git.preview(
+                dirty=dirty,
+                complete=complete,
+                target_base=target_base_ref,
+                permissions=facts.permissions,
+                denied_paths=facts.denied_paths,
+                input_mode=input_mode,
+            )
+        except BaselineGitConflict:
+            # Keep the exact refused preserve plan for audit. A separately
+            # proposed coder_reapply plan has a different digest/authority.
+            return None
+        return preview
 
     @staticmethod
     def _require_facts(facts: BaselineExecutionFacts) -> None:
@@ -159,6 +236,11 @@ class ExecutionBaselineService:
         plan: ExecutionBaselinePlan, authority: EngineeringAdmission | BaselineOperatorAuthorization
     ) -> tuple[Literal["organization_engineering_policy", "engineering_operator_decision"], str]:
         authority.validate_integrity()
+        if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE and (
+            not isinstance(authority, BaselineOperatorAuthorization)
+            or authority.confirm_legacy_containment is not True
+        ):
+            raise ValueError("旧执行救援需要工程人员确认原执行所在电脑已整机重启, 不能自动审批")
         task = plan.facts.task
         if (
             authority.task_id != task.id
@@ -246,19 +328,39 @@ class ExecutionBaselineService:
                 authority_sha,
             ):
                 raise ValueError("baseline operation start changed; preserve all existing state")
-            reference, after_inventory = self.git.apply(
-                dirty=plan.dirty_capture.to_capture(),
-                complete=plan.complete_capture.to_capture(),
-                preview=BaselineGitPreview(
-                    plan.prepared_source_revision,
-                    plan.prepared_dirty_tree,
-                    plan.prepared_dirty_patch,
-                ),
-                plan_sha256=plan_sha256,
-                permissions=current.permissions,
-                denied_paths=current.denied_paths,
-                original_inventory=plan.before_inventory,
-            )
+            if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+                self.git.manager.verify_mutations(
+                    plan.dirty_capture.to_capture(),
+                    current.permissions,
+                    denied_paths=current.denied_paths,
+                )
+                self.git.manager.verify_mutations(
+                    plan.complete_capture.to_capture(),
+                    current.permissions,
+                    denied_paths=current.denied_paths,
+                )
+                inventory = capture_mutation_inventory(Path(plan.dirty_capture.worktree_path))
+                if inventory != plan.before_inventory:
+                    raise ValueError("救援方案封存后现场已变化, 请重新准备方案; 原文件保留")
+                require_complete_legacy_inventory(self.git.manager, plan.dirty_capture, inventory)
+                reference, after_inventory = (
+                    plan.dirty_capture.to_capture().worktree,
+                    inventory.sha256,
+                )
+            else:
+                reference, after_inventory = self.git.apply(
+                    dirty=plan.dirty_capture.to_capture(),
+                    complete=plan.complete_capture.to_capture(),
+                    preview=BaselineGitPreview(
+                        plan.prepared_source_revision,
+                        plan.prepared_dirty_tree,
+                        plan.prepared_dirty_patch,
+                    ),
+                    plan_sha256=plan_sha256,
+                    permissions=current.permissions,
+                    denied_paths=current.denied_paths,
+                    original_inventory=plan.before_inventory,
+                )
             if self.facts.collect(plan.target_base_ref) != current:
                 raise ValueError(
                     "baseline Task/queue/native rules changed during mutation; "
@@ -267,6 +369,12 @@ class ExecutionBaselineService:
             patch_body = plan.complete_capture.patch.encode("utf-8")
             previous = plan.previous_binding
             binding = ExecutionBaselineBinding.create(
+                purpose=plan.purpose,
+                legacy_containment_sha256=(
+                    current.legacy_containment.containment_sha256
+                    if current.legacy_containment is not None
+                    else None
+                ),
                 scope=current.scope,
                 task_id=current.task.id,
                 task_intent_sha256=task_intent_sha256(current.task),

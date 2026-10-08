@@ -14,6 +14,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     EngineeringDispositionRecord,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringAdmission, EngineeringScope
+from ai_software_engineer.domain.execution_baseline import BaselinePurpose
 from ai_software_engineer.domain.model import JsonValue
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.knowledge.models import digest
@@ -487,7 +488,11 @@ def engineering_history(
                         kind=ProjectionEventKind.EVIDENCE,
                         occurred_at=occurred_at,
                         task_id=task.id,
-                        summary="原分支执行基线更新的精确工程授权已记录。",
+                        summary=(
+                            "工程人员确认原未知执行在本机且之后已整机重启, 批准保留完整草稿继续。"
+                            if baseline_plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                            else "原分支执行基线更新的精确工程授权已记录。"
+                        ),
                         source_uri=(
                             baselines
                             / store.records._name(
@@ -508,7 +513,11 @@ def engineering_history(
                         kind=ProjectionEventKind.EVIDENCE,
                         occurred_at=start.started_at,
                         task_id=task.id,
-                        summary="原需求分支执行基线更新已开始, 完成结果以后续绑定记录为准。",
+                        summary=(
+                            "原需求完整现场救援已开始, 原执行结果仍记为未知。"
+                            if baseline_plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                            else "原需求分支执行基线更新已开始, 完成结果以后续绑定记录为准。"
+                        ),
                         source_uri=(
                             baselines
                             / store.records._name(
@@ -536,11 +545,16 @@ def engineering_history(
                     kind=ProjectionEventKind.EVIDENCE,
                     occurred_at=binding.completed_at,
                     task_id=task.id,
-                    summary="已在原需求分支更新代码执行基线, 保留原候选和草稿记录。",
+                    summary=(
+                        "完整草稿已保留, 原未知执行历史不变, 下一轮使用原任务剩余工作额度继续。"
+                        if binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                        else "已在原需求分支更新代码执行基线, 保留原候选和草稿记录。"
+                    ),
                     source_uri=binding.retained_patch.uri,
                     source_sha256=binding.binding_sha256,
                     details={
                         "kind": binding.kind,
+                        "purpose": binding.purpose.value,
                         "authorization_source": binding.authority_source,
                         "input_mode": binding.input_mode.value,
                         "branch_name": binding.branch_name,

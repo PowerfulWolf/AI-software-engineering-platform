@@ -541,8 +541,11 @@ class TeamHost:
                 native,
                 repository=repository,
                 project_id=project_id,
+                purpose=command.purpose,
             )
-            plan = service.propose(command.target_base_ref, input_mode=command.input_mode)
+            plan = service.propose(
+                command.target_base_ref, input_mode=command.input_mode, purpose=command.purpose
+            )
             command.require_plan(plan)
             return plan
 
@@ -562,6 +565,7 @@ class TeamHost:
                 native,
                 repository=repository,
                 project_id=project_id,
+                plan_sha256=command.expected_plan_sha256,
             )
             plan = service.store.plan(command.expected_plan_sha256)
             command.require_plan(plan)
@@ -576,10 +580,12 @@ class TeamHost:
                     principal=self._operator_principal,
                     submitted_at=datetime.now(UTC),
                     reference=command.reference,
+                    confirm_legacy_containment=command.confirm_legacy_containment,
                 )
             elif (
                 authority.principal != self._operator_principal
                 or authority.reference != command.reference
+                or authority.confirm_legacy_containment != command.confirm_legacy_containment
             ):
                 raise ValueError("该执行基线已有不同主体或引用的工程决定")
             binding = service.execute(plan.plan_sha256, authority=authority)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from typing import TYPE_CHECKING, Literal, Self
 
@@ -10,7 +10,7 @@ from pydantic import model_validator
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
-from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
+from ai_software_engineer.domain.execution_baseline import BaselinePurpose, ExecutionBaselineBinding
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
@@ -22,7 +22,12 @@ from ai_software_engineer.work_queue.execution_store import (
     record_digest,
 )
 from ai_software_engineer.work_queue.models import QueuedWorkItem
-from ai_software_engineer.work_queue.ports import QueueConflict, QueueCorruption, QueueLeaseLost
+from ai_software_engineer.work_queue.ports import (
+    QueueConflict,
+    QueueCorruption,
+    QueueLeaseLost,
+    QueueNotFound,
+)
 
 if TYPE_CHECKING:
     from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
@@ -51,8 +56,24 @@ class BaselineQueueConsumption(DomainModel):
             or self.binding.execution_source_revision != self.plan.prepared_source_revision
             or self.binding.execution_base_ref != self.plan.target_base_ref
             or self.binding.prior_source_revision != self.plan.dirty_capture.source_revision
+            or self.binding.purpose != self.plan.purpose
         ):
             raise ValueError("baseline queue record changed the sealed operation")
+        if self.plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+            containment = self.plan.facts.legacy_containment
+            reservation = self.plan.facts.continuation
+            if (
+                containment is None
+                or reservation is None
+                or reservation.retry_cause != "legacy_execution_abandoned"
+                or reservation.containment_sha256 != containment.containment_sha256
+                or self.binding.legacy_containment_sha256 != containment.containment_sha256
+                or self.binding.authority_source != "engineering_operator_decision"
+                or self.next_work_item_id == self.work_item_id
+                or self.binding.prior_source_revision != self.binding.execution_source_revision
+                or self.binding.before_inventory_sha256 != self.binding.after_inventory_sha256
+            ):
+                raise ValueError("旧执行救援消费必须保留现场并使用独立下一工作身份")
         return self
 
 
@@ -79,7 +100,8 @@ def effective_step(
     """Resolve source at an exact historical invocation, or the current uninvoked input."""
     selected = original
     found = baseline_sha256 is None
-    for record in consumptions(queue, original.work_item.task_id):
+    records = consumptions(queue, original.work_item.task_id)
+    for record in records:
         if (
             record.work_item_id != original.work_item.id
             or record.next_work_item_id != record.work_item_id
@@ -106,24 +128,88 @@ def effective_step(
     if not latest:
         if baseline_sha256 is None:
             return original
-        # A newly reserved item already binds the source in its original step.
-        exact = next(
-            (
-                r
-                for r in consumptions(queue, original.work_item.task_id)
-                if r.binding.binding_sha256 == baseline_sha256
-                and r.next_work_item_id == original.work_item.id
-            ),
-            None,
-        )
-        if (
-            exact is not None
-            and original.boundary.source_revision == exact.binding.execution_source_revision
-        ):
-            return original
         if not found:
-            raise QueueCorruption("historical invocation has no exact baseline source record")
+            _require_inherited_baseline(queue, original, baseline_sha256, records)
+            # Descendants bind their own candidate/input, not the baseline's Coder source.
+            return original
     return selected
+
+
+def _require_inherited_baseline(
+    queue: MySqlRoleQueue,
+    original: QueuedRoleStep,
+    baseline_sha256: str,
+    records: tuple[BaselineQueueConsumption, ...],
+) -> None:
+    """Authenticate an inherited epoch through immutable queue parent identities."""
+    current = original
+    seen: set[str] = set()
+    while True:
+        identity = current.work_item.id
+        if identity in seen:
+            raise QueueCorruption("baseline source lineage has a cyclic parent")
+        seen.add(identity)
+        anchors = tuple(record for record in records if record.next_work_item_id == identity)
+        # Local in-place overlays were already resolved above. An older invocation
+        # on this item may predate them; descendants must use the final parent epoch.
+        if current == original:
+            anchors = tuple(record for record in anchors if record.work_item_id != identity)
+        if anchors:
+            anchor = anchors[-1]
+            if anchor.binding.binding_sha256 != baseline_sha256:
+                raise QueueCorruption("historical invocation crossed a newer baseline source epoch")
+            bound = (
+                effective_step(
+                    queue,
+                    current,
+                    baseline_sha256=baseline_sha256,
+                    latest=False,
+                )
+                if anchor.work_item_id == identity
+                else current
+            )
+            if (
+                bound.boundary.source_revision != anchor.binding.execution_source_revision
+                or bound.work_item.repository_id != anchor.binding.scope.repository_id
+                or bound.work_item.repository_scopes != (anchor.binding.scope.repository_root,)
+                or anchor.task_id != bound.boundary.task_id
+            ):
+                raise QueueCorruption("baseline source anchor changed its exact input or scope")
+            if anchor.work_item_id != identity:
+                parent = _baseline_parent(queue, current)
+                if parent is None or parent.work_item.id != anchor.work_item_id:
+                    raise QueueCorruption("reserved baseline source has no exact predecessor")
+                predecessor = effective_step(queue, parent)
+                if record_digest(predecessor) != anchor.prior_step_sha256:
+                    raise QueueCorruption(
+                        "reserved baseline source changed its immutable predecessor"
+                    )
+            return
+        parent = _baseline_parent(queue, current)
+        if parent is None:
+            raise QueueCorruption("historical invocation has no exact baseline source record")
+        current = parent
+
+
+def _baseline_parent(queue: MySqlRoleQueue, child: QueuedRoleStep) -> QueuedRoleStep | None:
+    identity = child.work_item.parent_work_item_id
+    if identity is None:
+        return None
+    try:
+        parent = queue.original_step(identity)
+    except QueueNotFound as error:
+        raise QueueCorruption("baseline source lineage is missing its immutable parent") from error
+    if (
+        parent.work_item.id != identity
+        or parent.work_item.task_id != child.work_item.task_id
+        or parent.work_item.repository_id != child.work_item.repository_id
+        or parent.work_item.repository_scopes != child.work_item.repository_scopes
+        or parent.allocation_sha256 != child.allocation_sha256
+    ):
+        raise QueueCorruption(
+            "baseline source lineage changed Task, repository, scopes or allocation"
+        )
+    return parent
 
 
 def consume_baseline(
@@ -132,6 +218,7 @@ def consume_baseline(
     binding: ExecutionBaselineBinding,
     *,
     cursor: DictCursor | None = None,
+    validate_new_consumption: Callable[[], None] | None = None,
 ) -> QueuedWorkItem:
     """Publish Git completion into scheduling once, without changing approved intent/events."""
     plan.validate_integrity()
@@ -149,6 +236,8 @@ def consume_baseline(
             if sealed.plan != plan or sealed.binding != binding:
                 raise QueueConflict("baseline already consumed another exact operation")
             return queue._get_locked(cursor, sealed.next_work_item_id, lock=True)
+        if validate_new_consumption is not None:
+            validate_new_consumption()
         current = queue._get_locked(cursor, plan.facts.work_item_id, lock=True)
         step = queue.step(current.id)
         cursor.execute(
@@ -160,6 +249,13 @@ def consume_baseline(
         task = _decode_task(binding.task_id, str(row["payload_json"]))
         binding.require_task(task)
         reservation = plan.facts.continuation
+        if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE and (
+            reservation is None
+            or reservation.reservation_already_applied
+            or reservation.retry_cause != "legacy_execution_abandoned"
+            or binding.authority_source != "engineering_operator_decision"
+        ):
+            raise QueueConflict("遗留未知执行不能退款、自动授权或复用旧工作预留")
         if (
             reservation is None
             or task != plan.facts.task
@@ -265,7 +361,11 @@ def consume_baseline(
             cursor,
             settled,
             from_status=current.status,
-            event_type="EXECUTION_BASELINE_REBOUND",
+            event_type=(
+                "LEGACY_EXECUTION_RESCUED"
+                if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                else "EXECUTION_BASELINE_REBOUND"
+            ),
             lease_id=None,
             occurred_at=now,
             detail={
@@ -273,6 +373,11 @@ def consume_baseline(
                 "next_work_item_id": next_item.id,
                 "plan_sha256": plan.plan_sha256,
                 "budget_refund": False,
+                **(
+                    {"original_outcome": "UNKNOWN", "purpose": plan.purpose.value}
+                    if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                    else {}
+                ),
                 "reservation": reservation.to_wire(),
             },
         )

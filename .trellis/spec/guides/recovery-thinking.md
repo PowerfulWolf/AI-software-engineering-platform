@@ -23,3 +23,26 @@ Before adding another recovery exception, read
 
 This is a design checklist, not an authorization to change current state contracts. Historical
 terminal Tasks remain immutable and use the verified successor compatibility path.
+
+### Legacy missing facts and crash boundaries (2026-10-08)
+
+Do not mistake a successful investigation report for a completed recovery path. Classify whether
+trusted facts exist but were not found, or were never sealed. Fixing future recording cannot recover
+old absent facts. Legacy rescue must explicitly separate new engineering evidence from historical
+outcome/stop facts, require exact human provenance when old host identity is missing, and audit it
+as supplied evidence. See `../core/legacy-execution-rescue.md`.
+
+A complete current Git patch can still omit ignored files. With no trustworthy before inventory,
+compare the full current inventory against Git plus captured mutation bodies; reject unknown ignored
+inputs and links rather than bringing them into a new execution implicitly.
+
+Test the boundary after immutable binding but before SQL consumption, both within the same boot and
+after a later same-device boot. Do not create another binding for the same original start. Already
+authorized containment remains a historical fact; new publication still rechecks exact live inputs.
+Always provide a UI way to reprepare an unapproved stale plan. Validate a subsequent full collector
+pass over the old UNKNOWN, not only the first successful restart.
+
+The full collector pass must include the succeeding Coder, QA and Review calls. Their requests
+inherit the baseline digest but their immutable queue boundaries may bind later candidate SHAs.
+Authenticate the exact consumption epoch through the immutable parent chain; do not rewrite
+verifier candidate sources to the rescued Coder input. A helper-only lookup can miss this seam.

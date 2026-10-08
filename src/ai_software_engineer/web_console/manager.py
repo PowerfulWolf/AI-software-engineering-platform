@@ -17,7 +17,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     InspectDeliveryWait,
     ResolveDeliveryWait,
 )
-from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
+from ai_software_engineer.domain.execution_baseline import BaselinePurpose, ExecutionBaselineBinding
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError
 from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
 from ai_software_engineer.manager.baseline_production import (
@@ -281,7 +281,10 @@ class ManagerConsoleAdapter:
                         checkpoint_sha256=current.checkpoint_sha256,
                         stage="ENGINEERING_BASELINE_PLAN",
                         next_action=(
-                            "旧改动与目标代码存在冲突, 请提出明确的 Coder 适配计划。"
+                            "完整当前草稿已封存。请确认原执行在本机且原执行之后已整机重启, "
+                            "再批准保留进度继续。"
+                            if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                            else "旧改动与目标代码存在冲突, 请提出明确的 Coder 适配计划。"
                             if plan.conflicted
                             else "工程基线计划已封存, 工程人员可决定在原分支继续。"
                         ),
@@ -296,7 +299,12 @@ class ManagerConsoleAdapter:
                     delivery_id=intent.delivery_id,
                     checkpoint_sha256=current.checkpoint_sha256,
                     stage="ENGINEERING_BASELINE_UPDATED",
-                    next_action="原分支执行基线已更新并记录工程决定, 继续原需求的独立交付验收。",
+                    next_action=(
+                        "原需求的完整草稿已按工程决定保留并安排新执行。"
+                        "原执行结果仍记为未知, 后续需独立测试和评审。"
+                        if binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                        else "原分支执行基线已更新并记录工程决定, 继续原需求的独立交付验收。"
+                    ),
                     execution_baseline_binding=binding,
                 )
             if isinstance(

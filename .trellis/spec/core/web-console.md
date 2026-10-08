@@ -733,10 +733,12 @@ _, plan = host.recovery_entry(project_id).open_plan(Path(plan_file))
 
 `create_console_app()` 启动时一次读取并保留三个静态资源的 bytes。后续 GET `/`、`/app.js`、
 `/style.css` 始终返回本次启动所绑定的内容。GET `/api/v1/console` 保持 `schema_version=v0.2`，
-增加 `operation_contract_version=1` 和由当前 `ConsoleAction` 推导的 `supported_actions`。
+增加 `operation_contract_version` 和由当前 `ConsoleAction` 推导的 `supported_actions`。
+当前版本为 2：旧 action 从版本 1 起兼容，`legacy_workspace_rescue` purpose 和显式
+`confirm_legacy_containment` 参数必须有版本 2 及两个 baseline action 能力。静态页仍与启动版本绑定。
 清单是兼容性声明，不是权限或审批；原团队、Project、digest、operator、policy 验证全部保持。
 
-浏览器 `submitOperation(intent)` 在 POST 之前检查契约版本和 action 支持。缺失、不同版本、
+浏览器 `submitOperation(intent)` 在 POST 之前检查契约版本和 action 支持。缺失、不支持的版本、
 未列出 action 时没有 POST、Operation、审批、恢复或重试预算变化。工程等待卡片直接显示中文
 空闲重启/刷新建议；能力事实纳入 incremental signature，404/失败清空旧 capability，不保留陈旧准入。
 

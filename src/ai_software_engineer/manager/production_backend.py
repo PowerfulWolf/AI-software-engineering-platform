@@ -21,6 +21,7 @@ from ai_software_engineer.agents import (
     StructuredModelClient,
     StructuredModelRoute,
 )
+from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.artifacts import ArtifactStore, FileArtifactStore
 from ai_software_engineer.config import (
     ModelProviderKind,
@@ -77,6 +78,7 @@ from ai_software_engineer.domain.engineering_authority import (
     LocalOperatorPrincipal,
     OperatorDuty,
 )
+from ai_software_engineer.domain.execution_baseline import BaselinePurpose
 from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.git.policy import delivery_write_paths
 from ai_software_engineer.knowledge.models import digest
@@ -113,6 +115,7 @@ from ai_software_engineer.manager.dispatch import (
     RecoveryDispatchRecord,
 )
 from ai_software_engineer.manager.execution_baseline import ExecutionBaselineService
+from ai_software_engineer.manager.legacy_audit import EngineeringHumanActionRecorder
 from ai_software_engineer.manager.mysql_dispatch_authority import (
     MySqlDispatchAuthority,
 )
@@ -1712,8 +1715,9 @@ class ProductionProjectDeliveryBackend:
             agent_definitions=definitions,
             repository_root=facts.workspace.repository_root,
             context_builder=knowledge_contexts,
-            human_action_recorder=KnowledgeHumanActionRecorder(
-                tuple(audit_stores), requirement_id=requirement_id
+            human_action_recorder=EngineeringHumanActionRecorder(
+                KnowledgeHumanActionRecorder(tuple(audit_stores), requirement_id=requirement_id),
+                facts.workspace.directory("state") / "execution-baselines",
             ),
             transition_gate=KnowledgeDeliveryGate(
                 records=KnowledgeRecordStore(facts.workspace.root / "knowledge" / "runs"),
@@ -1987,6 +1991,8 @@ class ProductionProjectDeliveryBackend:
         *,
         repository: MySqlTaskRepository,
         project_id: str,
+        purpose: BaselinePurpose = BaselinePurpose.SOURCE_REBIND,
+        plan_sha256: str | None = None,
     ) -> ExecutionBaselineService:
         """Compose exact same-Task source recovery from frozen approved inputs."""
         from ai_software_engineer.domain.engineering_authority import EngineeringScope
@@ -2015,6 +2021,8 @@ class ProductionProjectDeliveryBackend:
         store = FileExecutionBaselineStore(
             facts.workspace.directory("state") / "execution-baselines" / task.id,
         )
+        if plan_sha256 is not None:
+            purpose = store.plan(plan_sha256).purpose
         queue = self._role_queue or production_role_queue(self._dsn)
         manager = GitWorktreeManager(
             facts.workspace.repository_root,
@@ -2024,6 +2032,8 @@ class ProductionProjectDeliveryBackend:
             branch_names={task.id: task.branch_name},
         )
         collector = ProductionBaselineFactCollector(
+            purpose=purpose,
+            route_root=model_route_root(facts.workspace.root),
             allocation=dispatch,
             scope=EngineeringScope(
                 team_id=self._config.team_id,

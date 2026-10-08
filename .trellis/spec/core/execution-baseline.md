@@ -70,6 +70,15 @@ An Agent/model cannot submit either trusted facts or an engineering principal.
   validated stop marker for every original non-invoked lease, each matched to the source that
   preceded its SQL CLAIMED event. Preserve all marker digests in the quiescence proof; do not
   reject valid history merely because it has multiple markers or an older execution source.
+- `work_queue/baseline.py::effective_step(..., baseline_sha256, latest=False)` also accepts a
+  downstream role's inherited baseline only through the immutable `parent_work_item_id` chain
+  to the exact consumed binding. Every link must retain Task, Repository, root scopes and dispatch
+  allocation; the nearest consumed epoch must match the requested digest. Missing/cyclic parents,
+  unrelated/older bindings and a changed anchor source/predecessor digest are corruption. Keep
+  the descendant's own candidate boundary unchanged. `tests/work_queue/test_baseline_history.py`
+  covers these positive and negative contracts; the full native public fixture reads all roles.
+  `role-queue-execution.schema.json` must match the complete runtime union, including the existing
+  `QueuedWorkItem.wait_disposition`; `tests/work_queue/test_execution_contracts.py` checks parity.
 - An initial preflight wait can precede creation of the Coder checkout. Create that first clean
   original-branch checkout only for trusted uninvoked original-base facts with no Coder invocation
   start, interruption receipt, implementation/progress Artifact or previous baseline binding.
