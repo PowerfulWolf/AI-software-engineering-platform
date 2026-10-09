@@ -213,6 +213,138 @@ function localPlanFor(fixture) {
   return plan;
 }
 
+test("operations read failure explains missing recovery controls after the toast closes and requires fresh approval on recovery", async t => {
+  const fixture = await rescueUi(t, 3);
+  const {h, request, card, submitted} = fixture;
+  await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
+  await h.close();
+  const plan = localPlanFor(fixture);
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+    checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  await card.getByRole("checkbox").check();
+  await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true})
+    .evaluate(node => {window.beforeReadFailureApproval = node;});
+  const failRead = route => route.request().method() === "GET"
+    ? route.fulfill({status: 500, json: {error: {message: "operation read unavailable"}}}) : route.fallback();
+  await h.page.route("http://ui.test/api/v1/operations", failRead);
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  const wait = h.page.locator("#detail .engineering-wait-panel");
+  const unavailable = wait.locator(".engineering-controls-unavailable");
+  assert.equal(await unavailable.isVisible(), true);
+  assert.match(await unavailable.innerText(), /交付操作记录读取失败/);
+  assert.match(await unavailable.innerText(), /不能确认当前恢复方案与审批状态/);
+  assert.match(await unavailable.innerText(), /修复操作记录读取/);
+  assert.match(await unavailable.innerText(), /不要重复准备方案或重建需求/);
+  assert.doesNotMatch(await wait.locator(".engineering-wait-facts").innerText(), /你可以点击|点击“准备保留进度的恢复方案”/);
+  assert.equal(await wait.getByRole("button", {name: "调查工程等待", exact: true}).count(), 0);
+  assert.equal(await wait.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).count(), 0);
+  assert.equal(await card.count(), 0, "unreadable plans cannot become cached recovery authority");
+  await h.page.evaluate(() => window.beforeReadFailureApproval.click());
+  assert.equal(submitted.length, 1, "the retained checked control cannot submit while operation facts are unavailable");
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  await h.tick();
+  assert.equal(await h.page.locator("#notification").isVisible(), false);
+  assert.equal(await unavailable.isVisible(), true, "the next step persists after notification acknowledgment and polling");
+  await h.page.unroute("http://ui.test/api/v1/operations", failRead);
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.equal(await unavailable.count(), 0);
+  assert.equal(await card.isVisible(), true);
+  const checkbox = card.getByRole("checkbox", {name: "确认原调用及全部派生工具已结束"});
+  const approve = card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true});
+  assert.equal(await checkbox.isChecked(), false, "current records must be read again and the engineering decision confirmed anew");
+  assert.equal(await approve.isDisabled(), true);
+  assert.equal(submitted.length, 1, "successful reads do not approve or execute recovery");
+  await checkbox.check();
+  await approve.click();
+  await h.close();
+  assert.equal(submitted[1].expected_plan_sha256, plan.plan_sha256);
+  assert.equal(submitted[1].confirm_local_execution_stopped, true);
+  assert.equal(submitted[1].expected_checkpoint_sha256, request.checkpoint_sha256);
+});
+
+test("simultaneous team and operation read failure revokes checked recovery controls while preserving detail reading state", async t => {
+  const fixture = await rescueUi(t, 3);
+  const {h, request, card, submitted} = fixture;
+  await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
+  await h.close();
+  const plan = localPlanFor(fixture);
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+    checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  const binding = h.page.locator("#detail .engineering-wait-binding");
+  await binding.locator("summary").first().click();
+  await binding.evaluate(node => {window.beforeFailedRefreshBinding = node;});
+  await card.getByRole("checkbox").check();
+  await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true})
+    .evaluate(node => {window.beforeFailedRefreshApproval = node;});
+  const failRead = route => route.fulfill({status: 500, json: {error: {message: "read unavailable"}}});
+  await h.page.route("http://ui.test/api/v1/team?*", failRead);
+  await h.page.route("http://ui.test/api/v1/operations", failRead);
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  const wait = h.page.locator("#detail .engineering-wait-panel");
+  const unavailable = wait.locator(".engineering-controls-unavailable");
+  assert.equal(await unavailable.isVisible(), true);
+  assert.match(await unavailable.innerText(), /交付操作记录读取失败/);
+  assert.match(await unavailable.innerText(), /修复操作记录读取/);
+  assert.equal(await wait.getByRole("checkbox").count(), 0);
+  assert.equal(await wait.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).count(), 0);
+  assert.equal(await binding.evaluate(node => node === window.beforeFailedRefreshBinding && node.open), true,
+    "the unrelated investigation disclosure remains open and is not rebuilt");
+  await h.page.evaluate(() => window.beforeFailedRefreshApproval.click());
+  assert.equal(submitted.length, 1);
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  await h.tick();
+  assert.equal(await h.page.locator("#notification").isVisible(), false);
+  assert.equal(await unavailable.isVisible(), true, "a failed Team snapshot does not hide the persistent control explanation");
+  await h.page.unroute("http://ui.test/api/v1/team?*", failRead);
+  await h.page.unroute("http://ui.test/api/v1/operations", failRead);
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.equal(await unavailable.count(), 0);
+  assert.equal(await binding.evaluate(node => node === window.beforeFailedRefreshBinding && node.open), true);
+  const checkbox = card.getByRole("checkbox", {name: "确认原调用及全部派生工具已结束"});
+  const approve = card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true});
+  assert.equal(await checkbox.isChecked(), false, "an identical re-read plan requires a new engineering confirmation");
+  assert.equal(await approve.isDisabled(), true);
+  await h.page.evaluate(() => window.beforeFailedRefreshApproval.click());
+  assert.equal(submitted.length, 1, "a disconnected checked approval cannot revive after connectivity returns");
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  await checkbox.check();
+  await approve.click();
+  await h.close();
+  assert.equal(submitted[1].expected_plan_sha256, plan.plan_sha256);
+  assert.equal(submitted[1].confirm_local_execution_stopped, true);
+});
+
+test("failed Team refresh renders control guidance without replacing a business draft", async t => {
+  const fixture = await rescueUi(t, 3);
+  const {h, submitted} = fixture;
+  await h.draft();
+  const draft = h.page.locator('#composer input[name="name"]');
+  const failRead = route => route.fulfill({status: 500, json: {error: {message: "read unavailable"}}});
+  await h.page.route("http://ui.test/api/v1/team?*", failRead);
+  await h.page.route("http://ui.test/api/v1/operations", failRead);
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.equal(await draft.evaluate(node => node === window.draftInput), true);
+  assert.equal(await draft.inputValue(), "保留正在编辑的需求");
+  assert.equal(await h.page.locator("#composer").isVisible(), true);
+  assert.match(await h.page.locator("#detail .engineering-controls-unavailable").innerText(), /交付操作记录读取失败/);
+  await h.page.unroute("http://ui.test/api/v1/team?*", failRead);
+  await h.page.unroute("http://ui.test/api/v1/operations", failRead);
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.equal(await draft.evaluate(node => node === window.draftInput), true);
+  assert.equal(await draft.inputValue(), "保留正在编辑的需求");
+  assert.equal(submitted.length, 0, "read failures and draft preservation do not create requirements or recovery actions");
+});
+
 test("local rescue shows auxiliary checks before a distinct exact human stop authorization", async t => {
   const fixture = await rescueUi(t, 3);
   const {h, request, card, submitted} = fixture;

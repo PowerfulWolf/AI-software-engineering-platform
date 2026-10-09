@@ -66,6 +66,13 @@ CLI、数据库、Git、模型 SDK 和文件系统实现只能依赖这些端口
 
 ## 4. Validation & Error Matrix
 
+Console append-only records 的完整 typed 结果遵守
+[`web-console.md`](web-console.md) 的独立 16 MiB serialized UTF-8 byte budget。
+写入与读取必须对称，包含 JSON escaping；不得借通用 Team 知识正文的 256 KB 限制
+处理完整恢复计划。发布前拒绝超限，已有完整结果保留 model/hash/sequence/path 验证；
+HTTP 错误用固定中文 envelope，不能泄露 ValidationError 输入或以部分列表遮住损坏事实。
+存储预算不是 Schema 最大值，wire 不变，不改写存量 bytes/hash。
+
 | 场景 | 校验位置 | 结果 |
 |---|---|---|
 | 模型返回非法 JSON | Agent adapter | 返回 typed invalid-output error，不进入领域层 |

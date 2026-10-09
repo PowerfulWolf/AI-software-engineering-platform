@@ -101,3 +101,13 @@ the survey from approval and subsequent execution.
 - 完整正文、staged patch、wire 父级、计划读取/重放、required Context 是否同规则？
   只改 capture 会在批准后的 Coder 启动再次失败；必须保持 bytes/digest。
 - 页面和复制报告是否保留最近一次精确准备失败？历史 UNKNOWN 三项不应盖住本次实际错误。
+
+### 已封存方案与页面可读性分开核验（2026-10-09）
+
+- 按钮消失不意味着计划没有成功。先沿 sealed operation → store read → HTTP → browser gate
+  核验，不能继续修进程扫描器、重建需求或再次生成计划来绕过读侧失败。
+- 一个 writer 接受的完整结果能否重开读取？按真实 serialized UTF-8 JSON bytes 验证预算，
+  含完整正文、重复capture、escaping和inventory，不只给小型假结果做roundtrip。
+- 超限读写都有界，历史摘要链与正文不截断。通用文档上限与完整 Operation 上限不是同一政策。
+- Operation不可读时，Console readiness和交付权限分开；需求内要持久说明门禁原因，
+  关闭全局通知后仍有下一步。读成功后最新精确方案重新显示，不能保留旧勾选替代确认。

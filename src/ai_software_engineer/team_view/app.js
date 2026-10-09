@@ -388,6 +388,12 @@ const button = (text, action, className = "link") => {
 };
 const deliveryButton = (text, action, className = "link") => {
   const control = button(text, (...args) => {
+    if (control.isConnected === false) {
+      operationNotice = {kind: "error", title: "交付操作已失效",
+        message: "此操作已随页面更新失效。请查看当前需求，重新核对页面显示的方案后再确认。"};
+      renderNotification();
+      return null;
+    }
     if (canControlCurrentTeam()) return action(...args);
   }, className);
   control.setAttribute("data-delivery-control", "true");
@@ -489,13 +495,50 @@ const latestApproval = (deliveryId, checkpoint) => {
   );
 };
 const operationKey = () => `browser-${Date.now()}-${++actionSerial}`;
-const canControlCurrentTeam = () =>
-  !projectSwitchPending() &&
-  consoleAvailable === true &&
-  operationsAvailable &&
-  consoleDeliveryReady === true &&
-  snapshot &&
-  snapshot.team_id === consoleTeamId;
+function deliveryControlUnavailableReason() {
+  if (projectSwitchPending()) return {
+    title: "正在切换项目",
+    reason: "正在切换项目，暂不能对当前需求提交操作。",
+    next_action: "请等待目标项目加载完成，核对当前项目和需求后再操作。",
+  };
+  if (consoleAvailable !== true) return {
+    title: "交付控制不可用",
+    reason: consoleAvailable === false ? "当前服务未提供交付控制接口。"
+      : "暂时无法连接或确认后台 Web Console。",
+    next_action: consoleAvailable === false ? "请连接后台 Web Console，再刷新当前需求。原需求和开发进度保留。"
+      : "请等待后台服务恢复连接，页面将自动重新读取；仍无法连接时由 ASE 平台维护者检查服务。原需求和开发进度保留。",
+  };
+  if (!operationsAvailable) return {
+    title: "交付操作记录读取失败",
+    reason: "平台暂时无法读取已保存的交付操作记录，因此不能确认当前恢复方案与审批状态。",
+    next_action: "请由 ASE 平台维护者检查并修复操作记录读取；恢复后刷新当前需求，再核对恢复方案。不要重复准备方案或重建需求。",
+  };
+  if (consoleDeliveryReady !== true) return {
+    title: "交付运行时尚未就绪",
+    reason: "交付运行时尚未就绪，暂不能提交恢复或交付操作。",
+    next_action: "请到设置或状态页查看未就绪原因，按页面提示处理；运行时就绪后刷新当前需求。原需求和开发进度保留。",
+  };
+  if (!snapshot) return {
+    title: "团队数据暂不可读取",
+    reason: "团队数据暂不可读取，尚不能核对当前页面与后台服务的绑定。",
+    next_action: "请待团队数据恢复后刷新页面，再核对当前 Team、项目和需求后操作。",
+  };
+  if (snapshot.team_id !== consoleTeamId) return {
+    title: "Team 绑定不一致",
+    reason: "页面与后台服务的 Team 绑定不一致，暂时只能查看。",
+    next_action: "请连接当前 Team 对应的后台 Web Console，核对 Team 与项目后刷新当前需求。",
+  };
+  return null;
+}
+const canControlCurrentTeam = () => deliveryControlUnavailableReason() === null;
+function deliveryControlUnavailableNotice(reason) {
+  const notice = viewBlock(el("div", undefined, "engineering-controls-unavailable"),
+    "engineering-controls-unavailable", reason);
+  notice.setAttribute("role", "status");
+  notice.append(el("strong", reason.title), el("p", reason.reason),
+    el("p", "下一步 · " + reason.next_action, "muted"));
+  return notice;
+}
 function assignmentBadge(task, assignment) {
   if (task.terminal) return badge(task.status);
   const status = taskPresentationStatus(task);
@@ -715,7 +758,7 @@ function engineeringGuidanceList(...descriptions) {
   }
   return list;
 }
-function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, legacyRescue = false, rescueFailure = null} = {}) {
+function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, legacyRescue = false, rescueFailure = null, controlUnavailable = null} = {}) {
   if (historical) {
     target.append(el("p", "当次调查 · " + humanizeBlockingText(proof.next_action || "调查结果未提供处理建议。")),
       el("p", "这是该次调查保存的结果；当前原因与操作以页面上方为准。", "muted"));
@@ -727,7 +770,8 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
   if (collectionFailed) target.append(el("p", engineeringCollectionFailureNotice, "error"));
   if (legacyRescue) {
     target.append(engineeringGuidanceList("旧执行没有留下完整结果、结束和现场记录，不能把它当作已完成，也不能靠重复调查补齐。",
-      rescueFailure ? "本次恢复方案准备尚未完成，具体失败和平台处理下一步见下方；当前没有可批准的恢复方案。"
+      controlUnavailable ? "当前恢复操作不可用，具体原因和下一步见下方；操作恢复后须重新读取并核对方案，不能使用旧页面的审批。"
+        : rescueFailure ? "本次恢复方案准备尚未完成，具体失败和平台处理下一步见下方；当前没有可批准的恢复方案。"
         : "可使用下方“保留进度的恢复方案”：平台检查当前本机执行并封存完整合法草稿，展示所需工程确认；授权后才可继续同一需求。"));
     return;
   }
@@ -805,10 +849,16 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
       facts.user = consoleOperationVersionMismatchMessage;
     } else facts.user += " " + consoleOperationVersionMismatchMessage;
   }
+  const controlUnavailable = deliveryControlUnavailableReason();
+  if (controlUnavailable) {
+    facts.platform = active || decision ? facts.platform + " " + controlUnavailable.reason : controlUnavailable.reason;
+    facts.user = controlUnavailable.next_action;
+  }
   return facts;
 }
 async function copyEngineeringWaitReport(request, handling) {
   const proof = handling.investigation;
+  const controlUnavailable = deliveryControlUnavailableReason();
   const current = engineeringWaitSteps(request).find(({task, step}) =>
     engineeringWaitHandling(request, step)?.handling_sha256 === handling.handling_sha256 &&
     matchingEngineeringWaitProof(proof, request, step) && engineeringLegacyRescueFacts(request, task, step, proof, handling));
@@ -823,16 +873,18 @@ async function copyEngineeringWaitReport(request, handling) {
       "平台修复检查结果后再检查。",
     ];
     return ["待处理事项 · " + title, "处理方 · " + (failure ? "ASE 平台维护者" : rescue ? "ASE 平台与工程授权者" : owner),
-      "具体处理 · " + (failure ? "先处理本次恢复方案准备失败；旧执行的缺失事实仍保留，不能通过重复调查补造。"
+      "具体处理 · " + (controlUnavailable ? controlUnavailable.next_action
+        : failure ? "先处理本次恢复方案准备失败；旧执行的缺失事实仍保留，不能通过重复调查补造。"
         : rescue ? "使用需求详情中的“准备保留进度的恢复方案”，由平台检查当前本机执行并封存合法草稿；查看检查结果后再决定，不补造原执行记录。" : action),
       "何时复查 · " + (failure ? "平台修复本次失败后，再重新检查恢复前提。"
         : rescue ? "按恢复前提检查所列下一步处理后再检查；重复检查不会补出旧执行结果。" : recheck)].join("\n");
   });
   const report = ["ASE 交付处理报告", "需求 · " + request.title,
+    ...(controlUnavailable ? ["操作可用性 · " + controlUnavailable.title + "；" + controlUnavailable.reason] : []),
     ...(handling.collection_failed === true ? ["当前结果 · " + engineeringCollectionFailureNotice] : []),
     "本次处理 · " + (failure ? `恢复方案准备${failure.status === "INTERRUPTED" ? "被中断" : "失败"}：${failure.summary}`
       : preparation?.summary || humanizeBlockingText(handling.summary || "未提供处理说明")),
-    "用户操作 · " + (failure ? failure.next_action
+    "用户操作 · " + (controlUnavailable ? controlUnavailable.next_action : failure ? failure.next_action
       : preparation?.next_action || (rescue ? "在当前需求详情点击“准备保留进度的恢复方案”；先看平台检查结果，方案准备完成后由工程授权者明确确认所列实际停止前提，再批准继续原需求。" : humanizeBlockingText(handling.user_action || "无"))),
     "复查时机 · " + (failure ? "平台修复本次失败后，再重新检查恢复前提；重复调查不能修复内部异常。"
       : rescue ? "按恢复前提检查所列下一步处理后重新检查；旧执行结果仍保持未知。" : humanizeBlockingText(handling.recheck_when || "处理记录或执行前提更新后")),
@@ -874,6 +926,7 @@ function engineeringWaitBox(request, task, step) {
   const decision = engineeringWaitDecision(request, step, proof);
   const handling = engineeringWaitHandling(request, step);
   const running = activeOperation(request.id, request.project_id);
+  const controlUnavailable = deliveryControlUnavailableReason();
   const facts = engineeringWaitCurrentFacts(request, step, proof, handling, decision, running);
   const rescue = engineeringLegacyRescueFacts(request, task, step, proof, handling);
   const rescueFailure = engineeringLegacyRescueFailure(request, task, step, rescue);
@@ -888,10 +941,11 @@ function engineeringWaitBox(request, task, step) {
   management.append(overview);
   if (proof) {
     const collectionFailed = handling?.collection_failed === true;
-    const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof", [proof, collectionFailed, Boolean(rescue), rescueFailure]);
-    appendEngineeringInvestigation(result, proof, {collectionFailed, legacyRescue: Boolean(rescue), rescueFailure});
+    const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof", [proof, collectionFailed, Boolean(rescue), rescueFailure, controlUnavailable]);
+    appendEngineeringInvestigation(result, proof, {collectionFailed, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable});
     management.append(result);
   }
+  if (controlUnavailable) management.append(deliveryControlUnavailableNotice(controlUnavailable));
   if (decision) {
     management.append(el("p", "继续决定已记录；实际进度与验收以新的执行记录为准。", "muted"));
   } else if (canControlCurrentTeam() && !running) {
@@ -1091,7 +1145,9 @@ async function submitEngineeringLegacyRescueOperation(intent, originalRescue) {
   const propose = intent.action === "PROPOSE_EXECUTION_BASELINE";
   const execute = intent.action === "EXECUTE_EXECUTION_BASELINE";
   if (!canControlCurrentTeam() || !consoleSupportsLegacyRescue()) {
-    operationNotice = {kind: "error", title: "恢复操作未被受理", message: consoleOperationVersionMismatchMessage};
+    const unavailable = deliveryControlUnavailableReason();
+    operationNotice = {kind: "error", title: "恢复操作未被受理", message: unavailable
+      ? unavailable.reason + " " + unavailable.next_action : consoleOperationVersionMismatchMessage};
     renderNotification();
     return null;
   }
@@ -1122,6 +1178,7 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
   const active = activeOperation(request.id, request.project_id);
   const supported = consoleSupportsLegacyRescue();
   const executed = engineeringLegacyRescueExecuted(request, task, plan);
+  const controlUnavailable = deliveryControlUnavailableReason();
   const panel = viewGroup(el("section", undefined, "engineering-baseline-panel engineering-baseline-pending engineering-rescue-panel"),
     "engineering-rescue:" + step.work_item_id);
   panel.dataset.key = "engineering:" + step.work_item_id + ":rescue";
@@ -1152,6 +1209,7 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
       el("p", "本次检查没有生成恢复方案、保存审批或启动 Coder；原需求和草稿保留。", "muted"));
     panel.append(summary);
   }
+  if (controlUnavailable) panel.append(deliveryControlUnavailableNotice(controlUnavailable));
   if (executed) {
     panel.append(viewBlock(el("p", "恢复工程决定已保存。旧执行历史仍保留，是否继续与最终验收以新的执行记录为准。", "muted"), "rescue-executed", plan.plan_sha256));
   } else if (active) {
@@ -1173,7 +1231,7 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
         target_base_ref: rescue.baseline.expected_source_revision, input_mode: "preserve_draft",
       }, rescue), "secondary"));
     panel.append(summary);
-  } else if (!supported || local && !consoleSupportsLocalRescue()) {
+  } else if (!controlUnavailable && (!supported || local && !consoleSupportsLocalRescue())) {
     panel.append(viewBlock(el("p", "当前服务尚不支持此恢复路径。请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。", "muted"),
       "rescue-unavailable", [consoleOperationContractVersion, consoleSupportedActions]));
   } else if (canControlCurrentTeam()) {
@@ -1347,11 +1405,13 @@ function currentEngineeringRescueAdvice(operation, request) {
     engineeringWaitHandling(request, step)?.handling_sha256 === handling.handling_sha256 &&
     engineeringLegacyRescueFacts(request, task, step));
   if (!current) return null;
+  const controlUnavailable = deliveryControlUnavailableReason();
+  if (controlUnavailable) return controlUnavailable.title + "：" + controlUnavailable.reason + "\n" + controlUnavailable.next_action;
   const rescue = engineeringLegacyRescueFacts(request, current.task, current.step);
   const failure = engineeringLegacyRescueFailure(request, current.task, current.step, rescue);
   if (failure) return `恢复方案准备${failure.status === "INTERRUPTED" ? "被中断" : "失败"}：${failure.summary}\n${failure.next_action}`;
   const preparation = engineeringLegacyRescuePreparation(request, current.task, current.step, rescue);
-  if (preparation?.status === "WAITING") return preparation.summary + "\n" + preparation.next_action;
+  if (preparation) return preparation.summary + "\n" + preparation.next_action;
   return "原执行记录仍不完整，旧执行结果保持未知。" + (consoleSupportsLegacyRescue()
     ? "请进入需求详情，点击“准备保留进度的恢复方案”。先查看平台的本机检查结果和精确方案，再由工程授权者确认所列实际停止前提；检查不会自动启动下一轮。"
     : "当前服务尚不支持保留进度的恢复方案，请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。");
@@ -8865,7 +8925,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       : "只读团队记录已连接；交付控制台暂不可用。";
   } catch {
     if (superseded()) return;
-    if (["settings", "status"].includes(page) && systemViewsChanged()) render({incremental: true});
+    if (systemViewsChanged()) render({preserveComposer: hasOpenComposer(), incremental: true});
     status.className = "error";
     const destination = snapshot?.projects.find(item => item.id === requestedProjectId)?.name
       || requestedProjectId;

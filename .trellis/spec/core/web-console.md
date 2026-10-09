@@ -13,6 +13,51 @@ Operation 持久化或 `ase-console` 生产装配时必须遵守本规范。只�
 
 v0.1 是可信本机、单用户、loopback 控制台，不是远程多租户控制面。
 
+### 完整操作记录字节预算与控制不可用说明（2026-10-09）
+
+签名：`web_console.store.MAX_CONSOLE_OPERATION_BYTES = 16 * 1024 * 1024`，
+`_bounded_json_bytes(content: str, maximum_bytes: int) -> bytes`；
+`FileConsoleOperationStore._current(operation_id)` / `_append(operation, expected)`
+使用同一预算。`team_view/app.js.deliveryControlUnavailableReason() -> {title, reason,
+next_action} | null` 是 `canControlCurrentTeam()` 的共享条件来源。
+
+- Operation 可能包含完整基线计划、两份 mutation capture、prepared patch 和 inventory。
+  不得复用普通 Team 知识正文的 256,000 bytes 限制；16 MiB 是独立有界存储准入政策，
+  不声称覆盖所有 Schema-valid 无长度上限字段组合。计量 `model_dump_json(indent=2)`
+  实际 UTF-8 bytes，包含 JSON escaping/缩进，不以字符数或 patch 字节数代替。
+- 发布前校验预算；超限抛 `ConsoleOperationConflict`，不得创建终态/临时记录，原
+  RUNNING/hash 保留。模型诊断独立读写预算仍为 16,000 bytes，知识正文预算不变。
+  regular/no-symlink、model、digest、identity、sequence、successor chain 和 exclusive
+  publish/fsync 继续校验；不能截断 result、跳过坏记录或改写历史以让列表返回成功。
+- GET `/api/v1/operations` 和 `/api/v1/operations/{operation_id}` 对已知 store conflict、
+  ValidationError、I/O 或 byte budget 失败返回固定中文 `503 OPERATION_STATE_INVALID`，
+  无 partial list、路径、原输入、traceback 或原异常正文。invalid/missing ID 保持 404。
+  `/api/v1/console.delivery_ready` 独立，不因 Operation 读取失败改为配置缺失。
+- 门禁依次检查 Project 切换、Console、Operations、delivery runtime、Team binding。
+  工程等待和恢复面板持久显示对应中文原因/下一步，用户行动、复制报告与当前通知保持一致。
+  不依赖可关闭全局通知；不能承诺一个被门禁隐藏的按钮，也不凭暂时不可读断言方案不存在。
+  操作读取失败清空当前 results、禁用写入口；恢复读取后重新核对精确计划并独立确认，
+  不允许缓存 READY 或旧勾选/闭包在失效事实下批准。
+- `/api/v1/team` 与 Operations 同轮失败时，`refreshSnapshot()` 的 catch 也必须随
+  system/control facts 变化增量更新当前视图，以 preserveComposer 保留业务草稿及阅读
+  展开状态。只 `syncDeliveryControls()` 禁用按钮不足以撤销旧勾选；读取恢复后不能复用
+  未经历失效渲染的确认 DOM。已脱离 DOM 的 delivery control 必须拒绝提交。
+
+| 输入 | 行为 |
+| --- | --- |
+| 完整合法 Operation >256 KB、≤16 MiB | store reopen/list/get 与 HTTP 200 完整读回，bytes/hash不变 |
+| actual UTF-8 JSON 超预算，含转义膨胀 | 发布前拒绝，无终态/临时文件；现存超限读取拒绝 |
+| malformed/digest/chain/sequence/identity/path 错误 | fail closed，GET 中文503，不跳过或返回部分成功 |
+| Console ready但Operation不可读 | readiness保持，需求内说明入口不可用，不重复准备/重建 |
+| 读取恢复且最新精确READY仍匹配 | 方案及按钮重新显示，确认默认为未勾选，原审批门禁保持 |
+
+Good：已有 2.18 MB READY 恢复方案重新可读且用户能确认同一计划；Base：其他门禁给
+对应下一步；Bad：无界读取、截断审计、删除大记录、将读取失败称为没有方案或无说明隐藏入口。
+增量 `test_operation_budget.py`、`test_transport.py`、`engineering-wait.test.cjs` 与真实
+Chrome `browser/legacy-rescue.test.cjs` 覆盖上述矩阵。Wire Schema 不变。
+存量不迁移、不改库、不重写 operation；空闲时受控加载修复并刷新原需求即可重新读取。
+完整重正文的 artifact 引用与分页需要另行版本化契约，不能原地瘦身历史。
+
 ### 最新恢复准备失败的展示（2026-10-09）
 
 `team_view/app.js` 的 `engineeringBaselineProposalOperation(bound, purpose="source_rebind")`

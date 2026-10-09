@@ -31,6 +31,13 @@ administration status/settings；交付写入口是 typed JSON `POST /api/v1/ope
 `/api/v1/admin/*` 边界。未知路径 404，错误不泄露 DSN。
 没有任意文件路由，不应通过反向代理公开到局域网或互联网。这不是带认证的多用户站点。
 
+Operation 持久化允许完整恢复结果，使用独立 16 MiB 实际 UTF-8 JSON 字节准入限制，
+包含 JSON 转义和缩进；读写对称，模型调用诊断仍独立限制 16,000 bytes。
+该政策不扩展 capture/wire 字段，不改变历史摘要或序号。超过预算或记录校验失败时不返回
+部分列表；operations list/detail 返回中文 `503 OPERATION_STATE_INVALID`，无原输入或异常。
+非法/不存在操作 ID 仍返回404。Console readiness不被改为配置缺失；浏览器禁用交付并在
+需求内显示原因。现有大型合法记录通过兼容读取恢复，无需迁移或改写。
+
 正式 wire contract：[team-snapshot.schema.json](../../schemas/team-snapshot.schema.json) 与
 [console-operation.schema.json](../../schemas/console-operation.schema.json)。
 旧 DashboardRenderer / ReadOnlyProjectionApi 仍为纯、transport-neutral 的基础组件，

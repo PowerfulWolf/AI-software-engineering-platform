@@ -568,6 +568,102 @@ function legacyRescuePlan(h) {
   return plan;
 }
 
+test("engineering controls explain every unavailable gate without promising hidden recovery actions", async () => {
+  for (const [mutation, reason, nextStep] of [
+    ["consoleAvailable = false", /当前服务未提供交付控制接口/, /连接后台 Web Console/],
+    ["consoleAvailable = null; consoleConnectionFailed = true", /无法连接或确认后台 Web Console/, /恢复连接/],
+    ["operationsAvailable = false", /无法读取已保存的交付操作记录/, /修复操作记录读取/],
+    ["consoleDeliveryReady = false", /交付运行时尚未就绪/, /设置或状态页查看未就绪原因/],
+    ["consoleTeamId = 'team_other'", /Team 绑定不一致/, /当前 Team/],
+    ["requestedProjectId = 'project_other'", /正在切换项目/, /目标项目加载完成/],
+  ]) {
+    const h = harness();
+    legacyRescueFixture(h);
+    legacyRescuePlan(h);
+    h.run(mutation);
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    const notices = descend(box).filter(node => (node.className || "").includes("engineering-controls-unavailable"));
+    assert.equal(notices.length, 2, mutation + " leaves a visible reason in both the wait and rescue panels");
+    for (const notice of notices) {
+      assert.match(text(notice), reason, mutation);
+      assert.match(text(notice), nextStep, mutation);
+    }
+    const userRow = descend(box).find(node => node.tagName === "DIV" &&
+      node.children.some(child => child.tagName === "DT" && child.textContent === "你需要做什么"));
+    assert.match(text(userRow), nextStep, mutation);
+    assert.doesNotMatch(text(userRow), /点击“准备保留进度的恢复方案”/, mutation);
+    for (const name of ["让平台处理中断", "调查工程等待", "准备保留进度的恢复方案", "批准保留进度并继续原需求"])
+      assert.equal(control(box, name), undefined, mutation);
+    assert.equal(descend(box).some(node => node.tagName === "INPUT" && node.type === "checkbox"), false, mutation);
+    assert.equal(h.run("canControlCurrentTeam()"), false, mutation);
+    assert.equal(h.run("submitted.length"), 0, mutation);
+  }
+});
+
+test("unready runtime and unavailable team data do not invent an unavailable configuration or team mismatch", () => {
+  const h = harness();
+  h.run("consoleDeliveryReady = false");
+  let reason = JSON.parse(h.run("JSON.stringify(deliveryControlUnavailableReason())"));
+  assert.match(reason.next_action, /设置或状态页查看未就绪原因，按页面提示处理/);
+  assert.doesNotMatch(reason.next_action, /完成配置|应用配置|重启/);
+  h.run("consoleDeliveryReady = true; snapshot = null");
+  reason = JSON.parse(h.run("JSON.stringify(deliveryControlUnavailableReason())"));
+  assert.match(reason.title, /团队数据暂不可读取/);
+  assert.match(reason.next_action, /待团队数据恢复/);
+  assert.doesNotMatch(reason.reason, /绑定不一致/);
+  assert.equal(h.run("canControlCurrentTeam()"), false);
+});
+
+test("operation read failure stays explicit when cached proofs are absent and never changes the original wait", () => {
+  const h = harness();
+  const original = JSON.stringify(h.step.wait_disposition);
+  h.run("operationsAvailable = false; operations = [];");
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.match(text(box), /交付操作记录读取失败/);
+  assert.match(text(box), /不能确认当前恢复方案与审批状态/);
+  assert.match(text(box), /不要重复准备方案或重建需求/);
+  assert.doesNotMatch(text(box), /你可以点击“让平台处理中断”/);
+  assert.equal(JSON.stringify(h.step.wait_disposition), original);
+  assert.equal(h.run("submitted.length"), 0);
+});
+
+test("copied current report names unavailable controls instead of directing the user to a hidden action", async () => {
+  const h = harness();
+  legacyRescueFixture(h);
+  legacyRescuePlan(h);
+  h.context.navigator = {clipboard: {writeText: async value => {h.context.copiedReport = value;}}};
+  h.run("operationsAvailable = false");
+  await control(h.run("engineeringWaitBox(data.request, data.task, data.step)"), "复制处理报告").events.click();
+  assert.match(h.context.copiedReport, /交付操作记录读取失败/);
+  assert.match(h.context.copiedReport, /用户操作 · .*修复操作记录读取/);
+  assert.doesNotMatch(h.context.copiedReport, /使用需求详情中的“准备保留进度的恢复方案”|在当前需求详情点击“准备保留进度的恢复方案”/);
+  assert.match(h.run("currentEngineeringRescueAdvice(operations[0], data.request)"), /修复操作记录读取/);
+});
+
+test("a checked recovery approval removed during unreadable facts cannot revive after the same plan is read again", async () => {
+  const h = harness();
+  legacyRescueFixture(h);
+  legacyRescuePlan(h);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const checkbox = descend(box).find(node => node.tagName === "INPUT" && node.type === "checkbox");
+  checkbox.checked = true;
+  const oldApprove = control(box, "批准保留进度并继续原需求");
+  h.run("operationsAvailable = false");
+  await oldApprove.events.click();
+  assert.equal(h.run("submitted.length"), 0);
+  oldApprove.isConnected = false;
+  h.run("operationsAvailable = true");
+  await oldApprove.events.click();
+  assert.equal(h.run("submitted.length"), 0, "the disconnected approval cannot reuse its old checked confirmation");
+  const current = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const currentCheckbox = descend(current).find(node => node.tagName === "INPUT" && node.type === "checkbox");
+  assert.equal(currentCheckbox.checked, false);
+  currentCheckbox.checked = true;
+  currentCheckbox.events.change();
+  await control(current, "批准保留进度并继续原需求").events.click();
+  assert.equal(h.run("submitted.length"), 1);
+});
+
 test("legacy unknown execution offers a visible precise preservation path without asking for a SHA", async () => {
   const h = harness();
   const result = legacyRescueFixture(h);

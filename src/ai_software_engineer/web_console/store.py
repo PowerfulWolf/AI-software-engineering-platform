@@ -27,6 +27,13 @@ from .models import (
     OperationId,
 )
 
+# A Console operation can include an exact baseline plan with two complete
+# mutation captures, its prepared patch and the workspace inventory. This is a
+# separate storage admission budget, measured after UTF-8 JSON serialization
+# (including escaping); it does not enlarge any capture or domain wire limit.
+MAX_CONSOLE_OPERATION_BYTES = 16 * 1024 * 1024
+_MAX_MODEL_CALL_BYTES = 16_000
+
 
 class ConsoleOperationError(RuntimeError):
     """Base safe operation-store error."""
@@ -234,6 +241,7 @@ class FileConsoleOperationStore:
 
     def record_model_call(self, operation_id: str, call: ModelCallDiagnostic) -> None:
         record = ConsoleModelCall(operation_id=operation_id, call=call)
+        payload = _bounded_json_bytes(record.model_dump_json(indent=2), _MAX_MODEL_CALL_BYTES)
         with self._locked():
             operation = self._current(operation_id)
             if operation is None:
@@ -246,12 +254,12 @@ class FileConsoleOperationStore:
             target = directory / f"{record.record_sha256}.json"
             _reject_symlinks(target)
             if target.exists():
-                if _read_regular(target, 16_000) != record.model_dump_json(indent=2).encode():
+                if _read_regular(target, _MAX_MODEL_CALL_BYTES) != payload:
                     raise ConsoleOperationConflict("model call diagnostic changed")
                 return
             if len(tuple(directory.glob("*.json"))) >= 2048:
                 raise ConsoleOperationConflict("model call diagnostic limit reached")
-            _publish_json(target, record.model_dump_json(indent=2))
+            _publish_json(target, payload)
 
     def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]:
         with self._locked(shared=True):
@@ -267,7 +275,9 @@ class FileConsoleOperationStore:
             calls = []
             for path in paths:
                 _reject_symlinks(path)
-                record = ConsoleModelCall.model_validate_json(_read_regular(path, 16_000))
+                record = ConsoleModelCall.model_validate_json(
+                    _read_regular(path, _MAX_MODEL_CALL_BYTES)
+                )
                 if record.operation_id != operation_id or path.stem != record.record_sha256:
                     raise ConsoleOperationConflict("model call diagnostic identity mismatch")
                 calls.append(record.call)
@@ -427,7 +437,9 @@ class FileConsoleOperationStore:
         previous: ConsoleOperation | None = None
         for path in sorted(directory.glob("*.json")):
             _reject_symlinks(path)
-            item = ConsoleOperation.model_validate_json(_read_regular(path, 256_000))
+            item = ConsoleOperation.model_validate_json(
+                _read_regular(path, MAX_CONSOLE_OPERATION_BYTES)
+            )
             item.validate_integrity()
             if path.name != f"{item.sequence:06d}.json" or item.operation_id != operation_id:
                 raise ConsoleOperationConflict("console operation identity mismatch")
@@ -437,6 +449,9 @@ class FileConsoleOperationStore:
 
     def _append(self, operation: ConsoleOperation, *, expected: str | None) -> None:
         operation.validate_integrity()
+        payload = _bounded_json_bytes(
+            operation.model_dump_json(indent=2), MAX_CONSOLE_OPERATION_BYTES
+        )
         current = self._current(operation.operation_id)
         if (current.operation_sha256 if current else None) != expected:
             raise ConsoleOperationConflict("console operation changed")
@@ -444,14 +459,21 @@ class FileConsoleOperationStore:
         directory = self.root / operation.operation_id
         directory.mkdir(parents=True, exist_ok=True)
         target = directory / f"{operation.sequence:06d}.json"
-        _publish_json(target, operation.model_dump_json(indent=2))
+        _publish_json(target, payload)
 
 
-def _publish_json(target: Path, content: str) -> None:
+def _bounded_json_bytes(content: str, maximum_bytes: int) -> bytes:
+    payload = content.encode("utf-8")
+    if len(payload) > maximum_bytes:
+        raise ConsoleOperationConflict("console record exceeds byte budget")
+    return payload
+
+
+def _publish_json(target: Path, content: bytes) -> None:
     descriptor, temporary_name = tempfile.mkstemp(prefix=".operation-", dir=target.parent)
     temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        with os.fdopen(descriptor, "wb") as stream:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
@@ -517,6 +539,7 @@ def _reject_symlinks(path: Path) -> None:
 
 
 __all__ = [
+    "MAX_CONSOLE_OPERATION_BYTES",
     "ConsoleOperationConflict",
     "ConsoleOperationError",
     "ConsoleOperationNotFound",

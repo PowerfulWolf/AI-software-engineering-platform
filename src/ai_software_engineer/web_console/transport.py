@@ -55,7 +55,7 @@ from .lifecycle import (
     ConfigurationApplyView,
     ConfigurationLifecycle,
 )
-from .models import ConsoleAction, ConsoleIntent, ConsoleOperation, IdempotencyKey
+from .models import ConsoleAction, ConsoleIntent, ConsoleOperation, IdempotencyKey, OperationId
 from .service_lifecycle import (
     ConsoleShutdownCoordinator,
     OwnedProcessShutdownPort,
@@ -300,7 +300,14 @@ def create_console_app(
 
     @app.get("/api/v1/operations")
     async def operations() -> Response:
-        values = await run_in_threadpool(console.list_operations)
+        try:
+            values = await run_in_threadpool(console.list_operations)
+        except (ConsoleOperationConflict, ValidationError, OSError, ValueError):
+            return _error(
+                503,
+                "OPERATION_STATE_INVALID",
+                "平台暂时无法读取并核验操作记录, 交付操作暂不可用。原需求和已保存进度保留。",
+            )
         return JSONResponse([value.to_wire() for value in values])
 
     @app.get("/api/v1/console")
@@ -946,9 +953,19 @@ def create_console_app(
     @app.get("/api/v1/operations/{operation_id}")
     async def operation(operation_id: str) -> Response:
         try:
-            value = await run_in_threadpool(console.get, operation_id)
-        except (ConsoleOperationNotFound, ValidationError):
+            TypeAdapter(OperationId).validate_python(operation_id)
+        except ValidationError:
             return _error(404, "NOT_FOUND", "Operation not found.")
+        try:
+            value = await run_in_threadpool(console.get, operation_id)
+        except ConsoleOperationNotFound:
+            return _error(404, "NOT_FOUND", "Operation not found.")
+        except (ConsoleOperationConflict, ValidationError, OSError, ValueError):
+            return _error(
+                503,
+                "OPERATION_STATE_INVALID",
+                "平台暂时无法读取并核验操作记录, 交付操作暂不可用。原需求和已保存进度保留。",
+            )
         return JSONResponse(value.to_wire())
 
     @app.post("/api/v1/operations", status_code=202)

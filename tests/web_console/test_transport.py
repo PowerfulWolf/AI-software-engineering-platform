@@ -42,8 +42,9 @@ from ai_software_engineer.web_console.models import (
     ConsoleCommandResult,
 )
 from ai_software_engineer.web_console.shutdown import ShutdownResult, ShutdownState
-from ai_software_engineer.web_console.store import ConsoleOperationStore
+from ai_software_engineer.web_console.store import ConsoleOperationConflict, ConsoleOperationStore
 from ai_software_engineer.web_console.transport import _screenshot_body
+from tests.manager.test_execution_baseline import setup as baseline_setup
 from tests.web_console.test_core import _create_intent, _Executor
 
 
@@ -462,6 +463,94 @@ def test_http_internal_record_validation_is_not_reported_as_invalid_browser_inpu
     assert "平台" in rejected.json()["error"]["message"]
     assert "PRIVATE_INTERNAL_RECORD" not in rejected.text
     assert console.list_operations() == ()
+
+
+@pytest.mark.parametrize("failure", ["conflict", "validation", "io", "budget"])
+@pytest.mark.parametrize("detail", [False, True])
+def test_operation_read_failure_returns_safe_unavailable_without_partial_records(
+    failure: str, detail: bool
+) -> None:
+    class UnreadableConsole(_Console):
+        def _reject_read(self) -> None:
+            if failure == "conflict":
+                raise ConsoleOperationConflict("PRIVATE_RECORD_PATH hash chain broken")
+            if failure == "validation":
+                TypeAdapter(int).validate_python("PRIVATE_RECORD_INPUT")
+            if failure == "io":
+                raise OSError("PRIVATE_RECORD_PATH read denied")
+            raise ValueError("PRIVATE_RECORD_INPUT exceeds byte budget")
+
+        def list_operations(self) -> tuple[ConsoleOperation, ...]:
+            self._reject_read()
+            return ()
+
+        def get(self, operation_id: str) -> ConsoleOperation:
+            self._reject_read()
+            return super().get(operation_id)
+
+    app = create_console_app(UnreadableConsole(), _Reader(), team_id="team_test", port=8765)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        endpoint = "/api/v1/operations" + ("/operation_" + "a" * 32 if detail else "")
+        response = client.get(endpoint)
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "OPERATION_STATE_INVALID"
+        assert "操作记录" in response.json()["error"]["message"]
+        assert "PRIVATE_RECORD" not in response.text
+        assert "Traceback" not in response.text
+        assert response.headers["cache-control"] == "no-store"
+        metadata = client.get("/api/v1/console")
+        assert metadata.status_code == 200
+        assert metadata.json()["delivery_ready"] is True
+
+
+def test_http_reads_complete_large_baseline_operation_after_reopening_store(tmp_path: Path) -> None:
+    fixture = baseline_setup(tmp_path)
+    (fixture.worktree.path / "src/app.py").write_text(
+        '# "\\quoted retained draft"\n' * 18_000, encoding="utf-8"
+    )
+    plan = fixture.service.propose(fixture.target)
+    result = ConsoleCommandResult(
+        project_id="project_test",
+        delivery_id="delivery_multi_" + "a" * 40,
+        checkpoint_sha256="2" * 64,
+        stage="DELIVERING",
+        next_action="请查看已保存的完整方案并确认后继续。",
+        execution_baseline_plan=plan,
+    )
+    root = tmp_path / "console-operations"
+    store = FileConsoleOperationStore(root, team_id="team_test")
+    at = datetime(2026, 10, 9, tzinfo=UTC)
+    queued = store.submit(
+        intent=_create_intent(tmp_path), idempotency_key="large-bound-plan", requested_at=at
+    )
+    running = store.claim_next(at=at)
+    assert running is not None
+    completed = store.succeed(
+        queued.operation_id, expected=running.operation_sha256, result=result, at=at
+    )
+    record = root / queued.operation_id / "000003.json"
+    before = record.read_bytes()
+    assert len(before) > 2_000_000
+    reopened = FileConsoleOperationStore(root, team_id="team_test")
+    app = create_console_app(_Console(reopened), _Reader(), team_id="team_test", port=8765)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        listed = client.get("/api/v1/operations")
+        detail = client.get(f"/api/v1/operations/{queued.operation_id}")
+        assert listed.status_code == detail.status_code == 200
+        assert listed.json() == [completed.to_wire()]
+        assert detail.json() == completed.to_wire()
+        restored = ConsoleOperation.model_validate(detail.json())
+        restored.validate_integrity()
+        assert restored.result is not None
+        assert restored.result.execution_baseline_plan == plan
+    assert record.read_bytes() == before
+
+
+@pytest.mark.parametrize("identity", ["unknown", "operation_" + "f" * 32])
+def test_operation_missing_or_invalid_identity_still_returns_not_found(identity: str) -> None:
+    app = create_console_app(_Console(), _Reader(), team_id="team_test", port=8765)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        assert client.get("/api/v1/operations/" + identity).status_code == 404
 
 
 def test_http_handle_wait_still_rejects_input_authority_and_localizes_failure() -> None:
