@@ -64,7 +64,9 @@ class DeliveryFailureFacts(DomainModel):
     budget_available: StrictBool
     retry_authorized: StrictBool = False
     evidence_ids: tuple[NonEmptyStr, ...] = ()
-    execution_baseline_sha256: DispositionSha256 | None = None
+    execution_baseline_sha256: DispositionSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_baseline_pause(self) -> Self:

@@ -1226,6 +1226,14 @@ approval or a verdict. Exact pending approval UI takes precedence over Manager w
   runtime into setup mode, but unavailable Operations still disable delivery commands. Every lightweight
   refresh reads system facts even if `/api/v1/team` fails; Settings/Status must also render when there
   has never been a successful Team snapshot. Missing Team data remains explicitly unavailable.
+  Validated Team facts publish without waiting for Console/Operations; the shared serial refresh
+  retains ownership of unfinished reads until their bounded deadline. An Operation-list outage
+  retains the last complete validated history with explicit stale wording, but revokes current
+  action authority: `activeOperation` returns no active command, `latestApproval` returns no
+  current approval, and baseline proposal lookup returns no current plan. Historical investigation
+  and handling text may remain available for reading/copying; their unavailable control notice
+  takes priority and every submission rechecks `canControlCurrentTeam`. A cached history cannot
+  authorize continuation or revive a disconnected approval callback after reconnection.
 - `refreshSettingsSnapshot` updates saved/process facts without replacing the editable config or
   write-only runtime-variable drafts. Expiring a Settings notice must not re-render another page's
   Project/Requirement form or confirmation dialog. When delivery facts become unavailable, update

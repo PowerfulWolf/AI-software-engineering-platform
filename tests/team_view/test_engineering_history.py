@@ -347,6 +347,62 @@ def test_handling_history_refuses_a_valid_report_stored_under_another_key(tmp_pa
     assert before == _bytes(sidecar)
 
 
+def test_legacy_handling_store_key_survives_absent_baseline_extension(tmp_path: Path) -> None:
+    task = make_task()
+    proof = _proof(task)
+    handling = _handling(proof)
+    # Reproduce the published pre-baseline-extension identity, including the
+    # original nullable proof fields. Only the newly added absent field is absent.
+    facts = proof.model_dump(
+        mode="json", exclude={"proof_sha256", "inspected_at", "prerequisite_receipt_sha256"}
+    )
+    facts["disposition"]["facts"].pop("execution_baseline_sha256", None)
+    legacy_key = digest(
+        {
+            "binding": {
+                "work_item_id": proof.work_item_id,
+                "expected_disposition_sha256": proof.disposition_sha256,
+                "expected_task_intent_sha256": proof.task_intent_sha256,
+                "expected_source_revision": proof.source_revision,
+                "expected_checkpoint_sequence": proof.checkpoint_sequence,
+            },
+            "facts": facts,
+            "manual_resolution_allowed": handling.manual_resolution_allowed,
+            "collection_failed": handling.collection_failed,
+        }
+    )
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof)
+    records = KnowledgeRecordStore(sidecar / "state" / "delivery-waits")
+    records.put("wait-handling-proofs", legacy_key, proof)
+    records.put("wait-handlings", legacy_key, handling)
+    before = _bytes(sidecar)
+
+    history = engineering_history(sidecar, task, _scope(task), "delivery_history")
+
+    assert handling.record_key == legacy_key
+    assert len(history) == 2
+    entry = next(item for item in history if item.source_sha256 == handling.handling_sha256)
+    assert entry.source_uri == (records.root / records._name("wait-handlings", legacy_key)).as_uri()
+    assert before == _bytes(sidecar)
+
+
+def test_handling_history_still_requires_its_independent_original_proof(tmp_path: Path) -> None:
+    task = make_task()
+    proof = _proof(task)
+    handling = _handling(proof)
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, handling=handling)
+    records = KnowledgeRecordStore(sidecar / "state" / "delivery-waits")
+    (records.root / records._name("wait-investigations", proof.proof_sha256)).unlink()
+    before = _bytes(sidecar)
+
+    with pytest.raises(KnowledgeError, match="RECORD_NOT_FOUND"):
+        engineering_history(sidecar, task, _scope(task), "delivery_history")
+
+    assert before == _bytes(sidecar)
+
+
 def test_handling_redaction_keeps_sealed_report_and_hash_unchanged(tmp_path: Path) -> None:
     task = make_task()
     proof = _proof(task)

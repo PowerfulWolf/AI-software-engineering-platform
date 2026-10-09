@@ -1,0 +1,30 @@
+{
+  "id": "console-read-reliability-20261009",
+  "title": "修复控制台历史读取失败、重复校验和刷新耦合",
+  "status": "completed",
+  "phase": "done",
+  "owner": "codex",
+  "created_at": "2026-10-09",
+  "baseline": "e823e29",
+  "allowed_paths": [
+    "src/ai_software_engineer/team_view/",
+    "src/ai_software_engineer/multi_directory/retirement.py",
+    "src/ai_software_engineer/manager/delivery_wait.py",
+    "src/ai_software_engineer/domain/delivery_resolution.py",
+    "src/ai_software_engineer/domain/delivery_disposition.py",
+    "tests/domain/test_delivery_disposition.py",
+    "schemas/delivery-failure-facts.schema.json",
+    "tests/team_view/",
+    "tests/manager/test_delivery_wait.py",
+    "tests/manager/test_requirement_retirement.py",
+    "tests/manager/test_joint_journal_read_reuse.py",
+    ".trellis/spec/core/live-team-view.md",
+    ".trellis/spec/core/incremental-polling.md",
+    ".trellis/spec/core/read-memory-lifecycle.md",
+    ".trellis/spec/core/web-console.md",
+    ".trellis/spec/guides/recovery-thinking.md",
+    "docs/user/team-console.md",
+    ".trellis/tasks/10-09-console-read-reliability/"
+  ],
+  "verification": "verification.md"
+}

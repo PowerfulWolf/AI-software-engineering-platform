@@ -5,6 +5,44 @@ Long-lived read lifetime and native validation-error retention follow
 worker through serialization; cancellation does not prove that read stopped. Complete verified
 history remains available and must release after a finished read.
 
+## 历史处理报告的嵌套序列化兼容（2026-10-09）
+
+Scope：扩展 `DeliveryFailureFacts`、工程等待证明或内容寻址的报告身份时适用。
+签名：`DeliveryFailureFacts.model_dump(mode="json")`、
+`delivery_wait_handling_record_key(command, proof, *, manual_resolution_allowed,
+collection_failed=False) -> str`、`engineering_history(...) -> tuple[TimelineEntry, ...]`。
+
+- 新增 `execution_baseline_sha256` 使用 `Field(default=None, exclude_if=lambda value:
+  value is None)`；没有基线引用时，从全部嵌套 dump 中保持 absent，不只从 `to_wire()` 排除。
+  真实非空 SHA 仍进入完整事实、暂停证明和内容摘要。
+- 处理报告 identity 的旧 canonical proof 包含原有的 nullable 字段。不能把算法整体改为
+  `exclude_none=True`、接受任意历史文件名、跳过报告或用内嵌调查替代缺失的独立证明。
+  immutable key、digest、独立 proof、Task intent、原 source 和工程范围继续精确校验。
+- `schemas/delivery-failure-facts.schema.json` 与当前模型保持精确一致；其他嵌入该模型的契约
+  同样要检查。序列化兼容与 JSON Schema 接受 optional 字段是两个验证点。
+
+| 输入 | 结果 |
+| --- | --- |
+| 升级前报告/独立调查/frozen proof及旧 key 完整 | 完整只读展示，源 URI/hash 不变；HANDLE 重用原报告 |
+| 新的非空基线 SHA | 嵌套 dump 保留 SHA，事实和身份摘要随之变化 |
+| 任意改键、坏摘要、独立 proof 缺失/不同或 scope 漂移 | 继续拒绝，不提供恢复权限，不写存量事实 |
+
+Good：旧报告可精确重算其封存文件名；Base：无旧报告与新暂停事实正常投影；Bad：只测
+`to_wire()` 的 absent 字段，却未测真实 identity 使用的嵌套 `model_dump()`。
+Wrong：新增 `optional_sha: str | None = None` 后假设全部旧 hash 不变。
+Correct：新增字段显式排除 absent 默认，并回放原报告 key/读取/HANDLE 幂等完整路径。
+
+增量测试：`tests/domain/test_delivery_disposition.py`、
+`tests/team_view/test_engineering_history.py::test_legacy_handling_store_key_survives_absent_baseline_extension`、
+`tests/manager/test_delivery_wait.py::test_upgrade_reuses_a_handling_sealed_before_baseline_extension`。
+必须证明原文件 bytes 不变、旧 source URI 正确、没有新增 handling 或消费队列；已有改键/坏证明
+与工程权限反例继续通过。
+
+存量数据处置：真实 K1 的 `73f432c90582…`、`5089ac77a6a3…` 两份历史报告与其独立调查均完整，
+不是事实丢失。恢复正确嵌套形态后可重算原合法 key，无需 SQL/文件迁移、重命名或补证据。
+用户受控加载修复服务、刷新原项目后即可读回；交付审批仍由用户决定。回滚代码不会删除任何事实，
+但旧错误版本会再次无法读取这些报告。
+
 ## 面向产品负责人的执行状态与工程处理（2026-10-04）
 
 ### Scope / Signatures

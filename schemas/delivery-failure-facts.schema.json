@@ -50,7 +50,8 @@
         "EXECUTION_UNCERTAIN",
         "ENVIRONMENT_UNAVAILABLE",
         "ENGINEERING_AUTHORIZATION",
-        "SOURCE_PREPARATION_DRIFT"
+        "SOURCE_PREPARATION_DRIFT",
+        "EXECUTION_BASELINE_PAUSED"
       ],
       "title": "Classification",
       "type": "string"
@@ -87,6 +88,19 @@
       },
       "title": "Evidence Ids",
       "type": "array"
+    },
+    "execution_baseline_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Execution Baseline Sha256"
     }
   },
   "required": [

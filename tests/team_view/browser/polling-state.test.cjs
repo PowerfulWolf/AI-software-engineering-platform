@@ -2,6 +2,55 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { ui, operation } = require("./fixture.cjs");
 
+test("a slow independent Operations read cannot hold updated Requirement text or its preserved document", async t => {
+  const h = await ui(t);
+  const request = h.team.requests[0];
+  request.documents = [{name: "Saved document", source_uri: "artifact://saved",
+    sha256: "d".repeat(64), content: "Retained evidence body"}];
+  await h.tick();
+  await h.requests();
+  const document = h.page.locator('details[data-key="artifact://saved"]');
+  await document.locator(":scope > summary").click();
+  await document.evaluate(node => {window.savedReadDocument = node;});
+  let release, started;
+  const held = new Promise(resolve => {release = resolve;});
+  const reading = new Promise(resolve => {started = resolve;});
+  await h.page.route("**/api/v1/operations", async route => {
+    started();
+    await held;
+    return route.fulfill({json: []});
+  });
+  t.after(() => release());
+  request.title = "New Requirement text before history finishes";
+  const polling = h.tick();
+  await reading;
+  await h.page.locator(".request-title-row").getByText(request.title, {exact: true}).waitFor();
+  assert.equal(await h.page.evaluate(() => refreshing), true);
+  assert.equal(await document.evaluate(node => node === window.savedReadDocument && node.open), true);
+  release();
+  await polling;
+  assert.equal(await h.page.evaluate(() => refreshing), false);
+});
+
+test("a transient Operations outage keeps all history visible and disables stale execution authority", async t => {
+  const records = Array.from({length: 12}, (_, index) => operation(index === 11 ? "RUNNING" : "SUCCEEDED",
+    {operation_id: "operation_saved_" + index, updated_at: `2026-10-09T00:${String(index).padStart(2, "0")}:00Z`}));
+  const h = await ui(t, {operations: records});
+  await h.requests();
+  await h.close();
+  const history = h.page.locator('#detail details[data-key="operation-history:project_fixture/request_fixture"]');
+  await history.locator(":scope > summary").click();
+  assert.equal(await history.locator(".execution-history-entry").count(), records.length);
+  await h.page.route("**/api/v1/operations", route => route.fulfill({status: 503,
+    json: {error: {message: "fixture operation read unavailable"}}}));
+  await h.tick();
+  assert.equal(await history.locator(".execution-history-entry").count(), records.length);
+  assert.match(await history.innerText(), /上次成功读取的完整历史，不能代表当前执行状态/);
+  assert.equal(await h.page.evaluate(() => activeOperation("request_fixture")), undefined);
+  assert.equal(await h.page.evaluate(() => canControlCurrentTeam()), false);
+  assert.match(await h.page.locator("#connection").innerText(), /操作记录读取失败/);
+});
+
 test("unrelated polling preserves Settings inputs, focus and an open help popover", async t => {
   const h = await ui(t);
   await h.page.locator("#nav-settings").click();

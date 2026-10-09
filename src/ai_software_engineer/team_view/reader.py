@@ -32,7 +32,7 @@ from ai_software_engineer.domain.enums import (
 from ai_software_engineer.domain.model import DomainModel, JsonValue
 from ai_software_engineer.domain.task import Task, task_matches_dispatch
 from ai_software_engineer.domain.workforce import AgentProfile
-from ai_software_engineer.evaluation import FileEvaluationEventStore
+from ai_software_engineer.evaluation import EvaluationEvent, FileEvaluationEventStore
 from ai_software_engineer.knowledge.administration import find_gap_records
 from ai_software_engineer.knowledge.gaps import GapRoute, KnowledgeGap, KnowledgeGapRouting
 from ai_software_engineer.knowledge.models import digest as knowledge_digest
@@ -56,7 +56,10 @@ from ai_software_engineer.manager.mysql_dispatch_authority import _decode_alloca
 from ai_software_engineer.multi_directory.budget import DesignRetryPolicy, stage_budget
 from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage, digest
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
-from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
+from ai_software_engineer.multi_directory.retirement import (
+    RequirementCheckpointReader,
+    RequirementRetirementStore,
+)
 from ai_software_engineer.multi_directory.scope import git_read
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.orchestration.continuation_models import (
@@ -173,6 +176,29 @@ class _NativeRequirementOwner:
 
 
 @dataclass(slots=True)
+class _JointHistorySnapshot:
+    """Capture each complete verified prefix once during one Team read.
+
+    Retirement validation, ownership and display counts consume the same prefix.
+    The cache is private to the read call; the next snapshot opens a fresh Journal
+    and checks every byte, path and predecessor again. Callers only inspect these
+    captured models, so reusing them avoids repeated full-history deep copies.
+    """
+
+    _journal: JointJournal
+    _histories: dict[str, tuple[JointCheckpoint, ...]] = field(default_factory=dict)
+
+    def history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]:
+        if delivery_id not in self._histories:
+            self._histories[delivery_id] = self._journal.history(delivery_id)
+        return self._histories[delivery_id]
+
+    def current(self, delivery_id: str) -> JointCheckpoint | None:
+        history = self.history(delivery_id)
+        return history[-1] if history else None
+
+
+@dataclass(slots=True)
 class _ModelRouteAttemptCache:
     """Cache immutable route facts for one Team snapshot.
 
@@ -226,6 +252,66 @@ class _CandidateBranchCache:
         return self._by_identity[identity]
 
 
+@dataclass(slots=True)
+class _EvaluationEventCache:
+    """Validate a sidecar's complete evaluation prefix once in one snapshot."""
+
+    _by_root: dict[Path, tuple[EvaluationEvent, ...]] = field(default_factory=dict)
+
+    def events(self, root: Path) -> tuple[EvaluationEvent, ...]:
+        if root not in self._by_root:
+            paths = _files(root, "evalevt_*.json")
+            store = FileEvaluationEventStore(root, read_only=True)
+            self._by_root[root] = tuple(store.get(path.stem) for path in paths)
+        return self._by_root[root]
+
+
+@dataclass(slots=True)
+class _TaskReadSnapshot:
+    """Reuse exact native Task projections inside one read-only SQL transaction.
+
+    Verification reservations may reference a Task already projected in delivery
+    history. A result is reusable only with the same checkpoint, intake, Team,
+    sidecar, complete presentation base and optional successor dispatch. The SQL
+    cursor and finite filesystem ledgers belong to this one snapshot.
+    """
+
+    _cursor: DictCursor
+    _route_attempts: _ModelRouteAttemptCache
+    _branches: _CandidateBranchCache
+    _evaluations: _EvaluationEventCache = field(default_factory=_EvaluationEventCache)
+    _views: dict[tuple[Path, str | None, str, str, str, str | None], TaskView] = field(
+        default_factory=dict
+    )
+
+    def read(
+        self,
+        native: _Native,
+        base: TaskView,
+        *,
+        dispatch_override: DeliveryAllocation | None = None,
+    ) -> TaskView:
+        identity = (
+            native.sidecar,
+            native.team_id,
+            native.checkpoint.checkpoint_sha256,
+            native.intake.intake_sha256,
+            knowledge_digest(base.to_wire()),
+            dispatch_override.dispatch_sha256 if dispatch_override is not None else None,
+        )
+        if identity not in self._views:
+            self._views[identity] = _read_task_details(
+                native,
+                self._cursor,
+                base,
+                dispatch_override=dispatch_override,
+                route_attempts=self._route_attempts,
+                branch_cache=self._branches,
+                evaluation_events=self._evaluations,
+            )
+        return self._views[identity]
+
+
 class ProductionTeamReader:
     def __init__(self, config: ProductionConfig, environment: Mapping[str, str]) -> None:
         self.config = config
@@ -267,7 +353,7 @@ class ProductionTeamReader:
             for path in _files(workforce_workspace.directory("agents"), "*.json")
         )
         journal = (
-            JointJournal(selected.requirements_root, read_only=True)
+            _JointHistorySnapshot(JointJournal(selected.requirements_root, read_only=True))
             if selected is not None
             else None
         )
@@ -278,10 +364,11 @@ class ProductionTeamReader:
         )
         all_joints: list[JointCheckpoint] = []
         joint_histories: dict[str, tuple[JointCheckpoint, ...]] = {}
-        for path in _directories(
+        joint_directories = _directories(
             selected.requirements_root if selected is not None else Path("/nonexistent"),
             "delivery_multi_*",
-        ):
+        )
+        for path in joint_directories:
             assert journal is not None
             assert selected is not None
             history = journal.history(path.name)
@@ -540,23 +627,18 @@ class ProductionTeamReader:
                 with connection.cursor(DictCursor) as cursor:
                     cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                     cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                    task_reads = _TaskReadSnapshot(cursor, route_attempts, branch_cache)
                     for native, base in native_views:
-                        view = _read_task_details(
+                        view = task_reads.read(
                             native,
-                            cursor,
                             base,
-                            route_attempts=route_attempts,
-                            branch_cache=branch_cache,
                         )
                         successor = _active_successor_dispatch(native, cursor)
                         if successor is not None:
-                            view = _read_task_details(
+                            view = task_reads.read(
                                 native,
-                                cursor,
                                 base,
                                 dispatch_override=successor,
-                                route_attempts=route_attempts,
-                                branch_cache=branch_cache,
                             )
                         # A remediation/continuation may publish a successor Task while
                         # the native checkpoint still retains its predecessor history. Read
@@ -567,17 +649,15 @@ class ProductionTeamReader:
                             if task_id == view.task_id:
                                 continue
                             historical_views.append(
-                                _read_task_details(
+                                task_reads.read(
                                     source_native,
-                                    cursor,
                                     _task_base(
                                         source_native,
                                         base.project_id,
                                         base.request_id,
                                         base.scope,
+                                        branch_cache=branch_cache,
                                     ),
-                                    route_attempts=route_attempts,
-                                    branch_cache=branch_cache,
                                 )
                             )
                         view = _merge_task_history(view, tuple(historical_views))
@@ -592,6 +672,7 @@ class ProductionTeamReader:
                             retired_task_sources=retired_task_sources,
                             route_attempts=route_attempts,
                             branch_cache=branch_cache,
+                            task_reads=task_reads,
                         )
                     )
             finally:
@@ -651,11 +732,23 @@ class ProductionTeamReader:
                     requirement_count=len(
                         set(
                             path.name
-                            for path in _directories(item.requirements_root, "delivery_multi_*")
+                            for path in (
+                                joint_directories
+                                if selected is not None
+                                and item.manifest.project_id == selected.manifest.project_id
+                                else _directories(item.requirements_root, "delivery_multi_*")
+                            )
                         )
-                        - _retired_requirement_ids(
-                            item,
-                            JointJournal(item.requirements_root, read_only=True),
+                        - (
+                            retired
+                            if selected is not None
+                            and item.manifest.project_id == selected.manifest.project_id
+                            else _retired_requirement_ids(
+                                item,
+                                _JointHistorySnapshot(
+                                    JointJournal(item.requirements_root, read_only=True)
+                                ),
+                            )
                         )
                     ),
                 )
@@ -774,7 +867,9 @@ def _agent_views(
     return tuple(views)
 
 
-def _retired_requirement_ids(project: ProjectWorkspace, journal: JointJournal) -> frozenset[str]:
+def _retired_requirement_ids(
+    project: ProjectWorkspace, journal: RequirementCheckpointReader
+) -> frozenset[str]:
     return RequirementRetirementStore(
         project.requirements_root,
         team_id=project.team.manifest.team_id,
@@ -983,7 +1078,7 @@ def _merge_task_history(current: TaskView, historical: tuple[TaskView, ...]) -> 
 
 def _design_recovery_available(
     project: ProjectWorkspace | None,
-    journal: JointJournal | None,
+    journal: _JointHistorySnapshot | None,
     checkpoint: JointCheckpoint,
     *,
     policy: DesignRetryPolicy,
@@ -1546,17 +1641,21 @@ def _read_task(
     *,
     route_attempts: _ModelRouteAttemptCache | None = None,
     branch_cache: _CandidateBranchCache | None = None,
+    task_reads: _TaskReadSnapshot | None = None,
 ) -> TaskView:
+    base = _task_base(
+        native,
+        project_id,
+        request_id,
+        scope,
+        branch_cache=branch_cache,
+    )
+    if task_reads is not None:
+        return task_reads.read(native, base)
     return _read_task_details(
         native,
         cursor,
-        _task_base(
-            native,
-            project_id,
-            request_id,
-            scope,
-            branch_cache=branch_cache,
-        ),
+        base,
         route_attempts=route_attempts,
         branch_cache=branch_cache,
     )
@@ -1608,6 +1707,7 @@ def _read_verifications(
     retired_task_sources: frozenset[tuple[str, str]] = frozenset(),
     route_attempts: _ModelRouteAttemptCache | None = None,
     branch_cache: _CandidateBranchCache | None = None,
+    task_reads: _TaskReadSnapshot | None = None,
 ) -> tuple[TaskView, ...]:
     """Project verification reservations as first-class read-side work items."""
     cursor.execute(
@@ -1658,6 +1758,7 @@ def _read_verifications(
                 cursor,
                 route_attempts=route_attempts,
                 branch_cache=branch_cache,
+                task_reads=task_reads,
             )
             if source_view.task_id != reservation.source_task_id:
                 raise ValueError("verification reservation source Task is missing")
@@ -1845,6 +1946,7 @@ def _read_task_details(
     dispatch_override: DeliveryAllocation | None = None,
     route_attempts: _ModelRouteAttemptCache | None = None,
     branch_cache: _CandidateBranchCache | None = None,
+    evaluation_events: _EvaluationEventCache | None = None,
 ) -> TaskView:
     cp = native.checkpoint
     if cp.dispatch_commit_id is None and dispatch_override is None:
@@ -1910,13 +2012,13 @@ def _read_task_details(
         state_artifact_ids=tuple(identity for event in events for identity in event.artifact_ids),
     )
     artifacts = artifact_history.artifacts
-    evaluation_store = FileEvaluationEventStore(native.sidecar / "evaluations", read_only=True)
+    if evaluation_events is None:
+        evaluation_events = _EvaluationEventCache()
     # Read a finite published prefix; later events cannot silently change this SQL snapshot.
     evaluation = tuple(
         e
-        for path in _files(native.sidecar / "evaluations", "evalevt_*.json")
-        if (e := evaluation_store.get(path.stem)).task_id == task.id
-        and e.occurred_at <= task.updated_at
+        for e in evaluation_events.events(native.sidecar / "evaluations")
+        if e.task_id == task.id and e.occurred_at <= task.updated_at
     )
     projection = RunProjectionBuilder().build(
         ProjectionFacts(

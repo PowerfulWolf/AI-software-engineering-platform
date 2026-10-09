@@ -234,7 +234,9 @@ test("operations read failure explains missing recovery controls after the toast
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
   const wait = h.page.locator("#detail .engineering-wait-panel");
-  const unavailable = wait.locator(".engineering-controls-unavailable");
+  const unavailable = wait.locator(".engineering-controls-unavailable").first();
+  assert.equal(await wait.locator(".engineering-controls-unavailable").count(), 2,
+    "retained wait and rescue history each explain their unavailable current controls");
   assert.equal(await unavailable.isVisible(), true);
   assert.match(await unavailable.innerText(), /交付操作记录读取失败/);
   assert.match(await unavailable.innerText(), /不能确认当前恢复方案与审批状态/);
@@ -243,7 +245,9 @@ test("operations read failure explains missing recovery controls after the toast
   assert.doesNotMatch(await wait.locator(".engineering-wait-facts").innerText(), /你可以点击|点击“准备保留进度的恢复方案”/);
   assert.equal(await wait.getByRole("button", {name: "调查工程等待", exact: true}).count(), 0);
   assert.equal(await wait.getByRole("button", {name: "批准保留进度，保持暂停", exact: true}).count(), 0);
-  assert.equal(await card.count(), 0, "unreadable plans cannot become cached recovery authority");
+  assert.equal(await card.count(), 1, "the read-only rescue explanation remains available");
+  assert.equal(await card.getByText(/计划摘要 ·/).count(), 0,
+    "the retained history cannot become a current recovery plan");
   await h.page.evaluate(() => window.beforeReadFailureApproval.click());
   assert.equal(submitted.length, 1, "the retained control cannot submit while operation facts are unavailable");
   if (await h.page.locator("#notification").isVisible()) await h.close();
@@ -288,7 +292,8 @@ test("simultaneous team and operation read failure revokes recovery controls whi
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
   const wait = h.page.locator("#detail .engineering-wait-panel");
-  const unavailable = wait.locator(".engineering-controls-unavailable");
+  const unavailable = wait.locator(".engineering-controls-unavailable").first();
+  assert.equal(await wait.locator(".engineering-controls-unavailable").count(), 2);
   assert.equal(await unavailable.isVisible(), true);
   assert.match(await unavailable.innerText(), /交付操作记录读取失败/);
   assert.match(await unavailable.innerText(), /修复操作记录读取/);
@@ -333,7 +338,7 @@ test("failed Team refresh renders control guidance without replacing a business 
   assert.equal(await draft.evaluate(node => node === window.draftInput), true);
   assert.equal(await draft.inputValue(), "保留正在编辑的需求");
   assert.equal(await h.page.locator("#composer").isVisible(), true);
-  assert.match(await h.page.locator("#detail .engineering-controls-unavailable").innerText(), /交付操作记录读取失败/);
+  assert.match(await h.page.locator("#detail .engineering-controls-unavailable").first().innerText(), /交付操作记录读取失败/);
   await h.page.unroute("http://ui.test/api/v1/team?*", failRead);
   await h.page.unroute("http://ui.test/api/v1/operations", failRead);
   await h.tick();

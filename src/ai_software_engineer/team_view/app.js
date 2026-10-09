@@ -2,6 +2,7 @@
 let snapshot = null;
 let page = "team";
 let selected = null;
+let selectionIntentRevision = 0;
 let pausedTaskDetailKey = null;
 let refreshing = false;
 let refreshFlight = null;
@@ -448,12 +449,12 @@ const currentProjectId = () => snapshot?.selected_project_id || null;
 const projectSwitchPending = () =>
   requestedProjectId !== null && requestedProjectId !== currentProjectId();
 const activeOperation = (deliveryId, projectId = null) =>
-  operations.find(
+  operationsAvailable ? operations.find(
     (operation) =>
       operationTarget(operation) === deliveryId &&
       (!projectId || operation.intent.project_id === projectId) &&
       ["QUEUED", "RUNNING"].includes(operation.status),
-  );
+  ) : undefined;
 const latestOperation = (deliveryId) =>
   [...operations]
     .filter((operation) => operationTarget(operation) === deliveryId)
@@ -472,6 +473,7 @@ const isSourceRevisionDrift = (operation) =>
       operation.error_summary || "",
     ));
 const latestApproval = (deliveryId, checkpoint) => {
+  if (!operationsAvailable) return null;
   return (
     [...operations]
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
@@ -1219,7 +1221,7 @@ function engineeringLegacyRescuePreparation(request, task, step, rescue) {
   return preparation;
 }
 function engineeringBaselineProposalOperation(bound, purpose = "source_rebind") {
-  if (!bound) return null;
+  if (!operationsAvailable || !bound) return null;
   return [...operations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .find(item => item.intent?.action === "PROPOSE_EXECUTION_BASELINE" &&
       (item.intent.purpose || "source_rebind") === purpose && sameEngineeringWaitIntent(item.intent, bound) &&
@@ -4792,6 +4794,7 @@ function renderRequests(content) {
     const control = button(
       `${title} ${counts[key]}`,
       () => {
+        selectionIntentRevision++;
         requestFilter = key;
         selected = null;
         render();
@@ -4824,6 +4827,18 @@ async function adminFetch(url, options = {}) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error?.message || "管理操作失败。");
   return payload;
+}
+async function withReadDeadline(signal, read) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, {once: true});
+  const timeout = setTimeout(abort, 40000);
+  try { return await read(controller.signal); }
+  finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  }
 }
 function readConfigurationApplyPending() {
   try {
@@ -4903,7 +4918,7 @@ function reconnectToConfigurationPort(port) {
   setTimeout(reconnect, 2500);
   return true;
 }
-async function refreshConfigurationApply() {
+async function refreshConfigurationApply(signal) {
   if (!configurationApplyInFlight) return;
   if (
     configurationApplyStartedAt !== null &&
@@ -4913,7 +4928,7 @@ async function refreshConfigurationApply() {
     return;
   }
   try {
-    const state = await adminFetch("/api/v1/admin/settings/apply");
+    const state = await adminFetch("/api/v1/admin/settings/apply", {signal});
     if (
       configurationApplyPending &&
       state.request_id !== configurationApplyPending.request_id
@@ -4929,7 +4944,7 @@ async function refreshConfigurationApply() {
       return;
     }
     if (state.status === "SUCCEEDED") {
-      const saved = await adminFetch("/api/v1/admin/settings");
+      const saved = await adminFetch("/api/v1/admin/settings", {signal});
       settingsSnapshot = saved;
       if (saved.restart_required) {
         configurationApplyInFlight = false;
@@ -4938,9 +4953,9 @@ async function refreshConfigurationApply() {
         render();
         return;
       }
-      await refreshConsoleInfo();
+      await refreshConsoleInfo(signal);
       runtimeStatusSnapshot = null;
-      if (page === "status") await loadRuntimeStatus();
+      if (page === "status") await loadRuntimeStatus(signal);
       finishConfigurationApply({
         kind: "success",
         message: "配置已应用，Web Console 已使用保存的运行配置重新启动。",
@@ -4955,10 +4970,10 @@ async function refreshConfigurationApply() {
     }
   }
 }
-async function resumeConfigurationApply() {
+async function resumeConfigurationApply(signal) {
   if (!configurationApplyPending) {
     try {
-      const state = await adminFetch("/api/v1/admin/settings/apply");
+      const state = await adminFetch("/api/v1/admin/settings/apply", {signal});
       if (
         state.status === "PENDING" ||
         (state.status === "FAILED" && settingsSnapshot?.restart_required)
@@ -4979,7 +4994,7 @@ async function resumeConfigurationApply() {
       return;
     }
   }
-  if (configurationApplyPending) await refreshConfigurationApply();
+  if (configurationApplyPending) await refreshConfigurationApply(signal);
 }
 async function applySavedConfiguration() {
   if (configurationApplyInFlight) return;
@@ -5012,7 +5027,7 @@ async function applySavedConfiguration() {
 function knowledgeContext() {
   return JSON.stringify([knowledgeScope, knowledgeMode, currentProjectId()]);
 }
-async function loadKnowledge() {
+async function loadKnowledge(signal) {
   const context = knowledgeContext(), serial = ++knowledgeReadSerial;
   const mode = knowledgeMode, scope = knowledgeScope, projectId = currentProjectId();
   const isCurrent = () => serial === knowledgeReadSerial && context === knowledgeContext();
@@ -5028,10 +5043,10 @@ async function loadKnowledge() {
     let documents = [], index = null;
     if (owner) {
       const resource = mode === "specs" ? "/specs" : mode === "learning" ? "/learnings" : "/knowledge";
-      [documents, index] = await Promise.all([
-        adminFetch(owner + resource),
-        mode === "background" ? adminFetch(owner + "/knowledge/index") : null,
-      ]);
+      [documents, index] = await withReadDeadline(signal, readSignal => Promise.all([
+        adminFetch(owner + resource, {signal: readSignal}),
+        mode === "background" ? adminFetch(owner + "/knowledge/index", {signal: readSignal}) : null,
+      ]));
     }
     if (!isCurrent()) return false;
     if (mode === "specs") specDocuments = documents;
@@ -5043,7 +5058,9 @@ async function loadKnowledge() {
     if (!isCurrent()) return false;
     knowledgeDocuments = []; specDocuments = []; learningProposals = [];
     knowledgeIndexStatus = null;
-    knowledgeError = error instanceof Error ? error.message : "知识读取失败，请重试。";
+    knowledgeError = signal?.aborted || error?.name === "AbortError"
+      ? "知识读取等待超时或连接已中断，请刷新重试；已保存的知识与需求保持不变。"
+      : error instanceof Error ? error.message : "知识读取失败，请重试。";
     return true;
   } finally {
     if (isCurrent()) knowledgeLoading = false;
@@ -5053,10 +5070,10 @@ function settingsHaveDraft() {
   return settingsDraft && (JSON.stringify(settingsDraft) !== settingsDraftBaseline ||
     Object.keys(runtimeVariablesDraft).length > 0);
 }
-async function loadAdministration() {
-  if (!administrationLoadPromise) administrationLoadPromise = (async () => {
+async function loadAdministration(signal, {refreshConsole = true} = {}) {
+  if (!administrationLoadPromise) administrationLoadPromise = withReadDeadline(signal, async readSignal => {
     try {
-      const settings = await adminFetch("/api/v1/admin/settings");
+      const settings = await adminFetch("/api/v1/admin/settings", {signal: readSignal});
       settingsSnapshot = settings;
       if (!settingsHaveDraft()) {
         settingsDraft = structuredClone(settings.config);
@@ -5065,17 +5082,17 @@ async function loadAdministration() {
         settingsDraftBaseline = JSON.stringify(settingsDraft);
       }
       administrationAvailable = true;
-      await refreshConsoleInfo();
-      await resumeConfigurationApply();
+      if (refreshConsole) await refreshConsoleInfo(readSignal);
+      await resumeConfigurationApply(readSignal);
       let projects;
-      try { projects = await adminFetch("/api/v1/admin/projects"); }
+      try { projects = await adminFetch("/api/v1/admin/projects", {signal: readSignal}); }
       catch { projects = []; }
       administrationProjects = projects;
     } catch {
       administrationAvailable = false;
       // A read outage must never erase unsaved configuration or write-only secrets.
     }
-  })();
+  });
   const pending = administrationLoadPromise;
   try { await pending; }
   finally {
@@ -5083,16 +5100,18 @@ async function loadAdministration() {
   }
   // Share only Team administration facts. Knowledge reads belong to the current
   // scope, so an old Project request must never hold up a new Project navigation.
-  if (page === "knowledge" && administrationAvailable) await loadKnowledge();
+  if (page === "knowledge" && administrationAvailable) await loadKnowledge(signal);
 }
 async function loadRuntimeStatus(signal) {
   try {
-    runtimeStatusSnapshot = await adminFetch("/api/v1/admin/status", { signal });
+    runtimeStatusSnapshot = await withReadDeadline(signal,
+      readSignal => adminFetch("/api/v1/admin/status", {signal: readSignal}));
     runtimeStatusError = null;
   } catch (error) {
     runtimeStatusSnapshot = null;
     runtimeStatusError =
-      error instanceof Error ? error.message : "平台状态暂时无法读取。";
+      error?.name === "AbortError" ? "平台状态读取等待超时或连接已中断，请重新打开状态页或刷新重试。"
+        : error instanceof Error ? error.message : "平台状态暂时无法读取。";
   }
 }
 function administrationUnavailable(content) {
@@ -7696,6 +7715,7 @@ function renderStatus(content) {
   content.append(summary, grid, agentRoutes, routes);
 }
 function showDetail(kind, id) {
+  selectionIntentRevision++;
   pausedTaskDetailKey = null;
   selected = { kind, id };
   if (page === "requests") {
@@ -8251,6 +8271,8 @@ function requestOperationHistory(panel, request) {
   fold.dataset.key = "operation-history:" + request.project_id + "/" + request.id;
   fold.append(el("summary", `操作记录（完整历史） · ${records.length} 条`),
     el("p", `共 ${records.length} 条操作，全部保留。历史原因与当次下一步只描述那一轮；当前阻塞和建议操作以本页上方为准。命令完成不代表需求已交付。`, "muted"));
+  if (!operationsAvailable)
+    fold.append(el("p", "交付操作记录读取失败。以下保留上次成功读取的完整历史，不能代表当前执行状态；恢复读取后再核对和操作。", "error"));
   const list = viewGroup(el("ol", undefined, "execution-history"), "requirement-operation-history-list");
   for (const record of records) {
     const progress = currentOperationProgress(record, request);
@@ -8590,6 +8612,7 @@ function buildDetail(panel = document.getElementById("detail")) {
     button(
       selected.kind === "request" ? "关闭详情" : "关闭",
       () => {
+        selectionIntentRevision++;
         selected = null;
         render();
       },
@@ -8924,6 +8947,7 @@ function updateNavigation() {
 async function navigatePage(target) {
   if (!mayCloseComposer()) return;
   if (uiCommands.has(document.querySelector?.(".settings-form"))) return;
+  selectionIntentRevision++;
   administrationNotice = null;
   page = target;
   selected = null;
@@ -9004,7 +9028,7 @@ async function refreshOperations(signal) {
     operations = values;
     operationsAvailable = true;
   } catch {
-    operations = [];
+    // Retain the last verified history for reading; it is no longer current authority.
     operationsAvailable = false;
   }
 }
@@ -9021,6 +9045,7 @@ async function refreshSettingsSnapshot(signal) {
 async function refresh(projectId, includeRuntimeStatus = false) {
   if (projectId && projectId !== currentProjectId() && !mayCloseComposer()) return;
   if (projectId) {
+    selectionIntentRevision++;
     requestedProjectId = projectId;
     refreshQueued = projectId !== activeRefreshProject || requestedRuntimeStatus;
   }
@@ -9075,8 +9100,25 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
   const priorOperations = JSON.stringify(operations);
   const priorOperationsAvailable = operationsAvailable;
   const priorKnowledge = JSON.stringify(pollingKnowledgeFacts());
+  const selectedAtStart = selected, pageAtStart = page, selectionRevisionAtStart = selectionIntentRevision;
+  const selectEditedReplacement = (sourceSelection) => {
+    if (selectionIntentRevision !== selectionRevisionAtStart || page !== pageAtStart ||
+        sourceSelection?.kind !== "request" || !snapshot ||
+        requestById(sourceSelection.id) ||
+        (selected && (selected.kind !== "request" || selected.id !== sourceSelection.id))) return false;
+    const replacement = [...operations]
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+      .find(operation => operation.status === "SUCCEEDED" &&
+        operation.intent.action === "UPDATE_REQUIREMENT" &&
+        operation.intent.project_id === currentProjectId() &&
+        operation.intent.delivery_id === sourceSelection.id &&
+        operation.result?.delivery_id && requestById(operation.result.delivery_id));
+    if (!replacement) return false;
+    selected = {kind: "request", id: replacement.result.delivery_id};
+    return true;
+  };
   const refreshSystemViews = async () => {
-    if (configurationApplyInFlight) await refreshConfigurationApply();
+    if (configurationApplyInFlight) await refreshConfigurationApply(controller.signal);
     if (["settings", "status"].includes(page) && administrationAvailable)
       await refreshSettingsSnapshot(controller.signal);
     if (
@@ -9092,94 +9134,96 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
     priorOperationsAvailable !== operationsAvailable ||
     priorSettings !== JSON.stringify(settingsSnapshot) ||
     priorRuntimeStatus !== JSON.stringify(runtimeStatusSnapshot);
+  const renderCurrentFacts = (teamChanged = false) => {
+    const modalActive = hasOpenComposer();
+    if ((!modalActive || (["settings", "status"].includes(page) && systemViewsChanged())) &&
+        (teamChanged || priorOperations !== JSON.stringify(operations) ||
+          priorKnowledge !== JSON.stringify(pollingKnowledgeFacts()) || systemViewsChanged()))
+      render({preserveComposer: Boolean(modalActive && !settingsSaveResult), incremental: true});
+  };
+  let systemReadFinished = false;
   try {
     const url = target
       ? "/api/v1/team?project_id=" + encodeURIComponent(target)
       : "/api/v1/team";
-    const teamRead = fetch(url, {
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    const [teamResult, systemResult] = await Promise.allSettled([
-      teamRead,
-      (async () => {
+    const teamRead = (async () => {
+      const response = await fetch(url, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error("read failed");
+      const next = await response.json();
+      if (superseded()) return;
+      if (
+        next.schema_version !== "v0.2" ||
+        (target && next.selected_project_id !== target) ||
+        !Array.isArray(next.tasks) ||
+        !Array.isArray(next.agents) ||
+        !Array.isArray(next.requests)
+      )
+        throw new Error("invalid snapshot");
+      const changed =
+        !snapshot ||
+        JSON.stringify({ ...snapshot, as_of: null }) !==
+          JSON.stringify({ ...next, as_of: null });
+      const projectChanged = currentProjectId() !== next.selected_project_id;
+      const selectedBeforeRefresh = selected;
+      snapshot = next;
+      if (requestedProjectId === target) requestedProjectId = null;
+      if (
+        selectedBeforeRefresh?.kind === "request" &&
+        !requestById(selectedBeforeRefresh.id)
+      ) {
+        if (!selectEditedReplacement(selectedBeforeRefresh)) selected = null;
+      }
+      if (page === "knowledge") {
+        if (projectChanged) {
+          // Publish identity and its loading view together; a later navigation may
+          // arrive while Knowledge is still loading for this accepted snapshot.
+          knowledgeLoading = true;
+          render({ preserveComposer: hasOpenComposer() });
+        }
+        // The refresh deadline owns every knowledge read, including its body.
+        if (administrationAvailable) await loadKnowledge(controller.signal);
+        else await loadAdministration(controller.signal, {refreshConsole: false});
+      }
+      renderCurrentFacts(changed);
+      if (!superseded() && !systemReadFinished) {
+        status.className = "";
+        status.textContent = "团队记录已更新 · 正在读取交付操作记录…";
+      }
+    })();
+    const systemRead = (async () => {
+      try {
         await refreshOperations(controller.signal);
         syncDeliveryControls();
         if (priorOperationsAvailable !== operationsAvailable) renderOperationStatus();
         await refreshSystemViews();
-      })(),
-    ]);
+      } finally {
+        systemReadFinished = true;
+        renderCurrentFacts();
+      }
+    })();
+    const [teamResult, systemResult] = await Promise.allSettled([teamRead, systemRead]);
     if (systemResult.status === "rejected") throw systemResult.reason;
     if (teamResult.status === "rejected") throw teamResult.reason;
-    const response = teamResult.value;
-    if (!response.ok) throw new Error("read failed");
-    const next = await response.json();
-    if (superseded()) return;
-    if (
-      next.schema_version !== "v0.2" ||
-      (target && next.selected_project_id !== target) ||
-      !Array.isArray(next.tasks) ||
-      !Array.isArray(next.agents) ||
-      !Array.isArray(next.requests)
-    )
-      throw new Error("invalid snapshot");
-    const changed =
-      !snapshot ||
-      JSON.stringify({ ...snapshot, as_of: null }) !==
-        JSON.stringify({ ...next, as_of: null });
-    const projectChanged = currentProjectId() !== next.selected_project_id;
-    const selectedBeforeRefresh = selected;
-    snapshot = next;
-    if (requestedProjectId === target) requestedProjectId = null;
-    if (
-      selectedBeforeRefresh?.kind === "request" &&
-      !requestById(selectedBeforeRefresh.id)
-    ) {
-      const replacement = [...operations]
-        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-        .find(
-          (operation) =>
-            operation.status === "SUCCEEDED" &&
-            operation.intent.action === "UPDATE_REQUIREMENT" &&
-            operation.intent.delivery_id === selectedBeforeRefresh.id &&
-            operation.result?.delivery_id &&
-            requestById(operation.result.delivery_id),
-        );
-      selected = replacement
-        ? { kind: "request", id: replacement.result.delivery_id }
-        : null;
-    }
-    if (page === "knowledge") {
-      if (projectChanged) {
-        // Publish identity and its loading view together; a later navigation may
-        // arrive while Knowledge is still loading for this accepted snapshot.
-        knowledgeLoading = true;
-        render({ preserveComposer: hasOpenComposer() });
-      }
-      await loadAdministration();
-    }
-    const modalActive = hasOpenComposer();
-    if (
-      (!modalActive || (["settings", "status"].includes(page) && systemViewsChanged())) &&
-      (changed ||
-        priorOperations !== JSON.stringify(operations) ||
-        priorKnowledge !== JSON.stringify(pollingKnowledgeFacts()) ||
-        systemViewsChanged())
-    )
-      render({ preserveComposer: Boolean(modalActive && !settingsSaveResult), incremental: true });
+    // An edit result can arrive after Team publishes the replacement identity.
+    // Follow only the exact saved edit, without overwriting a later user selection.
+    if (!superseded() && selectEditedReplacement(selectedAtStart)) renderCurrentFacts(true);
     if (superseded()) {
       showRefreshProgress();
       return;
     }
-    status.className = "";
+    status.className = operationsAvailable && consoleAvailable === true ? "" : "error";
     status.textContent = consoleAvailable
       ? (consoleDeliveryReady
           ? "团队与交付控制台已连接"
           : "设置控制台已连接 · 交付运行时尚未就绪") +
         " · 最近读取 " +
         time(snapshot.as_of) +
-        " · 每 5 秒刷新"
-      : "只读团队记录已连接；交付控制台暂不可用。";
+        " · 每 5 秒刷新" + (operationsAvailable ? "" : " · 交付操作记录读取失败，保留上次历史；当前操作暂不可用")
+      : consoleAvailable === false ? "只读团队记录已连接；当前服务未提供交付控制接口。"
+        : "团队记录已更新；交付控制连接暂不可用，当前操作暂停。";
   } catch {
     if (superseded()) return;
     if (systemViewsChanged()) render({preserveComposer: hasOpenComposer(), incremental: true});

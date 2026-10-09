@@ -235,6 +235,41 @@ def test_handling_real_checkpoint_uses_frozen_policy_without_human_actor_and_rep
         DeliveryResolution.model_validate({**decision.to_wire(), "proof_sha256": "f" * 64})
 
 
+def test_upgrade_reuses_a_handling_sealed_before_baseline_extension(
+    native: Fixture, tmp_path: Path
+) -> None:
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    entry = service(native, queue, tmp_path)
+    command = HandleDeliveryWait.model_validate(queue.command().to_wire())
+    proof = entry.inspect(queue.command())
+    status, summary, user_action, recheck_when = entry._handling_presentation(proof)
+    handling = entry._handling_record(
+        proof, None, status, summary, user_action, recheck_when, at=NOW
+    )
+    legacy_facts = proof.model_dump(
+        mode="json", exclude={"proof_sha256", "inspected_at", "prerequisite_receipt_sha256"}
+    )
+    legacy_facts["disposition"]["facts"].pop("execution_baseline_sha256", None)
+    legacy_key = digest(
+        {
+            "binding": command.to_wire(),
+            "facts": legacy_facts,
+            "manual_resolution_allowed": handling.manual_resolution_allowed,
+            "collection_failed": handling.collection_failed,
+        }
+    )
+    entry.records.put("wait-handling-proofs", legacy_key, proof)
+    entry.records.put("wait-handlings", legacy_key, handling)
+    before = {p.name: p.read_bytes() for p in entry.records.root.glob("*.json")}
+    entry.clock = lambda: NOW + timedelta(seconds=5)
+
+    assert entry.handle(command) == handling
+    assert queue.consumed == []
+    assert entry.records.list("wait-handlings", DeliveryWaitHandling) == (handling,)
+    assert {p.name: p.read_bytes() for p in entry.records.root.glob("*.json")} == before
+
+
 def test_handling_reopens_sealed_decision_after_queue_consumption_before_report_publication(
     native: Fixture,
     tmp_path: Path,

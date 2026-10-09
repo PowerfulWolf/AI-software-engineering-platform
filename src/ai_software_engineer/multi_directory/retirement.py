@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
@@ -22,6 +22,12 @@ from ai_software_engineer.multi_directory.store import JointJournal
 
 RetirementReason = Literal["deleted", "replaced"]
 _MAX_RETIREMENT_BYTES = 256_000
+
+
+class RequirementCheckpointReader(Protocol):
+    """Read the latest checkpoint from a fully verified Requirement prefix."""
+
+    def current(self, delivery_id: str) -> JointCheckpoint | None: ...
 
 
 class RequirementRetirementError(RuntimeError):
@@ -127,7 +133,7 @@ class RequirementRetirementStore:
             raise RequirementRetirementError("Requirement retirement owner mismatch")
         return record
 
-    def retired_delivery_ids(self, journal: JointJournal) -> frozenset[str]:
+    def retired_delivery_ids(self, journal: RequirementCheckpointReader) -> frozenset[str]:
         record = self.retirement()
         for entry in record.entries:
             checkpoint = journal.current(entry.delivery_id)

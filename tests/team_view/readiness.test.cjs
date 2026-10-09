@@ -129,6 +129,7 @@ async function browser(options = {}) {
         if (request.method === "POST" && options.operationPost)
           return await options.operationPost;
         if (state.operationsFailure) throw new Error("Operations unavailable");
+        if (options.operationsRead) return options.operationsRead(request, response);
         return response([]);
       }
       if (url === "/api/v1/admin/settings") return response({ settings_contract_version: 2, config,
@@ -144,6 +145,7 @@ async function browser(options = {}) {
       }
       if (url === "/api/v1/admin/status") {
         if (state.statusFailure) throw new Error("Status offline");
+        if (options.statusRead) return options.statusRead(request, response);
         return response({ config_path: "/fixture/production.json", config_source: "saved",
           runtime_environment_path: "/fixture/runtime.env", restart_required: state.restart,
           delivery_runtime: state.statusRuntime, live_model_execution: false,
@@ -158,7 +160,7 @@ async function browser(options = {}) {
         return response([]);
       if (url === "/api/v1/admin/team/knowledge/index") return response(null);
       if (/^\/api\/v1\/admin\/projects\/[^/]+\/knowledge$/.test(url))
-        return options.knowledgeRead ? options.knowledgeRead(url, response) : response([]);
+        return options.knowledgeRead ? options.knowledgeRead(url, response, request) : response([]);
       if (/^\/api\/v1\/admin\/projects\/[^/]+\/knowledge\/index$/.test(url))
         return response(null);
       throw new Error("Unexpected request: " + url);
@@ -230,6 +232,128 @@ test("Project click during an in-flight poll is retained without another click o
   assert.equal(ui.requests.filter(({ url }) => url.endsWith("project_id=project_other")).length, 1);
   assert.equal(ui.get("refresh").disabled, false);
   assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), true);
+});
+
+test("validated Team facts publish while independent Operations are still pending", async () => {
+  const options = { ready: true, restart: false, project: true };
+  const ui = await browser(options);
+  const held = deferred();
+  options.operationsRead = async (_request, response) => {
+    await held.promise;
+    return response([]);
+  };
+  options.teamRead = async (_url, _request, team, response) =>
+    response({ ...team, team_name: "Updated team" });
+  const polling = ui.tick();
+  await settled();
+  assert.equal(vm.runInContext("snapshot.team_name", ui.context), "Updated team");
+  assert.equal(ui.get("team").textContent, "Updated team");
+  assert.equal(vm.runInContext("refreshing", ui.context), true,
+    "the serial refresh still owns the unfinished independent read");
+  held.resolve();
+  await polling;
+  assert.equal(vm.runInContext("refreshing", ui.context), false);
+});
+
+test("a late exact edit result cannot reopen detail after the user explicitly closes it", async () => {
+  const request = {id: "request_saved", title: "Original requirement", project_id: "project_fixture",
+    stage: "READY_FOR_DISCUSSION", checkpoint_sha256: "a".repeat(64), scopes: [], documents: [], dialogue: []};
+  const options = {ready: true, restart: false, project: true, requests: [request]};
+  const ui = await browser(options);
+  vm.runInContext('showDetail("request", "request_saved")', ui.context);
+  const teamHeld = deferred(), operationsHeld = deferred();
+  options.teamRead = async (_url, _request, team, response) => {
+    await teamHeld.promise;
+    return response({...team, requests: [{...request, id: "request_replacement", title: "Edited requirement"}]});
+  };
+  options.operationsRead = async (_request, response) => {
+    await operationsHeld.promise;
+    return response([{operation_id: "operation_edit", status: "SUCCEEDED", updated_at: "2026-10-09T00:00:00Z",
+      intent: {action: "UPDATE_REQUIREMENT", project_id: "project_fixture", delivery_id: request.id},
+      result: {delivery_id: "request_replacement"}}]);
+  };
+  const polling = ui.tick();
+  await settled();
+  const close = descendants(ui.get("detail")).find(node => node.tag === "button" && node.textContent === "关闭详情");
+  assert.ok(close);
+  close.events.click();
+  teamHeld.resolve();
+  await settled();
+  operationsHeld.resolve();
+  await polling;
+  assert.equal(vm.runInContext("selected", ui.context), null);
+  assert.equal(ui.get("detail").hidden, true);
+});
+
+test("Operations read failure preserves complete historical rows but revokes current authority", async () => {
+  const ui = await browser({ ready: true, restart: false, project: true });
+  const saved = { operation_id: "operation_saved", status: "RUNNING",
+    updated_at: "2026-10-09T00:00:00Z",
+    intent: { action: "CONTINUE_DELIVERY", project_id: "project_fixture", delivery_id: "request_saved" } };
+  ui.context.saved = saved;
+  vm.runInContext("operations = [saved]; operationsAvailable = true;", ui.context);
+  ui.state.operationsFailure = true;
+  await ui.tick();
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(operations)", ui.context)), [saved]);
+  assert.equal(vm.runInContext("operationsAvailable", ui.context), false);
+  assert.equal(vm.runInContext('activeOperation("request_saved")', ui.context), undefined);
+  assert.equal(vm.runInContext('latestApproval("request_saved", "checkpoint")', ui.context), null);
+  assert.equal(vm.runInContext('engineeringBaselineProposalOperation({})', ui.context), null);
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), false);
+  assert.match(text(ui.get("connection")), /操作记录.*读取失败/);
+});
+
+test("Knowledge reads obey the refresh deadline and release the serial lane after timeout", async () => {
+  const options = { ready: true, restart: false, project: true };
+  const ui = await browser(options);
+  await ui.navigate("knowledge");
+  vm.runInContext('knowledgeScope = "project";', ui.context);
+  let signal;
+  options.knowledgeRead = async (_url, _response, request) => {
+    signal = request.signal;
+    return new Promise((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(new Error("fixture read timeout")), { once: true });
+    });
+  };
+  const polling = ui.tick();
+  await settled();
+  assert.ok(signal instanceof AbortSignal, "the knowledge GET has an explicit read deadline");
+  await ui.runTimer(40000);
+  await polling;
+  assert.equal(signal.aborted, true);
+  assert.match(vm.runInContext("knowledgeError", ui.context), /知识读取等待超时或连接已中断/);
+  assert.equal(vm.runInContext("refreshing || refreshFlight !== null", ui.context), false);
+  assert.equal(ui.get("refresh").disabled, false);
+  options.knowledgeRead = undefined;
+  await ui.tick();
+  assert.equal(vm.runInContext("knowledgeError", ui.context), null);
+});
+
+for (const phase of ["headers", "body"]) test(`independent Status navigation has a read deadline and recovers after timeout: ${phase}`, async () => {
+  const options = {ready: true, restart: false, project: true};
+  const ui = await browser(options);
+  let signal;
+  options.statusRead = async (request) => {
+    signal = request.signal;
+    const pending = new Promise((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(Object.assign(new Error("fixture status timeout"),
+        {name: "AbortError"})), {once: true});
+    });
+    return phase === "body" ? {ok: true, json: () => pending} : pending;
+  };
+  const navigation = ui.navigate("status");
+  await settled();
+  assert.ok(signal instanceof AbortSignal, "the standalone Status GET has a bounded signal");
+  assert.equal(vm.runInContext("runtimeStatusLoading", ui.context), true);
+  await ui.runTimer(40000);
+  await navigation;
+  assert.equal(signal.aborted, true);
+  assert.equal(vm.runInContext("runtimeStatusLoading", ui.context), false);
+  assert.equal(vm.runInContext("runtimeStatusSnapshot", ui.context), null);
+  assert.match(ui.content(), /平台状态读取等待超时或连接已中断/);
+  options.statusRead = undefined;
+  await ui.navigate("status");
+  assert.match(ui.content(), /平台可以接收交付任务/);
 });
 
 async function projectBrowser() {

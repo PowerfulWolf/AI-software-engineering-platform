@@ -21,6 +21,35 @@ async function drain(h, pattern, release) {
   await h.page.evaluate(() => new Promise(resolve => setTimeout(resolve, 50)));
 }
 
+test("late Requirement edit facts preserve the user's explicit detail close", async t => {
+  const h = await ui(t);
+  await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  const teamStarted = deferred(), teamRelease = deferred(), operationsRelease = deferred();
+  await h.page.route("**/api/v1/team?*", async route => {
+    teamStarted.resolve();
+    await teamRelease.promise;
+    return route.fulfill({json: h.team});
+  });
+  await h.page.route("**/api/v1/operations", async route => {
+    await operationsRelease.promise;
+    return route.fulfill({json: [{operation_id: "operation_edit", status: "SUCCEEDED",
+      updated_at: "2026-10-09T00:00:00Z",
+      intent: {action: "UPDATE_REQUIREMENT", project_id: "project_fixture", delivery_id: "request_fixture"},
+      result: {delivery_id: "request_replacement"}}]});
+  });
+  t.after(() => {teamRelease.resolve(); operationsRelease.resolve();});
+  const polling = h.tick();
+  await teamStarted.promise;
+  await h.page.getByRole("button", {name: "关闭详情", exact: true}).click();
+  h.team.requests = [{...h.team.requests[0], id: "request_replacement", title: "Edited requirement"}];
+  teamRelease.resolve();
+  await h.page.waitForFunction(() => snapshot.requests[0].id === "request_replacement");
+  operationsRelease.resolve();
+  await polling;
+  assert.equal(await h.page.evaluate(() => selected), null);
+  assert.equal(await h.page.locator("#detail").isVisible(), false);
+});
+
 test("a late learning scan cannot publish into another Project", async t => {
   const h = await ui(t);
   h.team.projects.push({ id: "project_other", name: "Other project" });

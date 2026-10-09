@@ -111,6 +111,11 @@ the survey from approval and subsequent execution.
 - 超限读写都有界，历史摘要链与正文不截断。通用文档上限与完整 Operation 上限不是同一政策。
 - Operation不可读时，Console readiness和交付权限分开；需求内要持久说明门禁原因，
   关闭全局通知后仍有下一步。读成功后最新精确方案重新显示，不能保留旧勾选替代确认。
+- `RECORD_NOT_FOUND` 是否真缺事实，还是模型新增 absent 默认使旧内容寻址 key 漂移？
+  验证原文件/摘要与真实嵌套 canonical dump，不能凭异常名补造证明。新增字段的兼容测试
+  要回放旧 key、只读历史和处理幂等，不只比较 `to_wire()`。详见 live-team-view.md。
+- 页面很慢时先测成功读的完整历史 bytes、解码次数和独立请求依赖；单次 snapshot 复用
+  完整已校验 prefix，与跨轮询缓存或截断历史是不同方案。见 read-memory-lifecycle.md。
 
 ## 保留后的执行权必须持久暂停
 

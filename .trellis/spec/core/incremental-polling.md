@@ -1,5 +1,62 @@
 # Console incremental polling
 
+## Independent read publication and outage history (2026-10-09)
+
+```javascript
+refreshSnapshot(target, includeRuntimeStatus) // one serial owner, parallel Team/system reads
+withReadDeadline(signal, read)               // bounded GET lifecycle, inherited abort and cleanup
+loadKnowledge(signal)
+loadAdministration(signal, {refreshConsole = true} = {})
+loadRuntimeStatus(signal)                    // standalone Status navigation owns a deadline too
+```
+
+- Validate Team JSON and exact Project intent, then publish/render it without waiting for the
+  independent Console/Operations branch. Keep the owner/deadline until both branches settle;
+  periodic ticks remain coalesced. Each branch can update its own facts independently when the
+  other fails, retaining keyed DOM, drafts, reading pause and exact approval gates.
+- Team publication and a later UPDATE_REQUIREMENT result can arrive in either order. Resolve
+  only the exact successful edit from the same Project, matching the old Requirement identity
+  and a replacement present in the validated current Team. Recheck after Operations settles;
+  do not overwrite later user navigation or a different explicit selection. Save and match the
+  explicit selection-intent revision; detail open/close, page navigation, Requirement filter
+  and accepted explicit Project selection advance it. Automatic missing/default selection does
+  not. A nullable selection alone cannot distinguish a user close from a derived missing record.
+- Failed Operations reads keep the last complete validated array for history. Mark it stale in
+  the connection status and complete-history disclosure; `operationsAvailable=false` revokes
+  all commands. `activeOperation`, `latestApproval` and baseline proposal lookup cannot use it
+  as current execution, approval or plan authority. Existing investigation/handling descriptions
+  can still be copied for diagnosis, with the explicit unavailable-control guidance first.
+- Knowledge GETs and initialization GETs inherit the refresh abort or own a 40-second deadline;
+  release listeners/timers in finally. Thread the same signal into config-apply observation reads,
+  including JSON bodies. Abort is a browser observation failure, never proof an ASE operation
+  stopped. Mutation POSTs retain their existing behavior and are not given this read deadline.
+  Standalone Status navigation wraps its status GET/body in the same bounded lifecycle; timeout
+  clears its loading state, shows Chinese retry guidance, and a later navigation can read again.
+- An already initialized Knowledge poll reads only its current scoped documents/index; it does
+  not reload Settings and Project catalogs each five seconds. Initialization can recover missing
+  administration facts but does not duplicate the refresh owner's Console metadata read.
+
+| Scenario | Required behavior and regression |
+| --- | --- |
+| Team succeeds while Operations is held | New title appears immediately, existing document node remains open; owner still busy |
+| Temporary Operations outage | All 12 history rows remain, stale warning appears, current commands/approval/plan unavailable |
+| Knowledge GET hangs | Explicit signal aborts at the deadline, serial lane and refresh button release, next read recovers |
+| Standalone Status GET/header or body hangs | Own deadline aborts, navigation loading releases, later navigation succeeds |
+| Team replacement identity precedes edit Operation | Exact replacement becomes selected after result arrives; no lost detail |
+| User closes detail before delayed edit results | Preserve explicit closed state; late result cannot reopen it |
+| Late Project response / current approval changes | Existing latest-intent and disconnected-callback tests remain green |
+
+Coverage: focused additions in `tests/team_view/readiness.test.cjs` and
+`browser/polling-state.test.cjs`, plus existing async-boundaries, UI, engineering-wait and
+operation-capability contracts. No persistent facts, journal history or authorization change.
+Existing data: load the new frontend through a browser refresh after the service's frozen assets
+are updated. No migration or repeated demand is needed. Roll back assets and refresh to revert.
+
+Root cause: rendering was joined to an unrelated slower list, and transient read failure cleared
+the complete history. The replacement-selection assumption also depended on Operations arriving
+before Team. Test both independent completion orders and keep freshness separate from retained
+readable history; do not widen authority to compensate for a missing request.
+
 ## Scope and signatures
 
 Applies to the five-second Console read loop in `src/ai_software_engineer/team_view/app.js`.

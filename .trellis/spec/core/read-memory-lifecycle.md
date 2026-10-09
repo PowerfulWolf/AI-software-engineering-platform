@@ -102,3 +102,73 @@ The root cause was an implicit assumption that discarded native validation error
 GC-visible. Previous functional tests verified rejection correctness, not completed-caller
 lifetime. Prevent recurrence with lifetime tests at the real failing boundary and serial replay
 before attributing memory growth to concurrency. No generated spec/template mirror exists here.
+
+## Snapshot-local history reuse (2026-10-09)
+
+### Scope and signatures
+
+Apply when a Team read projects retired Requirements, historical native Tasks and independent
+verification reservations. A five-second poll must not re-read the same large history separately
+for retirement validation, presentation, ownership and Project counts.
+
+```python
+RequirementCheckpointReader.current(delivery_id: str) -> JointCheckpoint | None
+RequirementRetirementStore.retired_delivery_ids(reader: RequirementCheckpointReader) -> frozenset[str]
+_JointHistorySnapshot.history(delivery_id: str) -> tuple[JointCheckpoint, ...]
+_EvaluationEventCache.events(root: Path) -> tuple[EvaluationEvent, ...]
+_TaskReadSnapshot.read(native: _Native, base: TaskView,
+                       *, dispatch_override: DeliveryAllocation | None = None) -> TaskView
+```
+
+### Contracts
+
+- `ProductionTeamReader._snapshot` owns a fresh `_JointHistorySnapshot`. Its first read of each
+  Requirement uses the ordinary read-only `JointJournal.history` and validates every historical
+  byte, digest, path, filename, predecessor and schema. Retirement validation and ownership consume
+  that exact complete prefix; the selected Project count reuses its captured directory inventory
+  and validated retirement set. Other Project counts retain isolated ownership validation and
+  reuse any shared replacement history only within that Project's count read.
+- Reuse never weakens `JointJournal`'s public contract. Independent `current`/`history` calls still
+  re-read bytes and return private deep copies; a caller's nested dictionary edits cannot poison
+  the journal's verification cache. The private captured models are inspected without mutation.
+- `_EvaluationEventCache` captures and fully validates every event in a sidecar once. Each Task
+  still selects only its own events at or before its durable `updated_at`; unrelated/future events
+  cannot become its Run evidence. New publications enter the next Team snapshot.
+- `_TaskReadSnapshot` owns one read-only SQL cursor. Reuse requires an exact sidecar, Team,
+  checkpoint digest, intake digest, complete presentation-base digest and optional successor
+  dispatch digest. A verification source can reuse its already validated native Task projection;
+  different Tasks, scopes, checkpoints or dispatches cannot inherit that result. Candidate
+  verification lineage and independent completion validation remain unchanged.
+- All three helpers are local to one snapshot. Success/failure releases them with the worker's
+  read scope; no application-global or reader-instance snapshot cache is introduced. The next
+  poll observes append-only tails and rechecks historical corruption and symlinks. Complete
+  Requirement, Task, QA/Review and handling histories remain visible and unchanged.
+
+### Validation and test points
+
+| Case | Expected result |
+| --- | --- |
+| Retired history and replacement used by retirement, display and count | Each complete history read once in that snapshot |
+| Multiple retired entries reference one other-Project replacement | One validated replacement read, correct isolated counts |
+| Requirement published after selected directory capture | Absent from this read/count; visible together on the next poll |
+| Subsequent snapshot after append | New checkpoint and action visible |
+| Historical body/digest/path/ancestor or retirement tampered; replacement missing | Entire snapshot fails closed |
+| Evaluation ledger projected for several historical Tasks | Each event decoded once; per-Task/time filtering preserved |
+| Later evaluation publication or historical tampering | Next cache sees new facts or rejects corruption |
+| Same native projection referenced by independent verification | Exact reuse; changed scope/checkpoint gets a fresh projection |
+
+Regression tests are `tests/team_view/test_joint_history_snapshot.py`,
+`tests/team_view/test_task_read_snapshot.py`, related non-MySQL live reader/retirement/design-budget
+cases, and existing `tests/manager/test_joint_journal_read_reuse.py`. Real performance measurement
+must run sequentially: concurrent full Project hashing or HTTP reads invalidate a latency comparison.
+The measured production histories contain 225 numbered JSON records / 253,531,912 bytes; the old
+successful snapshot read them 557 times in total / 623,760,450 bytes. After snapshot-local capture,
+each history is read once. Evaluation event reads fall from 8,028 to 223 and native Task projection
+calls from 37 to 26. These are concrete work counts, not portable latency thresholds.
+
+### Existing data and rollback
+
+No migration, SQL write, history truncation, approval or execution restart is needed. The optimization
+only removes repeated work while reading unchanged facts. Users refresh the same Project after an
+idle controlled service restart loads the repaired code. Rollback restores the previous reader and
+its repeated read cost; all durable records and user decisions remain untouched.

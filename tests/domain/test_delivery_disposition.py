@@ -1,5 +1,8 @@
 """Delivery responsibility and waiting cannot be chosen by model prose."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from ai_software_engineer.domain.delivery_disposition import (
@@ -131,5 +134,33 @@ def test_baseline_pause_is_a_distinct_exact_manual_continue_decision() -> None:
 def test_old_disposition_wire_omits_new_absent_baseline_field() -> None:
     original = facts("EXECUTION_UNCERTAIN")
     assert "execution_baseline_sha256" not in original.to_wire()
+    assert "execution_baseline_sha256" not in original.model_dump(mode="json")
     decision = decide_delivery_disposition(original)
+    assert "execution_baseline_sha256" not in decision.model_dump(mode="json")["facts"]
     assert type(decision).model_validate(decision.to_wire()).to_wire() == decision.to_wire()
+
+
+def test_explicit_baseline_reference_is_retained_in_nested_canonical_dump() -> None:
+    paused = DeliveryFailureFacts.model_validate(
+        {
+            **facts("EXECUTION_UNCERTAIN").to_wire(),
+            "classification": "EXECUTION_BASELINE_PAUSED",
+            "execution_baseline_sha256": "c" * 64,
+        }
+    )
+    decision = decide_delivery_disposition(paused)
+    assert decision.model_dump(mode="json")["facts"]["execution_baseline_sha256"] == "c" * 64
+    other = DeliveryFailureFacts.model_validate(
+        {**paused.to_wire(), "execution_baseline_sha256": "d" * 64}
+    )
+    assert other.facts_sha256 != paused.facts_sha256
+    assert decide_delivery_disposition(other).disposition_sha256 != decision.disposition_sha256
+
+
+def test_failure_facts_published_schema_matches_the_current_model() -> None:
+    schema = json.loads(Path("schemas/delivery-failure-facts.schema.json").read_text())
+    assert schema.pop("$id") == (
+        "https://ai-software-engineer.local/schemas/delivery-failure-facts.schema.json"
+    )
+    assert schema.pop("$schema") == "https://json-schema.org/draft/2020-12/schema"
+    assert schema == DeliveryFailureFacts.model_json_schema()
