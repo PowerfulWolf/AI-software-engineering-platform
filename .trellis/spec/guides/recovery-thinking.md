@@ -85,6 +85,10 @@ the survey from approval and subsequent execution.
   真正打开原工作区文件、交互控制位于原 checkout 和不明工具仍应拒绝。
 - 不用维护 ancestry 给任意子进程文件豁免。Unix exec 不改变 PID/birth；
   两次清单分类变化须重查已覆盖路径，不能只验 PID 复用。
+- 当前调查者的桌面工具是否被 native sandbox 全账户分类误伤？复现真实 OS 路径、
+  协议调用链和原 checkout 的完整 cwd/file 占用，而非只测独立 resume。新旧桌面入口
+  不一定都有 code-mode-host；临时 kernel.js/trusted-worker.js 名称不能作为信任根。
+  正向来源只影响 wrapper 分类，不能扩大 ignored_pids。详见 legacy-execution-rescue.md。
 - 原电脑当前没有识别到执行依然不能替代旧调用及派生工具的 exact 工程确认。
   见 `../core/legacy-execution-rescue.md` 的进程归属契约。
 

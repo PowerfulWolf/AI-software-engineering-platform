@@ -100,7 +100,7 @@ from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationStart,
 )
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
-from tests.manager.test_legacy_local_execution import MacFixtureObserver
+from tests.manager.test_legacy_local_execution import DesktopFixtureObserver
 from tests.manager.test_production_backend import (
     _git,
     _git_output,
@@ -482,6 +482,67 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     if local_stop:
         boot = boot.model_copy(update={"booted_at": original_start.started_at - timedelta(days=1)})
 
+    def desktop_survey(
+        *,
+        worktree_root: Path,
+        boot: LocalBootObservation,
+        retained_reference: bool = False,
+    ) -> LegacyLocalExecutionSurvey:
+        # Keep the real desktop CUA ancestry and independently supplied native
+        # paths through the public Host, alongside the existing control facts.
+        uid = os.getuid()
+        observer = DesktopFixtureObserver()
+        observer.native_paths.update(
+            {
+                106: observer.native_paths[101],
+                107: observer.native_paths[103],
+                108: observer.native_paths[103],
+                201: "/usr/local/bin/codex",
+                202: "/usr/bin/python",
+                203: "/bin/zsh",
+            }
+        )
+        observer.process_rows.update(
+            {
+                106: (
+                    102,
+                    observer.process_rows[101][1].replace("kernel.js", "trusted-worker.js"),
+                ),
+                107: (106, f"{observer.native_paths[107]} /tmp/trusted-worker.js"),
+                108: (101, f"{observer.native_paths[108]} /tmp/kernel.js"),
+                201: (1, "/usr/local/bin/codex resume maintenance"),
+                202: (1, "/usr/bin/python /platform/ase-console"),
+                203: (1, "/bin/zsh"),
+            }
+        )
+        rows = "\n".join(
+            f"{pid} {ppid} {uid} S Thu Oct 8 08:00:00 2026 {command}"
+            for pid, (ppid, command) in observer.process_rows.items()
+        )
+        observer.commands = [rows, rows]
+        observer.open_files = b"".join(
+            f"p{pid}\0\nfcwd\0tDIR\0n/maintenance-checkout\0\n".encode()
+            for pid in observer.process_rows
+            if pid not in {202, 203}
+        ) + (
+            b"p202\0\nfcwd\0tDIR\0n/platform\0\n"
+            + f"p203\0\nfcwd\0tDIR\0n{worktree_root}\0\n".encode()
+        )
+        if retained_reference:
+            # Positive control ownership must never exempt a sandbox or its
+            # tool from the retained checkout's cwd/open-file checks.
+            observer.open_files += (
+                f"p106\0\nf5\0tREG\0n{worktree_root}/hello.txt\0\n"
+                f"p107\0\nfcwd\0tDIR\0n{worktree_root}\0\n"
+            ).encode()
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                "ai_software_engineer.manager.legacy_local_execution.sys.platform", "darwin"
+            )
+            result = native_survey(observer, worktree_root=worktree_root, boot=boot)
+        assert result.blockers == (("WORKTREE_PROCESS_ACTIVE",) if retained_reference else ())
+        return result
+
     def idle_survey(
         _self: TrustedLegacyLocalExecutionObserver,
         *,
@@ -491,26 +552,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         if local_stop:
             # Exercise the real attribution/path scanner through the public
             # Host collector; only the bounded OS reads use fixture facts.
-            uid = os.getuid()
-            rows = (
-                f"101 1 {uid} S Thu Oct 8 08:00:00 2026 /usr/local/bin/codex resume maintenance\n"
-                f"102 1 {uid} S Thu Oct 8 08:00:00 2026 /usr/bin/python /platform/ase-console\n"
-                f"103 1 {uid} S Thu Oct 8 08:00:00 2026 /bin/zsh"
-            )
-            files = (
-                b"p101\0\nfcwd\0tDIR\0n/maintenance-checkout\0\n"
-                b"p102\0\nfcwd\0tDIR\0n/platform\0\n"
-                + f"p103\0\nfcwd\0tDIR\0n{worktree_root}\0\n".encode()
-            )
-            with monkeypatch.context() as scoped:
-                scoped.setattr(
-                    "ai_software_engineer.manager.legacy_local_execution.sys.platform", "darwin"
-                )
-                result = native_survey(
-                    MacFixtureObserver(commands=(rows, rows), open_files=files),
-                    worktree_root=worktree_root,
-                    boot=boot,
-                )
+            result = desktop_survey(worktree_root=worktree_root, boot=boot)
             result.require_idle()
             return result
         return LegacyLocalExecutionSurvey.create(
@@ -642,12 +684,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             worktree_root: Path,
             boot: LocalBootObservation,
         ) -> LegacyLocalExecutionSurvey:
-            return LegacyLocalExecutionSurvey.create(
-                **idle_survey(_self, worktree_root=worktree_root, boot=boot).model_dump(
-                    exclude={"survey_sha256", "blockers"}
-                ),
-                blockers=("WORKTREE_PROCESS_ACTIVE",),
-            )
+            return desktop_survey(worktree_root=worktree_root, boot=boot, retained_reference=True)
 
         monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", active_survey)
         with pytest.raises(LegacyRescuePrerequisiteError, match="工作区"):

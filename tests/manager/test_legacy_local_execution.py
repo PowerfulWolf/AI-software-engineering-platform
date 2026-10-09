@@ -1,8 +1,9 @@
 """Current local surveys are a prerequisite, never a historical stop receipt."""
 
+import ctypes
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 
@@ -129,6 +130,370 @@ class MacFixtureObserver(TrustedLegacyLocalExecutionObserver):
             # Fixture kernel identity preserves executable paths with spaces.
             return Path(command.split(" --", maxsplit=1)[0]).name
         return Path(command.split(maxsplit=1)[0]).name
+
+
+DESKTOP_BUNDLE = Path("/Applications/ChatGPT.app")
+DESKTOP_CODEX = str(
+    DESKTOP_BUNDLE / "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+)
+DESKTOP_NODE = str(DESKTOP_BUNDLE / "Contents/Resources/cua_node/bin/node")
+DESKTOP_NODE_REPL = str(DESKTOP_BUNDLE / "Contents/Resources/cua_node/bin/node_repl")
+DESKTOP_REPL_SCRIPT = str(
+    DESKTOP_BUNDLE / "Contents/Resources/cua_node/lib/node_modules/@oai/cua-repl/bin/cua-repl.mjs"
+)
+DESKTOP_APP = str(DESKTOP_BUNDLE / "Contents/MacOS/ChatGPT")
+
+
+class DesktopFixtureObserver(MacFixtureObserver):
+    """Native identities and complete paths are independent of process argv."""
+
+    def __init__(self) -> None:
+        self.native_paths = {
+            101: DESKTOP_CODEX,
+            102: DESKTOP_NODE_REPL,
+            103: DESKTOP_NODE,
+            104: DESKTOP_CODEX,
+            105: DESKTOP_APP,
+        }
+        self.process_rows = {
+            101: (
+                102,
+                f"{DESKTOP_CODEX} -c model=unused sandbox -- {DESKTOP_NODE} "
+                "--experimental-vm-modules /tmp/kernel.js --working-dir /maintenance",
+            ),
+            102: (103, "node_repl"),
+            103: (104, f"{DESKTOP_NODE} {DESKTOP_REPL_SCRIPT}"),
+            104: (105, f"{DESKTOP_CODEX} app-server"),
+            105: (1, DESKTOP_APP),
+        }
+        rows = self.rows()
+        super().__init__(commands=(rows, rows), open_files=self.files())
+
+    def rows(self, *, state: str = "S") -> str:
+        return "\n".join(
+            f"{pid} {ppid} 501 {state} Thu Oct 8 08:00:00 2026 {command}"
+            for pid, (ppid, command) in self.process_rows.items()
+        )
+
+    def files(self) -> bytes:
+        return b"".join(
+            f"p{pid}\0\nfcwd\0tDIR\0n/maintenance\0\n".encode() for pid in self.process_rows
+        )
+
+    def _executable_name(self, pid: int) -> str:
+        return Path(self.native_paths[pid]).name
+
+    def _executable_path(self, pid: int) -> str | None:
+        return self.native_paths[pid]
+
+
+def test_exact_desktop_cua_sandbox_is_control_tool_without_original_checkout_access(
+    tmp_path: Path, mac: None
+) -> None:
+    observer = DesktopFixtureObserver()
+    result = observer.observe(worktree_root=tmp_path, boot=BOOT)
+    result.require_idle()
+    assert result.scanner_version == "local-execution-v1"
+    assert not ({"pid", "argv", "processes", "environment"} & result.to_wire().keys())
+    assert "kernel.js" not in result.model_dump_json()
+
+
+def test_desktop_attribution_uses_bundle_route_not_temporary_payload_name(
+    tmp_path: Path, mac: None
+) -> None:
+    observer = DesktopFixtureObserver()
+    parent, command = observer.process_rows[101]
+    observer.process_rows[101] = (parent, command.replace("kernel.js", "unrelated-name.js"))
+    observer.commands = [observer.rows(), observer.rows(state="R")]
+    observer.observe(worktree_root=tmp_path, boot=BOOT).require_idle()
+    assert any("-p" in call for call in observer.calls)  # state drift gets fresh path coverage
+
+
+@pytest.mark.parametrize("pid", [101, 102, 103, 104, 105, 106])
+@pytest.mark.parametrize("reference", ["cwd", "file"])
+def test_verified_desktop_chain_and_arbitrary_descendants_still_check_worktree_access(
+    tmp_path: Path, mac: None, pid: int, reference: str
+) -> None:
+    observer = DesktopFixtureObserver()
+    observer.native_paths[106] = "/usr/bin/python3"
+    observer.process_rows[106] = (101, "/usr/bin/python3 writer.py")
+    observer.commands = [observer.rows(), observer.rows()]
+    observer.open_files = (
+        observer.files()
+        + (
+            f"p{pid}\0\nf{'cwd' if reference == 'cwd' else '4'}\0"
+            f"t{'DIR' if reference == 'cwd' else 'REG'}\0"
+            f"n{tmp_path if reference == 'cwd' else tmp_path / 'draft.py'}\0\n"
+        ).encode()
+    )
+    result = observer.observe(worktree_root=tmp_path, boot=BOOT)
+    assert result.blockers == ("WORKTREE_PROCESS_ACTIVE",)
+
+
+@pytest.mark.parametrize(
+    "target_argument",
+    [
+        "--working-dir {root}",
+        "--working-dir={root}",
+        "-C {root}",
+        "-C{root}",
+        "--cd={root}",
+        "--input-file={root}/draft.py",
+        "{root}/draft.py",
+        "--working-dir relative-directory",
+    ],
+)
+def test_desktop_sandbox_explicitly_targeting_original_worktree_is_not_exempt(
+    tmp_path: Path, mac: None, target_argument: str
+) -> None:
+    observer = DesktopFixtureObserver()
+    parent, command = observer.process_rows[101]
+    command = command.replace("--working-dir /maintenance", target_argument.format(root=tmp_path))
+    observer.process_rows[101] = (parent, command)
+    observer.commands = [observer.rows(), observer.rows()]
+    result = observer.observe(worktree_root=tmp_path, boot=BOOT)
+    assert result.blockers == ("CODEX_WRAPPER_ACTIVE",)
+
+
+@pytest.mark.parametrize("pid", [101, 102, 103, 104, 105])
+def test_every_desktop_layer_needs_positive_native_path_attribution(
+    tmp_path: Path, mac: None, pid: int
+) -> None:
+    class Observer(DesktopFixtureObserver):
+        def _executable_path(self, target: int) -> str | None:
+            if target == pid:
+                return None  # running deleted executable / denied optional identity
+            return super()._executable_path(target)
+
+    result = Observer().observe(worktree_root=tmp_path, boot=BOOT)
+    assert result.blockers == ("CODEX_WRAPPER_ACTIVE",)
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "valid",
+        "enoent",
+        "overlong",
+        "query_error",
+        "library_error",
+        "relative",
+        "traversal",
+        "noncanonical",
+        "nul",
+        "non_utf8",
+    ],
+)
+def test_mac_native_executable_path_is_optional_bounded_os_identity_without_raw_errors(
+    tmp_path: Path, mac: None, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    class Query:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, pid: int, buffer: object, size: int) -> int:
+            assert pid == 101 and size == 4096
+            if problem == "query_error":
+                raise OSError("private native process detail must not escape")
+            if problem == "enoent":
+                return 0  # PID can remain alive when its old binary path was removed
+            if problem == "overlong":
+                return size
+            bodies = {
+                "relative": b"relative/codex",
+                "traversal": b"/Applications/../codex",
+                "noncanonical": b"/Applications//codex",
+                "nul": b"/Applications/\0codex",
+                "non_utf8": b"/Applications/\xffcodex",
+            }
+            body = bodies.get(problem, DESKTOP_CODEX.encode())
+            ctypes.memmove(cast(ctypes.c_void_p, buffer), body + b"\0", len(body) + 1)
+            return len(body)
+
+    class Library:
+        proc_pidpath = Query()
+
+    def native_library(path: str, *, use_errno: bool) -> Library:
+        assert path == "/usr/lib/libproc.dylib" and use_errno
+        if problem == "library_error":
+            raise OSError("private library detail must not escape")
+        return Library()
+
+    class Observer(DesktopFixtureObserver):
+        def _executable_path(self, pid: int) -> str | None:
+            if pid == 101:
+                return TrustedLegacyLocalExecutionObserver._executable_path(self, pid)
+            return super()._executable_path(pid)
+
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.legacy_local_execution.ctypes.CDLL", native_library
+    )
+    result = Observer().observe(worktree_root=tmp_path, boot=BOOT)
+    assert result.blockers == (() if problem == "valid" else ("CODEX_WRAPPER_ACTIVE",))
+    assert "private native process detail" not in result.model_dump_json()
+    assert "private library detail" not in result.model_dump_json()
+
+
+def test_desktop_chain_needs_file_coverage_in_both_inventories(tmp_path: Path, mac: None) -> None:
+    class Observer(DesktopFixtureObserver):
+        def _query(self, argv: tuple[str, ...]) -> bytes:
+            if argv[0] == "/usr/sbin/lsof" and "-p" not in argv:
+                return b"".join(
+                    f"p{pid}\0\nfcwd\0tDIR\0n/maintenance\0\n".encode()
+                    for pid in self.process_rows
+                    if pid != 102
+                )
+            return super()._query(argv)
+
+    # The second targeted path read recovers complete coverage, but cannot
+    # establish a fully inspected chain for the missing initial observation.
+    result = Observer().observe(worktree_root=tmp_path, boot=BOOT)
+    assert result.blockers == ("CODEX_WRAPPER_ACTIVE",)
+
+
+def test_self_consistent_imitation_bundle_does_not_establish_trusted_desktop_route(
+    tmp_path: Path, mac: None
+) -> None:
+    observer = DesktopFixtureObserver()
+    for pid, path in observer.native_paths.items():
+        observer.native_paths[pid] = path.replace(str(DESKTOP_BUNDLE), "/tmp/fake/ChatGPT.app")
+    for pid, (parent, command) in observer.process_rows.items():
+        observer.process_rows[pid] = (
+            parent,
+            command.replace(str(DESKTOP_BUNDLE), "/tmp/fake/ChatGPT.app"),
+        )
+    observer.commands = [observer.rows(), observer.rows()]
+    result = observer.observe(worktree_root=tmp_path, boot=BOOT)
+    assert result.blockers == ("CODEX_WRAPPER_ACTIVE",)
+
+
+@pytest.mark.parametrize("pid", [101, 102, 103, 104, 105])
+@pytest.mark.parametrize("problem", ["wrong_native_path", "stopped", "missing_coverage"])
+def test_desktop_ancestry_does_not_replace_exact_identity_state_or_file_coverage(
+    tmp_path: Path, mac: None, pid: int, problem: str
+) -> None:
+    observer = DesktopFixtureObserver()
+    if problem == "wrong_native_path":
+        observer.native_paths[pid] = "/unrelated/" + Path(observer.native_paths[pid]).name
+    rows = observer.rows()
+    if problem == "stopped":
+        rows = rows.replace(
+            f"{pid} {observer.process_rows[pid][0]} 501 S ",
+            f"{pid} {observer.process_rows[pid][0]} 501 T ",
+        )
+    observer.commands = [rows, rows]
+    if problem == "missing_coverage":
+        observer.open_files = b"".join(
+            f"p{target}\0\nfcwd\0tDIR\0n/maintenance\0\n".encode()
+            for target in observer.process_rows
+            if target != pid
+        )
+    result = observer.observe(worktree_root=tmp_path, boot=BOOT)
+    assert "CODEX_WRAPPER_ACTIVE" in result.blockers
+    assert ("PROCESS_SCAN_INCOMPLETE" in result.blockers) == (problem == "missing_coverage")
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "orphan",
+        "cycle",
+        "unknown_root_script",
+        "root_extra_args",
+        "wrong_payload",
+        "no_payload_marker",
+        "app_server_wrong_action",
+        "fake_node_repl_title",
+    ],
+)
+def test_unknown_or_spoofed_desktop_route_remains_globally_blocked(
+    tmp_path: Path, mac: None, problem: str
+) -> None:
+    observer = DesktopFixtureObserver()
+    pid = 101
+    parent, command = observer.process_rows[pid]
+    if problem == "orphan":
+        parent = 999
+    elif problem == "cycle":
+        observer.process_rows[104] = (101, observer.process_rows[104][1])
+    elif problem == "unknown_root_script":
+        observer.process_rows[103] = (104, f"{DESKTOP_NODE} /tmp/cua-repl.mjs")
+    elif problem == "root_extra_args":
+        observer.process_rows[103] = (104, observer.process_rows[103][1] + " /tmp/extra.js")
+    elif problem == "wrong_payload":
+        command = command.replace(f"-- {DESKTOP_NODE}", "-- /usr/bin/node")
+    elif problem == "no_payload_marker":
+        command = command.replace("sandbox --", "sandbox")
+    elif problem == "app_server_wrong_action":
+        observer.process_rows[104] = (105, f"{DESKTOP_CODEX} resume app-server")
+    else:
+        observer.process_rows[102] = (103, "node_repl unknown-title")
+    observer.process_rows[pid] = (parent, command)
+    observer.commands = [observer.rows(), observer.rows()]
+    result = observer.observe(worktree_root=tmp_path, boot=BOOT)
+    assert "CODEX_WRAPPER_ACTIVE" in result.blockers
+
+
+@pytest.mark.parametrize("pid", [101, 102, 103, 104, 105])
+@pytest.mark.parametrize("drift", ["ppid", "command", "birth", "native_path", "kernel_name"])
+def test_desktop_attribution_requires_stable_all_layer_identity_in_both_inventories(
+    tmp_path: Path, mac: None, pid: int, drift: str
+) -> None:
+    class Observer(DesktopFixtureObserver):
+        def _birth(self, target: int) -> str:
+            if target == pid and drift == "birth" and not self.commands:
+                return "new-native-birth"
+            return super()._birth(target)
+
+        def _executable_name(self, target: int) -> str:
+            if target == pid and drift == "kernel_name" and not self.commands:
+                return "unknown-kernel-name"
+            return super()._executable_name(target)
+
+        def _executable_path(self, target: int) -> str | None:
+            if target == pid and drift == "native_path" and not self.commands:
+                return "/changed/" + Path(self.native_paths[target]).name
+            return super()._executable_path(target)
+
+    observer = Observer()
+    before = observer.rows()
+    parent, command = observer.process_rows[pid]
+    if drift == "ppid":
+        observer.process_rows[pid] = (parent + 1000, command)
+    elif drift == "command":
+        # Equivalent whitespace is still identity drift, not a stable survey.
+        observer.process_rows[pid] = (parent, command + " ")
+    observer.commands = [before, observer.rows()]
+    result = observer.observe(worktree_root=tmp_path, boot=BOOT)
+    assert "CODEX_WRAPPER_ACTIVE" in result.blockers
+    assert ("PROCESS_SCAN_INCOMPLETE" in result.blockers) == (drift == "birth")
+
+
+def test_true_execution_under_verified_desktop_control_still_blocks(
+    tmp_path: Path, mac: None
+) -> None:
+    observer = DesktopFixtureObserver()
+    observer.native_paths[106] = DESKTOP_CODEX
+    observer.process_rows[106] = (101, f"{DESKTOP_CODEX} exec prompt")
+    observer.commands = [observer.rows(), observer.rows()]
+    observer.open_files = observer.files()
+    result = observer.observe(worktree_root=tmp_path, boot=BOOT)
+    assert result.blockers == ("CODEX_EXECUTION_ACTIVE",)
+
+
+def test_linux_desktop_named_ancestry_does_not_grant_new_exemption(
+    tmp_path: Path, mac: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observer = DesktopFixtureObserver()
+    proc_root = tmp_path / "proc"
+    for pid in observer.process_rows:
+        proc = proc_root / str(pid)
+        (proc / "fd").mkdir(parents=True)
+        (proc / "cwd").symlink_to("/maintenance")
+    monkeypatch.setattr("ai_software_engineer.manager.legacy_local_execution.sys.platform", "linux")
+    monkeypatch.setattr("ai_software_engineer.manager.legacy_local_execution._PROC_ROOT", proc_root)
+    result = observer.observe(worktree_root=tmp_path, boot=BOOT)
+    assert result.blockers == ("CODEX_WRAPPER_ACTIVE",)
 
 
 @pytest.fixture

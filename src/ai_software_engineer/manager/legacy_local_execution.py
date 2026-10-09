@@ -44,6 +44,7 @@ _SCANNER_VERSION = "local-execution-v1"
 _MAX_PROCESSES = 4096
 _MAX_FILES = 65_536
 _PROC_ROOT = Path("/proc")
+_DESKTOP_CONTROL_BUNDLE = Path("/Applications/ChatGPT.app")
 _DEADLINE: ContextVar[float | None] = ContextVar("legacy_local_survey_deadline", default=None)
 _QUERY_PIDS: ContextVar[set[int] | None] = ContextVar("legacy_local_survey_queries", default=None)
 
@@ -149,6 +150,16 @@ class _Process:
     birth: str
     command: str
     executable_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DesktopProcessIdentity:
+    pid: int
+    ppid: int
+    birth: str
+    command: str
+    executable_name: str
+    executable_path: str
 
 
 class _IncompleteSurvey(RuntimeError):
@@ -279,6 +290,38 @@ class TrustedLegacyLocalExecutionObserver:
         if not executable.startswith("/"):
             raise _IncompleteSurvey
         return Path(executable.removesuffix(" (deleted)")).name
+
+    def _executable_path(self, pid: int) -> str | None:
+        """Optional positive attribution, never an absence or historical stop proof."""
+        self._remaining()
+        try:
+            if sys.platform == "darwin":
+                library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+                query = library.proc_pidpath
+                query.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+                query.restype = ctypes.c_int
+                buffer = ctypes.create_string_buffer(4096)
+                size = cast(int, query(pid, ctypes.byref(buffer), len(buffer)))
+                if size <= 0 or size >= len(buffer):
+                    return None
+                executable = buffer.raw[:size].removesuffix(b"\0").decode("utf-8", errors="strict")
+            elif sys.platform.startswith("linux"):
+                executable = os.readlink(_PROC_ROOT / str(pid) / "exe")
+            else:
+                return None
+        except (OSError, UnicodeError):
+            # A live old app binary can have no PIDPATH after an update. Keep
+            # its ordinary classification rather than treating it as stopped.
+            return None
+        path = PurePosixPath(executable)
+        if (
+            not path.is_absolute()
+            or ".." in path.parts
+            or str(path) != executable
+            or "\0" in executable
+        ):
+            return None
+        return executable
 
     def _darwin_info(self, pid: int) -> bytes:
         self._remaining()
@@ -481,6 +524,138 @@ class TrustedLegacyLocalExecutionObserver:
             if self._operator_control_process(process.command, process.executable_name)
         )
 
+    def _arguments_reference_worktree(self, arguments: tuple[str, ...], root: Path) -> bool:
+        """Do not exempt a control tool explicitly targeted at the retained checkout."""
+        directory_options = {"--working-dir", "-C", "--cd"}
+        for index, argument in enumerate(arguments):
+            self._remaining()
+            option, separator, value = argument.partition("=")
+            if option in directory_options:
+                if not separator:
+                    if index + 1 == len(arguments):
+                        return True
+                    value = arguments[index + 1]
+                if not value.startswith("/") or self._covers(value, root):
+                    return True  # relative/unknown targets do not grant attribution
+            elif argument.startswith("-C") and len(argument) > 2:
+                value = argument[2:]
+                if not value.startswith("/") or self._covers(value, root):
+                    return True
+            candidate = value if separator else argument
+            if candidate.startswith("/") and self._covers(candidate, root):
+                return True
+        return False
+
+    def _desktop_sandbox_chains(
+        self, processes: dict[int, _Process], root: Path
+    ) -> dict[int, tuple[_DesktopProcessIdentity, ...]]:
+        """Attribute only the native sandbox of the fixed macOS desktop CUA route.
+
+        Process ancestry alone is insufficient. These identities do not remove
+        any process or descendant from cwd/open-file checks.
+        """
+        if sys.platform != "darwin":
+            return {}
+        chains: dict[int, tuple[_DesktopProcessIdentity, ...]] = {}
+        paths: dict[int, str | None] = {}
+        names = ("codex", "node_repl", "node", "codex", "ChatGPT")
+        for sandbox in processes.values():
+            self._remaining()
+            if sandbox.executable_name != "codex":
+                continue
+            try:
+                sandbox_arguments = tuple(shlex.split(sandbox.command))
+            except ValueError:
+                continue
+            if not sandbox_arguments or self._codex_action(sandbox_arguments[1:]) != "sandbox":
+                continue
+            chain: list[_Process] = []
+            process: _Process | None = sandbox
+            for name in names:
+                if (
+                    process is None
+                    or process.state not in {"R", "S", "I"}
+                    or process.birth == "unobserved"
+                    or process.executable_name != name
+                    or process.pid in {parent.pid for parent in chain}
+                ):
+                    break
+                chain.append(process)
+                process = processes.get(process.ppid)
+            if len(chain) != len(names):
+                continue
+            identity: list[_DesktopProcessIdentity] = []
+            for process in chain:
+                if process.pid not in paths:
+                    paths[process.pid] = self._executable_path(process.pid)
+                executable_path = paths[process.pid]
+                if executable_path is None:
+                    break
+                identity.append(
+                    _DesktopProcessIdentity(
+                        process.pid,
+                        process.ppid,
+                        process.birth,
+                        process.command,
+                        process.executable_name,
+                        executable_path,
+                    )
+                )
+            if len(identity) != len(names):
+                continue
+            # The installed trust root is fixed by this adapter, never selected
+            # from an inventory's self-consistent app title or caller input.
+            bundle = _DESKTOP_CONTROL_BUNDLE
+            codex = str(bundle / "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
+            node = str(bundle / "Contents/Resources/cua_node/bin/node")
+            node_repl = str(bundle / "Contents/Resources/cua_node/bin/node_repl")
+            app = str(bundle / "Contents/MacOS/ChatGPT")
+            script = str(
+                bundle
+                / "Contents/Resources/cua_node/lib/node_modules/@oai/cua-repl/bin/cua-repl.mjs"
+            )
+            if tuple(item.executable_path for item in identity) != (
+                codex,
+                node_repl,
+                node,
+                codex,
+                app,
+            ):
+                continue
+            try:
+                arguments = tuple(tuple(shlex.split(item.command)) for item in identity)
+                payload_index = sandbox_arguments.index("--") + 1
+            except ValueError:
+                continue
+            if (
+                sandbox_arguments[0] != codex
+                or sandbox_arguments[payload_index : payload_index + 1] != (node,)
+                or arguments[1] not in {("node_repl",), (node_repl,)}
+                or arguments[2] != (node, script)
+                or not arguments[3]
+                or arguments[3][0] != codex
+                or self._codex_action(arguments[3][1:]) != "app-server"
+                or arguments[4] != (app,)
+                or self._arguments_reference_worktree(sandbox_arguments, root)
+            ):
+                continue
+            chains[sandbox.pid] = tuple(identity)
+        return chains
+
+    @staticmethod
+    def _verified_desktop_sandbox_pids(
+        before_chains: dict[int, tuple[_DesktopProcessIdentity, ...]],
+        after_chains: dict[int, tuple[_DesktopProcessIdentity, ...]],
+        before_covered: frozenset[int],
+        covered: set[int],
+    ) -> frozenset[int]:
+        return frozenset(
+            pid
+            for pid, chain in before_chains.items()
+            if after_chains.get(pid) == chain
+            and all(item.pid in before_covered and item.pid in covered for item in chain)
+        )
+
     def _execution_related_pids(
         self, processes: dict[int, _Process], roots: frozenset[int]
     ) -> frozenset[int]:
@@ -667,6 +842,7 @@ class TrustedLegacyLocalExecutionObserver:
             if sys.platform != "darwin" and not sys.platform.startswith("linux"):
                 raise _IncompleteSurvey
             before = self._processes(uid)
+            before_desktop_chains = self._desktop_sandbox_chains(before, root)
             control_pids = self._operator_control_pids(before)
             execution_pids = self._execution_related_pids(
                 before, self._execution_pids(before, control_pids)
@@ -693,7 +869,9 @@ class TrustedLegacyLocalExecutionObserver:
                 )
             )
             blockers.update(path_blockers)
+            before_covered = frozenset(covered)
             after = self._processes(uid)
+            after_desktop_chains = self._desktop_sandbox_chains(after, root)
             after_control_pids = self._operator_control_pids(after)
             execution_pids = execution_pids | self._execution_related_pids(
                 after, self._execution_pids(after, after_control_pids)
@@ -736,6 +914,9 @@ class TrustedLegacyLocalExecutionObserver:
                 covered.difference_update(missing)
                 covered.update(extra_covered)
                 blockers.update(extra_blockers)
+            desktop_sandbox_pids = self._verified_desktop_sandbox_pids(
+                before_desktop_chains, after_desktop_chains, before_covered, covered
+            )
             for process in (*before.values(), *after.values()):
                 if process.state not in {"R", "S", "I", "T", "U", "D", "W", "Z"}:
                     blockers.add("PROCESS_STATE_UNKNOWN")
@@ -744,6 +925,9 @@ class TrustedLegacyLocalExecutionObserver:
                     and process.state != "Z"
                     and (
                         blocker := self._execution_blocker(process.command, process.executable_name)
+                    )
+                    and (
+                        blocker != "CODEX_WRAPPER_ACTIVE" or process.pid not in desktop_sandbox_pids
                     )
                 ):
                     blockers.add(blocker)

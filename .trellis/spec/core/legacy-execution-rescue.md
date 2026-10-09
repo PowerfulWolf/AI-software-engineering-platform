@@ -165,7 +165,8 @@ Linux 使用 `/proc/<pid>/exe`；不是 argv 内目录名字。macOS 已更新/�
 ### 3. Contracts
 
 - 根可执行身份与动作分开识别：真实 `codex exec` 和 `e` 阻塞；实际 CLI 的未知参数、
-  sandbox/apply/default prompt 和包装路线保守阻塞。不能用四个子命令白名单放行未知 CLI。
+  未核实的 sandbox、apply/default prompt 和包装路线保守阻塞。仅下节核实的桌面 CUA
+  工具沙箱可免账户级 wrapper 推断；不能用四个子命令白名单放行未知 CLI。
   `_codex_action` 按实际动作位置跳过明确全局选项和值，`_argv_blocker` 按 shell command、
   script/module/env 的启动位置识别 wrapper；参数中的 app-server/exec/e 和会话名称不是动作。
 - 独立 `codex resume`、code-mode-host 和明确控制 daemon 不属于旧平台 `codex exec`。
@@ -213,6 +214,91 @@ Console/containment/Schema 增量回归保证 WAITING 无 plan/approval、新浏
 Wrong：`if "codex" in command: block()` 或 `if control_ancestor: ignore_all_files()`。
 Correct：读取内核可执行身份，分类明确控制入口，按原 checkout 的实际 cwd/文件事实核验，
 仅豁免明确空闲终端；再由已有 exact 工程授权供给缺失的历史停止事实。
+
+## 桌面 CUA 沙箱的正向来源分类（2026-10-09）
+
+### 1. Scope / Trigger
+
+控制入口自身不是执行，但它启动的固定桌面工具可能仍被全账户 `sandbox` 分类挡住。
+必须核实当前真实来源；不要求使用者关闭维护会话，也不把所有 sandbox 改成仅看 cwd。
+当前经过 OS 验证的路线仅为 macOS ChatGPT.app 的 CUA REPL。
+
+### 2. Signatures
+
+`manager/legacy_local_execution.py` 内部：
+
+```python
+_executable_path(pid: int) -> str | None
+_desktop_sandbox_chains(processes: dict[int, _Process], root: Path
+                       ) -> dict[int, tuple[_DesktopProcessIdentity, ...]]
+_verified_desktop_sandbox_pids(before_chains, after_chains,
+                             before_covered: frozenset[int], covered: set[int]
+                             ) -> frozenset[int]
+```
+
+`_DesktopProcessIdentity` 仅存内存中的 PID/PPID/birth/command/kernel name/native path。
+macOS 固定 `proc_pidpath` 查询仅用于正向分类；查询失败、更新删除导致 ENOENT 或未知路径
+表示没有取得正向身份，不能推断退出。Linux 不获得这条桌面路线的豁免。
+`observe(worktree_root, boot)`、wire/摘要、`local-execution-v1` 和审批 API 不变。
+
+### 3. Contracts
+
+- 固定五级链：真实 `codex sandbox → node_repl → node(cua-repl.mjs) → codex app-server → ChatGPT`。
+  每一级来自当前账户的两次清单，PID、PPID、birth、command、kernel name 和 native path
+  均一致，全部有 fresh cwd/file coverage。允许 R/S/I 之间的瞬态变化，不允许 stopped、
+  zombie、未知状态、链不全、环、reparent 或身份/程序漂移。
+- 受信 bundle 固定为已核实安装位置 `/Applications/ChatGPT.app`，不是由进程 native path
+  自行推导或 caller 指定。其他安装位置/平台暂不授予来源分类，保持 wrapper 拒绝。
+  所有路径属于该 bundle：`Contents/MacOS/ChatGPT`、
+  `Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`、
+  `Contents/Resources/cua_node/bin/node_repl` 和 `node`；sandbox 与 app-server 的真实 binary
+  相同。node 主入口精确使用同 bundle 的
+  `Contents/Resources/cua_node/lib/node_modules/@oai/cua-repl/bin/cua-repl.mjs`，
+  无未知额外参数。按实际位置解析 app-server 与 sandbox 动作；sandbox `--` 后执行器
+  必须是同 bundle node。临时 `kernel.js`/`trusted-worker.js` basename 不是信任根。
+- 只在完整扫描后取消上述 sandbox 的全账户 `CODEX_WRAPPER_ACTIVE`；observer 外没有
+  `ignored_pids`。控制入口、封装、任意子工具和孤儿的真实 cwd/open-file 检查全保留。
+  实际占用原 checkout 仍 `WORKTREE_PROCESS_ACTIVE`；显式载荷/工作目录参数指向原
+  checkout 时不授予来源豁免，即使调查瞬间 cwd 在其他地方。
+- 真实 `exec/e`、`ase task run`、普通 shell/script 封装、未知/orphan sandbox 和其他 app
+  路线不获得这个分类。不得从 argv 控制词、临时文件名或 caller PID 白名单推断来源。
+- 原扫描 deadline/限长、PID reuse、二次 drift 重查、完整 coverage 和拒绝行为保持。
+  归属分类不造历史 stop/result，不自动批准，不改 Task/旧 Run 或工作区。
+- 这是 v1 误分类修正，无新持久化事实/权限。旧 sealed survey/Operation 不重写；本次复查
+  产生新当前事实，用户仍须对精确方案确认实际停止前提。
+
+### 4. Validation & Error Matrix
+
+| 情况 | 结果 |
+| --- | --- |
+| 同 bundle 固定链，稳定且完全覆盖，另一个 checkout | 无账户级 wrapper 假阻塞 |
+| 同链或任意子工具的 cwd/打开文件位于原 checkout | WORKTREE_PROCESS_ACTIVE |
+| sandbox 载荷/声明工作目录指向原 checkout | 无豁免，保留 wrapper 阻塞 |
+| 不同 bundle、伪 executable/title、不同脚本、未知 payload、孤儿/缺链 | CODEX_WRAPPER_ACTIVE |
+| 控制链中出现真实 exec/e 或独立真实 exec/e | CODEX_EXECUTION_ACTIVE |
+| 祖先或 sandbox PID/birth/PPID/command/native path 漂移 | 不复用维护来源分类 |
+| native 正向路径不可读但普通 coverage 完整 | 保守 wrapper 阻塞，不假称退出 |
+| cwd/file 覆盖失败、identity reuse、权限/超时/截断 | PROCESS_SCAN_INCOMPLETE，无方案 |
+
+### 5. Good / Base / Bad Cases
+
+Good：维护会话保持在线，真实原 K1 只读调查无误报；Base：真实工具占用原工作区时等待
+其正常结束；Bad：让使用者 kill 调查者，或因控制 ancestry 跳过全部源文件检查。
+
+### 6. Tests Required
+
+`test_legacy_local_execution.py` 先 red 复现真实五级链；覆盖 bundle/脚本/title/payload
+假冒、native 路径失败、祖先-only drift、reparent、真实 exec/e、全部 cwd/file/声明参数、
+Linux 无新路线及 coverage 拒绝。`test_legacy_rescue_delivery.py` 的两个 local-stop 公开
+Host 场景必须在该真实形状的维护链存活时完成同 Task/UNKNOWN 保全、绑定崩溃重放和
+独立 QA/Review；仅替换固定 OS reads，不 mock 正向分类。真实 K1 的只读复核记录完整
+工作树与 index 的前后摘要，无生产方案、审批或队列写入。
+
+### 7. Wrong vs Correct
+
+Wrong：`if parent_contains_codex: ignore_tree()` 或按 `kernel.js` 文件名放行。
+Correct：双清单 + native path 核实固定协议入口，只改最终 wrapper 分类，完整工作区
+检查仍独立拒绝；历史停止仍由现有 exact 工程声明补足。
 
 ## 保留源码的敏感信息分类与准备失败（2026-10-09）
 
