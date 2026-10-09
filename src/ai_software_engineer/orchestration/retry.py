@@ -36,6 +36,7 @@ from ai_software_engineer.domain.enums import (
     TaskStatus,
 )
 from ai_software_engineer.domain.event import EventId, StateEvent
+from ai_software_engineer.domain.execution_baseline import CoderExecutionInput
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, DeliveryRetryFailure
 from ai_software_engineer.domain.task import Task, TaskId
@@ -172,8 +173,13 @@ class RetryingOrchestrator(SerialOrchestrator):
             task = self._repository.get(task.id)
 
         artifacts = self._artifacts_for_task(task.id)
+        baseline_input = (
+            self._coder_execution_inputs.current(task, implementation=None, progress=None)
+            if self._coder_execution_inputs is not None
+            else None
+        )
         plan = _latest(artifacts, PlanArtifact)
-        implementation = _latest(artifacts, ImplementationReportArtifact)
+        implementation = _implementation_for_feedback(artifacts, source=baseline_input)
         qa = _latest(artifacts, QaReportArtifact)
         review = _latest(artifacts, ReviewReportArtifact)
         event_ids: list[str] = [event.event_id for event in existing_events]
@@ -242,10 +248,8 @@ class RetryingOrchestrator(SerialOrchestrator):
             coder_source = self._current_coder_input(task)
             active_progress = coder_source.active_progress
             if (
-                coder_source.baseline is not None
-                and implementation is not None
-                and implementation.artifact_id
-                == coder_source.baseline.superseded_implementation_artifact_id
+                implementation is not None
+                and implementation.artifact_id in coder_source.superseded_artifact_ids
             ):
                 recover_candidate = False
             if task.status is TaskStatus.CONTINUE_REQUIRED:
@@ -620,13 +624,8 @@ class RetryingOrchestrator(SerialOrchestrator):
         feedback = coder_feedback(previous, qa, review)
         inputs = (plan, *feedback, *((progress,) if progress is not None else ()))
         coder_source = self._current_coder_input(task)
-        baseline = coder_source.baseline
         progress_supersedes = (
-            progress.artifact_id
-            if progress is not None
-            else baseline.superseded_progress_artifact_id
-            if baseline is not None
-            else None
+            progress.artifact_id if progress is not None else coder_source.progress_supersedes
         )
         parents = tuple(item.artifact_id for item in inputs)
         if self.execution_control is not None:
@@ -902,24 +901,24 @@ class RetryingOrchestrator(SerialOrchestrator):
         artifact_ids: tuple[ArtifactId, ...],
         source_revision: str | None = None,
     ) -> BlockedResult:
-        implementation = _latest(self._artifacts_for_task(task.id), ImplementationReportArtifact)
+        baseline_input = (
+            self._coder_execution_inputs.current(task, implementation=None, progress=None)
+            if self._coder_execution_inputs is not None
+            else None
+        )
+        implementation = _latest(
+            self._artifacts_for_task(task.id),
+            ImplementationReportArtifact,
+            excluded_artifact_ids=(
+                baseline_input.superseded_artifact_ids
+                if baseline_input is not None
+                else frozenset()
+            ),
+        )
         retained_candidate = None
         if implementation is not None:
-            baseline_input = (
-                self._coder_execution_inputs.current(
-                    task, implementation=implementation, progress=None
-                )
-                if self._coder_execution_inputs is not None
-                else None
-            )
-            if (
-                baseline_input is None
-                or baseline_input.baseline is None
-                or implementation.artifact_id
-                != baseline_input.baseline.superseded_implementation_artifact_id
-            ):
-                self._validate_implementation(task, implementation)
-                retained_candidate = implementation.content.commit_sha
+            self._validate_implementation(task, implementation)
+            retained_candidate = implementation.content.commit_sha
         if (
             task.engineering_policy is not None
             and self._delivery_failure_control is not None
@@ -1093,8 +1092,46 @@ def _latest[
         QaReportArtifact,
         ReviewReportArtifact,
     )
-](artifacts: tuple[Artifact, ...], artifact_type: type[ArtifactT]) -> ArtifactT | None:
-    return latest_accepted_artifact(artifacts, artifact_type)
+](
+    artifacts: tuple[Artifact, ...],
+    artifact_type: type[ArtifactT],
+    *,
+    excluded_artifact_ids: frozenset[str] = frozenset(),
+) -> ArtifactT | None:
+    return latest_accepted_artifact(
+        artifacts, artifact_type, excluded_artifact_ids=excluded_artifact_ids
+    )
+
+
+def _implementation_for_feedback(
+    artifacts: tuple[Artifact, ...], *, source: CoderExecutionInput | None
+) -> ImplementationReportArtifact | None:
+    """Select current output, retaining exact retired output only for verifier findings.
+
+    An old candidate remains a valid parent for its historical QA/Review findings,
+    but never authorizes candidate recovery or supplies the new execution source.
+    """
+    implementation = _latest(
+        artifacts,
+        ImplementationReportArtifact,
+        excluded_artifact_ids=source.superseded_artifact_ids if source is not None else frozenset(),
+    )
+    if (
+        implementation is not None
+        or source is None
+        or not source.superseded_implementation_artifact_ids
+    ):
+        return implementation
+    identity = source.superseded_implementation_artifact_ids[-1]
+    return next(
+        (
+            artifact
+            for artifact in artifacts
+            if isinstance(artifact, ImplementationReportArtifact)
+            and artifact.artifact_id == identity
+        ),
+        None,
+    )
 
 
 def _active_progress(

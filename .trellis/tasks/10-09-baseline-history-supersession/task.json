@@ -1,0 +1,28 @@
+{
+  "id": "baseline-history-supersession-20261009",
+  "title": "修复连续暂停基线更新后旧进度复活导致继续原需求失败",
+  "status": "completed",
+  "phase": "done",
+  "owner": "codex",
+  "created_at": "2026-10-09",
+  "baseline": "53d0eb4",
+  "allowed_paths": [
+    "src/ai_software_engineer/domain/execution_baseline.py",
+    "src/ai_software_engineer/artifacts/ordering.py",
+    "src/ai_software_engineer/manager/execution_baseline.py",
+    "src/ai_software_engineer/manager/baseline_production.py",
+    "src/ai_software_engineer/manager/baseline_admission.py",
+    "src/ai_software_engineer/manager/production_backend.py",
+    "src/ai_software_engineer/orchestration/runner.py",
+    "src/ai_software_engineer/orchestration/retry.py",
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/manager/",
+    "tests/orchestration/",
+    "tests/artifacts/",
+    "tests/team_view/",
+    ".trellis/spec/core/execution-baseline.md",
+    ".trellis/spec/guides/recovery-thinking.md",
+    ".trellis/tasks/10-09-baseline-history-supersession/"
+  ],
+  "verification": "verification.md"
+}

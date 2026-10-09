@@ -81,8 +81,14 @@ class _AcceptedArtifacts:
 
 
 class _BaselineResolver:
-    def __init__(self, binding: ExecutionBaselineBinding) -> None:
+    def __init__(
+        self,
+        binding: ExecutionBaselineBinding,
+        *,
+        history: tuple[ExecutionBaselineBinding, ...] = (),
+    ) -> None:
         self.binding = binding
+        self.history = history
 
     def current(
         self,
@@ -92,7 +98,11 @@ class _BaselineResolver:
         progress: CoderProgressArtifact | None,
     ) -> CoderExecutionInput:
         return resolve_coder_execution_input(
-            task, implementation=implementation, progress=progress, baseline=self.binding
+            task,
+            implementation=implementation,
+            progress=progress,
+            baseline=self.binding,
+            baseline_history=self.history,
         )
 
     def required_context(self, source: CoderExecutionInput) -> str | None:
@@ -226,6 +236,50 @@ def test_restart_excludes_baseline_superseded_candidate_and_keeps_new_candidate(
     )
     assert isinstance(result, BlockedResult)
     assert result.candidate_revision == ("c" * 40 if new_candidate else None)
+    assert "art_impl_001" in result.artifact_ids
+
+
+@pytest.mark.parametrize("new_candidate", [False, True])
+def test_restart_excludes_candidate_from_ancestor_binding_before_ordering(
+    new_candidate: bool,
+) -> None:
+    repository = _repository(candidate_checkpoint=True)
+    first = _binding(repository.task)
+    second = ExecutionBaselineBinding.create(
+        **{
+            **first.model_dump(exclude={"binding_sha256"}),
+            "sequence": 2,
+            "previous_binding_sha256": first.binding_sha256,
+            "prior_execution_base_ref": first.execution_base_ref,
+            "prior_source_revision": first.execution_source_revision,
+            "execution_base_ref": "e" * 40,
+            "execution_source_revision": "e" * 40,
+            "superseded_implementation_artifact_id": None,
+        }
+    )
+    implementation = make_implementation_artifact()
+    artifacts: tuple[Artifact, ...] = (make_plan_artifact(), implementation)
+    if new_candidate:
+        # A candidate after rebinding can have no ordinary supersedes edge to
+        # the old accepted output. The verified binding supplies its exclusion.
+        artifacts += (
+            implementation.model_copy(
+                update={
+                    "artifact_id": "art_impl_post_rebind",
+                    "source_revision": "f" * 40,
+                    "content": implementation.content.model_copy(update={"commit_sha": "f" * 40}),
+                }
+            ),
+        )
+    sealed = tuple(seal_artifact(artifact, validated_at=NOW) for artifact in artifacts)
+    result = _terminal_delivery_result(
+        repository,
+        _AcceptedArtifacts(sealed),
+        repository.task.id,
+        coder_execution_inputs=_BaselineResolver(second, history=(first, second)),
+    )
+    assert isinstance(result, BlockedResult)
+    assert result.candidate_revision == ("f" * 40 if new_candidate else None)
     assert "art_impl_001" in result.artifact_ids
 
 

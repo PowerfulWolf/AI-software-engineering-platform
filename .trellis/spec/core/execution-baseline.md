@@ -20,6 +20,10 @@ TeamHost.propose_execution_baseline(command: BaselineProposeCommand, *, project_
 TeamHost.execute_execution_baseline(command: BaselineExecuteCommand, *, project_id) -> ExecutionBaselineBinding
 load_sealed_preparation(workspace, preparation_sha256, *, organization) -> PrepareProjectResult
 StoredCoderExecutionInputResolver.current(task, *, implementation, progress) -> CoderExecutionInput
+resolve_coder_execution_input(task, *, implementation, progress, baseline, baseline_history=()) -> CoderExecutionInput
+CoderExecutionInput.superseded_artifact_ids -> frozenset[ArtifactId]
+CoderExecutionInput.progress_supersedes -> ArtifactId | None
+latest_accepted_artifact(artifacts, artifact_type, *, trusted_order=None, excluded_artifact_ids=frozenset())
 StoredCoderExecutionInputResolver.required_context(source) -> str | None
 BaselineRunContextBuilder.build(task, agent, *, attempt, candidate_revision, input_artifacts)
 execution_baseline_from_context(context, request, task) -> ExecutionBaselineBinding | None
@@ -166,8 +170,18 @@ publication clock. Equal publication time requires the full parent/supersedes gr
 `created_at`, file iteration order and random artifact IDs cannot establish current work.
 Duplicate identities, cycles and multiple incomparable latest artifacts fail closed.
 
-Resolve the trusted baseline first and exclude its exact superseded implementation/progress
-before comparing active Coder progress. Pass the complete accepted history to transitive lineage
+Resolve the complete verified baseline chain first and accumulate every binding's exact
+superseded implementation/progress IDs. A later binding with an absent superseded field does
+not reactivate an artifact superseded by an ancestor. Exclude these IDs from eligible candidates
+before selecting latest implementation/progress; retain the complete accepted artifact history
+for integrity and transitive lineage checks. New progress must still match the current source;
+source inequality alone is never grounds to ignore an artifact. The latest nonempty superseded
+progress ID remains the exact supersedes fallback for the first new checkpoint.
+Exclusion follows each retired artifact's explicit same-Task, same-kind `supersedes` ancestors,
+so removing the latest checkpoint cannot revive any checkpoint it already replaced. Ordinary
+parent references are not retirement edges: they remain available for ordering and historical
+QA/Review finding routing. A real new successor to a retired checkpoint remains eligible.
+Pass the complete accepted history to transitive lineage
 comparison. Runtime dispatch, initial draft admission and baseline recollection use the same
 selection rule; a replaced old candidate cannot hide a legitimate new-baseline checkpoint.
 
@@ -175,6 +189,42 @@ A terminal blocked handoff advertises only a valid accepted implementation's can
 The new execution input and a binding-superseded implementation are not candidates, even when
 their source differs from immutable `Task.base_ref`. Waiting and StateEvent source still record
 the actual current execution input or independent verifier candidate.
+
+`StoredCoderExecutionInputResolver` obtains the complete store-validated binding history;
+domain resolution rechecks Task/predecessor/latest identity and derives the two ordered
+`superseded_*_artifact_ids` tuples without changing wire records. Runtime source collection,
+workspace admission, Coder requests and blocked-result reconstruction first resolve the baseline
+with no role artifact, then select eligible artifacts using those exclusions. Exact retired
+implementation remains available only as historical verifier feedback and expected supersedes,
+never as a current execution source or recoverable/deliverable candidate.
+
+Wrong: select latest progress, discard only `history[-1].superseded_progress_artifact_id`, then
+compare source; a later empty field resurrects earlier retired work. Correct: validate full binding
+history, select candidates with its cumulative exclusions and complete accepted supersedes graph,
+then enforce active progress source equality. Missing history/foreign Task/changed digest or a
+genuinely mismatched active checkpoint still fails closed.
+
+| Repeated baseline history | Required behavior |
+| --- | --- |
+| B1 retires P0, B2 has no progress ID, P0 and four replaced predecessors remain stored | None is an active checkpoint; continue B2's preserved input |
+| New P1 on B2 source explicitly supersedes P0 | P1 remains active; normal progress lineage is retained |
+| Unrelated old-source progress not retired by exact binding/supersedes chain | Reject with Chinese source mismatch; retain all evidence |
+| Retired implementation I0 followed by empty B2 field | No candidate recovery/handoff from I0; its QA/Review findings still reach Coder |
+| Excluded records hide invalid integrity/duplicate/cycle or cross-kind supersedes | Reject; exclusions cannot bypass validation |
+
+Incremental regressions: `tests/orchestration/test_baseline_history_inputs.py`,
+`test_baseline_exclusion.py`, `tests/manager/test_paused_baseline_service.py`,
+`test_terminal_candidate_reconstruction.py`, and the `first_checkpoint=True` public native
+Host flow in `test_legacy_rescue_delivery.py`. The latter must keep exact old artifact bytes,
+Task/approval/worktree/budgets and independent same-candidate QA/Review after two PAUSE bindings.
+`tests/team_view/baseline-progress-failure.test.cjs` checks Chinese presentation of the historical
+exact English error while keeping immutable Operation audit text unchanged.
+
+Existing K1 failed before continuation authorization or SQL release: no record migration,
+Task reset, new approval or source update is needed. Read-only verify current binding/worktree
+inventory/hold, load the fixed service while idle, refresh the original Requirement and explicitly
+continue its latest paused binding. This fix changes no persisted Schema/bytes/digests; a code
+rollback remains possible while idle but reintroduces this selection failure.
 
 ## Validation matrix
 

@@ -501,29 +501,22 @@ class SerialOrchestrator:
 
     def _current_coder_input(self, task: Task) -> CoderExecutionInput:
         artifacts = self._artifact_store.list_for_task(task.id)
-        implementation = latest_accepted_artifact(artifacts, ImplementationReportArtifact)
-        progress = latest_accepted_artifact(artifacts, CoderProgressArtifact)
         baseline_input = (
-            self._coder_execution_inputs.current(task, implementation=implementation, progress=None)
+            self._coder_execution_inputs.current(task, implementation=None, progress=None)
             if self._coder_execution_inputs is not None
             else None
         )
-        current_implementation = implementation
-        if baseline_input is not None and baseline_input.baseline is not None:
-            baseline = baseline_input.baseline
-            if (
-                progress is not None
-                and progress.artifact_id == baseline.superseded_progress_artifact_id
-            ):
-                progress = None
-            if (
-                current_implementation is not None
-                and current_implementation.artifact_id
-                == baseline.superseded_implementation_artifact_id
-            ):
-                current_implementation = None
-        if progress is not None and current_implementation is not None:
-            order = compare_artifact_order(progress, current_implementation, artifacts=artifacts)
+        excluded = (
+            baseline_input.superseded_artifact_ids if baseline_input is not None else frozenset()
+        )
+        implementation = latest_accepted_artifact(
+            artifacts, ImplementationReportArtifact, excluded_artifact_ids=excluded
+        )
+        progress = latest_accepted_artifact(
+            artifacts, CoderProgressArtifact, excluded_artifact_ids=excluded
+        )
+        if progress is not None and implementation is not None:
+            order = compare_artifact_order(progress, implementation, artifacts=artifacts)
             if order is None:
                 raise ArtifactOrderingError(
                     "Coder progress and candidate have no publication order"

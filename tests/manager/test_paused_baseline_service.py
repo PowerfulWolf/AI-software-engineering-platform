@@ -6,14 +6,20 @@ from pathlib import Path
 
 import pytest
 
+from ai_software_engineer.artifacts import seal_artifact
+from ai_software_engineer.domain.artifact import CoderProgressArtifact
 from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal
-from ai_software_engineer.domain.execution_baseline import BaselineContinuationMode
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
+    resolve_coder_execution_input,
+)
 from ai_software_engineer.domain.execution_native_rules import native_rules_sha256
 from ai_software_engineer.manager.baseline_models import BaselineOperatorAuthorization
 from ai_software_engineer.manager.baseline_native_rules import build_native_rule_change
 from ai_software_engineer.manager.baseline_production import native_rules_at_revision
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.recovery.models import digest
+from tests.domain.factories import make_coder_progress_artifact
 from tests.git.test_worktree import _git
 from tests.manager.test_execution_baseline import setup
 
@@ -40,11 +46,20 @@ def test_exact_native_approval_pauses_and_later_source_update_inherits_rules(
         target_rules=target,
     )
     assert change is not None
+    old_progress = seal_artifact(
+        make_coder_progress_artifact().model_copy(
+            update={"source_revision": f.worktree.head_revision}
+        ),
+        validated_at=datetime.now(UTC),
+    )
+    assert isinstance(old_progress, CoderProgressArtifact)
     values = original.model_copy(
         update={
             "source_native_rules_sha256": native_rules_sha256(old),
             "target_native_rules_sha256": native_rules_sha256(target),
             "native_rule_change": change,
+            "progress_artifact_id": old_progress.artifact_id,
+            "source_artifact_ids": (*original.source_artifact_ids, old_progress.artifact_id),
         }
     )
     f.collector.facts = values.model_copy(
@@ -89,6 +104,7 @@ def test_exact_native_approval_pauses_and_later_source_update_inherits_rules(
             "native_rule_change": None,
             "source_native_rules_sha256": native_rules_sha256(target),
             "implementation_artifact_id": None,
+            "progress_artifact_id": None,
         }
     )
     f.collector.facts = values.model_copy(
@@ -126,3 +142,51 @@ def test_exact_native_approval_pauses_and_later_source_update_inherits_rules(
     source = resolver.current(original.task, implementation=None, progress=None)
     assert resolver.native_rule_epoch(source) == epoch
     assert len(f.service.store.bindings_for_task(original.task.id)) == 2
+    assert binding.superseded_progress_artifact_id == old_progress.artifact_id
+    assert next_binding.superseded_progress_artifact_id is None
+    continued = resolver.current(original.task, implementation=None, progress=old_progress)
+    assert continued.source_revision == next_binding.execution_source_revision
+    assert continued.active_progress is None
+    assert continued.progress_supersedes == old_progress.artifact_id
+    assert old_progress.artifact_id in continued.superseded_artifact_ids
+    valid_new = seal_artifact(
+        old_progress.model_copy(
+            update={
+                "artifact_id": "art_progress_new",
+                "supersedes": old_progress.artifact_id,
+                "source_revision": next_binding.execution_source_revision,
+            }
+        ),
+        validated_at=datetime.now(UTC),
+    )
+    assert isinstance(valid_new, CoderProgressArtifact)
+    assert (
+        resolver.current(original.task, implementation=None, progress=valid_new).active_progress
+        == valid_new
+    )
+    unknown_old_source = seal_artifact(
+        old_progress.model_copy(update={"artifact_id": "art_progress_unapproved"}),
+        validated_at=datetime.now(UTC),
+    )
+    assert isinstance(unknown_old_source, CoderProgressArtifact)
+    with pytest.raises(ValueError, match=r"开发进度.*执行版本不一致"):
+        resolver.current(original.task, implementation=None, progress=unknown_old_source)
+    foreign = valid_new.model_copy(update={"task_id": "task_foreign"})
+    with pytest.raises(ValueError, match="another Task"):
+        resolver.current(original.task, implementation=None, progress=foreign)
+    with pytest.raises(ValueError, match="predecessor"):
+        resolve_coder_execution_input(
+            original.task,
+            implementation=None,
+            progress=old_progress,
+            baseline=next_binding,
+            baseline_history=(next_binding,),
+        )
+    with pytest.raises(ValueError, match="最新绑定"):
+        resolve_coder_execution_input(
+            original.task,
+            implementation=None,
+            progress=old_progress,
+            baseline=binding,
+            baseline_history=(binding, next_binding),
+        )

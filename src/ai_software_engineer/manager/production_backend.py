@@ -1287,32 +1287,22 @@ class ProductionProjectDeliveryBackend:
                     from ai_software_engineer.orchestration.retry import _active_progress, _latest
 
                     values = accepted_artifacts.list_for_task(dispatch.task_id)
-                    implementation = _latest(values, ImplementationReportArtifact)
                     snapshot = current_task()
-                    source = baseline_inputs.current(
-                        snapshot, implementation=implementation, progress=None
+                    source = baseline_inputs.current(snapshot, implementation=None, progress=None)
+                    implementation = _latest(
+                        values,
+                        ImplementationReportArtifact,
+                        excluded_artifact_ids=source.superseded_artifact_ids,
                     )
-                    progress = _latest(values, CoderProgressArtifact)
-                    current_implementation = implementation
-                    if source.baseline is not None:
-                        if (
-                            progress is not None
-                            and progress.artifact_id
-                            == source.baseline.superseded_progress_artifact_id
-                        ):
-                            progress = None
-                        if (
-                            current_implementation is not None
-                            and current_implementation.artifact_id
-                            == source.baseline.superseded_implementation_artifact_id
-                        ):
-                            current_implementation = None
+                    progress = _latest(
+                        values,
+                        CoderProgressArtifact,
+                        excluded_artifact_ids=source.superseded_artifact_ids,
+                    )
                     return baseline_inputs.current(
                         snapshot,
                         implementation=implementation,
-                        progress=_active_progress(
-                            progress, current_implementation, artifacts=values
-                        ),
+                        progress=_active_progress(progress, implementation, artifacts=values),
                     ).source_revision
 
                 def resolved_receipts() -> tuple[str, ...]:
@@ -1348,31 +1338,31 @@ class ProductionProjectDeliveryBackend:
                     from ai_software_engineer.orchestration.continuation_models import (
                         ContinuationRejected,
                     )
-                    from ai_software_engineer.orchestration.retry import _active_progress, _latest
+                    from ai_software_engineer.orchestration.retry import (
+                        _active_progress,
+                        _implementation_for_feedback,
+                        _latest,
+                    )
 
                     artifacts = accepted_artifacts.list_for_task(dispatch.task_id)
                     selected_plan = _latest(artifacts, PlanArtifact)
-                    implementation = _latest(artifacts, ImplementationReportArtifact)
                     snapshot = current_task()
                     preliminary_source = baseline_inputs.current(
-                        snapshot, implementation=implementation, progress=None
+                        snapshot, implementation=None, progress=None
                     )
-                    selected_progress = _latest(artifacts, CoderProgressArtifact)
-                    current_implementation = implementation
-                    if preliminary_source.baseline is not None:
-                        baseline = preliminary_source.baseline
-                        if (
-                            selected_progress is not None
-                            and selected_progress.artifact_id
-                            == baseline.superseded_progress_artifact_id
-                        ):
-                            selected_progress = None
-                        if (
-                            current_implementation is not None
-                            and current_implementation.artifact_id
-                            == baseline.superseded_implementation_artifact_id
-                        ):
-                            current_implementation = None
+                    implementation = _implementation_for_feedback(
+                        artifacts, source=preliminary_source
+                    )
+                    current_implementation = _latest(
+                        artifacts,
+                        ImplementationReportArtifact,
+                        excluded_artifact_ids=preliminary_source.superseded_artifact_ids,
+                    )
+                    selected_progress = _latest(
+                        artifacts,
+                        CoderProgressArtifact,
+                        excluded_artifact_ids=preliminary_source.superseded_artifact_ids,
+                    )
                     selected_progress = _active_progress(
                         selected_progress, current_implementation, artifacts=artifacts
                     )
@@ -1410,9 +1400,7 @@ class ProductionProjectDeliveryBackend:
                     expected_supersedes[ArtifactKind.CODER_PROGRESS] = (
                         selected_progress.artifact_id
                         if selected_progress is not None
-                        else coder_source.baseline.superseded_progress_artifact_id
-                        if coder_source.baseline is not None
-                        else None
+                        else coder_source.progress_supersedes
                     )
                     inputs = (
                         selected_plan,
@@ -2225,21 +2213,20 @@ def _terminal_delivery_result(
         accepted = artifacts.list_for_task(task.id)
         if any(artifact.task_id != task.id for artifact in accepted):
             raise ValueError("terminal accepted artifact history belongs to another Task")
-        retained_implementation = latest_accepted_artifact(accepted, ImplementationReportArtifact)
         source = (
-            coder_execution_inputs.current(
-                task, implementation=retained_implementation, progress=None
-            )
+            coder_execution_inputs.current(task, implementation=None, progress=None)
             if coder_execution_inputs is not None
             else None
         )
+        retained_implementation = latest_accepted_artifact(
+            accepted,
+            ImplementationReportArtifact,
+            excluded_artifact_ids=source.superseded_artifact_ids
+            if source is not None
+            else frozenset(),
+        )
         retained_candidate = None
-        if retained_implementation is not None and (
-            source is None
-            or source.baseline is None
-            or retained_implementation.artifact_id
-            != source.baseline.superseded_implementation_artifact_id
-        ):
+        if retained_implementation is not None:
             if (
                 retained_implementation.source_revision
                 != retained_implementation.content.commit_sha

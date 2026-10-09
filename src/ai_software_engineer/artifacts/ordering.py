@@ -92,10 +92,8 @@ def latest_accepted_artifact[ArtifactT: Artifact](
     artifact_type: type[ArtifactT],
     *,
     trusted_order: Mapping[str, ArtifactOrderPosition] | None = None,
+    excluded_artifact_ids: frozenset[str] = frozenset(),
 ) -> ArtifactT | None:
-    candidates = tuple(artifact for artifact in artifacts if isinstance(artifact, artifact_type))
-    if not candidates:
-        return None
     if any(
         not artifact.integrity.validated or artifact.integrity.validated_at is None
         for artifact in artifacts
@@ -106,6 +104,29 @@ def latest_accepted_artifact[ArtifactT: Artifact](
         raise ArtifactOrderingError("accepted artifact history contains duplicate identities")
     if any(_descends(artifact.artifact_id, artifact.artifact_id, by_id) for artifact in artifacts):
         raise ArtifactOrderingError("accepted artifact lineage contains a cycle")
+    # A binding retires an accepted checkpoint, including older checkpoints it
+    # explicitly replaced. Removing only the newest ID would revive its ancestors.
+    excluded = set(excluded_artifact_ids)
+    pending = list(excluded)
+    while pending:
+        artifact = by_id.get(pending.pop())
+        if artifact is None or artifact.supersedes is None:
+            continue
+        ancestor = by_id.get(artifact.supersedes)
+        if ancestor is None:
+            continue
+        if (ancestor.task_id, ancestor.kind) != (artifact.task_id, artifact.kind):
+            raise ArtifactOrderingError("superseded artifact lineage changed Task or kind")
+        if ancestor.artifact_id not in excluded:
+            excluded.add(ancestor.artifact_id)
+            pending.append(ancestor.artifact_id)
+    candidates = tuple(
+        artifact
+        for artifact in artifacts
+        if isinstance(artifact, artifact_type) and artifact.artifact_id not in excluded
+    )
+    if not candidates:
+        return None
     maximal = tuple(
         artifact
         for artifact in candidates

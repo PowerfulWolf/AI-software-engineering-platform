@@ -19,6 +19,7 @@ from pymysql.cursors import DictCursor
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, RouteAttemptOutcome
 from ai_software_engineer.agents.models import AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
+from ai_software_engineer.artifacts.ordering import latest_accepted_artifact
 from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.artifact import (
     CoderProgressArtifact,
@@ -575,24 +576,18 @@ class ProductionBaselineFactCollector:
         self._require_step(item, step)
         artifacts = self.artifacts.list_for_task(task.id)
         plan = _latest(artifacts, PlanArtifact)
-        implementation = _latest(artifacts, ImplementationReportArtifact)
-        progress = _latest(artifacts, CoderProgressArtifact)
-        previous_source = self.inputs.current(task, implementation=implementation, progress=None)
-        current_implementation = implementation
-        if previous_source.baseline is not None:
-            baseline = previous_source.baseline
-            if (
-                progress is not None
-                and progress.artifact_id == baseline.superseded_progress_artifact_id
-            ):
-                progress = None
-            if (
-                current_implementation is not None
-                and current_implementation.artifact_id
-                == baseline.superseded_implementation_artifact_id
-            ):
-                current_implementation = None
-        progress = _active_progress(progress, current_implementation, artifacts)
+        previous_source = self.inputs.current(task, implementation=None, progress=None)
+        implementation = latest_accepted_artifact(
+            artifacts,
+            ImplementationReportArtifact,
+            excluded_artifact_ids=previous_source.superseded_artifact_ids,
+        )
+        progress = latest_accepted_artifact(
+            artifacts,
+            CoderProgressArtifact,
+            excluded_artifact_ids=previous_source.superseded_artifact_ids,
+        )
+        progress = _active_progress(progress, implementation, artifacts)
         if plan is None:
             raise ValueError("执行基线调查缺少已接纳的原始交付计划")
         for artifact in artifacts:
@@ -605,7 +600,7 @@ class ProductionBaselineFactCollector:
         if step.boundary.source_revision != source.source_revision:
             raise ValueError("Coder 队列源版本与当前已接纳输入不一致")
         if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE and (
-            target_base_ref != source.execution_base_ref or current_implementation is not None
+            target_base_ref != source.execution_base_ref or implementation is not None
         ):
             raise ValueError("旧执行救援只能保留原代码基线和草稿, 不能覆盖已接纳候选")
         target_rules = native_rules_at_revision(
@@ -677,13 +672,7 @@ class ProductionBaselineFactCollector:
             target_native_rules_sha256=digest([rule.to_wire() for rule in target_rules]),
             native_rule_change=change,
             source_artifact_ids=tuple(sorted(artifact.artifact_id for artifact in artifacts)),
-            implementation_artifact_id=(
-                current_implementation.artifact_id
-                if legacy is not None and current_implementation is not None
-                else implementation.artifact_id
-                if legacy is None and implementation is not None
-                else None
-            ),
+            implementation_artifact_id=implementation.artifact_id if implementation else None,
             progress_artifact_id=progress.artifact_id if progress else None,
             resolved_interruption_receipt_sha256s=resolved,
             continuation=reservation,
@@ -715,26 +704,18 @@ class ProductionBaselineFactCollector:
         if not self._scope_held or facts.task.id != self.allocation.task_id:
             raise ValueError("执行基线工作区不属于当前持锁需求")
         artifacts = self.artifacts.list_for_task(facts.task.id)
-        implementation = _latest(artifacts, ImplementationReportArtifact)
-        progress = _latest(artifacts, CoderProgressArtifact)
-        previous_source = self.inputs.current(
-            facts.task, implementation=implementation, progress=None
+        previous_source = self.inputs.current(facts.task, implementation=None, progress=None)
+        implementation = latest_accepted_artifact(
+            artifacts,
+            ImplementationReportArtifact,
+            excluded_artifact_ids=previous_source.superseded_artifact_ids,
         )
-        current_implementation = implementation
-        if previous_source.baseline is not None:
-            baseline = previous_source.baseline
-            if (
-                progress is not None
-                and progress.artifact_id == baseline.superseded_progress_artifact_id
-            ):
-                progress = None
-            if (
-                current_implementation is not None
-                and current_implementation.artifact_id
-                == baseline.superseded_implementation_artifact_id
-            ):
-                current_implementation = None
-        progress = _active_progress(progress, current_implementation, artifacts)
+        progress = latest_accepted_artifact(
+            artifacts,
+            CoderProgressArtifact,
+            excluded_artifact_ids=previous_source.superseded_artifact_ids,
+        )
+        progress = _active_progress(progress, implementation, artifacts)
         source = self.inputs.current(facts.task, implementation=implementation, progress=progress)
         spec = WorktreeSpec(
             task_id=facts.task.id,

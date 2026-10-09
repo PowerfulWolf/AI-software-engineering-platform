@@ -546,6 +546,7 @@ class StoredCoderExecutionInputResolver:
             implementation=implementation,
             progress=progress,
             baseline=history[-1] if history else None,
+            baseline_history=history,
         )
 
     def required_context(self, source: CoderExecutionInput) -> str | None:

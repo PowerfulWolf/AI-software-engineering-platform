@@ -42,6 +42,8 @@ from ai_software_engineer.context.native import validate_native_rule_epoch_conte
 from ai_software_engineer.domain import (
     AgentDefinition,
     AgentRole,
+    ArtifactKind,
+    CoderProgressArtifact,
     Evidence,
     EvidenceType,
     ImplementationReportArtifact,
@@ -116,18 +118,19 @@ from tests.manager.test_production_backend import (
 )
 from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
 from tests.manager.test_production_continuation import Invocation, _coder_draft
-from tests.manager.test_production_continuation_v2 import DESIRED, _ReportTemplate
+from tests.manager.test_production_continuation_v2 import DESIRED, _progress, _ReportTemplate
 
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    ("sealed_final", "crash_before_consumption", "local_stop"),
+    ("sealed_final", "crash_before_consumption", "local_stop", "first_checkpoint"),
     [
-        (False, False, False),
-        (False, True, False),
-        (True, False, False),
-        (False, False, True),
-        (False, True, True),
+        (False, False, False, False),
+        (False, True, False, False),
+        (True, False, False, False),
+        (False, False, True, False),
+        (False, True, True, False),
+        (False, False, True, True),
     ],
 )
 def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
@@ -137,6 +140,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     sealed_final: bool,
     crash_before_consumption: bool,
     local_stop: bool,
+    first_checkpoint: bool,
 ) -> None:
     pause_rescue = local_stop and not crash_before_consumption and not sealed_final
     repository = tmp_path / "target"
@@ -151,6 +155,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     results: list[AgentResult] = []
     expected_binding: str | None = None
     expected_epoch: NativeRuleEpoch | None = None
+    first_progress_id: str | None = None
     original_complete = _ScriptedStructuredClient.complete
 
     def source_inspection(
@@ -225,10 +230,19 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             stdin: str,
             timeout_seconds: float,
         ) -> CodexInvocationResult:
+            nonlocal first_progress_id
             adapter, request = self.adapter, self.request
             record_call(adapter, request, cwd)
             guard = cast(WorkerExecutionGuard, adapter._execution_guard)
             if request.role is AgentRole.CODER and request.attempt == 1:
+                if first_checkpoint:
+                    (cwd / "hello.txt").write_text("first retained draft\n")
+                    progress = _progress(adapter, request)
+                    first_progress_id = progress.artifact_id
+                    Path(argv[argv.index("--output-last-message") + 1]).write_text(
+                        progress.model_dump_json()
+                    )
+                    return CodexInvocationResult(returncode=0)
                 outcome = SubprocessCodexCommandRunner(guard).run(
                     (
                         sys.executable,
@@ -262,6 +276,12 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             policy = WorkspacePolicy(cwd, request.permissions)
             if request.role is AgentRole.CODER:
                 assert request.attempt == 3
+                assert request.continuation_checkpoint_id is None
+                assert first_progress_id not in request.input_artifact_ids
+                if first_checkpoint:
+                    assert (request.expected_supersedes_by_kind or {}).get(
+                        ArtifactKind.CODER_PROGRESS
+                    ) == first_progress_id
                 assert (cwd / "hello.txt").read_text() == "unknown retained draft\n"
                 policy.authorize_write("hello.txt")
                 with pytest.raises(WorkspacePolicyError):
@@ -343,12 +363,16 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
 
     class ObservedCodex(CodexCliAgentAdapter):
         def run(self, request: AgentRequest) -> AgentResult:
+            nonlocal first_progress_id
             if request.role is AgentRole.CODER and request.attempt == 2:
                 # Simulate a pre-ledger local runner: it did work under a real claim,
                 # but never sealed final/stop/capture records. The test process owns
                 # the child and waits for it; this is not a fabricated stop artifact.
                 cwd = self._workspace_root
                 record_call(self, request, cwd)
+                if first_checkpoint:
+                    assert request.continuation_checkpoint_id == first_progress_id
+                    assert (cwd / "hello.txt").read_text() == "first retained draft\n"
                 with subprocess.Popen(
                     (
                         sys.executable,
@@ -366,6 +390,8 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
                 raise ContinuationExecutionUncertain("fixture: old local invocation has no result")
             self._runner = Runner(self, request)
             result = super().run(request)
+            if isinstance(result.artifact, CoderProgressArtifact):
+                first_progress_id = result.artifact.artifact_id
             results.append(result)
             return result
 
@@ -430,8 +456,16 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     continuations = FileContinuationStore(
         sidecar / "state/continuations" / pending.task_id, task_id=pending.task_id
     )
-    (first_receipt,) = continuations.receipts_for_task(pending.task_id)
-    assert first_receipt.request == first.request
+    first_receipts = continuations.receipts_for_task(pending.task_id)
+    if first_checkpoint:
+        assert not first_receipts
+        assert first_progress_id is not None
+    else:
+        (first_receipt,) = first_receipts
+        assert first_receipt.request == first.request
+    original_artifacts = {
+        path: path.read_bytes() for path in (sidecar / "artifacts").rglob("*.json")
+    }
     capture_root = sidecar / "state/continuations" / pending.task_id
     assert not (capture_root / f"capture-start-{unknown.request.run_id}.json").exists()
     assert not (capture_root / f"capture-stop-{unknown.request.run_id}.json").exists()
@@ -444,7 +478,10 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         if i.status is not WorkItemStatus.CLOSED
     )
     assert waiting.id == unknown.claim.work_item.id
-    assert waiting.status in (WorkItemStatus.WAITING_DEPENDENCY, WorkItemStatus.WAITING_HUMAN)
+    assert waiting.status in (
+        WorkItemStatus.WAITING_DEPENDENCY,
+        WorkItemStatus.WAITING_HUMAN,
+    ), pending.failure_summary
     assert frozen.attempts == frozen.work_attempt == 2 and not frozen.retry_failures
     original_bytes = {path: path.read_bytes() for path in (sidecar / "policy").rglob("*.json")}
     workspace_bytes = {
@@ -614,7 +651,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             host.propose_execution_baseline(command, project_id="project_test")
         assert len(calls) == 2
         assert records.find("invocation-outcomes", waiting.id, DeliveryInvocationOutcome) is None
-        assert continuations.receipts_for_task(frozen.id) == (first_receipt,)
+        assert continuations.receipts_for_task(frozen.id) == first_receipts
         assert {
             path.relative_to(unknown.workspace): path.read_bytes()
             for path in unknown.workspace.rglob("*")
@@ -786,6 +823,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
     assert binding.execution_base_ref == binding.approved_base_ref == source
     assert binding.execution_source_revision == source
+    assert binding.superseded_progress_artifact_id == first_progress_id
     assert {
         path.relative_to(unknown.workspace): path.read_bytes()
         for path in unknown.workspace.rglob("*")
@@ -796,7 +834,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert _git_output("branch", "--show-current", cwd=unknown.workspace) == unknown.branch
     assert records.get("invocation-starts", waiting.id, DeliveryInvocationStart) == original_start
     assert records.find("invocation-outcomes", waiting.id, DeliveryInvocationOutcome) is None
-    assert continuations.receipts_for_task(frozen.id) == (first_receipt,)
+    assert continuations.receipts_for_task(frozen.id) == first_receipts
     assert not routes.list_for_run(unknown.request.run_id)
     # Full subsequent collection must still accept the independently disposed
     # old UNKNOWN while inspecting the new uninvoked successor.
@@ -889,6 +927,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         )
         latest_binding = host.execute_execution_baseline(upgrade_execute, project_id="project_test")
         assert latest_binding.previous_binding_sha256 == binding.binding_sha256
+        assert latest_binding.superseded_progress_artifact_id is None
         assert latest_binding.native_rule_epoch_sha256 is not None
         expected_binding = latest_binding.binding_sha256
         expected_epoch = FileExecutionBaselineStore(
@@ -953,6 +992,12 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     implementation = next(a for a in artifacts if isinstance(a, ImplementationReportArtifact))
     qa = next(a for a in artifacts if isinstance(a, QaReportArtifact))
     review = next(a for a in artifacts if isinstance(a, ReviewReportArtifact))
+    if first_checkpoint:
+        original_progress = next(a for a in artifacts if isinstance(a, CoderProgressArtifact))
+        assert original_progress.artifact_id == first_progress_id
+        assert original_progress.source_revision == source
+        assert original_progress.artifact_id not in implementation.parent_artifact_ids
+    assert all(path.read_bytes() == body for path, body in original_artifacts.items())
     assert (
         implementation.source_revision == qa.source_revision == review.source_revision == candidate
     )
@@ -964,7 +1009,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert pending.preparation_sha256 == delivered.preparation_sha256
     assert records.get("invocation-starts", waiting.id, DeliveryInvocationStart) == original_start
     assert records.find("invocation-outcomes", waiting.id, DeliveryInvocationOutcome) is None
-    assert continuations.receipts_for_task(frozen.id) == (first_receipt,)
+    assert continuations.receipts_for_task(frozen.id) == first_receipts
     baseline_store = FileExecutionBaselineStore(
         sidecar / "state/execution-baselines" / frozen.id, read_only=True
     )

@@ -124,6 +124,12 @@ the survey from approval and subsequent execution.
 
 ## 保留后的执行权必须持久暂停
 
+连续保留/更新两次以上时，是否沿完整可信 binding 链保留所有精确撤销？最新记录中的空字段
+不能让旧 checkpoint/candidate 复活；排除最新checkpoint也不能重新选回其显式supersedes
+祖先。公共继续用例必须包含真实已接纳进度，再经过第二次暂停更新，而不只有timeout capture。
+当前执行源、可交接候选与旧QA/Review finding是不同用途，过滤不能丢掉返工依据。详见
+execution-baseline.md 的 accepted artifact order 与 repeated baseline 验证矩阵。
+
 保存草稿与真正启动下一轮是两个不同决定。只跳过同步 Host.resume 不能暂停独立 dispatcher；
 必须在原 Task lock→queue authority→Task row fence 内写入精确 WAITING_HUMAN hold。更新代码/
 工程规范时延续该 hold 与预算，最后由匹配最新 binding/disposition/source/inventory 的明确决定

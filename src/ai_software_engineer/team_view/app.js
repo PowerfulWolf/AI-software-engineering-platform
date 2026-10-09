@@ -2392,6 +2392,7 @@ function humanizeBlockingText(value) {
   const text = String(value || "").trim();
   if (!text) return "暂未记录具体原因。";
   const exact = {
+    "new progress does not match the bound execution source": "平台在基线更新后选取开发进度失败，本次未能继续原需求，已保存的进度和现场仍保留。请加载修复版本并刷新原需求，再点击“继续原需求”；无需新建需求。",
     "Operation input is invalid.": "本次请求未被受理，不是原需求新增的阻塞。页面与服务的操作契约可能不匹配，或提交内容不符合当前契约。请在当前操作和角色执行结束、服务空闲时重启 Web Console 并刷新页面；原需求和已保存进度保留。如仍无法提交，请携带处理报告核对请求字段。",
     "The console host stopped before the operation completed.": "服务在本次操作完成前已停止，操作已中断。已保存的交付进度和审批仍保留。",
     "Designer did not publish a verified planning handoff": "设计到计划的交接尚未通过校验，当前交付已阻塞。由工程团队核验具体原因并处理。",

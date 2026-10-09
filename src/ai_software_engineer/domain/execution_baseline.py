@@ -209,6 +209,22 @@ class CoderExecutionInput:
     execution_base_ref: str
     active_progress: CoderProgressArtifact | None
     baseline: ExecutionBaselineBinding | None
+    superseded_implementation_artifact_ids: tuple[ArtifactId, ...] = ()
+    superseded_progress_artifact_ids: tuple[ArtifactId, ...] = ()
+
+    @property
+    def superseded_artifact_ids(self) -> frozenset[ArtifactId]:
+        return frozenset(
+            (*self.superseded_implementation_artifact_ids, *self.superseded_progress_artifact_ids)
+        )
+
+    @property
+    def progress_supersedes(self) -> ArtifactId | None:
+        return (
+            self.superseded_progress_artifact_ids[-1]
+            if self.superseded_progress_artifact_ids
+            else None
+        )
 
 
 def resolve_coder_execution_input(
@@ -217,6 +233,7 @@ def resolve_coder_execution_input(
     implementation: ImplementationReportArtifact | None,
     progress: CoderProgressArtifact | None,
     baseline: ExecutionBaselineBinding | None,
+    baseline_history: tuple[ExecutionBaselineBinding, ...] = (),
 ) -> CoderExecutionInput:
     """Resolve one source for runner/boundary/context/Native/worktree composition.
 
@@ -228,16 +245,39 @@ def resolve_coder_execution_input(
     for artifact in (implementation, progress):
         if artifact is not None and artifact.task_id != task.id:
             raise ValueError("Coder source artifact belongs to another Task")
+    if baseline_history:
+        if baseline != baseline_history[-1]:
+            raise ValueError("执行基线与完整历史链的最新绑定不一致")
+        previous = None
+        for binding in baseline_history:
+            binding.require_task(task)
+            binding.require_predecessor(previous)
+            previous = binding
     if baseline is None:
         source = implementation.content.commit_sha if implementation is not None else task.base_ref
         if progress is not None and progress.source_revision != source:
             raise ValueError("active progress does not match the current Coder input")
         return CoderExecutionInput(source, task.base_ref, progress, None)
     baseline.require_task(task)
+    history = baseline_history or (baseline,)
+    superseded_implementations = tuple(
+        dict.fromkeys(
+            identity
+            for binding in history
+            if (identity := binding.superseded_implementation_artifact_id) is not None
+        )
+    )
+    superseded_progress = tuple(
+        dict.fromkeys(
+            identity
+            for binding in history
+            if (identity := binding.superseded_progress_artifact_id) is not None
+        )
+    )
     current_implementation = implementation
     if (
         current_implementation is not None
-        and current_implementation.artifact_id == baseline.superseded_implementation_artifact_id
+        and current_implementation.artifact_id in superseded_implementations
     ):
         current_implementation = None
     source = (
@@ -246,11 +286,18 @@ def resolve_coder_execution_input(
         else baseline.execution_source_revision
     )
     active_progress = progress
-    if (
-        active_progress is not None
-        and active_progress.artifact_id == baseline.superseded_progress_artifact_id
-    ):
+    if active_progress is not None and active_progress.artifact_id in superseded_progress:
         active_progress = None
     if active_progress is not None and active_progress.source_revision != source:
-        raise ValueError("new progress does not match the bound execution source")
-    return CoderExecutionInput(source, baseline.execution_base_ref, active_progress, baseline)
+        raise ValueError(
+            "当前开发进度与已批准的执行版本不一致，暂不能继续原需求。"  # noqa: RUF001
+            "原进度和现场已保留，请由平台核验进度记录与基线更新历史后再继续。"  # noqa: RUF001
+        )
+    return CoderExecutionInput(
+        source,
+        baseline.execution_base_ref,
+        active_progress,
+        baseline,
+        superseded_implementations,
+        superseded_progress,
+    )

@@ -5,13 +5,14 @@ from pathlib import Path
 
 from ai_software_engineer.agents.models import AgentRequest
 from ai_software_engineer.artifacts import ArtifactStore
+from ai_software_engineer.artifacts.ordering import latest_accepted_artifact
 from ai_software_engineer.domain.artifact import CoderProgressArtifact, ImplementationReportArtifact
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import GitWorktreeManager, WorktreeSpec
 from ai_software_engineer.git.mutation import capture_mutation_inventory
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
-from ai_software_engineer.orchestration.retry import _active_progress, _latest
+from ai_software_engineer.orchestration.retry import _active_progress
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
 
@@ -37,24 +38,18 @@ class BaselineInitialWorkspaceAdmission:
         self.guard.check()
         task = self.task_reader()
         artifacts = self.artifacts.list_for_task(task.id)
-        implementation = _latest(artifacts, ImplementationReportArtifact)
-        progress = _latest(artifacts, CoderProgressArtifact)
-        previous_source = self.inputs.current(task, implementation=implementation, progress=None)
-        current_implementation = implementation
-        if previous_source.baseline is not None:
-            baseline = previous_source.baseline
-            if (
-                progress is not None
-                and progress.artifact_id == baseline.superseded_progress_artifact_id
-            ):
-                progress = None
-            if (
-                current_implementation is not None
-                and current_implementation.artifact_id
-                == baseline.superseded_implementation_artifact_id
-            ):
-                current_implementation = None
-        progress = _active_progress(progress, current_implementation, artifacts)
+        previous_source = self.inputs.current(task, implementation=None, progress=None)
+        implementation = latest_accepted_artifact(
+            artifacts,
+            ImplementationReportArtifact,
+            excluded_artifact_ids=previous_source.superseded_artifact_ids,
+        )
+        progress = latest_accepted_artifact(
+            artifacts,
+            CoderProgressArtifact,
+            excluded_artifact_ids=previous_source.superseded_artifact_ids,
+        )
+        progress = _active_progress(progress, implementation, artifacts)
         source = self.inputs.current(task, implementation=implementation, progress=progress)
         binding = source.baseline
         claim = self.guard.lease.claim if self.guard.lease is not None else None
