@@ -56,7 +56,10 @@ test("engineering wait investigation and decision use exact proof without hiding
   await h.tick();
   assert.equal(await panel.evaluate(node => node === window.engineeringWaitPanel), true, "the visible intervention panel survives polling");
   assert.match(await panel.innerText(), /原执行是否已结束还没有可靠记录/);
-  assert.match(await panel.innerText(), /重复调查不会补齐缺失记录/);
+  assert.doesNotMatch(await panel.innerText(), /重复调查不会补齐旧执行记录/);
+  await panel.getByRole("button", {name: "重新检查状态说明", exact: true}).click();
+  assert.match(await panel.getByRole("dialog", {name: "重新检查状态说明"}).innerText(), /重复调查不会补齐旧执行记录/);
+  await h.page.keyboard.press("Escape");
   assert.equal(await binding.evaluate(node => node.open), false);
   assert.equal(await panel.getByRole("button", {name: "继续原交付", exact: true}).count(), 0);
   Object.assign(proof, {proof_sha256: "f".repeat(64), missing: [],
@@ -146,15 +149,36 @@ test("product users ask the platform to handle an interruption and see honest ma
   assert.match(await panel.innerText(), /平台尚未取得原执行的结束记录/);
   assert.match(await panel.innerText(), /处理方 · 平台执行服务或维护者/);
   assert.match(await panel.innerText(), /无需自行确认执行记录/);
-  assert.match(await panel.innerText(), /平台维护者修复原执行记录后再检查/);
+  assert.doesNotMatch(await panel.innerText(), /平台维护者修复原执行记录后再检查/);
   assert.doesNotMatch(await panel.innerText(), /可信停止|Manager.*(?:正在|已经)/);
   assert.equal(await panel.getByRole("button", {name: "继续原交付", exact: true}).count(), 0);
   assert.equal(await panel.getByRole("button", {name: "让平台处理中断", exact: true}).count(), 0);
   assert.equal(await panel.getByRole("button", {name: "重新检查状态", exact: true}).getAttribute("class"), "secondary");
   assert.equal(await panel.locator(".engineering-wait-binding").evaluate(node => node.open), false);
   assert.match(await detail.locator(".product-execution-summary").innerText(), /等待工程处理/);
+  const help = panel.getByRole("button", {name: "重新检查状态说明", exact: true});
+  const explanation = panel.getByRole("dialog", {name: "重新检查状态说明"});
+  await help.focus();
+  await h.page.keyboard.press("Enter");
+  assert.match(await explanation.innerText(), /1\. 平台维护者修复原执行记录后再检查/);
+  assert.match(await explanation.innerText(), /2\. .*点击“重新检查状态”/);
+  assert.match(await explanation.innerText(), /3\. .*只检查状态/);
+  await explanation.evaluate(node => {window.recheckHelp = node;});
+  request.title = "更新标题，保留正在阅读的复查说明";
+  await h.tick();
+  assert.equal(await explanation.evaluate(node => node === window.recheckHelp && node.matches(":popover-open")), true);
+  assert.equal(writes, 1, "reading recheck help cannot submit a delivery command");
+  await h.page.keyboard.press("Escape");
+  assert.equal(await explanation.isVisible(), false);
   for (const width of [1440, 1024, 390]) {
     await h.page.setViewportSize({width, height: 1000});
+    await help.click();
+    const anchor = await help.boundingBox();
+    const action = await panel.getByRole("button", {name: "重新检查状态", exact: true}).boundingBox();
+    assert.ok(anchor.x > action.x + action.width && Math.abs(anchor.y - action.y - 4) <= 1,
+      "the information icon stays beside the upper right of its button");
+    const popup = await explanation.boundingBox();
+    assert.ok(popup.x >= 0 && popup.x + popup.width <= width && popup.y >= 0 && popup.y + popup.height <= 1000);
     assert.equal(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
     assert.equal(await detail.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
     assert.equal(await h.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
@@ -163,6 +187,8 @@ test("product users ask the platform to handle an interruption and see honest ma
       await panel.scrollIntoViewIfNeeded();
       await h.page.screenshot({path: process.env.ASE_UI_SCREENSHOT_DIR + `/engineering-handling-${width}.png`});
     }
+    await explanation.getByRole("button", {name: "关闭", exact: true}).click();
+    assert.equal(await explanation.isVisible(), false);
   }
   await h.page.evaluate(() => Object.defineProperty(navigator, "clipboard", {configurable: true,
     value: {writeText: async value => {window.copiedHandlingReport = value;}}}));

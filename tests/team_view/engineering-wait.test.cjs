@@ -353,7 +353,7 @@ test("unknown stop proof remains an engineering wait with explicit missing facts
   assert.match(text(box), /原执行是否已结束还没有可靠记录/);
   assert.match(text(box), /原工作可能仍在运行/);
   assert.match(text(box), /处理方 · 平台执行服务/);
-  assert.match(text(box), /重复调查不会补齐缺失记录/);
+  assert.match(text(box), /重复调查不会补齐旧执行记录/);
   assert.equal(control(box, "继续原交付"), undefined);
   assert.match(text(h.run("productExecutionSummary(data.request)")), /等待工程处理/);
   h.run('operations[0].status = "RUNNING"');

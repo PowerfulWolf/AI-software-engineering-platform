@@ -1385,9 +1385,17 @@ main[data-page="requests"] #detail {
   margin: 0;
   color: #4f5d70;
 }
-.engineering-wait-panel > .engineering-wait-recheck {
-  color: #725d42;
-  font-size: 0.8125rem;
+.engineering-wait-recheck-action {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 100%;
+}
+.engineering-wait-recheck-help {
+  margin-top: 4px;
+}
+.engineering-wait-recheck-help .settings-help-text {
+  white-space: pre-line;
 }
 .engineering-investigation-result {
   display: grid;
@@ -1445,6 +1453,7 @@ main[data-page="requests"] #detail {
   min-width: 0;
 }
 .engineering-wait-actions > button,
+.engineering-wait-recheck-action > button,
 .engineering-wait-panel > .engineering-wait-report,
 .engineering-baseline-actions > button {
   max-width: 100%;

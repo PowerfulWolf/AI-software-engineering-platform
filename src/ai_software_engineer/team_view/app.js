@@ -869,15 +869,30 @@ function engineeringWaitBox(request, task, step) {
   } else if (canControlCurrentTeam() && !running) {
     const canResolve = engineeringWaitCanResolve(request, step, proof);
     const actions = viewBlock(el("div", undefined, "engineering-wait-actions"), "engineering-wait-actions",
-      [bound, proof, handling, canResolve, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
+      [bound, proof, handling, Boolean(rescue), canResolve, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
     if (consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve &&
       !["NEEDS_AUTHORIZATION", "PLATFORM_ATTENTION", "BUDGET_EXHAUSTED", "WAITING_PREREQUISITES"].includes(handling?.status))
       actions.append(deliveryButton("让平台处理中断", () => submitEngineeringWaitOperation({
         ...bound, action: "HANDLE_DELIVERY_WAIT",
       }), "primary"));
-    if (consoleSupportsOperation("INSPECT_DELIVERY_WAIT")) actions.append(deliveryButton(proof || handling ? "重新检查状态" : "调查工程等待", () =>
-      submitEngineeringWaitOperation({...bound, action: "INSPECT_DELIVERY_WAIT"}),
-      "secondary"));
+    if (consoleSupportsOperation("INSPECT_DELIVERY_WAIT")) {
+      const inspect = deliveryButton(proof || handling ? "重新检查状态" : "调查工程等待", () =>
+        submitEngineeringWaitOperation({...bound, action: "INSPECT_DELIVERY_WAIT"}), "secondary");
+      if (proof || handling) {
+        const recheck = el("span", undefined, "engineering-wait-recheck-action");
+        const condition = rescue ? "先按“恢复前提检查”列出的下一步完成处理。"
+          : handling?.recheck_when ? humanizeBlockingText(handling.recheck_when)
+          : "原执行结束、平台记录修复或执行前提发生变化后，再进行检查。";
+        const help = settingsHelp("重新检查状态", [
+          "1. " + condition,
+          "2. 完成上述处理后，点击“重新检查状态”，重新核对已有记录和恢复前提。",
+          "3. 此操作只检查状态。服务重启或重复调查不会补齐旧执行记录，也不会自动恢复交付。",
+        ].join("\n\n"));
+        help.classList.add("engineering-wait-recheck-help");
+        recheck.append(inspect, help);
+        actions.append(recheck);
+      } else actions.append(inspect);
+    }
     if (canResolve && consoleSupportsOperation("RESOLVE_DELIVERY_WAIT"))
       for (const kind of proof.permitted_resolutions || []) {
         const title = engineeringResolutionLabels[kind];
@@ -889,11 +904,6 @@ function engineeringWaitBox(request, task, step) {
   } else if (running) {
     management.append(el("p", "操作尚未结束；原等待只有在新的执行事实成立后才解除。", "muted"));
   }
-  if (proof || handling) management.append(viewBlock(el("p", rescue
-    ? "何时复查 · 按恢复前提检查列出的下一步处理后，重新检查恢复前提；服务重启或重复调查不会补齐旧执行记录。"
-    : handling?.recheck_when ? "何时复查 · " + humanizeBlockingText(handling.recheck_when)
-    : "只有原执行结束、平台记录修复或执行前提变化后，重新检查才有意义。重复调查不会补齐缺失记录。",
-  "muted engineering-wait-recheck"), "engineering-wait-recheck", [proof, handling, Boolean(rescue)]));
   if (handling?.status === "PLATFORM_ATTENTION") management.append(viewBlock(button("复制处理报告", () =>
     copyEngineeringWaitReport(request, handling), "secondary engineering-wait-report"), "engineering-wait-report", [request.title, handling]));
   const technical = viewGroup(engineeringDetails("调查绑定详情", step.work_item_id + ":binding"),

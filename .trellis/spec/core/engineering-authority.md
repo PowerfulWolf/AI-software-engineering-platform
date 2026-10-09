@@ -238,9 +238,11 @@ failed and the system must preserve the original wait; a product user is not ask
 | `BUDGET_EXHAUSTED` | do not refund or silently expand frozen budget | an authorized owner decides whether to provide new resource authority |
 
 The Console must make “让平台处理中断” the primary action for an active engineering wait. The
-current card keeps the reason, responsible party, concrete action and recheck condition visible;
-technical IDs and digests remain in a secondary engineering details section. “重新检查状态” is
-secondary and must say that it only re-reads durable facts. Operation success is command completion,
+current card keeps the reason, responsible party and concrete action visible; the recheck condition
+is available through the clickable information icon beside “重新检查状态”, in three numbered points
+(prerequisite, when to click, inspection limits). Technical IDs and digests remain in a secondary
+engineering details section. “重新检查状态” is secondary; its help must say that it only re-reads
+durable facts and cannot fill missing execution records. Operation success is command completion,
 not delivery completion. The full operation and engineering timeline is retained; it is never
 truncated to the last eight entries.
 

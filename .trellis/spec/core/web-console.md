@@ -442,6 +442,9 @@ production_console_app(
   `PLATFORM_ATTENTION`、`WAITING_PREREQUISITES` 或 `BUDGET_EXHAUSTED` 的中文说明；后者
   只重新读取事实，不能补造停止记录。`PLATFORM_ATTENTION` 要明确说明由 ASE 工程维护者
   处理，产品无需填写内部 hash。`RESOLVED` 也只表示已交回原 Supervisor，不能显示需求已交付。
+  复查说明收进次按钮右上侧可点击的信息角标，分三点说明处理前提、点击时机和检查限制；
+  保留服务返回的具体复查条件。复用可键盘操作、可关闭的帮助弹层，提示不触发交付命令，
+  无关轮询保留已打开提示。当前阻塞原因、责任与下一步仍直接可见。
 - 原分支基线更新只出现在有精确 Task intent/revision/source 的 IMPLEMENTING Coder 工程区。
   调查完整草稿与目标代码后显示封存计划；冲突必须明确提出 coder_reapply 新计划，不能在旧
   批准下切换。QA/Review 阶段不提供 Coder 分支更新按钮，操作成功也不推断独立验收通过。
