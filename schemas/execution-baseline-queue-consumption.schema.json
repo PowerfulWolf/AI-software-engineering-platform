@@ -287,6 +287,14 @@
       "title": "ArtifactKind",
       "type": "string"
     },
+    "BaselineContinuationMode": {
+      "enum": [
+        "resume",
+        "pause"
+      ],
+      "title": "BaselineContinuationMode",
+      "type": "string"
+    },
     "BaselineExecutionFacts": {
       "additionalProperties": false,
       "description": "Trusted collector output, never accepted from an API/model request body.",
@@ -331,6 +339,17 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Target Native Rules Sha256",
           "type": "string"
+        },
+        "native_rule_change": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeRuleChangePlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "source_artifact_ids": {
           "items": {
@@ -942,6 +961,7 @@
             "engineering_authorization",
             "verified_prerequisites",
             "verified_execution_resolution",
+            "explicit_baseline_continuation",
             "none"
           ],
           "title": "Resume Condition",
@@ -999,7 +1019,8 @@
             "EXECUTION_UNCERTAIN",
             "ENVIRONMENT_UNAVAILABLE",
             "ENGINEERING_AUTHORIZATION",
-            "SOURCE_PREPARATION_DRIFT"
+            "SOURCE_PREPARATION_DRIFT",
+            "EXECUTION_BASELINE_PAUSED"
           ],
           "title": "Classification",
           "type": "string"
@@ -1036,6 +1057,19 @@
           },
           "title": "Evidence Ids",
           "type": "array"
+        },
+        "execution_baseline_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Baseline Sha256"
         }
       },
       "required": [
@@ -1106,6 +1140,7 @@
         "REQUEST_ENGINEERING_AUTHORIZATION",
         "WAIT_DEPENDENCY",
         "INVESTIGATE_EXECUTION",
+        "RESUME_EXECUTION_BASELINE",
         "TERMINATE"
       ],
       "title": "DeliveryNextAction",
@@ -1353,6 +1388,23 @@
         "purpose": {
           "$ref": "#/$defs/BaselinePurpose",
           "default": "source_rebind"
+        },
+        "continuation_mode": {
+          "$ref": "#/$defs/BaselineContinuationMode",
+          "default": "resume"
+        },
+        "native_rule_epoch_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Rule Epoch Sha256"
         },
         "legacy_containment_sha256": {
           "anyOf": [
@@ -2259,6 +2311,188 @@
         "size"
       ],
       "title": "MutationFile",
+      "type": "object"
+    },
+    "NativeRuleChangePlan": {
+      "additionalProperties": false,
+      "properties": {
+        "source_native_rules_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Native Rules Sha256",
+          "type": "string"
+        },
+        "target_native_rules_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Target Native Rules Sha256",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/NativeRuleEpochReference"
+        },
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/NativeRuleDelta"
+          },
+          "maxItems": 5000,
+          "minItems": 1,
+          "title": "Changes",
+          "type": "array"
+        },
+        "change_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Change Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_native_rules_sha256",
+        "target_native_rules_sha256",
+        "target",
+        "changes",
+        "change_sha256"
+      ],
+      "title": "NativeRuleChangePlan",
+      "type": "object"
+    },
+    "NativeRuleDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "change": {
+          "enum": [
+            "added",
+            "modified",
+            "deleted"
+          ],
+          "title": "Change",
+          "type": "string"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeRuleSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeRuleSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "path",
+        "change"
+      ],
+      "title": "NativeRuleDelta",
+      "type": "object"
+    },
+    "NativeRuleEpochReference": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "target_base_ref": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Target Base Ref",
+          "type": "string"
+        },
+        "rules_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Rules Sha256",
+          "type": "string"
+        },
+        "epoch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Epoch Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "task_id",
+        "target_base_ref",
+        "rules_sha256",
+        "epoch_sha256"
+      ],
+      "title": "NativeRuleEpochReference",
+      "type": "object"
+    },
+    "NativeRuleKind": {
+      "description": "Project-native guidance source categories, not interpreted priorities.",
+      "enum": [
+        "agents",
+        "contributing",
+        "readme",
+        "editorconfig",
+        "ci",
+        "trellis-spec"
+      ],
+      "title": "NativeRuleKind",
+      "type": "string"
+    },
+    "NativeRuleSource": {
+      "additionalProperties": false,
+      "description": "A UTF-8 project-native rule source represented without absolute paths.",
+      "properties": {
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "relative_path": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "kinds": {
+          "items": {
+            "$ref": "#/$defs/NativeRuleKind"
+          },
+          "minItems": 1,
+          "title": "Kinds",
+          "type": "array"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "byte_length": {
+          "minimum": 0,
+          "title": "Byte Length",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "uri",
+        "relative_path",
+        "kinds",
+        "sha256",
+        "byte_length"
+      ],
+      "title": "NativeRuleSource",
       "type": "object"
     },
     "NetworkAccess": {

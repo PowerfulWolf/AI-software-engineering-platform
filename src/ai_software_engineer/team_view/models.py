@@ -10,6 +10,7 @@ from ai_software_engineer.domain.enums import AgentRole, TeamRole, WorkItemStatu
 from ai_software_engineer.domain.model import CodexConnectionMode, DomainModel, ProviderRouteKind
 from ai_software_engineer.knowledge.gaps import GapRoute
 from ai_software_engineer.knowledge.views import KnowledgeGapView
+from ai_software_engineer.manager.baseline_models import BaselineContinueAuthorization
 from ai_software_engineer.multi_directory.budget import DesignBudget, StageBudget
 from ai_software_engineer.projection.models import TimelineEntry
 
@@ -80,6 +81,7 @@ class RoleQueueView(DomainModel):
     wait_disposition: DeliveryDisposition | None = None
     wait_disposition_sha256: str | None = None
     available_at: AwareDatetime | None = None
+    pending_baseline_continuation: BaselineContinueAuthorization | None = None
 
 
 class DeliveryExecutionView(DomainModel):

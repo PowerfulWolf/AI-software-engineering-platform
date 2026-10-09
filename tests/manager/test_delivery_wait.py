@@ -525,6 +525,49 @@ def service(native: Fixture, queue: WaitQueue, root: Path) -> DeliveryWaitServic
     )
 
 
+def test_generic_wait_actions_cannot_investigate_or_release_manual_baseline_pause(
+    native: Fixture,
+    tmp_path: Path,
+) -> None:
+    queue = WaitQueue(native)
+    assert queue.item.wait_disposition is not None
+    facts = DeliveryFailureFacts.model_validate(
+        {
+            **queue.item.wait_disposition.facts.to_wire(),
+            "classification": "EXECUTION_BASELINE_PAUSED",
+            "execution_baseline_sha256": "b" * 64,
+        }
+    )
+    disposition = decide_delivery_disposition(facts)
+    queue.item = queue.item.model_copy(
+        update={"wait_disposition": disposition, "wait_reason": disposition.reason}
+    )
+    before = native.repository.get(native.task.id)
+    entry = service(native, queue, tmp_path)
+    collected: list[str] = []
+    entry.fact_collector = lambda task, step, guard: collected.append(task.id)
+    command = queue.command()
+    actions = (
+        lambda: entry.inspect(command),
+        lambda: entry.handle(HandleDeliveryWait.model_validate(command.to_wire())),
+        lambda: entry.resolve(
+            ResolveDeliveryWait.model_validate(
+                {
+                    **command.to_wire(),
+                    "proof_sha256": "c" * 64,
+                    "resolution_kind": "RETRY_FROM_CHECKPOINT",
+                    "submitted_at": NOW,
+                }
+            )
+        ),
+    )
+    for action in actions:
+        with pytest.raises(DeliveryWaitRejected, match="主动暂停"):
+            action()
+    assert not collected and not queue.consumed
+    assert native.repository.get(native.task.id) == before
+
+
 def seal_start(native: Fixture, queue: WaitQueue, root: Path) -> DeliveryInvocationStart:
     start = DeliveryInvocationStart(
         work_item_id=queue.item.id,

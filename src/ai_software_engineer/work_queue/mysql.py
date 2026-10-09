@@ -697,6 +697,8 @@ class MySqlPersistentWorkQueue:
             if self._active_claim_exists(cursor, current.id):
                 raise QueueCorruption("waiting WorkItem retained an active Lease")
             if current.wait_disposition is not None:
+                if current.wait_disposition.facts.classification == "EXECUTION_BASELINE_PAUSED":
+                    raise QueueConflict("已保留进度的工程暂停必须通过精确的继续授权解除")
                 if expected_disposition_sha256 != current.wait_disposition.disposition_sha256:
                     raise QueueConflict("typed wait requires its exact verified resume signal")
             elif expected_disposition_sha256 is not None:

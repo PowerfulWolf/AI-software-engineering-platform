@@ -17,6 +17,7 @@ from ai_software_engineer.domain.engineering_authority import (
 )
 from ai_software_engineer.domain.enums import TaskStatus
 from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
     BaselineInputMode,
     BaselinePurpose,
     CoderExecutionInput,
@@ -24,6 +25,7 @@ from ai_software_engineer.domain.execution_baseline import (
     RetainedExecutionPatch,
     resolve_coder_execution_input,
 )
+from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git.baseline import (
     BaselineGitConflict,
@@ -34,6 +36,7 @@ from ai_software_engineer.git.mutation import capture_mutation_inventory
 from ai_software_engineer.git.mutation_capture import WorktreeMutationCapture
 from ai_software_engineer.git.ports import WorktreeRef
 from ai_software_engineer.manager.baseline_models import (
+    BaselineContinueAuthorization,
     BaselineExecutionFacts,
     BaselineOperationStart,
     BaselineOperatorAuthorization,
@@ -75,9 +78,14 @@ class ExecutionBaselineService:
         facts: BaselineFactCollector,
         publish_completion: Callable[[ExecutionBaselinePlan, ExecutionBaselineBinding], None]
         | None = None,
+        publish_continuation: Callable[
+            [ExecutionBaselineBinding, BaselineContinueAuthorization], bool
+        ]
+        | None = None,
     ) -> None:
         self.store, self.git, self.facts = store, git, facts
         self.publish_completion = publish_completion
+        self.publish_continuation = publish_continuation
 
     def propose(
         self,
@@ -254,6 +262,10 @@ class ExecutionBaselineService:
         plan: ExecutionBaselinePlan, authority: EngineeringAdmission | BaselineOperatorAuthorization
     ) -> tuple[Literal["organization_engineering_policy", "engineering_operator_decision"], str]:
         authority.validate_integrity()
+        if isinstance(authority, BaselineOperatorAuthorization):
+            authority.require_plan_confirmation(plan)
+        elif plan.facts.native_rule_change is not None:
+            raise ValueError("项目规范变化需要精确人工确认, 原源码更新能力不能自动批准")
         if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("旧执行救援需要精确人工工程确认, 不能自动审批")
@@ -283,7 +295,6 @@ class ExecutionBaselineService:
                 raise BaselineGitConflict(
                     "conflicted preserve plan requires a new exact coder_reapply authorization"
                 )
-            self.store.put_authority(authority)
             existing = self.store.bindings_for_task(plan.facts.task.id)
             prior_completion = next(
                 (item for item in existing if item.plan_sha256 == plan.plan_sha256), None
@@ -310,6 +321,16 @@ class ExecutionBaselineService:
                 raise ValueError(
                     "baseline plan/source/queue facts drifted; request a new exact plan"
                 )
+            if (
+                expected_previous is not None
+                and expected_previous.continuation_mode is BaselineContinuationMode.PAUSE
+                and (
+                    not isinstance(authority, BaselineOperatorAuthorization)
+                    or authority.continuation_mode is not BaselineContinuationMode.PAUSE
+                )
+            ):
+                raise ValueError("已保留进度的需求需保持暂停, 更新完成后再明确继续")
+            self.store.put_authority(authority)
             started = self.store.start(plan_sha256)
             if started is None:
                 self.git.manager.verify_mutations(
@@ -389,6 +410,18 @@ class ExecutionBaselineService:
             previous = plan.previous_binding
             binding = ExecutionBaselineBinding.create(
                 purpose=plan.purpose,
+                continuation_mode=(
+                    authority.continuation_mode
+                    if isinstance(authority, BaselineOperatorAuthorization)
+                    else BaselineContinuationMode.RESUME
+                ),
+                native_rule_epoch_sha256=(
+                    current.native_rule_change.target.epoch_sha256
+                    if current.native_rule_change is not None
+                    else previous.native_rule_epoch_sha256
+                    if previous is not None
+                    else None
+                ),
                 legacy_containment_sha256=(
                     current.legacy_containment.containment_sha256
                     if current.legacy_containment is not None
@@ -432,6 +465,67 @@ class ExecutionBaselineService:
                 self.publish_completion(plan, completed)
             return completed
 
+    def continue_execution(
+        self, binding_sha256: str, *, authority: BaselineContinueAuthorization
+    ) -> bool:
+        """Release the latest pause or kick its exact still-unstarted READY replay."""
+        authority.validate_integrity()
+        if authority.execution_baseline_sha256 != binding_sha256:
+            raise ValueError("继续决定与当前已保存版本不同, 请刷新后确认")
+        if self.publish_continuation is None:
+            raise ValueError("平台未提供受控继续入口, 已保存进度保持暂停")
+        with self.store.execution_lock(), self.facts.execution_scope():
+            bindings = self.store.bindings_for_task(authority.task_id)
+            if not bindings or bindings[-1].binding_sha256 != binding_sha256:
+                raise ValueError("代码或恢复方案已经更新, 原继续决定已失效")
+            binding = bindings[-1]
+            if binding.continuation_mode is not BaselineContinuationMode.PAUSE:
+                raise ValueError("当前工程输入没有等待明确继续的暂停记录")
+            binding.require_task(self.facts.completed_task(binding))
+            if (
+                authority.scope,
+                authority.task_intent_sha256,
+                authority.expected_source_revision,
+                authority.inventory_sha256,
+            ) != (
+                binding.scope,
+                binding.task_intent_sha256,
+                binding.execution_source_revision,
+                binding.after_inventory_sha256,
+            ):
+                raise ValueError("继续决定与已保存的完整工程输入不同")
+            prior = self.store.records.find(
+                "baseline-continuations", binding_sha256, BaselineContinueAuthorization
+            )
+            if prior is not None:
+                prior.validate_integrity()
+                if prior != authority:
+                    raise ValueError("当前暂停已有另一份明确继续决定, 原记录保留")
+                # The fenced queue release distinguishes exact replay from new work.
+                return self.publish_continuation(binding, prior)
+            facts = self.facts.collect(binding.execution_base_ref)
+            self._require_facts(facts)
+            if (
+                facts.task.id,
+                facts.task_revision,
+                facts.work_item_id,
+                facts.checkpoint_sequence,
+            ) != (
+                authority.task_id,
+                authority.task_revision,
+                authority.work_item_id,
+                authority.checkpoint_sequence,
+            ):
+                raise ValueError("暂停工作项或任务版本已变化, 请重新查看当前输入")
+            worktree = self.facts.source_worktree(facts)
+            if (str(worktree.path), worktree.head_revision) != (
+                binding.worktree_path,
+                binding.execution_source_revision,
+            ) or capture_mutation_inventory(worktree.path).sha256 != binding.after_inventory_sha256:
+                raise ValueError("保留现场已变化, 不能沿用原继续决定; 文件保持")
+            self.store.records.put("baseline-continuations", binding_sha256, authority)
+            return self.publish_continuation(binding, authority)
+
 
 class StoredCoderExecutionInputResolver:
     """All runtime consumers share this append-only selector and verified patch body."""
@@ -460,3 +554,13 @@ class StoredCoderExecutionInputResolver:
         if self.store is None:
             raise ValueError("bound baseline has no immutable patch body store")
         return self.store.required_context(source.baseline)
+
+    def native_rule_epoch(self, source: CoderExecutionInput) -> NativeRuleEpoch | None:
+        if source.baseline is None or source.baseline.native_rule_epoch_sha256 is None:
+            return None
+        if self.store is None:
+            raise ValueError("执行规范版本缺少可信完整正文存储")
+        epoch = self.store.native_rule_epoch(source.baseline.native_rule_epoch_sha256)
+        if (epoch.scope, epoch.task_id) != (source.baseline.scope, source.baseline.task_id):
+            raise ValueError("执行规范版本不属于当前任务和工作空间")
+        return epoch

@@ -50,7 +50,7 @@ An Agent/model cannot submit either trusted facts or an engineering principal.
   interruption receipt digests in the verified binding are resolved; source differences alone
   cannot suppress an old uncertain invocation.
 
-### Trusted quiescence and frozen native rules
+### Trusted quiescence and versioned native rules
 
 - Hold the Task process lock before the queue authority/Task-row SQL fence, matching Worker lock
   order. The fence excludes **all** ACTIVE claims, including expired claims. A missing heartbeat,
@@ -90,9 +90,11 @@ An Agent/model cannot submit either trusted facts or an engineering principal.
   as a substitute for the approved inputs. A newly proposed target is checked separately.
 - Read target native-rule contents from its immutable Git tree. Reuse `native_rule_kinds()` and
   enumerate the full target tree so new AGENTS, CI, CONTRIBUTING, README, editor or Trellis rules
-  cannot evade comparison. Require the exact frozen source set, paths, kinds and content hashes.
+  cannot evade comparison. Require the exact current source set, paths, kinds and content hashes.
   Reject symlink/gitlink/non-UTF-8/over-budget rules. Changed project rules require a separate
-  explicit scope/knowledge decision; this source capability cannot silently adopt them.
+  explicit engineering decision through the inspectable rule-epoch contract below; a source-only
+  admission cannot silently adopt them. Structured PROJECT SpecRule provenance remains frozen;
+  source changes requiring recompilation are refused rather than treated as opaque text approval.
 - Seal an inspectable `BaselineQuiescenceProof`, not just an unexplained hash. Git HEAD/dirty
   capture and inventory belong to the exact plan/adapter; collect's stable Task/queue/native
   facts must not change during an already-authorized Git mutation.
@@ -181,7 +183,7 @@ the actual current execution input or independent verifier candidate.
 | Eligible stopped Coder, candidate plus dirty text, exact target/rules/authority | Preserve all work on the same Task/branch/worktree |
 | Full candidate diff after rebind | QA/Review compare new execution base to the same candidate; original Plan base unchanged |
 | Conflict under preserve plan | Keep refused plan and work; require a new exact coder-reapply plan and authorization |
-| Target adds/changes AGENTS, CI or Trellis rules | Reject source-only authority; retain original context and request explicit policy/scope handling |
+| Target adds/changes/deletes AGENTS, CI or Trellis rules | Seal inspectable exact before/after epoch, reject source-only authority, require matching rule-change digest |
 | Any ACTIVE claim or held process lock | No Git mutation; keep engineering wait |
 | Unknown invocation or claimed run without durable start/preflight | No model call or source rebind |
 | Success result awaiting acceptance | Replay original result first; no silent baseline overwrite |
@@ -226,3 +228,127 @@ Rollback before new bindings may revert the compatible code while idle. Once new
 required role Contexts or queue-consumption records exist, retain their readers and prefer a
 forward fix. Reverting code does not undo a target-source update or erase its authoritative
 facts; a further source change is another exact append-only engineering plan.
+
+## Preserved-input pause, rule review and explicit continuation (2026-10-09)
+
+This is a general target-repository flow, including self-hosted ASE. Upgrading the running ASE
+service alone never changes an unrelated target's source. New Console decisions explicitly set
+`continuation_mode="pause"`; omitted historical fields retain `resume` semantics and exact bytes.
+
+```python
+ExecutionBaselineService.continue_execution(binding_sha256, *, authority: BaselineContinueAuthorization) -> bool
+ProductionBaselineFactCollector.publish_continuation(binding, authority) -> bool
+MySqlRoleQueue.release_baseline_pause(binding, authorization, *, cursor=None, validate_new_release=None) -> bool
+StoredCoderExecutionInputResolver.native_rule_epoch(source) -> NativeRuleEpoch | None
+FileExecutionBaselineStore.native_rule_epoch(sha256) -> NativeRuleEpoch
+TeamHost.continue_execution_baseline(command: BaselineContinueCommand, *, project_id)
+build_native_rule_change(*, git, records, scope, task_id, source_revision, target_base_ref,
+                         source_rules, target_rules, structured_project_rules=()) -> NativeRuleChangePlan | None
+NativeRuleEpoch.inspect_change(path) -> NativeRuleChangeInspection
+```
+
+### Durable pause and exact release
+
+- `BaselineOperatorAuthorization.continuation_mode` is sealed in the binding. PAUSE consumes the
+  legitimate original reservation once but publishes `WAITING_HUMAN` with classification
+  `EXECUTION_BASELINE_PAUSED` and the exact `execution_baseline_sha256`, never READY.
+- Source updates while paused must remain PAUSE, checked before Git mutation. They extend the
+  same Task/branch/worktree and update the hold to the latest binding; no second work reservation.
+- Dispatcher, `make_ready`, generic `resolve_wait`, Manager handle/resolve and ordinary delivery
+  Continue cannot release this hold. The UI shows saved progress and pause, plus distinct update
+  and explicit continue controls. The Task retains its legitimate delivery checkpoint.
+- `RESUME_EXECUTION_BASELINE` supplies delivery/task IDs, `expected_task_intent_sha256`, Task
+  revision, current WorkItem/source, binding digest, disposition digest and human reference. Host
+  derives inventory, principal and time from trusted inputs; the command cannot declare idle.
+- Persist the immutable `baseline-continuations` authorization before SQL release. First release
+  validates latest consumption, original intent, unique paused Coder item, full exact source,
+  Task/event revision, disposition and all ACTIVE claims under the existing Task/queue fence.
+  The collector's `validate_new_release` rechecks current invocation facts, HEAD/path, full file
+  inventory, empty staged index and prepared dirty Git tree in that same fence.
+- A crash after authorization but before SQL commit must repeat that fresh validator; exact
+  committed release replay returns False without recollecting legitimately progressed work.
+  First release atomically appends typed `BaselineQueueRelease`, increments dispatch generation
+  once and makes READY. Only True causes synchronous Host resume. It is not a new attempt or
+  budget refund. `work_queue_baseline_releases` is additively initialized by the existing queue
+  schema initializer; no historical row transformation or direct SQL recovery is needed.
+
+### Exact native-rule epoch and human inspection
+
+- `BaselineExecutionFacts.native_rule_change` is absent when unchanged. When present it binds
+  sorted complete source/target reference digests, scope, Task, immutable target Git SHA and all
+  additions/modifications/deletions to `change_sha256` and an immutable `epoch_sha256`.
+- Private `baseline-native-rules` records store complete source/target rule bodies read from
+  immutable Git commits. Each original source SHA/length is retained independently from the
+  redacted body SHA/length. Boundaries: 1 MB/file, 8 MB/raw version, 16 MiB/serialized epoch;
+  symmetric secure KnowledgeRecordStore read/write budget is 20 MB. No truncation or mutable
+  checkout substitution. Symlink/gitlink, invalid UTF-8, missing source and over-budget input fail.
+- Human execute authority must include `approved_native_rule_change_sha256` matching the exact
+  plan. Missing/wrong/stale digest or old organization source-rebind capability fails before Git.
+  Store readers verify authority, mode, source/target revision, full epoch, complete diff and
+  inherited epoch lineage; a later code update with unchanged rules keeps the accepted epoch.
+- GET `/api/v1/operations/{operation_id}/native-rules?path=...` opens only the validated successful
+  proposal's Team/Project registered sidecar and exact stored plan/epoch, without constructing
+  Host, registering, preparing or reconciling. Only a stored changed path is accepted. Response
+  supplies full redacted before/after text and exact unified diff; UI uses textContent and retains
+  the user's open review during polling. It does not expose secrets or arbitrary host paths.
+- Coder/QA/Reviewer Context and knowledge consultation select the same complete active epoch.
+  Original RepositoryProfile/preparation/compiled policy remain historical approved provenance;
+  required `source:execution.native_rules` identifies current rules. Added rules enter and deleted
+  rules disappear in both flows. Final Context validation rejects fake markers/body/hash, mixed
+  scope/Task/epoch and incomplete native sources. No role gains permission to alter hard policy,
+  structured rules, Task scope or verdicts by adopting opaque native text.
+
+### Validation, existing records and rollback
+
+| Case | Required result |
+| --- | --- |
+| PAUSE save, independent dispatch tick | No role claim/model call; exact durable human hold |
+| Source update while PAUSE | Same identity/budget, latest binding and hold; no automatic call |
+| Wrong/absent rule digest | No Git/binding/queue mutation |
+| Stale binding/disposition/revision/source | Continue refused; original work preserved |
+| Auth saved then crash, changed files/index | Pending replay refused before READY |
+| SQL release committed then replay | False, no second dispatch increment or model call |
+| Changed structured PROJECT provenance | Explicit recompile/scope decision required; no silent policy update |
+| Complete public pause/update/review/continue | Independent Coder/QA/Reviewer with one exact epoch and final candidate |
+
+Tests: `tests/work_queue/test_baseline_pause_mysql.py`, native epoch/context tests, public Host
+baseline delivery and legacy rescue tests, HTTP native inspection tests and Chrome legacy-rescue
+fixtures. Run these incrementally, plus changed-file Ruff/Mypy and schema parity; full-suite run
+is left to the user. Good: preserve then review upstream code/rule changes and explicitly continue.
+Base: unchanged rules and historical absent fields retain exact behavior. Bad: disable only Host
+resume, manually rebase a retained worktree, use ordinary Continue to release the hold, or replace
+original preparation/rules in place.
+
+Existing READY legacy rescue proposals remain usable: after loading compatible code, approve
+that exact proposal with PAUSE, inspect the new hold, propose an available exact target revision,
+review/approve its rule changes and preserve PAUSE, then explicitly continue. A separate clone
+must first obtain target Git objects through repository administration; missing objects never
+justify manually rebasing the Coder workspace or recreating its Requirement. No production K1
+approval, SQL rewrite, new Requirement or source mutation is performed as part of this fix.
+Before new records, an idle code rollback is possible. Once pause/epoch/release records exist,
+keep their readers and prefer a forward fix; old versions cannot safely interpret the new holds.
+
+Continuation's service-level True also covers a saved exact SQL release whose current item
+still equals its immutable READY result, source and dispatch generation. This permits replay
+of the crash between release commit and synchronous Host kickoff. Pending kickoff repeats the
+fresh file/index/tree and local-stop validator; unrelated READY work, an ACTIVE claim, a later
+wait or completed work is never kicked by the old authorization. Console may pass the internal
+`require_existing_authorization=True` only for an outer-checkpoint-changed replay; absence of an
+already saved exact decision refuses stale first submissions.
+
+Wrong: `consume_baseline(...); skip_host_resume()` while the queue remains claimable, or resume
+all exact old decisions after they have legitimately progressed. Correct: publish PAUSE in the
+fenced queue, review exact immutable rule differences, release the latest authorized hold, and
+only kick a new or exact verified still-unstarted release.
+
+Read-side pending kickoff: `RoleQueueView.pending_baseline_continuation` contains only a saved,
+validated `BaselineContinueAuthorization` whose exact latest binding/file record and SQL release
+still match the current READY snapshot and Task revision, with no ACTIVE claim. The read helper
+uses the existing read-only transaction and private read-only stores; it neither constructs queue
+services/Host nor initializes schema. Older stores without the additive release table return no
+hint. Task/Requirement UI shows actionable engineering wait and “继续已授权执行”, reusing the
+saved reference and exact decision fields. A mere authorization file, claimed work, a changed
+READY generation or later wait cannot produce this hint. This closes the service-restart gap in
+v0.1's synchronous Supervisor: telling users to wait for unattended dispatch would leave it idle.
+Multi-repository plans retain independent review/open/consent state, pruning only plans no longer
+present in a completed detail render; reading a second repository cannot clear the first approval.

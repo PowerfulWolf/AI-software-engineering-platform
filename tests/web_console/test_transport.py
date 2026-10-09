@@ -375,7 +375,7 @@ def test_console_operation_manifest_reports_the_running_action_contract() -> Non
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         info = client.get("/api/v1/console")
     assert info.status_code == 200
-    assert info.json()["operation_contract_version"] == 3
+    assert info.json()["operation_contract_version"] == 4
     assert set(info.json()["supported_actions"]) == {action.value for action in ConsoleAction}
     assert set(info.json()["supported_actions"]) == set(
         CONSOLE_INTENT_ADAPTER.json_schema()["discriminator"]["mapping"]

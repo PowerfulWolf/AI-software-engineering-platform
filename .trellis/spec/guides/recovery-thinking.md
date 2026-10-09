@@ -111,3 +111,12 @@ the survey from approval and subsequent execution.
 - 超限读写都有界，历史摘要链与正文不截断。通用文档上限与完整 Operation 上限不是同一政策。
 - Operation不可读时，Console readiness和交付权限分开；需求内要持久说明门禁原因，
   关闭全局通知后仍有下一步。读成功后最新精确方案重新显示，不能保留旧勾选替代确认。
+
+## 保留后的执行权必须持久暂停
+
+保存草稿与真正启动下一轮是两个不同决定。只跳过同步 Host.resume 不能暂停独立 dispatcher；
+必须在原 Task lock→queue authority→Task row fence 内写入精确 WAITING_HUMAN hold。更新代码/
+工程规范时延续该 hold 与预算，最后由匹配最新 binding/disposition/source/inventory 的明确决定
+释放。授权已落盘但 SQL 尚未提交的恢复重放必须重新核验现场；已提交重放不能重复启动。
+项目原生规则采用完整不可变 Git epoch，并同步进入 prompt 与知识查询，不能以路径/hash 清单
+代替可阅读的精确增改删正文，也不能静默重编译 hard/structured policy。

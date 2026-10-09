@@ -1,0 +1,28 @@
+{
+  "id": "paused-baseline-upgrade-20261009",
+  "title": "保留进度暂停、代码与项目规范更新及明确继续的完整路径",
+  "status": "completed",
+  "phase": "done",
+  "owner": "codex",
+  "created_at": "2026-10-09",
+  "baseline": "7a26146",
+  "allowed_paths": [
+    "src/ai_software_engineer/domain/",
+    "src/ai_software_engineer/manager/",
+    "src/ai_software_engineer/work_queue/",
+    "src/ai_software_engineer/context/",
+    "src/ai_software_engineer/orchestration/",
+    "src/ai_software_engineer/web_console/",
+    "src/ai_software_engineer/team_view/",
+    "schemas/",
+    "scripts/sync-*.py",
+    "tests/",
+    ".trellis/spec/core/",
+    ".trellis/spec/guides/recovery-thinking.md",
+    "docs/architecture/contracts.md",
+    "docs/user/legacy-execution-rescue.md",
+    "docs/user/team-console.md",
+    ".trellis/tasks/10-09-paused-baseline-upgrade/"
+  ],
+  "verification": "verification.md"
+}

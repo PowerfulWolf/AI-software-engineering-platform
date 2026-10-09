@@ -100,3 +100,36 @@ def test_tampered_facts_or_model_fields_cannot_change_a_sealed_disposition() -> 
     assert type(decision).model_validate(decision.to_wire()).disposition_sha256 == (
         decision.disposition_sha256
     )
+
+
+def test_baseline_pause_is_a_distinct_exact_manual_continue_decision() -> None:
+    paused = DeliveryFailureFacts.model_validate(
+        {
+            **facts("EXECUTION_UNCERTAIN").to_wire(),
+            "classification": "EXECUTION_BASELINE_PAUSED",
+            "execution_baseline_sha256": "c" * 64,
+        }
+    )
+    decision = decide_delivery_disposition(paused)
+    assert decision.action is DeliveryNextAction.RESUME_EXECUTION_BASELINE
+    assert decision.responsibility is DeliveryResponsibility.ENGINEERING
+    assert decision.resume_condition == "explicit_baseline_continuation"
+    assert "进度已保留" in decision.reason
+    assert "更新源码和工程规范" in decision.next_action
+    for changed in (
+        {"execution_baseline_sha256": None},
+        {"classification": "PLATFORM_BUG"},
+        {"role": "qa"},
+        {"retry_authorized": True},
+    ):
+        with pytest.raises(ValueError):
+            DeliveryFailureFacts.model_validate({**paused.to_wire(), **changed})
+    with pytest.raises(ValueError, match="exact explicit continuation"):
+        type(decision).model_validate({**decision.to_wire(), "action": "INVESTIGATE_EXECUTION"})
+
+
+def test_old_disposition_wire_omits_new_absent_baseline_field() -> None:
+    original = facts("EXECUTION_UNCERTAIN")
+    assert "execution_baseline_sha256" not in original.to_wire()
+    decision = decide_delivery_disposition(original)
+    assert type(decision).model_validate(decision.to_wire()).to_wire() == decision.to_wire()

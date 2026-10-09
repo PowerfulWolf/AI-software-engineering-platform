@@ -29,7 +29,10 @@ from ai_software_engineer.domain.engineering_authority import (
     OperatorDuty,
 )
 from ai_software_engineer.domain.enums import AgentRole, WorkItemStatus
-from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
+    ExecutionBaselineBinding,
+)
 from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.domain.identity import ProjectId
 from ai_software_engineer.domain.task import Task
@@ -40,15 +43,19 @@ from ai_software_engineer.knowledge_selection import (
     effective_team_knowledge_paths,
 )
 from ai_software_engineer.manager.baseline_models import (
+    BaselineContinueAuthorization,
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
 )
 from ai_software_engineer.manager.baseline_production import (
+    BaselineContinueCommand,
     BaselineExecuteCommand,
     BaselineProposeCommand,
 )
 from ai_software_engineer.manager.delivery import (
+    DeliveryCheckpointStale,
     ProjectDeliveryCheckpointCatalog,
+    ProjectDeliveryResult,
     ResumeProjectDelivery,
     UnifiedProjectEntryService,
 )
@@ -582,6 +589,8 @@ class TeamHost:
                     reference=command.reference,
                     confirm_legacy_containment=command.confirm_legacy_containment,
                     confirm_local_execution_stopped=command.confirm_local_execution_stopped,
+                    continuation_mode=command.continuation_mode,
+                    approved_native_rule_change_sha256=command.approved_native_rule_change_sha256,
                 )
             elif (
                 authority.principal != self._operator_principal
@@ -589,13 +598,82 @@ class TeamHost:
                 or authority.confirm_legacy_containment != command.confirm_legacy_containment
                 or authority.confirm_local_execution_stopped
                 != command.confirm_local_execution_stopped
+                or authority.continuation_mode != command.continuation_mode
+                or authority.approved_native_rule_change_sha256
+                != command.approved_native_rule_change_sha256
             ):
                 raise ValueError("该执行基线已有不同主体或引用的工程决定")
             binding = service.execute(plan.plan_sha256, authority=authority)
-        self.resume_delivery(
-            ResumeProjectDelivery(delivery_id=command.delivery_id), project_id=project_id
-        )
+        if command.continuation_mode is BaselineContinuationMode.RESUME:
+            self.resume_delivery(
+                ResumeProjectDelivery(delivery_id=command.delivery_id), project_id=project_id
+            )
         return binding
+
+    def continue_execution_baseline(
+        self,
+        command: BaselineContinueCommand,
+        *,
+        project_id: str,
+        require_existing_authorization: bool = False,
+    ) -> DeliveryResumeResult | JointDeliveryResult | ProjectDeliveryResult:
+        """Release only the exact preserved-input pause, without reserving another attempt."""
+        self._operator_principal.require_duty(OperatorDuty.ENGINEERING)
+        native = self._baseline_native_checkpoint(project_id, command.delivery_id, command.task_id)
+        with closing(
+            MySqlTaskRepository(self._config.require_mysql_dsn(self._environment))
+        ) as repository:
+            service = self._runtime(project_id).backend.execution_baseline_service(
+                native, repository=repository, project_id=project_id
+            )
+            bindings = service.store.bindings_for_task(command.task_id)
+            if (
+                not bindings
+                or bindings[-1].binding_sha256 != command.expected_execution_baseline_sha256
+            ):
+                raise ValueError("当前保留进度的执行基线已变化, 请刷新后再继续")
+            binding = bindings[-1]
+            authority = service.store.records.find(
+                "baseline-continuations", binding.binding_sha256, BaselineContinueAuthorization
+            )
+            if authority is None and require_existing_authorization:
+                raise DeliveryCheckpointStale("保留进度暂停的需求 checkpoint 已变化")
+            if authority is None:
+                authority = BaselineContinueAuthorization.create(
+                    scope=binding.scope,
+                    task_id=command.task_id,
+                    task_intent_sha256=command.expected_task_intent_sha256,
+                    task_revision=command.expected_task_revision,
+                    work_item_id=command.expected_work_item_id,
+                    execution_baseline_sha256=command.expected_execution_baseline_sha256,
+                    expected_source_revision=command.expected_source_revision,
+                    checkpoint_sequence=command.expected_task_revision,
+                    expected_disposition_sha256=command.expected_disposition_sha256,
+                    inventory_sha256=binding.after_inventory_sha256,
+                    principal=self._operator_principal,
+                    submitted_at=datetime.now(UTC),
+                    reference=command.reference,
+                )
+            elif (
+                authority.principal != self._operator_principal
+                or authority.reference != command.reference
+                or authority.work_item_id != command.expected_work_item_id
+                or authority.task_revision != command.expected_task_revision
+                or authority.task_intent_sha256 != command.expected_task_intent_sha256
+                or authority.expected_source_revision != command.expected_source_revision
+                or authority.expected_disposition_sha256 != command.expected_disposition_sha256
+            ):
+                raise ValueError("该保留进度暂停已有不同的继续决定, 请查看执行记录")
+            released = service.continue_execution(binding.binding_sha256, authority=authority)
+        if released:
+            return self.resume_delivery(
+                ResumeProjectDelivery(delivery_id=command.delivery_id), project_id=project_id
+            )
+        return (
+            self._runtime(project_id).requirements.status(command.delivery_id)
+            if command.delivery_id.startswith("delivery_multi_")
+            else self._runtime(project_id).entry.status(command.delivery_id)
+        )
 
     def _baseline_native_checkpoint(
         self,

@@ -16,11 +16,13 @@ from ai_software_engineer.domain.engineering_authority import (
     OperatorDuty,
 )
 from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
     BaselineInputMode,
     BaselinePurpose,
     ExecutionBaselineBinding,
     FullGitRevision,
 )
+from ai_software_engineer.domain.execution_native_rules import NativeRuleChangePlan
 from ai_software_engineer.domain.identity import RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure, ExecutionAttempt
@@ -111,6 +113,9 @@ class BaselineExecutionFacts(DomainModel):
     runtime_manifest_sha256: Sha256
     source_native_rules_sha256: Sha256
     target_native_rules_sha256: Sha256
+    native_rule_change: NativeRuleChangePlan | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     source_artifact_ids: tuple[ArtifactId, ...]
     implementation_artifact_id: ArtifactId | None = None
     progress_artifact_id: ArtifactId | None = None
@@ -127,6 +132,18 @@ class BaselineExecutionFacts(DomainModel):
 
     @model_validator(mode="after")
     def validate_inputs(self) -> Self:
+        change = self.native_rule_change
+        if change is not None:
+            change.validate_integrity()
+            if (
+                change.source_native_rules_sha256 != self.source_native_rules_sha256
+                or change.target_native_rules_sha256 != self.target_native_rules_sha256
+                or change.target.scope != self.scope
+                or change.target.task_id != self.task.id
+                or not change.changes
+                or self.legacy_containment is not None
+            ):
+                raise ValueError("项目规范更新未绑定当前任务和精确工程输入")
         ensure_unique(self.source_artifact_ids, "baseline source artifacts")
         ensure_unique(self.resolved_interruption_receipt_sha256s, "baseline interruption receipts")
         if self.denied_paths != (
@@ -198,6 +215,11 @@ class ExecutionBaselinePlan(DomainModel):
         CapturedMutations.model_validate(self.dirty_capture.to_wire())
         CapturedMutations.model_validate(self.complete_capture.to_wire())
         task = self.facts.task
+        if (
+            self.facts.native_rule_change is not None
+            and self.facts.native_rule_change.target.target_base_ref != self.target_base_ref
+        ):
+            raise ValueError("规范批准方案与目标代码版本不同")
         for capture in (self.dirty_capture, self.complete_capture):
             if capture.task_id != task.id or capture.branch_name != task.branch_name:
                 raise ValueError("baseline plan changed Task or original branch")
@@ -263,6 +285,13 @@ class BaselineOperatorAuthorization(DomainModel):
     principal: LocalOperatorPrincipal
     reference: NonEmptyStr = Field(max_length=2000)
     submitted_at: AwareDatetime
+    continuation_mode: BaselineContinuationMode = Field(
+        default=BaselineContinuationMode.RESUME,
+        exclude_if=lambda value: value is BaselineContinuationMode.RESUME,
+    )
+    approved_native_rule_change_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     confirm_legacy_containment: Literal[True] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -279,6 +308,10 @@ class BaselineOperatorAuthorization(DomainModel):
         return self
 
     def require_plan_confirmation(self, plan: ExecutionBaselinePlan) -> None:
+        change = plan.facts.native_rule_change
+        expected = change.change_sha256 if change is not None else None
+        if self.approved_native_rule_change_sha256 != expected:
+            raise ValueError("请明确确认当前方案所列项目规范变化; 旧批准不能用于新版本")
         require_rescue_confirmation(
             plan,
             confirm_legacy_containment=self.confirm_legacy_containment,
@@ -302,6 +335,8 @@ class BaselineOperatorAuthorization(DomainModel):
         submitted_at: datetime,
         confirm_legacy_containment: Literal[True] | None = None,
         confirm_local_execution_stopped: Literal[True] | None = None,
+        continuation_mode: BaselineContinuationMode = BaselineContinuationMode.RESUME,
+        approved_native_rule_change_sha256: str | None = None,
     ) -> Self:
         plan.validate_integrity()
         require_rescue_confirmation(
@@ -317,10 +352,58 @@ class BaselineOperatorAuthorization(DomainModel):
             principal=principal,
             reference=reference,
             submitted_at=submitted_at,
+            continuation_mode=continuation_mode,
+            approved_native_rule_change_sha256=approved_native_rule_change_sha256,
             confirm_legacy_containment=confirm_legacy_containment,
             confirm_local_execution_stopped=confirm_local_execution_stopped,
             authorization_sha256="0" * 64,
         )
+        value.require_plan_confirmation(plan)
+        return value.model_copy(
+            update={
+                "authorization_sha256": digest(
+                    value.model_dump(mode="json", exclude={"authorization_sha256"})
+                )
+            }
+        )
+
+
+class BaselineContinueAuthorization(DomainModel):
+    """One explicit start decision for the current preserved execution input."""
+
+    kind: Literal["baseline_continue_authorization"] = "baseline_continue_authorization"
+    scope: EngineeringScope
+    task_id: NonEmptyStr
+    task_intent_sha256: Sha256
+    task_revision: int = Field(ge=1)
+    work_item_id: NonEmptyStr
+    execution_baseline_sha256: Sha256
+    expected_source_revision: FullGitRevision
+    checkpoint_sequence: int = Field(ge=1)
+    expected_disposition_sha256: Sha256
+    inventory_sha256: Sha256
+    principal: LocalOperatorPrincipal
+    reference: NonEmptyStr = Field(max_length=2000)
+    submitted_at: AwareDatetime
+    authorization_sha256: Sha256
+
+    @model_validator(mode="after")
+    def engineering_decision(self) -> Self:
+        self.principal.require_duty(OperatorDuty.ENGINEERING)
+        if self.checkpoint_sequence != self.task_revision:
+            raise ValueError("继续决定未绑定精确任务版本")
+        return self
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+        if self.authorization_sha256 != digest(
+            self.model_dump(mode="json", exclude={"authorization_sha256"})
+        ):
+            raise ValueError("基线继续决定完整性异常")
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        value = cls.model_validate({**values, "authorization_sha256": "0" * 64})
         return value.model_copy(
             update={
                 "authorization_sha256": digest(

@@ -56,6 +56,7 @@ from .models import (
     RecoverDesignIntent,
     ResolveDeliveryWaitIntent,
     RestartRequirementIntent,
+    ResumeExecutionBaselineIntent,
     UpdateRequirementIntent,
 )
 from .store import (
@@ -120,6 +121,7 @@ __all__ = [
     "RecoverDesignIntent",
     "ResolveDeliveryWaitIntent",
     "RestartRequirementIntent",
+    "ResumeExecutionBaselineIntent",
     "RuntimeStatusSnapshot",
     "RuntimeVariableUpdate",
     "SecretStatus",

@@ -461,6 +461,7 @@ test("task execution history renders investigation and handling facts in Chinese
 });
 
 function baselineFixture(h) {
+  h.run("consoleOperationContractVersion = 4");
   h.task.task_revision = 4;
   h.task.task_intent_sha256 = digest("b");
   h.step.wait_disposition.facts.source_revision = "c".repeat(40);
@@ -482,7 +483,7 @@ test("baseline engineering controls bind original task and sealed exact plan", a
   const h = harness();
   baselineFixture(h);
   let box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
-  assert.equal(control(box, "批准并更新原分支基线"), undefined);
+  assert.equal(control(box, "批准更新基线，保持暂停"), undefined);
   const input = descend(box).find(node => node.tagName === "INPUT");
   input.value = "f".repeat(40);
   await control(box, "调查并保留原草稿").events.click();
@@ -496,7 +497,7 @@ test("baseline engineering controls bind original task and sealed exact plan", a
   baselinePlan(h);
   box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   assert.match(text(box), /ai\/feature\/original/);
-  await control(box, "批准并更新原分支基线").events.click();
+  await control(box, "批准更新基线，保持暂停").events.click();
   const intent = JSON.parse(h.run("JSON.stringify(submitted[1])"));
   assert.equal(intent.action, "EXECUTE_EXECUTION_BASELINE");
   assert.equal(intent.expected_plan_sha256, digest("e"));
@@ -510,14 +511,14 @@ test("baseline conflicts require a new explicit coder reapply plan before execut
   baselineFixture(h);
   baselinePlan(h, true);
   let box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
-  assert.equal(control(box, "批准并更新原分支基线"), undefined);
+  assert.equal(control(box, "批准更新基线，保持暂停"), undefined);
   await control(box, "提出 Coder 适配完整旧补丁的计划").events.click();
   assert.equal(h.run("submitted[0].input_mode"), "coder_reapply");
   assert.equal(h.run("submitted[0].action"), "PROPOSE_EXECUTION_BASELINE");
   baselinePlan(h, false, "coder_reapply");
   box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   assert.match(text(box), /读取完整旧补丁并适配/);
-  await control(box, "批准并更新原分支基线").events.click();
+  await control(box, "批准更新基线，保持暂停").events.click();
   assert.equal(h.run("submitted[1].action"), "EXECUTE_EXECUTION_BASELINE");
 });
 
@@ -532,7 +533,7 @@ test("stale baseline plans and QA stages cannot update the original coder branch
     baselinePlan(h);
     const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
     h.run(mutation);
-    await control(box, "批准并更新原分支基线").events.click();
+    await control(box, "批准更新基线，保持暂停").events.click();
     assert.equal(h.run("submitted.length"), 0, mutation);
   }
   const h = harness();
@@ -548,7 +549,7 @@ function legacyRescueFixture(h) {
   result.source_revision = "c".repeat(40);
   result.investigation.source_revision = "c".repeat(40);
   result.investigation.original_run_id = "run_original";
-  h.run("consoleOperationContractVersion = 2");
+  h.run("consoleOperationContractVersion = 4");
   return result;
 }
 function legacyRescuePlan(h) {
@@ -592,7 +593,7 @@ test("engineering controls explain every unavailable gate without promising hidd
       node.children.some(child => child.tagName === "DT" && child.textContent === "你需要做什么"));
     assert.match(text(userRow), nextStep, mutation);
     assert.doesNotMatch(text(userRow), /点击“准备保留进度的恢复方案”/, mutation);
-    for (const name of ["让平台处理中断", "调查工程等待", "准备保留进度的恢复方案", "批准保留进度并继续原需求"])
+    for (const name of ["让平台处理中断", "调查工程等待", "准备保留进度的恢复方案", "批准保留进度，保持暂停"])
       assert.equal(control(box, name), undefined, mutation);
     assert.equal(descend(box).some(node => node.tagName === "INPUT" && node.type === "checkbox"), false, mutation);
     assert.equal(h.run("canControlCurrentTeam()"), false, mutation);
@@ -647,7 +648,7 @@ test("a checked recovery approval removed during unreadable facts cannot revive 
   const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   const checkbox = descend(box).find(node => node.tagName === "INPUT" && node.type === "checkbox");
   checkbox.checked = true;
-  const oldApprove = control(box, "批准保留进度并继续原需求");
+  const oldApprove = control(box, "批准保留进度，保持暂停");
   h.run("operationsAvailable = false");
   await oldApprove.events.click();
   assert.equal(h.run("submitted.length"), 0);
@@ -660,7 +661,7 @@ test("a checked recovery approval removed during unreadable facts cannot revive 
   assert.equal(currentCheckbox.checked, false);
   currentCheckbox.checked = true;
   currentCheckbox.events.change();
-  await control(current, "批准保留进度并继续原需求").events.click();
+  await control(current, "批准保留进度，保持暂停").events.click();
   assert.equal(h.run("submitted.length"), 1);
 });
 
@@ -696,7 +697,7 @@ test("engineering approval requires the explicit same computer and whole compute
   assert.match(text(rescue), /方案核验的整机启动/);
   assert.match(text(rescue), /工程授权者身份/);
   assert.match(text(rescue), /未迁移或远程执行/);
-  const approve = control(rescue, "批准保留进度并继续原需求");
+  const approve = control(rescue, "批准保留进度，保持暂停");
   const checkbox = descend(rescue).find(node => node.tagName === "INPUT" && node.type === "checkbox");
   assert.equal(approve.disabled, true);
   await approve.events.click();
@@ -727,7 +728,7 @@ test("source update plans cannot become rescue approvals and incorrect containme
     legacyRescueFixture(h);
     mutate(legacyRescuePlan(h));
     const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
-    assert.equal(control(box, "批准保留进度并继续原需求"), undefined);
+    assert.equal(control(box, "批准保留进度，保持暂停"), undefined);
   }
 });
 
@@ -762,7 +763,7 @@ test("legacy rescue approvals cannot resubmit a consumed plan or a changed origi
     const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
     const checkbox = descend(box).find(node => node.tagName === "INPUT" && node.type === "checkbox");
     checkbox.checked = true;
-    const approval = control(box, "批准保留进度并继续原需求");
+    const approval = control(box, "批准保留进度，保持暂停");
     h.run(mutation);
     await approval.events.click();
     assert.equal(h.run("submitted.length"), 0, mutation);
@@ -816,7 +817,7 @@ test("failed or interrupted rescue preparation stays visible and in copied repor
     assert.match(text(box), /MANAGER_FAILURE/);
     assert.match(text(box), /WorktreeCaptureRejected/);
     assert.equal(control(box, "准备保留进度的恢复方案"), undefined);
-    assert.equal(control(box, "批准保留进度并继续原需求"), undefined);
+    assert.equal(control(box, "批准保留进度，保持暂停"), undefined);
     await control(box, "复制处理报告").events.click();
     assert.match(h.context.copiedReport, /恢复方案准备(?:失败|被中断)/);
     assert.match(h.context.copiedReport, /恢复准备操作 · failed_rescue_proposal/);
@@ -841,7 +842,7 @@ test("rescue failure exact scope prevents foreign and stale operations from chan
     h.run(`operations[2].intent[${JSON.stringify(key)}] = changedValue;`);
     const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
     assert.doesNotMatch(text(box), /MANAGER_FAILURE/, key);
-    assert.ok(control(box, "批准保留进度并继续原需求"), key);
+    assert.ok(control(box, "批准保留进度，保持暂停"), key);
   }
 });
 
@@ -852,9 +853,9 @@ test("a newer failed proposal removes a previous rescue approval and its retaine
   const oldBox = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   const checkbox = descend(oldBox).find(node => node.tagName === "INPUT" && node.type === "checkbox");
   checkbox.checked = true;
-  const oldApprove = control(oldBox, "批准保留进度并继续原需求");
+  const oldApprove = control(oldBox, "批准保留进度，保持暂停");
   failedRescueProposal(h);
-  assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"), "批准保留进度并继续原需求"), undefined);
+  assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"), "批准保留进度，保持暂停"), undefined);
   await oldApprove.events.click();
   assert.equal(h.run("submitted.length"), 0);
 });
@@ -894,9 +895,179 @@ test("typed capture waiting stays distinct from internal failure and drives the 
   const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   assert.match(text(box), /恢复前提尚未满足/);
   assert.doesNotMatch(text(box), /恢复方案准备失败|内部异常/);
-  assert.equal(control(box, "批准保留进度并继续原需求"), undefined);
+  assert.equal(control(box, "批准保留进度，保持暂停"), undefined);
   assert.ok(control(box, "重新检查恢复前提"));
   await control(box, "复制处理报告").events.click();
   assert.ok(h.context.copiedReport.includes("用户操作 · " + preparation.next_action));
   assert.doesNotMatch(h.context.copiedReport, /在当前需求详情点击“准备保留进度的恢复方案”/);
+});
+
+test("preserved progress pause separates baseline preparation from exact explicit continuation", async () => {
+  const h = harness();
+  baselineFixture(h);
+  Object.assign(h.step.wait_disposition.facts, {classification: "EXECUTION_BASELINE_PAUSED", execution_baseline_sha256: digest("8")});
+  h.step.wait_disposition.action = "RESUME_EXECUTION_BASELINE";
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.match(text(box), /进度已保留 · 交付暂停/);
+  assert.match(text(box), /没有启动新的 Coder/);
+  assert.equal(control(box, "调查工程等待"), undefined);
+  assert.equal(control(box, "让平台处理中断"), undefined);
+  assert.ok(control(box, "调查并保留原草稿"));
+  assert.equal(h.run("submitted.length"), 0);
+  await control(box, "继续原需求").events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.equal(intent.action, "RESUME_EXECUTION_BASELINE");
+  assert.equal(intent.expected_execution_baseline_sha256, digest("8"));
+  assert.equal(intent.expected_disposition_sha256, digest("d"));
+  assert.equal(intent.expected_work_item_id, h.step.work_item_id);
+  assert.equal(Object.hasOwn(intent, "approved_plan_sha256"), false);
+  assert.equal(Object.hasOwn(intent, "attempt"), false);
+});
+
+test("pause continuation rejects stale source, binding, disposition and old service capabilities", async () => {
+  for (const mutation of [
+    'data.step.wait_disposition.facts.source_revision = "e".repeat(40)',
+    'data.step.wait_disposition.facts.execution_baseline_sha256 = "e".repeat(64)',
+    'data.step.wait_disposition_sha256 = "e".repeat(64)',
+    'data.task.task_revision += 1',
+    'consoleOperationContractVersion = 3',
+    'consoleSupportedActions = consoleSupportedActions.filter(action => action !== "RESUME_EXECUTION_BASELINE")',
+  ]) {
+    const h = harness();
+    baselineFixture(h);
+    Object.assign(h.step.wait_disposition.facts, {classification: "EXECUTION_BASELINE_PAUSED", execution_baseline_sha256: digest("8")});
+    h.step.wait_disposition.action = "RESUME_EXECUTION_BASELINE";
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    const previous = control(box, "继续原需求");
+    assert.ok(previous);
+    h.run(mutation);
+    await previous.events.click();
+    assert.equal(h.run("submitted.length"), 0, mutation);
+  }
+});
+
+test("source update keeps pause and native rule approval requires actual complete review", async () => {
+  const h = harness();
+  baselineFixture(h);
+  const plan = baselinePlan(h);
+  plan.facts.native_rule_change = {change_sha256: digest("9"), changes: [
+    {path: "AGENTS.md", change: "modified", before: {sha256: digest("2")}, after: {sha256: digest("3")}},
+  ]};
+  let box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const approve = control(box, "批准更新基线，保持暂停");
+  const confirmation = descend(box).find(node => node.tagName === "INPUT" && node.type === "checkbox");
+  assert.equal(confirmation.disabled, true);
+  assert.equal(approve.disabled, true);
+  assert.ok(control(box, "查看规范变更 · AGENTS.md"));
+  confirmation.checked = true;
+  await approve.events.click();
+  assert.equal(h.run("submitted.length"), 0, "forged check cannot bypass complete review");
+  h.run(`saveNativeRuleReview(baselinePlan, "AGENTS.md", {status: "READY", inspection: {unified_diff: "complete rule: -old rule +new rule"}})`);
+  box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const checked = descend(box).find(node => node.tagName === "INPUT" && node.type === "checkbox");
+  assert.equal(checked.disabled, false);
+  assert.equal(checked.checked, false, "loading review never grants consent");
+  checked.checked = true;
+  await control(box, "批准更新基线，保持暂停").events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.equal(intent.continuation_mode, "pause");
+  assert.equal(intent.approved_native_rule_change_sha256, digest("9"));
+  assert.match(text(box), /new rule/);
+});
+
+test("native rule review retains every current repository plan and prunes removed plans once per detail", () => {
+  const h = harness();
+  baselineFixture(h);
+  const first = baselinePlan(h);
+  first.facts.native_rule_change = {change_sha256: digest("9"), changes: [{path: "AGENTS.md", change: "modified"}]};
+  const otherTask = structuredClone(h.task);
+  otherTask.id = "delivery_other";
+  otherTask.task_id = "task_other";
+  const otherStep = otherTask.role_queue[0];
+  otherStep.work_item_id = "work_other";
+  Object.assign(otherStep.wait_disposition.facts, {task_id: otherTask.task_id, work_item_id: otherStep.work_item_id});
+  const otherPlan = structuredClone(first);
+  otherPlan.plan_sha256 = digest("8");
+  otherPlan.facts.task.id = otherTask.task_id;
+  otherPlan.facts.work_item_id = otherStep.work_item_id;
+  Object.assign(h.context, {otherTask, otherStep, otherPlan});
+  h.run(`snapshot.tasks.push(otherTask); data.request.scopes.push({delivery_id: otherTask.id});
+    selected = {kind: "request", id: data.request.id};
+    operations.push({operation_id: "baseline_other", status: "SUCCEEDED", updated_at: "2026-10-05T02:00:00Z",
+      intent: {...engineeringBaselineFacts(data.request, otherTask, otherStep), action: "PROPOSE_EXECUTION_BASELINE",
+        target_base_ref: otherPlan.target_base_ref, input_mode: otherPlan.input_mode},
+      result: {checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: otherPlan}});
+    saveNativeRuleReview(baselinePlan, "AGENTS.md", {status: "READY", inspection: {unified_diff: "first complete rules"}});`);
+  h.run("engineeringWaitBox(data.request, data.task, data.step); engineeringWaitBox(data.request, otherTask, otherStep)");
+  assert.equal(h.run("nativeRulePlanReviewed(baselinePlan)"), true, "rendering the other plan cannot erase first review");
+  h.run(`saveNativeRuleReview(otherPlan, "AGENTS.md", {status: "READY", inspection: {unified_diff: "other complete rules"}});
+    pruneNativeRuleReviews();
+    engineeringWaitBox(data.request, data.task, data.step); engineeringWaitBox(data.request, otherTask, otherStep);`);
+  assert.equal(h.run("nativeRulePlanReviewed(baselinePlan) && nativeRulePlanReviewed(otherPlan)"), true);
+  assert.equal(h.run("nativeRuleReviews.size"), 2);
+  h.task.last_activity = "2026-10-06T00:00:00Z";
+  h.run("pruneNativeRuleReviews()");
+  assert.equal(h.run("nativeRuleReviews.size"), 2, "unrelated polling keeps all current plans");
+  h.run("snapshot.tasks = [data.task]; pruneNativeRuleReviews()");
+  assert.equal(h.run("nativeRuleReviews.size"), 1);
+  assert.equal(h.run("nativeRulePlanReviewed(baselinePlan)"), true);
+  assert.equal(h.run("nativeRulePlanReviewed(otherPlan)"), false);
+  h.run("selected = null; pruneNativeRuleReviews()");
+  assert.equal(h.run("nativeRuleReviews.size"), 0, "closed detail releases retained rule bodies");
+});
+
+function pendingContinuationFixture(h) {
+  baselineFixture(h);
+  h.step.status = "READY";
+  h.step.wait_disposition = null;
+  h.step.wait_disposition_sha256 = null;
+  const authority = {scope: {team_id: "team_current", project_id: h.request.project_id},
+    task_id: h.task.task_id, task_intent_sha256: h.task.task_intent_sha256, task_revision: h.task.task_revision,
+    checkpoint_sequence: h.task.task_revision, work_item_id: h.step.work_item_id,
+    expected_source_revision: "c".repeat(40), execution_baseline_sha256: digest("8"),
+    expected_disposition_sha256: digest("d"), authorization_sha256: digest("7"),
+    reference: "原工程授权者明确继续的决定"};
+  h.step.pending_baseline_continuation = authority;
+  h.task.execution = h.request.execution = {state: "WAITING", responsibility: "engineering", action_required: true,
+    reason_code: "BASELINE_CONTINUATION_PENDING", reason: "已授权的执行尚未启动。", next_action: "继续已授权执行"};
+  return authority;
+}
+
+test("committed but unstarted continuation exposes exact replay without another approval", async () => {
+  const h = harness();
+  const authority = pendingContinuationFixture(h);
+  assert.equal(h.run("engineeringPendingBaselineSteps(data.request).length"), 1);
+  assert.equal(h.run("canContinueDelivery(data.request)"), false, "generic continuation cannot conceal exact replay");
+  const box = h.run("engineeringAuthorizedContinuationBox(data.request, data.task, data.step)");
+  assert.match(text(box), /无需再次批准/);
+  assert.equal(descend(box).filter(node => node.tagName === "INPUT").length, 0);
+  h.request.checkpoint_sha256 = digest("6");
+  await control(box, "继续已授权执行").events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.equal(intent.action, "RESUME_EXECUTION_BASELINE");
+  assert.equal(intent.expected_checkpoint_sha256, digest("6"), "outer checkpoint refreshed; semantic authorization preserved");
+  assert.equal(intent.reference, authority.reference);
+  assert.equal(intent.expected_execution_baseline_sha256, authority.execution_baseline_sha256);
+  assert.equal(intent.expected_disposition_sha256, authority.expected_disposition_sha256);
+});
+
+test("old continuation retry cannot start changed work or an ordinary ready queue", async () => {
+  for (const mutation of [
+    'data.step.pending_baseline_continuation = null',
+    'data.step.status = "RUNNING"',
+    'data.task.status = "QA"',
+    'data.task.task_revision += 1',
+    'data.step.pending_baseline_continuation.expected_source_revision = "e".repeat(40)',
+    'data.step.pending_baseline_continuation.execution_baseline_sha256 = "e".repeat(64)',
+    'data.step.pending_baseline_continuation.reference = "different decision"',
+    'consoleOperationContractVersion = 3',
+  ]) {
+    const h = harness();
+    pendingContinuationFixture(h);
+    const old = control(h.run("engineeringAuthorizedContinuationBox(data.request, data.task, data.step)"), "继续已授权执行");
+    assert.ok(old);
+    h.run(mutation);
+    await old.events.click();
+    assert.equal(h.run("submitted.length"), 0, mutation);
+  }
 });

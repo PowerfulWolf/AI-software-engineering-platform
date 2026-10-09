@@ -14,12 +14,13 @@ from ai_software_engineer.domain.delivery_resolution import (
     EngineeringDispositionRecord,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringAdmission, EngineeringScope
-from ai_software_engineer.domain.execution_baseline import BaselinePurpose
+from ai_software_engineer.domain.execution_baseline import BaselineContinuationMode, BaselinePurpose
 from ai_software_engineer.domain.model import JsonValue
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import (
+    BaselineContinueAuthorization,
     BaselineOperationStart,
     BaselineOperatorAuthorization,
 )
@@ -554,7 +555,11 @@ def engineering_history(
                     occurred_at=binding.completed_at,
                     task_id=task.id,
                     summary=(
-                        "完整草稿已保留, 原未知执行历史不变, 下一轮使用原任务剩余工作额度继续。"
+                        "完整进度和工程决定已保存, 原需求保持暂停; 可先更新基线, 再明确继续。"
+                        if binding.continuation_mode is BaselineContinuationMode.PAUSE
+                        else (
+                            "完整草稿已保留, 原未知执行历史不变, 下一轮使用原任务剩余工作额度继续。"
+                        )
                         if binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
                         else "已在原需求分支更新代码执行基线, 保留原候选和草稿记录。"
                     ),
@@ -569,6 +574,50 @@ def engineering_history(
                         "approved_base_ref": binding.approved_base_ref,
                         "execution_base_ref": binding.execution_base_ref,
                         "execution_source_revision": binding.execution_source_revision,
+                        "continuation_mode": binding.continuation_mode.value,
+                        "native_rule_epoch_sha256": binding.native_rule_epoch_sha256,
+                    },
+                )
+            )
+        bindings_by_sha = {
+            binding.binding_sha256: binding for binding in store.bindings_for_task(task.id)
+        }
+        for continuation in store.records.list(
+            "baseline-continuations", BaselineContinueAuthorization
+        ):
+            continuation.validate_integrity()
+            continued_binding = bindings_by_sha.get(continuation.execution_baseline_sha256)
+            if (
+                continued_binding is None
+                or continued_binding.continuation_mode is not BaselineContinuationMode.PAUSE
+                or continuation.scope != scope
+                or continuation.task_id != task.id
+                or continuation.task_intent_sha256 != intent
+                or continuation.expected_source_revision
+                != continued_binding.execution_source_revision
+                or continuation.inventory_sha256 != continued_binding.after_inventory_sha256
+            ):
+                raise ValueError("基线继续记录与精确保留进度不同")
+            entries.append(
+                TimelineEntry(
+                    id="baseline_continue_" + continuation.authorization_sha256,
+                    kind=ProjectionEventKind.EVIDENCE,
+                    occurred_at=continuation.submitted_at,
+                    task_id=task.id,
+                    summary="工程授权者已明确继续原需求的保留进度; 后续执行记录确认启动与验收。",
+                    source_uri=(
+                        baselines
+                        / store.records._name(
+                            "baseline-continuations", continuation.execution_baseline_sha256
+                        )
+                    ).as_uri(),
+                    source_sha256=continuation.authorization_sha256,
+                    details={
+                        "kind": continuation.kind,
+                        "operator_id": continuation.principal.operator_id,
+                        "execution_baseline_sha256": continuation.execution_baseline_sha256,
+                        "work_item_id": continuation.work_item_id,
+                        "source_revision": continuation.expected_source_revision,
                     },
                 )
             )

@@ -119,6 +119,103 @@
       "title": "AssignmentView",
       "type": "object"
     },
+    "BaselineContinueAuthorization": {
+      "additionalProperties": false,
+      "description": "One explicit start decision for the current preserved execution input.",
+      "properties": {
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        },
+        "checkpoint_sequence": {
+          "minimum": 1,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "execution_baseline_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Execution Baseline Sha256",
+          "type": "string"
+        },
+        "expected_disposition_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Expected Disposition Sha256",
+          "type": "string"
+        },
+        "expected_source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Expected Source Revision",
+          "type": "string"
+        },
+        "inventory_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Inventory Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "baseline_continue_authorization",
+          "default": "baseline_continue_authorization",
+          "title": "Kind",
+          "type": "string"
+        },
+        "principal": {
+          "$ref": "#/$defs/LocalOperatorPrincipal"
+        },
+        "reference": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Reference",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "submitted_at": {
+          "format": "date-time",
+          "title": "Submitted At",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "task_id",
+        "task_intent_sha256",
+        "task_revision",
+        "work_item_id",
+        "execution_baseline_sha256",
+        "expected_source_revision",
+        "checkpoint_sequence",
+        "expected_disposition_sha256",
+        "inventory_sha256",
+        "principal",
+        "reference",
+        "submitted_at",
+        "authorization_sha256"
+      ],
+      "title": "BaselineContinueAuthorization",
+      "type": "object"
+    },
     "CodexConnectionMode": {
       "enum": [
         "direct",
@@ -174,6 +271,7 @@
             "engineering_authorization",
             "verified_prerequisites",
             "verified_execution_resolution",
+            "explicit_baseline_continuation",
             "none"
           ],
           "title": "Resume Condition",
@@ -323,7 +421,8 @@
             "EXECUTION_UNCERTAIN",
             "ENVIRONMENT_UNAVAILABLE",
             "ENGINEERING_AUTHORIZATION",
-            "SOURCE_PREPARATION_DRIFT"
+            "SOURCE_PREPARATION_DRIFT",
+            "EXECUTION_BASELINE_PAUSED"
           ],
           "title": "Classification",
           "type": "string"
@@ -336,6 +435,19 @@
           },
           "title": "Evidence Ids",
           "type": "array"
+        },
+        "execution_baseline_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Baseline Sha256"
         },
         "retry_authorized": {
           "default": false,
@@ -394,6 +506,7 @@
         "REQUEST_ENGINEERING_AUTHORIZATION",
         "WAIT_DEPENDENCY",
         "INVESTIGATE_EXECUTION",
+        "RESUME_EXECUTION_BASELINE",
         "TERMINATE"
       ],
       "title": "DeliveryNextAction",
@@ -562,6 +675,39 @@
         "sha256"
       ],
       "title": "DocumentView",
+      "type": "object"
+    },
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        },
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
       "type": "object"
     },
     "JsonValue": {
@@ -906,6 +1052,37 @@
       "title": "KnowledgeRunBinding",
       "type": "object"
     },
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        },
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
     "ManagerCoordinationAdvice": {
       "additionalProperties": false,
       "properties": {
@@ -1019,6 +1196,14 @@
       ],
       "title": "ManagerCoordinationDraft",
       "type": "object"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
     },
     "ProjectView": {
       "additionalProperties": false,
@@ -1331,6 +1516,17 @@
           ],
           "title": "Lease Liveness",
           "type": "string"
+        },
+        "pending_baseline_continuation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BaselineContinueAuthorization"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "role": {
           "$ref": "#/$defs/AgentRole"
@@ -2001,6 +2197,8 @@
       "type": "string"
     }
   },
+  "$id": "https://ai-software-engineer.local/schemas/team-snapshot.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
     "agents": {
@@ -2073,7 +2271,5 @@
     "team_name"
   ],
   "title": "TeamSnapshot",
-  "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/team-snapshot.schema.json"
+  "type": "object"
 }

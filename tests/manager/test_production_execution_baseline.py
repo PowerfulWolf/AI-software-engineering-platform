@@ -30,6 +30,7 @@ from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.context.execution_baseline import ExecutionBaselineContext
+from ai_software_engineer.context.native import validate_native_rule_epoch_context
 from ai_software_engineer.domain import (
     AgentDefinition,
     AgentRole,
@@ -48,20 +49,31 @@ from ai_software_engineer.domain import (
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal, OperatorDuty
-from ai_software_engineer.domain.execution_baseline import BaselineInputMode
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
+    BaselineInputMode,
+)
+from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
 from ai_software_engineer.execution import SubprocessCommandExecutor
 from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
 from ai_software_engineer.git.baseline import BaselineGitConflict
+from ai_software_engineer.knowledge.agents import KnowledgeConsultation
+from ai_software_engineer.knowledge.models import KnowledgeSnapshot
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager import production_backend, production_delivery
 from ai_software_engineer.manager.baseline_production import (
+    BaselineContinueCommand,
     BaselineExecuteCommand,
     BaselineProposeCommand,
     BaselineQuiescenceProof,
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
-from ai_software_engineer.manager.delivery import ApproveProductSpec, StartProjectDelivery
+from ai_software_engineer.manager.delivery import (
+    ApproveProductSpec,
+    ResumeProjectDelivery,
+    StartProjectDelivery,
+)
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
@@ -73,6 +85,8 @@ from ai_software_engineer.work_queue.dispatcher import (
     DispatcherTickResult,
     DispatcherTickStatus,
 )
+from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
+from ai_software_engineer.work_queue.ports import QueueConflict
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 from tests.manager.test_production_backend import (
     _git,
@@ -87,11 +101,12 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _ReportTempla
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    ("mode", "reject_after_baseline"),
+    ("mode", "reject_after_baseline", "native_pause"),
     [
-        (BaselineInputMode.PRESERVE_DRAFT, False),
-        (BaselineInputMode.CODER_REAPPLY, False),
-        (BaselineInputMode.PRESERVE_DRAFT, True),
+        (BaselineInputMode.PRESERVE_DRAFT, False, False),
+        (BaselineInputMode.CODER_REAPPLY, False, False),
+        (BaselineInputMode.PRESERVE_DRAFT, True, False),
+        pytest.param(BaselineInputMode.PRESERVE_DRAFT, False, True, id="pause_native_epoch"),
     ],
 )
 def test_public_baseline_updates_original_workspace_then_completes_independent_delivery(
@@ -100,12 +115,16 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     monkeypatch: pytest.MonkeyPatch,
     mode: BaselineInputMode,
     reject_after_baseline: bool,
+    native_pause: bool,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
     (repository / "hello.txt").write_text("hello\n")
+    if native_pause:
+        (repository / "README.md").write_text("Original greeting project instructions.\n")
+        (repository / "CONTRIBUTING.md").write_text("Old contribution guidance.\n")
     _git("init", "-b", "main", cwd=repository)
-    _git("add", "hello.txt", cwd=repository)
+    _git("add", ".", cwd=repository)
     _git("commit", "-m", "initial", cwd=repository)
     approved_source = _git_output("rev-parse", "HEAD", cwd=repository)
     calls: list[Invocation] = []
@@ -114,6 +133,8 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     paused = True
     expected_binding: str | None = None
     execution_base: str | None = None
+    expected_epoch: NativeRuleEpoch | None = None
+    continue_command: BaselineContinueCommand | None = None
     original_complete = _ScriptedStructuredClient.complete
 
     def source_inspection(
@@ -228,6 +249,47 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                 == trusted.binding.retained_patch.sha256
             )
             assert trusted.complete_patch.endswith("+retained draft\n")
+            if native_pause:
+                assert expected_epoch is not None
+                assert trusted.binding.native_rule_epoch_sha256 == expected_epoch.epoch_sha256
+                validate_native_rule_epoch_context(context, expected_epoch)
+                (marker,) = tuple(
+                    section
+                    for section in context.sections
+                    if section.name == "source:execution.native_rules"
+                )
+                assert marker.uri == "native-rules://" + expected_epoch.epoch_sha256
+                (agent_rules,) = tuple(
+                    section for section in context.sections if section.uri.endswith("/AGENTS.md")
+                )
+                assert agent_rules.content == "Approved greeting conventions for every role.\n"
+                assert not any(
+                    section.uri.endswith("/CONTRIBUTING.md") for section in context.sections
+                )
+                (consultation_section,) = tuple(
+                    section
+                    for section in context.sections
+                    if section.name == "knowledge.consultation"
+                )
+                consultation = KnowledgeConsultation.model_validate_json(
+                    consultation_section.content
+                )
+                knowledge = KnowledgeRecordStore(sidecar / "knowledge/runs", read_only=True)
+                snapshot = knowledge.get(
+                    "snapshots", consultation.binding.snapshot_sha256, KnowledgeSnapshot
+                )
+                native_documents = {
+                    document.source_uri: document.content
+                    for document in snapshot.documents
+                    if document.scope == "repository"
+                }
+                assert native_documents == {
+                    body.source.uri: body.content for body in expected_epoch.bodies
+                }
+                knowledge_parent = FileContextStore(sidecar / "contexts").get(
+                    consultation.binding.context_manifest_id
+                )
+                validate_native_rule_epoch_context(knowledge_parent, expected_epoch)
             assert (cwd / "tooling.txt").read_text() == "fixed platform baseline\n"
             if request.role is AgentRole.CODER:
                 policy.authorize_write("hello.txt")
@@ -478,21 +540,50 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             project_id="project_test",
         )
 
-    # Newly added native rules also require an explicit scope/rule decision.
-    (repository / "AGENTS.md").write_text("A changed native rule is not an engineering upgrade.\n")
-    _git("add", "AGENTS.md", cwd=repository)
+    # A complete immutable rule delta is inspectable but cannot be silently adopted.
+    (repository / "AGENTS.md").write_text("Approved greeting conventions for every role.\n")
+    if native_pause:
+        (repository / "README.md").write_text("Approved updated greeting project instructions.\n")
+        (repository / "CONTRIBUTING.md").unlink()
+    _git("add", "-A", cwd=repository)
     _git("commit", "-m", "changed native rules", cwd=repository)
     unsafe_target = _git_output("rev-parse", "HEAD", cwd=repository)
-    with pytest.raises(ValueError, match="原批准的项目规范"):
-        host.propose_execution_baseline(
-            command.model_copy(
-                update={
-                    "target_base_ref": unsafe_target,
-                }
-            ),
-            project_id="project_test",
-        )
-    _git("reset", "--hard", execution_base, cwd=repository)
+    native_plan = host.propose_execution_baseline(
+        command.model_copy(update={"target_base_ref": unsafe_target}), project_id="project_test"
+    )
+    assert native_plan.facts.native_rule_change is not None
+    native_digest = native_plan.facts.native_rule_change.change_sha256
+    native_execute = BaselineExecuteCommand(
+        delivery_id=pending.delivery_id,
+        task_id=frozen_task.id,
+        expected_plan_sha256=native_plan.plan_sha256,
+        reference="missing-native-rule-decision",
+        continuation_mode=BaselineContinuationMode.PAUSE,
+    )
+    before_head = _git_output("rev-parse", "HEAD", cwd=original_worktree)
+    for approved_digest in (None, "0" * 64):
+        with pytest.raises(ValueError, match="项目规范"):
+            host.execute_execution_baseline(
+                native_execute.model_copy(
+                    update={"approved_native_rule_change_sha256": approved_digest}
+                ),
+                project_id="project_test",
+            )
+    assert len(calls) == 1
+    assert host.work_queue.get(current_item.id) == current_item
+    assert _git_output("rev-parse", "HEAD", cwd=original_worktree) == before_head
+    if native_pause:
+        execution_base = unsafe_target
+        command = command.model_copy(update={"target_base_ref": execution_base})
+        assert {
+            (delta.path, delta.change) for delta in native_plan.facts.native_rule_change.changes
+        } == {
+            ("AGENTS.md", "added"),
+            ("CONTRIBUTING.md", "deleted"),
+            ("README.md", "modified"),
+        }
+    else:
+        _git("reset", "--hard", execution_base, cwd=repository)
 
     preserve = host.propose_execution_baseline(command, project_id="project_test")
     if mode is BaselineInputMode.CODER_REAPPLY:
@@ -527,6 +618,10 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         task_id=frozen_task.id,
         expected_plan_sha256=plan.plan_sha256,
         reference="exact-engineering-baseline-decision",
+        continuation_mode=BaselineContinuationMode.PAUSE
+        if native_pause
+        else BaselineContinuationMode.RESUME,
+        approved_native_rule_change_sha256=native_digest if native_pause else None,
     )
     with pytest.raises(ValueError, match="职责权限"):
         product_only.execute_execution_baseline(execute, project_id="project_test")
@@ -543,6 +638,13 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     # Keep the native Supervisor paused while publication commits the same-item overlay.
     binding = host.execute_execution_baseline(execute, project_id="project_test")
     expected_binding = binding.binding_sha256
+    if native_pause:
+        assert binding.native_rule_epoch_sha256 is not None
+        store = FileExecutionBaselineStore(
+            sidecar / "state/execution-baselines" / frozen_task.id, read_only=True
+        )
+        expected_epoch = store.native_rule_epoch(binding.native_rule_epoch_sha256)
+        assert expected_epoch.target_base_ref == execution_base
     assert binding.approved_base_ref == approved_source
     assert binding.execution_base_ref == execution_base
     assert binding.input_mode is mode
@@ -552,7 +654,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         _git_output("rev-parse", "HEAD", cwd=original_worktree) == binding.execution_source_revision
     )
     rebound_item = host.work_queue.get(current_item.id)
-    assert rebound_item.status is WorkItemStatus.READY
+    assert rebound_item.status is (
+        WorkItemStatus.WAITING_HUMAN if native_pause else WorkItemStatus.READY
+    )
     assert rebound_item.dispatch_sequence == current_item.dispatch_sequence + 1
     assert (
         host.work_queue.original_step(current_item.id).boundary.source_revision == approved_source
@@ -563,8 +667,81 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     )
     assert len(calls) == 1
     paused = False
-    # The public idempotent action resumes the same queued Coder with a real new claim.
-    assert host.execute_execution_baseline(execute, project_id="project_test") == binding
+    if native_pause:
+        assert rebound_item.wait_disposition is not None
+        assert host.execute_execution_baseline(execute, project_id="project_test") == binding
+        service.resume(ResumeProjectDelivery(delivery_id=pending.delivery_id))
+        assert len(calls) == 1
+        assert host.work_queue.get(rebound_item.id) == rebound_item
+        assert (
+            host.planner_dispatcher(
+                demand_builder=lambda item: (_ for _ in ()).throw(AssertionError("paused demand")),
+                worker_id="worker_paused_native",
+            )
+            .tick(now=datetime.now(UTC), work_item_id=rebound_item.id)
+            .status
+            is DispatcherTickStatus.IDLE
+        )
+        with pytest.raises(QueueConflict, match="精确"):
+            host.work_queue.make_ready(
+                rebound_item.id,
+                now=datetime.now(UTC),
+                expected_disposition_sha256=rebound_item.wait_disposition.disposition_sha256,
+            )
+        continue_command = BaselineContinueCommand(
+            delivery_id=pending.delivery_id,
+            task_id=frozen_task.id,
+            expected_task_intent_sha256=task_intent_sha256(frozen_task),
+            expected_task_revision=frozen_revision,
+            expected_work_item_id=rebound_item.id,
+            expected_source_revision=binding.execution_source_revision,
+            expected_execution_baseline_sha256=binding.binding_sha256,
+            expected_disposition_sha256=rebound_item.wait_disposition.disposition_sha256,
+            reference="explicit exact preserved input continuation",
+        )
+        with pytest.raises(ValueError, match="职责权限"):
+            product_only.continue_execution_baseline(continue_command, project_id="project_test")
+        original_release = MySqlRoleQueue.release_baseline_pause
+
+        def interrupted_release(*args: object, **kwargs: object) -> bool:
+            raise RuntimeError("fixture crash after authorization before SQL release")
+
+        monkeypatch.setattr(MySqlRoleQueue, "release_baseline_pause", interrupted_release)
+        with pytest.raises(RuntimeError, match="before SQL release"):
+            host.continue_execution_baseline(continue_command, project_id="project_test")
+        assert host.work_queue.get(rebound_item.id) == rebound_item and len(calls) == 1
+        monkeypatch.setattr(MySqlRoleQueue, "release_baseline_pause", original_release)
+        (original_worktree / "hello.txt").write_text("changed after saved continuation authority\n")
+        with pytest.raises(ValueError, match="现场"):
+            host.continue_execution_baseline(continue_command, project_id="project_test")
+        assert host.work_queue.get(rebound_item.id) == rebound_item and len(calls) == 1
+        (original_worktree / "hello.txt").write_text("retained draft\n")
+        _git("add", "hello.txt", cwd=original_worktree)
+        with pytest.raises(ValueError, match="暂存区"):
+            host.continue_execution_baseline(continue_command, project_id="project_test")
+        assert host.work_queue.get(rebound_item.id) == rebound_item and len(calls) == 1
+        _git("reset", "--mixed", binding.execution_source_revision, cwd=original_worktree)
+        original_resume = host.resume_delivery
+
+        def interrupted_resume(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("fixture crash after queue release commit")
+
+        monkeypatch.setattr(host, "resume_delivery", interrupted_resume)
+        with pytest.raises(RuntimeError, match="queue release commit"):
+            host.continue_execution_baseline(continue_command, project_id="project_test")
+        assert host.work_queue.get(rebound_item.id).status is WorkItemStatus.READY
+        assert len(calls) == 1
+        _git("add", "hello.txt", cwd=original_worktree)
+        with pytest.raises(ValueError, match="暂存区"):
+            host.continue_execution_baseline(continue_command, project_id="project_test")
+        assert host.work_queue.get(rebound_item.id).status is WorkItemStatus.READY
+        assert len(calls) == 1
+        _git("reset", "--mixed", binding.execution_source_revision, cwd=original_worktree)
+        monkeypatch.setattr(host, "resume_delivery", original_resume)
+        host.continue_execution_baseline(continue_command, project_id="project_test")
+    else:
+        # Historical resume mode keeps its existing public invocation behavior.
+        assert host.execute_execution_baseline(execute, project_id="project_test") == binding
     delivered = service.status(pending.delivery_id).checkpoint
     if reject_after_baseline:
         from ai_software_engineer.domain.delivery_resolution import (
@@ -679,6 +856,10 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     )
     assert baseline_store.bindings_for_task(frozen_task.id) == (binding,)
     assert len(consumptions(host.work_queue, frozen_task.id)) == 1
+    if continue_command is not None:
+        count = len(calls)
+        host.continue_execution_baseline(continue_command, project_id="project_test")
+        assert len(calls) == count
     contexts = FileContextStore(sidecar / "contexts")
     for call in calls[1:]:
         context = contexts.get(call.request.context_manifest_id)

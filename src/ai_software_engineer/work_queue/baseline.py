@@ -9,10 +9,23 @@ from typing import TYPE_CHECKING, Literal, Self
 from pydantic import model_validator
 from pymysql.cursors import DictCursor
 
+from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.delivery_disposition import (
+    DeliveryFailureFacts,
+    decide_delivery_disposition,
+)
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
-from ai_software_engineer.domain.execution_baseline import BaselinePurpose, ExecutionBaselineBinding
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
+    BaselinePurpose,
+    ExecutionBaselineBinding,
+)
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
-from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
+from ai_software_engineer.domain.task import Task
+from ai_software_engineer.manager.baseline_models import (
+    BaselineContinueAuthorization,
+    ExecutionBaselinePlan,
+)
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.store.mysql_repository import _decode_task, _encode, open_mysql_connection
 from ai_software_engineer.work_queue.execution_store import (
@@ -33,6 +46,7 @@ if TYPE_CHECKING:
     from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
 
 TABLE = "work_queue_execution_baselines"
+RELEASE_TABLE = "work_queue_baseline_releases"
 
 
 class BaselineQueueConsumption(DomainModel):
@@ -74,6 +88,35 @@ class BaselineQueueConsumption(DomainModel):
                 or self.binding.before_inventory_sha256 != self.binding.after_inventory_sha256
             ):
                 raise ValueError("旧执行救援消费必须保留现场并使用独立下一工作身份")
+        return self
+
+
+class BaselineQueueRelease(DomainModel):
+    """Immutable exact decision and scheduling result, never an execution verdict."""
+
+    kind: Literal["baseline_queue_release"] = "baseline_queue_release"
+    task_id: NonEmptyStr
+    binding: ExecutionBaselineBinding
+    authorization: BaselineContinueAuthorization
+    ready_work_item: QueuedWorkItem
+
+    @model_validator(mode="after")
+    def exact_release(self) -> Self:
+        self.authorization.validate_integrity()
+        authorization, item = self.authorization, self.ready_work_item
+        if (
+            self.binding.continuation_mode is not BaselineContinuationMode.PAUSE
+            or (self.task_id, self.binding.task_id, item.task_id) != (authorization.task_id,) * 3
+            or self.binding.binding_sha256 != authorization.execution_baseline_sha256
+            or self.binding.execution_source_revision != authorization.expected_source_revision
+            or self.binding.scope != authorization.scope
+            or self.binding.after_inventory_sha256 != authorization.inventory_sha256
+            or item.id != authorization.work_item_id
+            or item.checkpoint_sequence != authorization.checkpoint_sequence
+            or item.status is not WorkItemStatus.READY
+            or item.wait_disposition is not None
+        ):
+            raise ValueError("baseline release does not bind its exact paused input")
         return self
 
 
@@ -249,6 +292,12 @@ def consume_baseline(
         task = _decode_task(binding.task_id, str(row["payload_json"]))
         binding.require_task(task)
         reservation = plan.facts.continuation
+        if (
+            current.wait_disposition is not None
+            and current.wait_disposition.facts.classification == "EXECUTION_BASELINE_PAUSED"
+            and binding.continuation_mode is not BaselineContinuationMode.PAUSE
+        ):
+            raise QueueConflict("更新基线不能自动解除已有工程暂停; 请使用精确继续授权")
         if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE and (
             reservation is None
             or reservation.reservation_already_applied
@@ -291,6 +340,7 @@ def consume_baseline(
                     "dispatch_sequence": current.dispatch_sequence + 1,
                 }
             )
+            next_item = _paused_item(next_item, task, binding)
             settled = next_item
         else:
             updated = task
@@ -326,6 +376,7 @@ def consume_baseline(
                     "updated_at": now,
                 }
             )
+            next_item = _paused_item(next_item, updated, binding)
             next_step = QueuedRoleStep(
                 work_item=next_item,
                 boundary=RoleRunBoundary(
@@ -382,6 +433,207 @@ def consume_baseline(
             },
         )
         return next_item
+
+
+def _paused_item(
+    item: QueuedWorkItem, task: Task, binding: ExecutionBaselineBinding
+) -> QueuedWorkItem:
+    if binding.continuation_mode is not BaselineContinuationMode.PAUSE:
+        return item
+    disposition = decide_delivery_disposition(
+        DeliveryFailureFacts(
+            task_id=task.id,
+            work_item_id=item.id,
+            role=item.role,
+            classification="EXECUTION_BASELINE_PAUSED",
+            source_revision=binding.execution_source_revision,
+            task_intent_sha256=task_intent_sha256(task),
+            checkpoint_sequence=item.checkpoint_sequence,
+            budget_available=True,
+            execution_baseline_sha256=binding.binding_sha256,
+        )
+    )
+    return QueuedWorkItem.model_validate(
+        {
+            **item.to_wire(),
+            "status": WorkItemStatus.WAITING_HUMAN,
+            "wait_reason": disposition.reason,
+            "wait_disposition": disposition.to_wire(),
+        }
+    )
+
+
+def release_baseline_pause(
+    queue: MySqlRoleQueue,
+    binding: ExecutionBaselineBinding,
+    authorization: BaselineContinueAuthorization,
+    *,
+    cursor: DictCursor | None = None,
+    validate_new_release: Callable[[], None] | None = None,
+) -> bool:
+    """Release only the latest exact engineering pause, once in the Task-row fence."""
+    authorization.validate_integrity()
+    now = queue._clock()
+    with _consumption_cursor(queue, cursor) as cursor:
+        queue._lock_authority(cursor)
+        cursor.execute(
+            "SELECT payload_json,revision FROM tasks WHERE id=%s FOR UPDATE", (binding.task_id,)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise QueueCorruption("paused baseline Task is missing")
+        task = _decode_task(binding.task_id, str(row["payload_json"]))
+        binding.require_task(task)
+        cursor.execute(
+            f"SELECT id,task_id,payload_json,sha256 FROM {TABLE} WHERE task_id=%s FOR UPDATE",
+            (task.id,),
+        )
+        records = tuple(_decode(value, BaselineQueueConsumption) for value in cursor.fetchall())
+        if len({record.binding.sequence for record in records}) != len(records):
+            raise QueueCorruption("暂停基线消费历史存在重复版本, 不能猜测当前输入")
+        latest = max(records, key=lambda record: record.binding.sequence, default=None)
+        if (
+            latest is None
+            or latest.binding != binding
+            or latest.next_work_item_id != authorization.work_item_id
+            or binding.continuation_mode is not BaselineContinuationMode.PAUSE
+            or authorization.task_id != task.id
+            or authorization.execution_baseline_sha256 != binding.binding_sha256
+            or authorization.expected_source_revision != binding.execution_source_revision
+            or authorization.scope != binding.scope
+            or authorization.inventory_sha256 != binding.after_inventory_sha256
+        ):
+            raise QueueConflict("继续授权不属于当前最新的暂停基线, 请刷新后重新确认")
+        cursor.execute(
+            f"SELECT id,task_id,payload_json,sha256 FROM {RELEASE_TABLE} WHERE id=%s FOR UPDATE",
+            (authorization.authorization_sha256,),
+        )
+        prior = cursor.fetchone()
+        if prior is not None:
+            released = _decode(prior, BaselineQueueRelease)
+            if released.binding != binding or released.authorization != authorization:
+                raise QueueConflict("暂停已经由不同的精确决定解除")
+            queue._get_locked(cursor, released.ready_work_item.id, lock=True)
+            return False
+        current = queue._get_locked(cursor, authorization.work_item_id, lock=True)
+        disposition = current.wait_disposition
+        step = queue.step(current.id)
+        if (
+            task.status is not TaskStatus.IMPLEMENTING
+            or authorization.task_intent_sha256 != task_intent_sha256(task)
+            or authorization.task_revision != row["revision"]
+            or authorization.checkpoint_sequence != row["revision"]
+            or current.status is not WorkItemStatus.WAITING_HUMAN
+            or current.role is not AgentRole.CODER
+            or current.task_id != task.id
+            or current.repository_id != binding.scope.repository_id
+            or current.repository_scopes != (binding.scope.repository_root,)
+            or current.attempt != task.attempts
+            or disposition is None
+            or disposition.facts.classification != "EXECUTION_BASELINE_PAUSED"
+            or disposition.facts.execution_baseline_sha256 != binding.binding_sha256
+            or disposition.facts.task_intent_sha256 != authorization.task_intent_sha256
+            or disposition.disposition_sha256 != authorization.expected_disposition_sha256
+            or current.checkpoint_sequence != authorization.checkpoint_sequence
+            or step.boundary.source_revision != binding.execution_source_revision
+        ):
+            raise QueueConflict("继续授权与当前工作项、工程输入或暂停决定不一致")
+        cursor.execute(
+            "SELECT lease_id FROM work_queue_claims WHERE task_id=%s AND state='ACTIVE' FOR UPDATE",
+            (task.id,),
+        )
+        if cursor.fetchone() is not None:
+            raise QueueLeaseLost("工程暂停解除前必须释放所有原角色执行身份")
+        if validate_new_release is not None:
+            validate_new_release()
+        ready = current.model_copy(
+            update={
+                "status": WorkItemStatus.READY,
+                "dispatch_sequence": current.dispatch_sequence + 1,
+                "wait_reason": None,
+                "wait_disposition": None,
+                "available_at": None,
+                "updated_at": now,
+            }
+        )
+        release = BaselineQueueRelease(
+            task_id=task.id,
+            binding=binding,
+            authorization=authorization,
+            ready_work_item=ready,
+        )
+        _put(cursor, RELEASE_TABLE, authorization.authorization_sha256, task.id, release)
+        queue._update_item(cursor, ready)
+        queue._append_event(
+            cursor,
+            ready,
+            from_status=current.status,
+            event_type="EXECUTION_BASELINE_CONTINUED",
+            lease_id=None,
+            occurred_at=now,
+            detail={
+                "binding_sha256": binding.binding_sha256,
+                "authorization_sha256": authorization.authorization_sha256,
+            },
+        )
+        return True
+
+
+def pending_baseline_release(
+    queue: MySqlRoleQueue,
+    binding: ExecutionBaselineBinding,
+    authorization: BaselineContinueAuthorization,
+    *,
+    cursor: DictCursor | None = None,
+) -> bool:
+    """Whether the exact committed release still needs its first Supervisor kick.
+
+    This is a scheduling observation, never a second release or a retry permission.
+    A later claim, waiting result or source epoch must not be kicked by old authority.
+    """
+    authorization.validate_integrity()
+    with _consumption_cursor(queue, cursor) as cursor:
+        queue._lock_authority(cursor)
+        cursor.execute("SELECT payload_json FROM tasks WHERE id=%s FOR UPDATE", (binding.task_id,))
+        task_row = cursor.fetchone()
+        if task_row is None:
+            raise QueueCorruption("continued baseline Task is missing")
+        task = _decode_task(binding.task_id, str(task_row["payload_json"]))
+        binding.require_task(task)
+        cursor.execute(
+            f"SELECT id,task_id,payload_json,sha256 FROM {RELEASE_TABLE} WHERE id=%s FOR UPDATE",
+            (authorization.authorization_sha256,),
+        )
+        prior = cursor.fetchone()
+        if prior is None:
+            return False
+        released = _decode(prior, BaselineQueueRelease)
+        if released.binding != binding or released.authorization != authorization:
+            raise QueueConflict("已提交继续记录与精确工程决定不一致")
+        current = queue._get_locked(cursor, released.ready_work_item.id, lock=True)
+        if current != released.ready_work_item:
+            return False
+        cursor.execute(
+            f"SELECT id,task_id,payload_json,sha256 FROM {TABLE} WHERE task_id=%s FOR UPDATE",
+            (task.id,),
+        )
+        records = tuple(_decode(value, BaselineQueueConsumption) for value in cursor.fetchall())
+        if len({record.binding.sequence for record in records}) != len(records):
+            raise QueueCorruption("继续基线消费历史存在重复版本")
+        latest = max(records, key=lambda record: record.binding.sequence, default=None)
+        if latest is None or latest.binding != binding or latest.next_work_item_id != current.id:
+            return False
+        if (
+            task.status is not TaskStatus.IMPLEMENTING
+            or task.attempts != current.attempt
+            or queue.step(current.id).boundary.source_revision != binding.execution_source_revision
+        ):
+            return False
+        cursor.execute(
+            "SELECT lease_id FROM work_queue_claims WHERE task_id=%s AND state='ACTIVE' FOR UPDATE",
+            (task.id,),
+        )
+        return cursor.fetchone() is None
 
 
 @contextmanager

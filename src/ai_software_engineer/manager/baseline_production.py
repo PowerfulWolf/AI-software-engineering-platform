@@ -30,10 +30,17 @@ from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
     BaselineInputMode,
     BaselinePurpose,
     ExecutionBaselineBinding,
     FullGitRevision,
+)
+from ai_software_engineer.domain.execution_native_rules import (
+    MAX_NATIVE_RULE_RAW_TOTAL_BYTES as MAX_NATIVE_RULE_TOTAL_BYTES,
+)
+from ai_software_engineer.domain.execution_native_rules import (
+    MAX_NATIVE_RULE_SOURCE_BYTES as MAX_NATIVE_RULE_BYTES,
 )
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, DeliveryRetryFailure
@@ -44,12 +51,14 @@ from ai_software_engineer.git.mutation import capture_mutation_inventory
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSpec
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import (
+    BaselineContinueAuthorization,
     BaselineExecutionFacts,
     BaselineExecutionReservation,
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
     require_rescue_confirmation,
 )
+from ai_software_engineer.manager.baseline_native_rules import build_native_rule_change
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightCheckpoint,
@@ -75,6 +84,7 @@ from ai_software_engineer.orchestration.continuation_store import FileContinuati
 from ai_software_engineer.orchestration.retry import _active_progress, _latest
 from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.repository_profile import NativeRuleSource, native_rule_kinds
+from ai_software_engineer.spec_compiler import SpecRule
 from ai_software_engineer.store import TaskRepository
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
 from ai_software_engineer.work_queue.invocation import (
@@ -129,6 +139,13 @@ class BaselineExecuteCommand(DomainModel):
     task_id: TaskId
     expected_plan_sha256: Sha256
     reference: NonEmptyStr = Field(max_length=2000)
+    continuation_mode: BaselineContinuationMode = Field(
+        default=BaselineContinuationMode.RESUME,
+        exclude_if=lambda value: value is BaselineContinuationMode.RESUME,
+    )
+    approved_native_rule_change_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     confirm_legacy_containment: Literal[True] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -146,11 +163,30 @@ class BaselineExecuteCommand(DomainModel):
         plan.validate_integrity()
         if (plan.facts.task.id, plan.plan_sha256) != (self.task_id, self.expected_plan_sha256):
             raise ValueError("工程决定未绑定当前需求和精确执行基线计划")
+        change = plan.facts.native_rule_change
+        if self.approved_native_rule_change_sha256 != (
+            change.change_sha256 if change is not None else None
+        ):
+            raise ValueError("请明确确认此精确目标版本的项目规范变更")
         require_rescue_confirmation(
             plan,
             confirm_legacy_containment=self.confirm_legacy_containment,
             confirm_local_execution_stopped=self.confirm_local_execution_stopped,
         )
+
+
+class BaselineContinueCommand(DomainModel):
+    """A distinct, exact decision to release a preserved execution baseline hold."""
+
+    delivery_id: DeliveryId
+    task_id: TaskId
+    expected_task_intent_sha256: Sha256
+    expected_task_revision: int = Field(ge=1)
+    expected_work_item_id: NonEmptyStr
+    expected_source_revision: FullGitRevision
+    expected_execution_baseline_sha256: Sha256
+    expected_disposition_sha256: Sha256
+    reference: NonEmptyStr = Field(max_length=2000)
 
 
 class BaselineInvocationProof(DomainModel):
@@ -207,10 +243,6 @@ class BaselineQuiescenceProof(DomainModel):
     task_process_lock: Literal["held"] = "held"
     queue_authority_and_task_row: Literal["held_no_active_claim"] = "held_no_active_claim"
     invocations: tuple[BaselineInvocationProof, ...]
-
-
-MAX_NATIVE_RULE_BYTES = 1_000_000
-MAX_NATIVE_RULE_TOTAL_BYTES = 8_000_000
 
 
 def native_rules_at_revision(
@@ -283,6 +315,7 @@ class ProductionBaselineFactCollector:
         source_native_rules: tuple[NativeRuleSource, ...],
         runtime_manifest_sha256: str,
         inputs: StoredCoderExecutionInputResolver,
+        structured_project_rules: tuple[SpecRule, ...] = (),
         purpose: BaselinePurpose = BaselinePurpose.SOURCE_REBIND,
         observer: LocalBootObserver | None = None,
         local_execution_observer: LegacyLocalExecutionObserver | None = None,
@@ -298,6 +331,7 @@ class ProductionBaselineFactCollector:
             inputs,
         )
         self.guard = WorkerExecutionGuard()
+        self.structured_project_rules = structured_project_rules
         self.artifacts = AcceptedArtifactStore(artifacts, queue, allocation.task_id, self.guard)
         self._scope_held = False
         self._idle_cursor: DictCursor | None = None
@@ -431,6 +465,85 @@ class ProductionBaselineFactCollector:
             validate_new_consumption=validate_new_consumption,
         )
 
+    def publish_continuation(
+        self, binding: ExecutionBaselineBinding, authority: BaselineContinueAuthorization
+    ) -> bool:
+        if not self._scope_held or self._idle_cursor is None or self.inputs.store is None:
+            raise ValueError("工程继续缺少原持锁执行范围和 SQL 屏障")
+        store = self.inputs.store
+
+        def validate_new_release() -> None:
+            facts = self.collect(binding.execution_base_ref)
+            if (
+                facts.task.id,
+                facts.task_revision,
+                facts.work_item_id,
+                facts.checkpoint_sequence,
+            ) != (
+                authority.task_id,
+                authority.task_revision,
+                authority.work_item_id,
+                authority.checkpoint_sequence,
+            ):
+                raise ValueError("暂停工作项或任务版本已变化, 请重新查看当前输入")
+            worktree = self.source_worktree(facts)
+            if (str(worktree.path), worktree.head_revision) != (
+                binding.worktree_path,
+                binding.execution_source_revision,
+            ) or capture_mutation_inventory(worktree.path).sha256 != binding.after_inventory_sha256:
+                raise ValueError("保留现场已变化, 不能沿用原继续决定; 文件保持")
+            plan = store.plan(binding.plan_sha256)
+            for previous in store.bindings_for_task(binding.task_id):
+                if previous.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+                    saved = store.plan(previous.plan_sha256).facts.legacy_containment
+                    if saved is None:
+                        raise ValueError("原救援缺少完整实际停止前提, 保留进度")
+                    self._verify_legacy_observation(saved, worktree_root=worktree.path)
+            if binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+                self.git.verify_mutations(
+                    plan.dirty_capture.to_capture(),
+                    facts.permissions,
+                    denied_paths=facts.denied_paths,
+                )
+                self.git.verify_mutations(
+                    plan.complete_capture.to_capture(),
+                    facts.permissions,
+                    denied_paths=facts.denied_paths,
+                )
+                return
+            capture = self.git.capture_mutations(
+                worktree, facts.permissions, denied_paths=facts.denied_paths
+            )
+            if capture.index_diff_sha256 != hashlib.sha256(b"").hexdigest():
+                raise ValueError("保留现场暂存区已变化, 不能沿用原继续决定")
+            from ai_software_engineer.git.baseline import GitExecutionBaselineAdapter
+
+            adapter = GitExecutionBaselineAdapter(self.git)
+            if (
+                adapter._tree_for_worktree(
+                    worktree.head_revision,
+                    worktree.path,
+                    facts.permissions,
+                    facts.denied_paths,
+                    worktree,
+                )
+                != plan.prepared_dirty_tree
+            ):
+                raise ValueError("保留的完整草稿与获批方案不同, 请重新检查")
+
+        released = self.queue.release_baseline_pause(
+            binding,
+            authority,
+            cursor=self._idle_cursor,
+            validate_new_release=validate_new_release,
+        )
+        if released:
+            return True
+        if self.queue.pending_baseline_release(binding, authority, cursor=self._idle_cursor):
+            validate_new_release()
+            return True
+        return False
+
     def collect(self, target_base_ref: str) -> BaselineExecutionFacts:
         if not self._scope_held:
             raise ValueError("执行基线调查缺少真实停机锁和队列屏障")
@@ -498,9 +611,28 @@ class ProductionBaselineFactCollector:
         target_rules = native_rules_at_revision(
             self.git, repository_id=self.scope.repository_id, revision=target_base_ref
         )
-        frozen_rules = tuple(sorted(self.native_rules, key=lambda rule: rule.relative_path))
-        if target_rules != frozen_rules:
-            raise ValueError("目标代码基线改变了原批准的项目规范, 需要另行确认规范或范围")
+        epoch = self.inputs.native_rule_epoch(source)
+        frozen_rules = tuple(
+            sorted(
+                epoch.rules if epoch is not None else self.native_rules,
+                key=lambda rule: rule.relative_path,
+            )
+        )
+        if self.inputs.store is None:
+            raise ValueError("执行基线缺少可信 append-only 事实存储")
+        if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE and target_rules != frozen_rules:
+            raise ValueError("旧执行救援不能同时替换原规范, 请先保留进度并暂停")
+        change = build_native_rule_change(
+            git=self.git,
+            records=self.inputs.store.records,
+            scope=self.scope,
+            task_id=task.id,
+            source_revision=source.execution_base_ref,
+            target_base_ref=target_base_ref,
+            source_rules=frozen_rules,
+            target_rules=target_rules,
+            structured_project_rules=self.structured_project_rules,
+        )
         assignments = tuple(
             assignment
             for assignment in self.queue.list_assignments()
@@ -543,6 +675,7 @@ class ProductionBaselineFactCollector:
             runtime_manifest_sha256=self.runtime_manifest_sha256,
             source_native_rules_sha256=digest([rule.to_wire() for rule in frozen_rules]),
             target_native_rules_sha256=digest([rule.to_wire() for rule in target_rules]),
+            native_rule_change=change,
             source_artifact_ids=tuple(sorted(artifact.artifact_id for artifact in artifacts)),
             implementation_artifact_id=(
                 current_implementation.artifact_id

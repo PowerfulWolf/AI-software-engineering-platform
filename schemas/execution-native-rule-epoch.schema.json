@@ -1,0 +1,201 @@
+{
+  "$defs": {
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
+      "type": "object"
+    },
+    "NativeRuleEpochBody": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/NativeRuleSource"
+        },
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "content_bytes": {
+          "maximum": 16777216,
+          "minimum": 0,
+          "title": "Content Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source",
+        "content",
+        "content_sha256",
+        "content_bytes"
+      ],
+      "title": "NativeRuleEpochBody",
+      "type": "object"
+    },
+    "NativeRuleKind": {
+      "description": "Project-native guidance source categories, not interpreted priorities.",
+      "enum": [
+        "agents",
+        "contributing",
+        "readme",
+        "editorconfig",
+        "ci",
+        "trellis-spec"
+      ],
+      "title": "NativeRuleKind",
+      "type": "string"
+    },
+    "NativeRuleSource": {
+      "additionalProperties": false,
+      "description": "A UTF-8 project-native rule source represented without absolute paths.",
+      "properties": {
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "relative_path": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "kinds": {
+          "items": {
+            "$ref": "#/$defs/NativeRuleKind"
+          },
+          "minItems": 1,
+          "title": "Kinds",
+          "type": "array"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "byte_length": {
+          "minimum": 0,
+          "title": "Byte Length",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "uri",
+        "relative_path",
+        "kinds",
+        "sha256",
+        "byte_length"
+      ],
+      "title": "NativeRuleSource",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "execution_native_rule_epoch",
+      "default": "execution_native_rule_epoch",
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/EngineeringScope"
+    },
+    "task_id": {
+      "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "source_revision": {
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+      "title": "Source Revision",
+      "type": "string"
+    },
+    "target_base_ref": {
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+      "title": "Target Base Ref",
+      "type": "string"
+    },
+    "source_rules": {
+      "items": {
+        "$ref": "#/$defs/NativeRuleSource"
+      },
+      "maxItems": 5000,
+      "title": "Source Rules",
+      "type": "array"
+    },
+    "before_bodies": {
+      "items": {
+        "$ref": "#/$defs/NativeRuleEpochBody"
+      },
+      "maxItems": 5000,
+      "title": "Before Bodies",
+      "type": "array"
+    },
+    "bodies": {
+      "items": {
+        "$ref": "#/$defs/NativeRuleEpochBody"
+      },
+      "maxItems": 5000,
+      "title": "Bodies",
+      "type": "array"
+    },
+    "epoch_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Epoch Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope",
+    "task_id",
+    "source_revision",
+    "target_base_ref",
+    "source_rules",
+    "before_bodies",
+    "bodies",
+    "epoch_sha256"
+  ],
+  "title": "NativeRuleEpoch",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/execution-native-rule-epoch.schema.json"
+}

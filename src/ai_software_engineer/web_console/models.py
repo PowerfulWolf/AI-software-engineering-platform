@@ -33,6 +33,7 @@ from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairRe
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
 from ai_software_engineer.manager.baseline_production import (
+    BaselineContinueCommand,
     BaselineExecuteCommand,
     BaselineProposeCommand,
 )
@@ -79,6 +80,7 @@ class ConsoleAction(StrEnum):
     RESOLVE_DELIVERY_WAIT = "RESOLVE_DELIVERY_WAIT"
     PROPOSE_EXECUTION_BASELINE = "PROPOSE_EXECUTION_BASELINE"
     EXECUTE_EXECUTION_BASELINE = "EXECUTE_EXECUTION_BASELINE"
+    RESUME_EXECUTION_BASELINE = "RESUME_EXECUTION_BASELINE"
 
 
 class ConsoleOperationStatus(StrEnum):
@@ -262,6 +264,14 @@ class ExecuteExecutionBaselineIntent(BaselineExecuteCommand):
     expected_checkpoint_sha256: CheckpointDigest
 
 
+class ResumeExecutionBaselineIntent(BaselineContinueCommand):
+    action: Literal[ConsoleAction.RESUME_EXECUTION_BASELINE] = (
+        ConsoleAction.RESUME_EXECUTION_BASELINE
+    )
+    project_id: ProjectId
+    expected_checkpoint_sha256: CheckpointDigest
+
+
 ConsoleIntent = Annotated[
     CreateProjectIntent
     | CreateRequirementIntent
@@ -278,7 +288,8 @@ ConsoleIntent = Annotated[
     | HandleDeliveryWaitIntent
     | ResolveDeliveryWaitIntent
     | ProposeExecutionBaselineIntent
-    | ExecuteExecutionBaselineIntent,
+    | ExecuteExecutionBaselineIntent
+    | ResumeExecutionBaselineIntent,
     Field(discriminator="action"),
 ]
 CONSOLE_INTENT_ADAPTER: TypeAdapter[ConsoleIntent] = TypeAdapter(ConsoleIntent)

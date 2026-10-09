@@ -2,10 +2,11 @@
 
 import hashlib
 import json
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from ai_software_engineer.context.execution_baseline import ExecutionBaselineContext
-from ai_software_engineer.context.models import ContextBundle, ContextSection
+from ai_software_engineer.context.models import ContextBundle, ContextSection, ContextSource
+from ai_software_engineer.context.native import validate_native_rule_epoch_context
 from ai_software_engineer.context.ports import (
     ContextBudgetExceeded,
     ContextSourceError,
@@ -22,6 +23,7 @@ from ai_software_engineer.domain.execution_baseline import (
     CoderExecutionInput,
     ExecutionBaselineBinding,
 )
+from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.orchestration.context import RunContextBuilder
 from ai_software_engineer.redaction import patch_secret_occurrences, redact_text
@@ -51,6 +53,11 @@ class CoderExecutionInputResolver(Protocol):
         ...
 
 
+@runtime_checkable
+class NativeRuleEpochResolver(Protocol):
+    def native_rule_epoch(self, source: CoderExecutionInput) -> NativeRuleEpoch | None: ...
+
+
 class BaselineRunContextBuilder:
     """Append the complete verified patch after ordinary/native/knowledge Context.
 
@@ -63,8 +70,11 @@ class BaselineRunContextBuilder:
         delegate: RunContextBuilder,
         contexts: ContextStore,
         resolver: CoderExecutionInputResolver,
+        *,
+        native_sources: tuple[ContextSource, ...] | None = None,
     ) -> None:
         self.delegate, self.contexts, self.resolver = delegate, contexts, resolver
+        self.native_sources = native_sources
 
     def build(
         self,
@@ -88,6 +98,21 @@ class BaselineRunContextBuilder:
         # supplies its exact source. Here only the current immutable binding/body
         # is selected; no historical implementation is promoted by Context code.
         source = self.resolver.current(task, implementation=None, progress=None)
+        epoch = (
+            self.resolver.native_rule_epoch(source)
+            if isinstance(self.resolver, NativeRuleEpochResolver)
+            else None
+        )
+        if epoch is not None:
+            if (
+                source.baseline is None
+                or source.baseline.native_rule_epoch_sha256 != epoch.epoch_sha256
+                or (epoch.task_id, epoch.scope.repository_root) != (task.id, task.repository)
+            ):
+                raise ContextSourceError("执行原生规范版本不属于当前 Task 和工作空间")
+            validate_native_rule_epoch_context(context, epoch, expected_sources=self.native_sources)
+        elif any(section.name == "source:execution.native_rules" for section in context.sections):
+            raise ContextSourceError("当前执行没有可信原生规范版本, 不能接受外加规范批准")
         existing = tuple(s for s in context.sections if s.name == "execution.baseline")
         if source.baseline is None:
             if existing:

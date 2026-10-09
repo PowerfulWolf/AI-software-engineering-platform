@@ -1,5 +1,13 @@
 {
   "$defs": {
+    "BaselineContinuationMode": {
+      "enum": [
+        "resume",
+        "pause"
+      ],
+      "title": "BaselineContinuationMode",
+      "type": "string"
+    },
     "BaselineInputMode": {
       "enum": [
         "preserve_draft",
@@ -97,6 +105,23 @@
     "purpose": {
       "$ref": "#/$defs/BaselinePurpose",
       "default": "source_rebind"
+    },
+    "continuation_mode": {
+      "$ref": "#/$defs/BaselineContinuationMode",
+      "default": "resume"
+    },
+    "native_rule_epoch_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Native Rule Epoch Sha256"
     },
     "legacy_containment_sha256": {
       "anyOf": [

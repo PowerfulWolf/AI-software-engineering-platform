@@ -1,0 +1,173 @@
+{
+  "$defs": {
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
+      "type": "object"
+    },
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One explicit start decision for the current preserved execution input.",
+  "properties": {
+    "kind": {
+      "const": "baseline_continue_authorization",
+      "default": "baseline_continue_authorization",
+      "title": "Kind",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/EngineeringScope"
+    },
+    "task_id": {
+      "minLength": 1,
+      "title": "Task Id",
+      "type": "string"
+    },
+    "task_intent_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Task Intent Sha256",
+      "type": "string"
+    },
+    "task_revision": {
+      "minimum": 1,
+      "title": "Task Revision",
+      "type": "integer"
+    },
+    "work_item_id": {
+      "minLength": 1,
+      "title": "Work Item Id",
+      "type": "string"
+    },
+    "execution_baseline_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Execution Baseline Sha256",
+      "type": "string"
+    },
+    "expected_source_revision": {
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+      "title": "Expected Source Revision",
+      "type": "string"
+    },
+    "checkpoint_sequence": {
+      "minimum": 1,
+      "title": "Checkpoint Sequence",
+      "type": "integer"
+    },
+    "expected_disposition_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Expected Disposition Sha256",
+      "type": "string"
+    },
+    "inventory_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Inventory Sha256",
+      "type": "string"
+    },
+    "principal": {
+      "$ref": "#/$defs/LocalOperatorPrincipal"
+    },
+    "reference": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Reference",
+      "type": "string"
+    },
+    "submitted_at": {
+      "format": "date-time",
+      "title": "Submitted At",
+      "type": "string"
+    },
+    "authorization_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Authorization Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope",
+    "task_id",
+    "task_intent_sha256",
+    "task_revision",
+    "work_item_id",
+    "execution_baseline_sha256",
+    "expected_source_revision",
+    "checkpoint_sequence",
+    "expected_disposition_sha256",
+    "inventory_sha256",
+    "principal",
+    "reference",
+    "submitted_at",
+    "authorization_sha256"
+  ],
+  "title": "BaselineContinueAuthorization",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/baseline-continue-authorization.schema.json"
+}

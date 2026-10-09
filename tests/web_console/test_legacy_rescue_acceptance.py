@@ -11,7 +11,11 @@ from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
 
 from ai_software_engineer.git import WorktreeCaptureRejected
-from ai_software_engineer.manager.delivery import ProjectDeliveryResult, UnifiedProjectEntryService
+from ai_software_engineer.manager.delivery import (
+    DeliveryCheckpointStale,
+    ProjectDeliveryResult,
+    UnifiedProjectEntryService,
+)
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
     DeliveryNextAction,
@@ -47,6 +51,8 @@ class _Host:
     def __init__(self, checkpoint: ProjectDeliveryCheckpoint) -> None:
         self.entry = _Entry(checkpoint)
         self.baseline_calls = 0
+        self.continuation_replays = 0
+        self.existing_continuation = False
         self.error: Exception | None = None
 
     def project_entry(self, project_id: str) -> UnifiedProjectEntryService:
@@ -62,6 +68,20 @@ class _Host:
     def execute_execution_baseline(self, *args: object, **kwargs: object) -> None:
         self.baseline_calls += 1
         raise AssertionError("stale browser input must be rejected before Host execution")
+
+    def continue_execution_baseline(
+        self,
+        _command: object,
+        *,
+        project_id: str,
+        require_existing_authorization: bool = False,
+    ) -> ProjectDeliveryResult:
+        assert project_id == "project_test"
+        assert require_existing_authorization
+        if not self.existing_continuation:
+            raise DeliveryCheckpointStale("保留进度暂停的需求 checkpoint 已变化")
+        self.continuation_replays += 1
+        return self.entry.status(DELIVERY)
 
 
 def _fixture(tmp_path: Path) -> tuple[ProjectConsole, TestClient, _Host]:
@@ -106,6 +126,17 @@ def _intent(action: str) -> dict[str, object]:
             "target_base_ref": "3" * 40,
             "input_mode": "preserve_draft",
         }
+    if action == "RESUME_EXECUTION_BASELINE":
+        return {
+            **identity,
+            "expected_task_intent_sha256": "2" * 64,
+            "expected_task_revision": 2,
+            "expected_work_item_id": "work_preserved_pause",
+            "expected_source_revision": "3" * 40,
+            "expected_execution_baseline_sha256": "4" * 64,
+            "expected_disposition_sha256": "5" * 64,
+            "reference": "明确继续当前保留进度",
+        }
     return {
         **identity,
         "expected_plan_sha256": "4" * 64,
@@ -114,7 +145,10 @@ def _intent(action: str) -> dict[str, object]:
     }
 
 
-@pytest.mark.parametrize("action", ["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"])
+@pytest.mark.parametrize(
+    "action",
+    ["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE", "RESUME_EXECUTION_BASELINE"],
+)
 def test_real_http_console_rejects_stale_checkpoint_before_any_rescue_action(
     tmp_path: Path, action: str
 ) -> None:
@@ -132,6 +166,29 @@ def test_real_http_console_rejects_stale_checkpoint_before_any_rescue_action(
     read = client.get(f"/api/v1/operations/{operation_id}")
     assert read.status_code == 200 and read.json()["error_code"] == "STALE_CHECKPOINT"
     assert len(console.list_operations()) == 1
+
+
+def test_console_can_replay_saved_continuation_after_release_changes_outer_checkpoint(
+    tmp_path: Path,
+) -> None:
+    console, client, host = _fixture(tmp_path)
+    host.existing_continuation = True
+    response = client.post(
+        "/api/v1/operations",
+        json={
+            "intent": _intent("RESUME_EXECUTION_BASELINE"),
+            "idempotency_key": "resume-committed-release-after-crash",
+        },
+    )
+    assert response.status_code == 202, response.json()
+    completed = console.run_once()
+    assert completed is not None and completed.status is ConsoleOperationStatus.SUCCEEDED
+    assert completed.result is not None
+    assert completed.result.checkpoint_sha256 == host.entry.checkpoint.checkpoint_sha256
+    assert host.continuation_replays == 1
+    assert host.baseline_calls == 0
+    read = client.get(f"/api/v1/operations/{completed.operation_id}")
+    assert read.status_code == 200 and read.json()["status"] == "SUCCEEDED"
 
 
 @pytest.mark.parametrize(

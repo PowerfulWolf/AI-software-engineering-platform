@@ -32,6 +32,7 @@ class DeliveryNextAction(StrEnum):
     REQUEST_ENGINEERING_AUTHORIZATION = "REQUEST_ENGINEERING_AUTHORIZATION"
     WAIT_DEPENDENCY = "WAIT_DEPENDENCY"
     INVESTIGATE_EXECUTION = "INVESTIGATE_EXECUTION"
+    RESUME_EXECUTION_BASELINE = "RESUME_EXECUTION_BASELINE"
     TERMINATE = "TERMINATE"
 
 
@@ -55,6 +56,7 @@ class DeliveryFailureFacts(DomainModel):
         "ENVIRONMENT_UNAVAILABLE",
         "ENGINEERING_AUTHORIZATION",
         "SOURCE_PREPARATION_DRIFT",
+        "EXECUTION_BASELINE_PAUSED",
     ]
     source_revision: NonEmptyStr
     task_intent_sha256: DispositionSha256
@@ -62,6 +64,19 @@ class DeliveryFailureFacts(DomainModel):
     budget_available: StrictBool
     retry_authorized: StrictBool = False
     evidence_ids: tuple[NonEmptyStr, ...] = ()
+    execution_baseline_sha256: DispositionSha256 | None = None
+
+    @model_validator(mode="after")
+    def validate_baseline_pause(self) -> Self:
+        if (self.classification == "EXECUTION_BASELINE_PAUSED") != (
+            self.execution_baseline_sha256 is not None
+        ):
+            raise ValueError("baseline pause must bind its exact execution baseline")
+        if self.classification == "EXECUTION_BASELINE_PAUSED" and (
+            self.role is not AgentRole.CODER or self.work_item_id is None or self.retry_authorized
+        ):
+            raise ValueError("baseline pause requires an exact Coder item without automatic retry")
+        return self
 
     @property
     def facts_sha256(self) -> str:
@@ -84,6 +99,7 @@ class DeliveryDisposition(DomainModel):
         "engineering_authorization",
         "verified_prerequisites",
         "verified_execution_resolution",
+        "explicit_baseline_continuation",
         "none",
     ]
 
@@ -98,6 +114,17 @@ class DeliveryDisposition(DomainModel):
             and self.responsibility is not DeliveryResponsibility.PRODUCT
         ):
             raise ValueError("product decision requires product responsibility")
+        if self.facts.classification == "EXECUTION_BASELINE_PAUSED" and (
+            self.action is not DeliveryNextAction.RESUME_EXECUTION_BASELINE
+            or self.responsibility is not DeliveryResponsibility.ENGINEERING
+            or self.resume_condition != "explicit_baseline_continuation"
+        ):
+            raise ValueError("baseline pause can only request exact explicit continuation")
+        if self.facts.classification != "EXECUTION_BASELINE_PAUSED" and (
+            self.action is DeliveryNextAction.RESUME_EXECUTION_BASELINE
+            or self.resume_condition == "explicit_baseline_continuation"
+        ):
+            raise ValueError("explicit baseline continuation requires a preserved baseline pause")
         return self
 
     @property
@@ -128,11 +155,19 @@ def decide_delivery_disposition(facts: DeliveryFailureFacts) -> DeliveryDisposit
         "engineering_authorization",
         "verified_prerequisites",
         "verified_execution_resolution",
+        "explicit_baseline_continuation",
         "none",
     ] = "verified_prerequisites"
     reason = "当前工程前提尚未满足, 交付已暂停, 工作现场和执行历史保留。"
     next_action = "工程授权者需核验所列前提, 记录处理结果; 事实满足后平台继续原交付。"
-    if reason_code == "POLICY_VIOLATION":
+    if reason_code == "EXECUTION_BASELINE_PAUSED":
+        action, condition = (
+            DeliveryNextAction.RESUME_EXECUTION_BASELINE,
+            "explicit_baseline_continuation",
+        )
+        reason = "开发进度已保留, 交付按工程决定暂停, 尚未启动新的执行。"
+        next_action = "可先检查并更新源码和工程规范; 确认当前输入后, 明确批准继续原需求。"
+    elif reason_code == "POLICY_VIOLATION":
         action, condition = DeliveryNextAction.TERMINATE, "none"
         reason = "执行违反已冻结的权限, 当前交付已停止, 违规证据和现场保留。"
         next_action = "工程授权者需查看违规证据; 原授权不能用于接纳违规改动。"

@@ -35,6 +35,11 @@ class BaselinePurpose(StrEnum):
     LEGACY_WORKSPACE_RESCUE = "legacy_workspace_rescue"
 
 
+class BaselineContinuationMode(StrEnum):
+    RESUME = "resume"
+    PAUSE = "pause"
+
+
 class RetainedExecutionPatch(DomainModel):
     """Reference to complete old execution-base → candidate + dirty mutation bodies.
 
@@ -55,6 +60,13 @@ class ExecutionBaselineBinding(DomainModel):
     purpose: BaselinePurpose = Field(
         default=BaselinePurpose.SOURCE_REBIND,
         exclude_if=lambda value: value is BaselinePurpose.SOURCE_REBIND,
+    )
+    continuation_mode: BaselineContinuationMode = Field(
+        default=BaselineContinuationMode.RESUME,
+        exclude_if=lambda value: value is BaselineContinuationMode.RESUME,
+    )
+    native_rule_epoch_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
     )
     legacy_containment_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None

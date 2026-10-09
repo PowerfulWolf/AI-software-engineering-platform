@@ -1266,7 +1266,8 @@ def _task_execution(task: TaskView) -> DeliveryExecutionView:
                 reason_code=disposition.facts.classification,
                 reason=_safe(disposition.reason) + (" " + detail if detail else ""),
                 next_action=disposition.next_action,
-                action_required=disposition.responsibility.value == "product",
+                action_required=disposition.responsibility.value == "product"
+                or disposition.facts.classification == "EXECUTION_BASELINE_PAUSED",
             )
         return DeliveryExecutionView(
             state="WAITING",
@@ -1317,6 +1318,15 @@ def _task_execution(task: TaskView) -> DeliveryExecutionView:
                 available_at=current.available_at,
             )
         if current.status in {WorkItemStatus.READY, WorkItemStatus.LEASED}:
+            if current.status is WorkItemStatus.READY and current.pending_baseline_continuation:
+                return DeliveryExecutionView(
+                    state="WAITING",
+                    responsibility="engineering",
+                    reason_code="BASELINE_CONTINUATION_PENDING",
+                    action_required=True,
+                    reason="继续决定已保存, 原工作尚未启动。",
+                    next_action="点击“继续已授权执行”, 使用原决定启动当前保留进度; 无需重复审批。",
+                )
             return DeliveryExecutionView(
                 state="QUEUED",
                 responsibility="team",
@@ -1990,6 +2000,25 @@ def _read_task_details(
                 repository_root=task.repository,
             ),
             cp.delivery_id,
+        )
+        from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+        from ai_software_engineer.team_view.queue_reader import read_pending_baseline_continuation
+
+        baseline_root = native.sidecar / "state" / "execution-baselines" / task.id
+        role_queue = read_pending_baseline_continuation(
+            cursor,
+            task=task,
+            task_revision=len(event_rows),
+            scope=EngineeringScope(
+                team_id=native.team_id,
+                project_id=base.project_id,
+                repository_id=dispatch.repository_id,
+                repository_root=task.repository,
+            ),
+            baselines=FileExecutionBaselineStore(baseline_root, read_only=True)
+            if baseline_root.exists()
+            else None,
+            views=role_queue,
         )
         history, continuation_receipt = _continuation_history(
             native.sidecar,

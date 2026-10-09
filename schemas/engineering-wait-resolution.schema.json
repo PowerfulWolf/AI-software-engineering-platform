@@ -138,6 +138,7 @@
             "engineering_authorization",
             "verified_prerequisites",
             "verified_execution_resolution",
+            "explicit_baseline_continuation",
             "none"
           ],
           "title": "Resume Condition",
@@ -195,7 +196,8 @@
             "EXECUTION_UNCERTAIN",
             "ENVIRONMENT_UNAVAILABLE",
             "ENGINEERING_AUTHORIZATION",
-            "SOURCE_PREPARATION_DRIFT"
+            "SOURCE_PREPARATION_DRIFT",
+            "EXECUTION_BASELINE_PAUSED"
           ],
           "title": "Classification",
           "type": "string"
@@ -232,6 +234,19 @@
           },
           "title": "Evidence Ids",
           "type": "array"
+        },
+        "execution_baseline_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Baseline Sha256"
         }
       },
       "required": [
@@ -254,6 +269,7 @@
         "REQUEST_ENGINEERING_AUTHORIZATION",
         "WAIT_DEPENDENCY",
         "INVESTIGATE_EXECUTION",
+        "RESUME_EXECUTION_BASELINE",
         "TERMINATE"
       ],
       "title": "DeliveryNextAction",

@@ -32,6 +32,7 @@ from ai_software_engineer.config import (
 from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
 from ai_software_engineer.context.native import (
+    execution_native_rule_sources,
     native_rule_prompt_sources,
     rebind_native_rule_sources,
 )
@@ -1531,6 +1532,9 @@ class ProductionProjectDeliveryBackend:
         )
         primary = self._config.routes_for(TeamRole.CODER)[0]
         delivery_sources = (*self._delivery_context_sources, *extra_context)
+        native_epoch = baseline_inputs.native_rule_epoch(
+            baseline_inputs.current(dispatch.task, implementation=None, progress=None)
+        )
         if (
             isinstance(dispatch, ContinuationDispatchRecord)
             and dispatch.continuation_kind == "pre_execution_restart"
@@ -1546,7 +1550,11 @@ class ProductionProjectDeliveryBackend:
                     raise ValueError("restart frozen source differs from current joint context")
                 unique_sources[source.source_id] = source
             delivery_sources = tuple(unique_sources.values())
-        if isinstance(dispatch, (ContinuationDispatchRecord, RecoveryDispatchRecord)):
+        if native_epoch is not None:
+            delivery_sources = execution_native_rule_sources(
+                delivery_sources, native_epoch, profile=facts.profile
+            )
+        elif isinstance(dispatch, (ContinuationDispatchRecord, RecoveryDispatchRecord)):
             delivery_sources = rebind_native_rule_sources(
                 facts.workspace.repository_root,
                 facts.profile,
@@ -1645,7 +1653,10 @@ class ProductionProjectDeliveryBackend:
         from ai_software_engineer.orchestration.execution_baseline import BaselineRunContextBuilder
 
         baseline_contexts = BaselineRunContextBuilder(
-            run_contexts, contexts=contexts, resolver=baseline_inputs
+            run_contexts,
+            contexts=contexts,
+            resolver=baseline_inputs,
+            native_sources=runtime_config.context_sources,
         )
         knowledge_contexts = (
             KnowledgeRunContextBuilder(
@@ -2052,6 +2063,7 @@ class ProductionProjectDeliveryBackend:
                 AgentRole.CODER
             ].permissions,
             source_native_rules=facts.profile.native_rules,
+            structured_project_rules=facts.baseline.rules,
             runtime_manifest_sha256=digest(self._config.to_wire()),
             inputs=StoredCoderExecutionInputResolver(store),
         )
@@ -2060,6 +2072,7 @@ class ProductionProjectDeliveryBackend:
             git=GitExecutionBaselineAdapter(manager),
             facts=collector,
             publish_completion=collector.publish_completion,
+            publish_continuation=collector.publish_continuation,
         )
 
     def _product_service(self, facts: _ProjectFacts) -> ProductDiscoveryService:

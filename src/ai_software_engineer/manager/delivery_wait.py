@@ -201,10 +201,12 @@ class DeliveryWaitService:
 
     def resolve(self, command: ResolveDeliveryWait) -> DeliveryResolution:
         self.principal.require_duty(OperatorDuty.ENGINEERING)
+        self._reject_baseline_pause(command.work_item_id)
         return self._resolve(command)
 
     def handle(self, command: HandleDeliveryWait) -> DeliveryWaitHandling:
         """Collect once and use frozen policy; requesting handling adds no authority."""
+        self._reject_baseline_pause(command.work_item_id)
         binding_key = digest(command.to_wire())
         resolved = self.records.find("wait-handling-resolutions", binding_key, DeliveryWaitHandling)
         if resolved is not None:
@@ -622,6 +624,7 @@ class DeliveryWaitService:
             or disposition is None
         ):
             raise DeliveryWaitRejected("工作项当前没有可处理的工程等待")
+        self._reject_baseline_pause(item.id)
         facts = disposition.facts
         if disposition.responsibility is not DeliveryResponsibility.ENGINEERING:
             raise DeliveryWaitRejected("此等待需产品或团队处理, 不能用工程决定替代")
@@ -651,6 +654,16 @@ class DeliveryWaitService:
         ):
             raise DeliveryWaitRejected("工程等待不再绑定当前非终态 Task checkpoint, 禁止修改旧事实")
         return item, step, task
+
+    def _reject_baseline_pause(self, work_item_id: str) -> None:
+        disposition = self.queue.get(work_item_id).wait_disposition
+        if (
+            disposition is not None
+            and disposition.facts.classification == "EXECUTION_BASELINE_PAUSED"
+        ):
+            raise DeliveryWaitRejected(
+                "开发进度已保留并主动暂停; 可先更新源码和规范, 再明确批准继续原需求"
+            )
 
     def _collect(
         self, item: QueuedWorkItem, step: QueuedRoleStep, task: Task

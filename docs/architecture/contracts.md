@@ -991,3 +991,23 @@ Run 中保存，因此工程人员必须明确确认原执行同机本地、未�
 Run/Context/claim 与 QA/Review gates 保持。`HumanActionEvent(SUPPLY_EVIDENCE)` 进入原评估
 case，不把人工补证据算成自治。Console contract version=2 增加 purpose/confirmation 参数，
 版本 1 现有 actions 保持兼容。见 `.trellis/spec/core/legacy-execution-rescue.md`。
+
+### Preserved execution baseline and native-rule epoch
+
+`ExecutionBaselineBinding.continuation_mode="pause"` publishes an exact persistent engineering
+hold rather than executable READY work. `BaselineContinueAuthorization` and typed
+`BaselineQueueRelease` bind the latest Task intent/revision, WorkItem, source, binding,
+disposition and complete inventory before atomically releasing that hold. New source updates
+extend the same Task/branch, preserve pause and keep existing budget reservations. Crash replay
+revalidates uncommitted releases and only kicks a committed release whose exact work is still
+unstarted READY. Generic Manager/Continue actions cannot bypass the hold.
+
+Opaque project-native instruction changes require an inspectable immutable `NativeRuleEpoch`
+and exact `NativeRuleChangePlan.change_sha256` human engineering approval. Complete immutable
+Git source/target bodies and differences are separate from unchanged structured/hard policy.
+Independent sidecar PROJECT rule provenance remains frozen; changed native structured-rule
+provenance requires explicit recompilation instead of an opaque-text approval. The active epoch
+enters both role Context and knowledge consultation. Original preparation/Product/design/plan,
+Task base/scope/permissions, past failures and verdicts stay immutable. Full executable contract,
+wire schemas, negative tests and existing-data instructions are in
+[execution-baseline](../../.trellis/spec/core/execution-baseline.md).

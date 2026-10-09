@@ -10,14 +10,24 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from ai_software_engineer.domain.engineering_authority import EngineeringAdmission
-from ai_software_engineer.domain.execution_baseline import BaselinePurpose, ExecutionBaselineBinding
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringAdmission,
+    EngineeringCapability,
+)
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
+    BaselinePurpose,
+    ExecutionBaselineBinding,
+)
+from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import (
     BaselineOperationStart,
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
 )
+from ai_software_engineer.manager.baseline_native_rules import load_native_rule_epoch
+from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 
 
 class FileExecutionBaselineStore:
@@ -65,6 +75,9 @@ class FileExecutionBaselineStore:
             raise ValueError("baseline plan key changed")
         return plan
 
+    def native_rule_epoch(self, sha256: str) -> NativeRuleEpoch:
+        return load_native_rule_epoch(self.records, sha256)
+
     def put_authority(
         self, authority: EngineeringAdmission | BaselineOperatorAuthorization
     ) -> None:
@@ -94,14 +107,19 @@ class FileExecutionBaselineStore:
             item.require_predecessor(previous)
             plan = self.plan(item.plan_sha256)
             start = self.start(item.plan_sha256)
-            if start is None or (start.authority_source, start.authority_sha256) != (
-                item.authority_source,
-                item.authority_sha256,
+            if (
+                start is None
+                or start.plan != plan
+                or (start.authority_source, start.authority_sha256)
+                != (
+                    item.authority_source,
+                    item.authority_sha256,
+                )
             ):
                 raise ValueError("baseline binding has no exact admitted operation")
             if plan.facts.facts_sha256 != item.facts_sha256:
                 raise ValueError("baseline binding changed its source facts")
-            self._require_rescue_binding(item, plan)
+            self._require_authorized_binding(item, plan, previous)
             self.required_context(item)
             previous = item
         return selected
@@ -114,7 +132,9 @@ class FileExecutionBaselineStore:
                 raise ValueError("baseline sequence already has different immutable facts")
             return matched
         binding.require_predecessor(existing[-1] if existing else None)
-        self._require_rescue_binding(binding, self.plan(binding.plan_sha256))
+        self._require_authorized_binding(
+            binding, self.plan(binding.plan_sha256), existing[-1] if existing else None
+        )
         self.required_context(binding)
         return self.records.put(
             "baseline-bindings", f"{binding.task_id}:{binding.sequence}", binding
@@ -124,6 +144,67 @@ class FileExecutionBaselineStore:
         return (
             self.root / self.records._name("baseline-plans", plan_sha256)
         ).absolute().as_uri() + "#complete_capture.patch"
+
+    def _require_authorized_binding(
+        self,
+        binding: ExecutionBaselineBinding,
+        plan: ExecutionBaselinePlan,
+        previous: ExecutionBaselineBinding | None,
+    ) -> None:
+        self._require_rescue_binding(binding, plan)
+        if binding.authority_source == "engineering_operator_decision":
+            authority = self.records.get(
+                "baseline-authorities", plan.plan_sha256, BaselineOperatorAuthorization
+            )
+            authority.validate_integrity()
+            authority.require_plan_confirmation(plan)
+            if (
+                authority.authorization_sha256 != binding.authority_sha256
+                or authority.plan_sha256 != plan.plan_sha256
+                or authority.facts_sha256 != plan.facts.facts_sha256
+                or authority.task_id != binding.task_id
+                or authority.task_intent_sha256 != binding.task_intent_sha256
+                or authority.continuation_mode != binding.continuation_mode
+            ):
+                raise ValueError("工程绑定没有对应的精确人工代码和规范确认")
+        elif (
+            binding.continuation_mode is not BaselineContinuationMode.RESUME
+            or plan.facts.native_rule_change is not None
+        ):
+            raise ValueError("原工程策略不能批准暂停方式或变化的项目规范")
+        else:
+            admission = self.records.get(
+                "baseline-authorities", plan.plan_sha256, EngineeringAdmission
+            )
+            EngineeringAuthority.validate(task=plan.facts.task, record=admission)
+            if (
+                admission.admission_sha256 != binding.authority_sha256
+                or admission.plan_sha256 != plan.plan_sha256
+                or admission.facts_sha256 != plan.facts.facts_sha256
+                or admission.capabilities != (EngineeringCapability.EXECUTION_BASELINE_REBIND,)
+            ):
+                raise ValueError("工程绑定没有对应的精确组织工程批准")
+        change = plan.facts.native_rule_change
+        expected_epoch = (
+            change.target.epoch_sha256
+            if change is not None
+            else previous.native_rule_epoch_sha256
+            if previous is not None
+            else None
+        )
+        if binding.native_rule_epoch_sha256 != expected_epoch:
+            raise ValueError("工程绑定遗漏或替换了精确获批的完整项目规范版本")
+        if expected_epoch is not None:
+            epoch = self.native_rule_epoch(expected_epoch)
+            if (epoch.scope, epoch.task_id) != (binding.scope, binding.task_id):
+                raise ValueError("完整项目规范版本不属于当前需求和仓库")
+            if change is not None:
+                change.require_epoch(epoch)
+                if (epoch.source_revision, epoch.target_base_ref) != (
+                    binding.prior_execution_base_ref,
+                    binding.execution_base_ref,
+                ):
+                    raise ValueError("规范批准与当前代码执行基线不同")
 
     def _require_rescue_binding(
         self, binding: ExecutionBaselineBinding, plan: ExecutionBaselinePlan

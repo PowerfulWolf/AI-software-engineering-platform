@@ -29,11 +29,15 @@ from ai_software_engineer.domain.engineering_authority import (
     OperatorDuty,
 )
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
+from ai_software_engineer.domain.execution_baseline import BaselineContinuationMode
 from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.knowledge.models import KnowledgeError, digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
-from ai_software_engineer.manager.baseline_models import BaselineOperatorAuthorization
+from ai_software_engineer.manager.baseline_models import (
+    BaselineContinueAuthorization,
+    BaselineOperatorAuthorization,
+)
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationCheckpoint,
@@ -242,10 +246,15 @@ def test_policy_resolution_history_keeps_admission_source_without_claiming_a_hum
     assert "operator_id" not in entry.details
     assert entry.source_sha256 == decision.resolution_sha256
     records = KnowledgeRecordStore(sidecar / "state" / "delivery-waits", read_only=True)
-    assert entry.source_uri == (
-        records.root
-        / records._name("wait-resolutions", decision.work_item_id + ":" + proof.disposition_sha256)
-    ).as_uri()
+    assert (
+        entry.source_uri
+        == (
+            records.root
+            / records._name(
+                "wait-resolutions", decision.work_item_id + ":" + proof.disposition_sha256
+            )
+        ).as_uri()
+    )
     assert before == _bytes(sidecar)
 
 
@@ -314,9 +323,10 @@ def test_handling_history_keeps_all_records_and_links_the_shared_immutable_key(
         assert entry.details["user_action"] == handling.user_action
         assert entry.details["recheck_when"] == handling.recheck_when
         assert entry.details["proof_sha256"] == handling.investigation.proof_sha256
-        assert entry.source_uri == (
-        records.root / records._name("wait-handlings", handling.record_key)
-        ).as_uri()
+        assert (
+            entry.source_uri
+            == (records.root / records._name("wait-handlings", handling.record_key)).as_uri()
+        )
     assert before == _bytes(sidecar)
 
 
@@ -731,4 +741,55 @@ def test_baseline_history_validates_real_actor_start_and_complete_same_branch_bi
     assert history[1].details["kind"] == "baseline_operation_start"
     assert history[2].details["execution_source_revision"] == binding.execution_source_revision
     assert history[2].details["branch_name"] == task.branch_name
+    assert before == _bytes(sidecar)
+
+
+@pytest.mark.parametrize("changed_source", [False, True])
+def test_paused_baseline_history_records_continue_decision_without_inventing_execution(
+    tmp_path: Path, changed_source: bool
+) -> None:
+    ports = import_module("tests.manager.test_execution_baseline")
+    fixture = ports.setup(tmp_path)
+    task: Task = fixture.collector.facts.task
+    sidecar = tmp_path / "sidecar"
+    store = FileExecutionBaselineStore(sidecar / "state" / "execution-baselines" / task.id)
+    fixture.service.store = store
+    plan = fixture.service.propose(fixture.target)
+    authority = BaselineOperatorAuthorization.for_plan(
+        plan,
+        principal=LocalOperatorPrincipal.trusted_local(),
+        reference="更新代码后保持暂停",
+        submitted_at=NOW,
+        continuation_mode=BaselineContinuationMode.PAUSE,
+    )
+    binding = fixture.service.execute(plan.plan_sha256, authority=authority)
+    continuation = BaselineContinueAuthorization.create(
+        scope=binding.scope,
+        task_id=task.id,
+        task_intent_sha256=task_intent_sha256(task),
+        task_revision=plan.facts.task_revision,
+        work_item_id=plan.facts.work_item_id,
+        execution_baseline_sha256=binding.binding_sha256,
+        expected_source_revision="d" * 40 if changed_source else binding.execution_source_revision,
+        checkpoint_sequence=plan.facts.task_revision,
+        expected_disposition_sha256="e" * 64,
+        inventory_sha256=binding.after_inventory_sha256,
+        principal=LocalOperatorPrincipal.trusted_local(),
+        reference="明确继续已保存的版本",
+        submitted_at=NOW + timedelta(seconds=1),
+    )
+    store.records.put("baseline-continuations", binding.binding_sha256, continuation)
+    before = _bytes(sidecar)
+    if changed_source:
+        with pytest.raises(ValueError, match="精确保留进度"):
+            engineering_history(sidecar, task, binding.scope, "delivery_history")
+    else:
+        history = engineering_history(sidecar, task, binding.scope, "delivery_history")
+        assert len(history) == 4
+        paused = next(entry for entry in history if entry.details["kind"] == binding.kind)
+        decision = next(entry for entry in history if entry.details["kind"] == continuation.kind)
+        assert "保持暂停" in paused.summary
+        assert "后续执行记录确认启动与验收" in decision.summary
+        assert decision.details["source_revision"] == binding.execution_source_revision
+        assert "已启动" not in decision.summary and "已通过" not in decision.summary
     assert before == _bytes(sidecar)

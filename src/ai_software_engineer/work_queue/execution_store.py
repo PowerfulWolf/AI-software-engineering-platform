@@ -56,6 +56,8 @@ from ai_software_engineer.work_queue.ports import (
 )
 
 if TYPE_CHECKING:
+    from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
+    from ai_software_engineer.manager.baseline_models import BaselineContinueAuthorization
     from ai_software_engineer.manager.verifier_preparation import VerifierPreparationIntent
 
 
@@ -126,6 +128,7 @@ _TABLES = (
     "work_queue_steps",
     "work_queue_accepted_artifacts",
     "work_queue_execution_baselines",
+    "work_queue_baseline_releases",
 )
 _CANCELLATION_DIGEST = TypeAdapter(Sha256)
 _TERMINAL_TASK_STATUSES = frozenset({TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.DONE})
@@ -158,6 +161,35 @@ def read_queue_workforce(cursor: DictCursor, now: datetime) -> WorkforceFacts:
 
 
 class MySqlRoleQueue(MySqlPersistentWorkQueue):
+    def pending_baseline_release(
+        self,
+        binding: ExecutionBaselineBinding,
+        authorization: BaselineContinueAuthorization,
+        *,
+        cursor: DictCursor | None = None,
+    ) -> bool:
+        from ai_software_engineer.work_queue.baseline import pending_baseline_release
+
+        return pending_baseline_release(self, binding, authorization, cursor=cursor)
+
+    def release_baseline_pause(
+        self,
+        binding: ExecutionBaselineBinding,
+        authorization: BaselineContinueAuthorization,
+        *,
+        cursor: DictCursor | None = None,
+        validate_new_release: Callable[[], None] | None = None,
+    ) -> bool:
+        from ai_software_engineer.work_queue.baseline import release_baseline_pause
+
+        return release_baseline_pause(
+            self,
+            binding,
+            authorization,
+            cursor=cursor,
+            validate_new_release=validate_new_release,
+        )
+
     @contextmanager
     def idle_task_scope(self, task_id: str) -> Iterator[DictCursor]:
         """Fence a controlled same-Task Git action against new role claims."""
@@ -280,6 +312,11 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
         ):
             self._lock_authority(cursor)
             current = self._get_locked(cursor, resolution.work_item_id, lock=True)
+            if (
+                current.wait_disposition is not None
+                and current.wait_disposition.facts.classification == "EXECUTION_BASELINE_PAUSED"
+            ):
+                raise QueueConflict("工程暂停不能通过调查或普通等待处理解除; 请明确批准继续原需求")
             cursor.execute(
                 "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
                 "AND event_type='WAIT_RESOLVED' ORDER BY sequence DESC FOR UPDATE",
@@ -1049,7 +1086,10 @@ def _put(cursor: DictCursor, table: str, key: str, task_id: str, record: DomainM
 
 
 def _decode[T: DomainModel](row: dict[str, object], model: type[T]) -> T:
-    from ai_software_engineer.work_queue.baseline import BaselineQueueConsumption
+    from ai_software_engineer.work_queue.baseline import (
+        BaselineQueueConsumption,
+        BaselineQueueRelease,
+    )
 
     payload = row["payload_json"]
     if not isinstance(payload, str):
@@ -1066,6 +1106,8 @@ def _decode[T: DomainModel](row: dict[str, object], model: type[T]) -> T:
         key, task_id = record.receipt.artifact_id, record.task_id
     elif isinstance(record, BaselineQueueConsumption):
         key, task_id = record.binding.binding_sha256, record.task_id
+    elif isinstance(record, BaselineQueueRelease):
+        key, task_id = record.authorization.authorization_sha256, record.task_id
     else:
         raise QueueCorruption("unknown queue record model")
     if row["id"] != key or row["task_id"] != task_id:

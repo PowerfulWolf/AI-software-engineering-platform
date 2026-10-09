@@ -67,6 +67,10 @@ function consoleSupportsLegacyRescue() {
 function consoleSupportsLocalRescue() {
   return consoleOperationContractVersion >= 3 && consoleSupportsLegacyRescue();
 }
+function consoleSupportsPausedBaseline() {
+  return consoleOperationContractVersion >= 4 && consoleSupportsLegacyRescue() &&
+    consoleSupportsOperation("RESUME_EXECUTION_BASELINE");
+}
 const configurationApplyStorageKey = "ase-configuration-apply";
 const configurationApplyTimeoutMs = 30000;
 let configurationApplyPending = readConfigurationApplyPending();
@@ -81,6 +85,8 @@ let knowledgeImportMode = null;
 let editingKnowledgeDocument = null;
 let editingSpecDocument = null;
 const knowledgeGapSections = new Map();
+const nativeRuleReviews = new Map();
+let nativeRuleReviewsRevision = 0;
 // Signatures stay in memory; draft values and credentials must never become DOM attributes.
 const renderedSurfaces = new WeakMap();
 const renderedBlocks = new WeakMap();
@@ -164,7 +170,7 @@ function pollingDetailFacts() {
   const tasks = selected?.kind === "request" && item ? requestTasks(item) : [];
   return [page, selected, item, tasks, snapshot?.agents, pollingControlFacts(),
     item ? operations.filter(operation => operationTarget(operation) === item.id) : [],
-    page === "requests" && Boolean(snapshot?.requests.length)];
+    page === "requests" && Boolean(snapshot?.requests.length), nativeRuleReviewsRevision];
 }
 const acknowledgedOperationNoticeKeys = new Set(
   (() => {
@@ -256,6 +262,7 @@ const labels = {
   RESOLVE_DELIVERY_WAIT: "处理工程等待",
   PROPOSE_EXECUTION_BASELINE: "调查执行基线更新",
   EXECUTE_EXECUTION_BASELINE: "更新原需求执行基线",
+  RESUME_EXECUTION_BASELINE: "继续保留进度的原需求",
   QA_FAILURE: "QA 失败",
   REVIEW_REJECTION: "Review 拒绝",
   APPROVE: "已批准",
@@ -274,6 +281,7 @@ const deliveryOperationActions = new Set([
   "CONTINUE_DELIVERY",
   "RECOVER_DESIGN",
   "RECHECK_DESIGN",
+  "RESUME_EXECUTION_BASELINE",
 ]);
 const deliveryRoleOrder = { coder: 0, qa: 1, reviewer: 2 };
 const deliveryRoleStage = { coder: 3, qa: 4, reviewer: 5 };
@@ -636,6 +644,70 @@ function engineeringWaitSteps(request) {
       (!task.task_id || step.wait_disposition.facts.task_id === task.task_id)
     ).map(step => ({task, step})));
 }
+function engineeringPendingBaselineSteps(request) {
+  if (["DONE", "CLOSED"].includes(request.stage)) return [];
+  return currentRequestTasks(request).filter(task => !task.terminal && task.status === "IMPLEMENTING").flatMap(task =>
+    (task.role_queue || []).filter(step => {
+      const authority = step.pending_baseline_continuation;
+      return step.status === "READY" && step.role === "coder" && authority &&
+        authority.scope?.team_id === snapshot?.team_id && authority.scope?.project_id === request.project_id &&
+        (!task.scope?.root || authority.scope.repository_root === task.scope.root) &&
+        authority.task_id === task.task_id && authority.task_revision === task.task_revision &&
+        authority.task_intent_sha256 === task.task_intent_sha256 && authority.work_item_id === step.work_item_id &&
+        authority.checkpoint_sequence === authority.task_revision &&
+        /^[a-f0-9]{40}$/.test(authority.expected_source_revision || "") &&
+        [authority.authorization_sha256, authority.execution_baseline_sha256, authority.expected_disposition_sha256]
+          .every(value => /^[a-f0-9]{64}$/.test(value || "")) &&
+        typeof authority.reference === "string" && authority.reference.length > 0;
+    }).map(step => ({task, step})));
+}
+function engineeringAuthorizedContinuationIntent(request, step) {
+  const authority = step.pending_baseline_continuation;
+  return {action: "RESUME_EXECUTION_BASELINE", project_id: request.project_id, delivery_id: request.id,
+    expected_checkpoint_sha256: request.checkpoint_sha256, task_id: authority.task_id,
+    expected_task_intent_sha256: authority.task_intent_sha256, expected_task_revision: authority.task_revision,
+    expected_work_item_id: authority.work_item_id, expected_source_revision: authority.expected_source_revision,
+    expected_execution_baseline_sha256: authority.execution_baseline_sha256,
+    expected_disposition_sha256: authority.expected_disposition_sha256, reference: authority.reference};
+}
+async function submitEngineeringAuthorizedContinuation(bound, authorizationSha256) {
+  const request = requestById(bound.delivery_id);
+  const {expected_checkpoint_sha256: _previousCheckpoint, ...authorizedInput} = bound;
+  const current = request && engineeringPendingBaselineSteps(request).find(({step}) =>
+    step.work_item_id === bound.expected_work_item_id &&
+    step.pending_baseline_continuation.authorization_sha256 === authorizationSha256 &&
+    sameEngineeringWaitIntent(engineeringAuthorizedContinuationIntent(request, step), authorizedInput));
+  if (!current || !canControlCurrentTeam() || !consoleSupportsPausedBaseline() || activeOperation(request.id, request.project_id)) {
+    operationNotice = {kind: "error", title: "已授权执行的状态已变化",
+      message: "请查看当前需求；原继续决定只能接续同一份尚未启动的已授权执行。"};
+    renderDetail(); renderNotification(); return null;
+  }
+  return submitOperation(engineeringAuthorizedContinuationIntent(request, current.step));
+}
+function engineeringAuthorizedContinuationBox(request, task, step) {
+  const authority = step.pending_baseline_continuation;
+  const panel = viewGroup(el("section", undefined, "engineering-wait-panel engineering-baseline-continuation-pending"),
+    "engineering-pending-continuation:" + step.work_item_id);
+  panel.dataset.key = "engineering:" + step.work_item_id + ":pending-continuation";
+  panel.append(viewBlock(el("h3", "已授权执行等待接续"), "pending-continuation-title", true),
+    viewBlock(el("p", "之前的继续决定已经保存，但平台尚未启动这份执行。保留进度和原需求均保持；点击下面按钮接续已授权执行，无需再次批准代码、规范或恢复方案。"),
+      "pending-continuation-description", true));
+  const active = activeOperation(request.id, request.project_id);
+  const unavailable = deliveryControlUnavailableReason();
+  const bound = engineeringAuthorizedContinuationIntent(request, step);
+  if (unavailable) panel.append(deliveryControlUnavailableNotice(unavailable));
+  else if (!consoleSupportsPausedBaseline()) panel.append(el("p", "当前服务不支持此接续入口。请在服务空闲时更新并重启，再刷新原需求。", "muted"));
+  else if (active) panel.append(el("p", "平台正在处理当前操作；等待结果后再接续。", "muted"));
+  else if (canControlCurrentTeam()) panel.append(deliveryButton("继续已授权执行", () =>
+    submitEngineeringAuthorizedContinuation(bound, authority.authorization_sha256), "primary"));
+  const detail = engineeringDetails("已保存的继续决定", step.work_item_id + ":pending-continuation");
+  detail.append(el("p", "原任务 · " + task.task_id, "paths"),
+    el("p", "原工作项 · " + step.work_item_id, "paths"),
+    el("p", "继续决定 · " + authority.authorization_sha256, "paths"),
+    el("p", "当前执行版本 · " + authority.expected_source_revision, "paths"));
+  panel.append(detail);
+  return panel;
+}
 function engineeringWaitIntent(request, step) {
   const facts = step.wait_disposition.facts;
   return {
@@ -907,6 +979,8 @@ async function copyEngineeringWaitReport(request, handling) {
   renderNotification();
 }
 function engineeringWaitBox(request, task, step) {
+  if (step.wait_disposition?.facts.classification === "EXECUTION_BASELINE_PAUSED")
+    return engineeringBaselinePauseBox(request, task, step);
   const management = viewGroup(el("section", undefined, "engineering-wait-panel"),
     "engineering-wait:" + step.work_item_id);
   management.setAttribute("data-key", "engineering:" + step.work_item_id);
@@ -1007,6 +1081,59 @@ function engineeringWaitBox(request, task, step) {
   appendEngineeringLegacyRescue(management, request, task, step, proof, handling);
   management.append(technical);
   return management;
+}
+function engineeringBaselinePauseFacts(request, task, step) {
+  const baseline = engineeringBaselineFacts(request, task, step);
+  const facts = step.wait_disposition?.facts;
+  if (!baseline || step.status !== "WAITING_HUMAN" ||
+      facts.classification !== "EXECUTION_BASELINE_PAUSED" ||
+      step.wait_disposition.action !== "RESUME_EXECUTION_BASELINE" ||
+      !/^[a-f0-9]{64}$/.test(facts.execution_baseline_sha256 || "") ||
+      !/^[a-f0-9]{64}$/.test(step.wait_disposition_sha256 || "")) return null;
+  return {...baseline, expected_execution_baseline_sha256: facts.execution_baseline_sha256,
+    expected_disposition_sha256: step.wait_disposition_sha256};
+}
+async function submitEngineeringBaselineContinuation(bound) {
+  const request = requestById(bound.delivery_id);
+  const current = request && engineeringWaitSteps(request).find(({task, step}) =>
+    sameEngineeringWaitIntent(engineeringBaselinePauseFacts(request, task, step), bound));
+  if (!current || !canControlCurrentTeam() || !consoleSupportsPausedBaseline() ||
+      activeOperation(request.id, request.project_id)) {
+    operationNotice = {kind: "error", title: "保留进度的暂停已变化",
+      message: "请查看当前需求和精确执行基线；旧的继续入口不能启动执行。"};
+    renderDetail(); renderNotification(); return null;
+  }
+  return submitOperation({...bound, action: "RESUME_EXECUTION_BASELINE",
+    reference: "工程授权者明确继续当前已保存的完整进度和已批准代码及项目规范基线"});
+}
+function engineeringBaselinePauseBox(request, task, step) {
+  const bound = engineeringBaselinePauseFacts(request, task, step);
+  const panel = viewGroup(el("section", undefined, "engineering-wait-panel engineering-baseline-pause"),
+    "engineering-pause:" + step.work_item_id);
+  panel.dataset.key = "engineering:" + step.work_item_id + ":pause";
+  panel.append(viewBlock(el("h3", "进度已保留 · 交付暂停"), "pause-title", true),
+    viewBlock(engineeringGuidanceList(
+      "1. 完整开发进度和原执行历史已保留，没有启动新的 Coder。\n" +
+      "2. 如需纳入最新代码与规范，先在下面准备并批准基线更新；更新后仍保持暂停。\n" +
+      "3. 确认当前执行基线后，点击“继续原需求”，使用已经预留的执行身份接续开发，再进行独立 QA 和 Review。"),
+    "pause-description", true));
+  if (!bound) {
+    panel.append(el("p", "当前暂停记录缺少完整绑定。请刷新页面；仍缺失时由平台维护者核验，不能直接继续。", "error"));
+    return panel;
+  }
+  const active = activeOperation(request.id, request.project_id);
+  const unavailable = deliveryControlUnavailableReason();
+  if (unavailable) panel.append(deliveryControlUnavailableNotice(unavailable));
+  else if (!consoleSupportsPausedBaseline()) panel.append(el("p",
+    "当前服务不支持保留进度后暂停并单独继续。请在服务空闲时更新并重启，再刷新原需求。", "muted"));
+  appendEngineeringBaseline(panel, request, task, step);
+  const continuation = viewBlock(el("div", undefined, "engineering-baseline-actions"), "pause-continue",
+    [bound, active, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
+  if (active) continuation.append(el("p", "平台正在处理当前操作；执行结束后再决定是否继续。", "muted"));
+  else if (canControlCurrentTeam() && consoleSupportsPausedBaseline()) continuation.append(
+    deliveryButton("继续原需求", () => submitEngineeringBaselineContinuation(bound), "primary"));
+  panel.append(continuation);
+  return panel;
 }
 function engineeringBaselineFacts(request, task, step) {
   const facts = step.wait_disposition?.facts;
@@ -1157,6 +1284,7 @@ async function submitEngineeringLegacyRescueOperation(intent, originalRescue) {
       (!propose && !execute) || propose && (intent.purpose !== "legacy_workspace_rescue" ||
         intent.target_base_ref !== rescue.baseline.expected_source_revision || intent.input_mode !== "preserve_draft") ||
       execute && (!plan || plan.plan_sha256 !== intent.expected_plan_sha256 ||
+        !consoleSupportsPausedBaseline() || intent.continuation_mode !== "pause" ||
         (plan.facts.legacy_containment.method === "operator_confirmed_local_stop"
           ? !consoleSupportsLocalRescue() || intent.confirm_local_execution_stopped !== true || intent.confirm_legacy_containment != null
           : intent.confirm_legacy_containment !== true || intent.confirm_local_execution_stopped != null) ||
@@ -1233,7 +1361,8 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
         target_base_ref: rescue.baseline.expected_source_revision, input_mode: "preserve_draft",
       }, rescue), "secondary"));
     panel.append(summary);
-  } else if (!controlUnavailable && (!supported || local && !consoleSupportsLocalRescue())) {
+  } else if (!controlUnavailable && (!supported || local && !consoleSupportsLocalRescue() ||
+      plan && !consoleSupportsPausedBaseline())) {
     panel.append(viewBlock(el("p", "当前服务尚不支持此恢复路径。请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。", "muted"),
       "rescue-unavailable", [consoleOperationContractVersion, consoleSupportedActions]));
   } else if (canControlCurrentTeam()) {
@@ -1244,22 +1373,23 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
         local ? "engineering-rescue-confirmation" : "settings-checkbox-control");
       const confirmation = local ? null : el("input");
       if (local) {
-        field.append(el("p", "点击“批准保留进度并继续原需求”即表示你以工程授权者身份确认：原调用一直在当前同一电脑、同一账户本地执行，未迁移或远程执行；原调用及全部派生工具已结束，不会再修改保留的现场。你接受旧结果仍为未知，并批准使用剩余工作额度再次执行。此确认是独立人工工程授权，不是平台补出的旧停止记录。"));
+        field.append(el("p", "点击“批准保留进度，保持暂停”即表示你以工程授权者身份确认：原调用一直在当前同一电脑、同一账户本地执行，未迁移或远程执行；原调用及全部派生工具已结束，不会再修改保留的现场。你接受旧结果仍为未知，并批准保存完整进度及预留下一次执行身份。批准后不会启动 Coder；可以先更新代码和项目规范基线，再明确继续。此确认是独立人工工程授权，不是平台补出的旧停止记录。"));
       } else {
         confirmation.type = "checkbox";
         confirmation.checked = false;
         confirmation.setAttribute("aria-label", "确认原执行在同一电脑且已整机重启");
         field.append(confirmation, el("span", "我以工程授权者身份确认：原执行一直在当前同一电脑本地运行，未迁移或远程执行；原执行之后已重启整台电脑，并认可平台显示的时间依据。"));
       }
-      const approve = deliveryButton("批准保留进度并继续原需求", () => submitEngineeringLegacyRescueOperation({
+      const approve = deliveryButton("批准保留进度，保持暂停", () => submitEngineeringLegacyRescueOperation({
         action: "EXECUTE_EXECUTION_BASELINE", project_id: request.project_id, delivery_id: request.id,
         expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id,
         expected_plan_sha256: planSha256,
+        continuation_mode: "pause",
         ...(local ? {confirm_local_execution_stopped: true}
           : {confirm_legacy_containment: confirmation.checked === true}),
         reference: local
-          ? "工程授权者确认原调用始终同机同账户本地未迁移或远程、原调用及全部派生工具已结束且不会再修改现场；接受旧结果未知，批准保留完整合法草稿使用剩余额度再次执行"
-          : "工程授权者确认原执行同机本地且已整机重启，批准保留完整合法草稿继续原需求",
+          ? "工程授权者确认原调用始终同机同账户本地未迁移或远程、原调用及全部派生工具已结束且不会再修改现场；接受旧结果未知，批准保留完整合法草稿并保持暂停"
+          : "工程授权者确认原执行同机本地且已整机重启，批准保留完整合法草稿并保持暂停",
       }, rescue), "primary");
       approve.disabled = !local;
       if (confirmation) confirmation.addEventListener("change", () => {approve.disabled = confirmation.checked !== true;});
@@ -1286,8 +1416,12 @@ async function submitEngineeringBaselineOperation(intent, originalBound) {
   const current = request && engineeringWaitSteps(request).find(({task, step}) =>
     sameEngineeringWaitIntent(engineeringBaselineFacts(request, task, step), originalBound));
   const plan = current && engineeringBaselinePlan(request, current.task, current.step);
-  if (!current || (intent.action === "EXECUTE_EXECUTION_BASELINE" &&
-      (!plan || plan.plan_sha256 !== intent.expected_plan_sha256 || plan.conflicted))) {
+  if (!current || !canControlCurrentTeam() || !consoleSupportsPausedBaseline() ||
+      activeOperation(request.id, request.project_id) || (intent.action === "EXECUTE_EXECUTION_BASELINE" &&
+      (!plan || plan.plan_sha256 !== intent.expected_plan_sha256 || plan.conflicted ||
+       intent.continuation_mode !== "pause" ||
+       (intent.approved_native_rule_change_sha256 || null) !== (plan.facts.native_rule_change?.change_sha256 || null) ||
+       plan.facts.native_rule_change && !nativeRulePlanReviewed(plan)))) {
     operationNotice = {kind: "error", title: "执行基线事实已变化",
       message: "请刷新当前需求并重新调查；旧计划不能用于更新新的工作现场。"};
     renderDetail();
@@ -1302,6 +1436,59 @@ async function submitEngineeringBaselineOperation(intent, originalBound) {
   }
   return submitOperation(intent);
 }
+function nativeRuleReviewPlanKey(plan) {
+  return JSON.stringify([plan.facts.task.id, plan.facts.work_item_id, plan.plan_sha256]);
+}
+function nativeRuleReview(plan, path) {
+  return nativeRuleReviews.get(nativeRuleReviewPlanKey(plan))?.get(path);
+}
+function saveNativeRuleReview(plan, path, review) {
+  const key = nativeRuleReviewPlanKey(plan);
+  if (!nativeRuleReviews.has(key)) nativeRuleReviews.set(key, new Map());
+  nativeRuleReviews.get(key).set(path, review);
+  nativeRuleReviewsRevision += 1;
+}
+function pruneNativeRuleReviews() {
+  const request = snapshot && selected?.kind === "request" ? requestById(selected.id) : null;
+  const retained = new Set((request ? engineeringWaitSteps(request) : [])
+    .map(({task, step}) => engineeringBaselinePlan(request, task, step))
+    .filter(plan => plan?.facts.native_rule_change).map(nativeRuleReviewPlanKey));
+  for (const key of nativeRuleReviews.keys())
+    if (!retained.has(key)) {
+      nativeRuleReviews.delete(key);
+      nativeRuleReviewsRevision += 1;
+    }
+}
+function nativeRulePlanReviewed(plan) {
+  return (plan.facts.native_rule_change?.changes || []).every(delta =>
+    nativeRuleReview(plan, delta.path)?.status === "READY");
+}
+async function loadEngineeringNativeRuleReview(request, task, step, plan, delta) {
+  const original = engineeringBaselineFacts(request, task, step);
+  const operation = engineeringBaselineProposalOperation(original);
+  if (!operation || !canControlCurrentTeam() || !consoleSupportsPausedBaseline() ||
+      engineeringBaselinePlan(request, task, step)?.plan_sha256 !== plan.plan_sha256) return;
+  saveNativeRuleReview(plan, delta.path, {status: "LOADING"});
+  renderDetail({incremental: true});
+  try {
+    const response = await fetch("/api/v1/operations/" + encodeURIComponent(operation.operation_id) +
+      "/native-rules?path=" + encodeURIComponent(delta.path));
+    if (!response.ok) throw new Error("项目规范变更暂不可读取，请重新准备当前基线方案。");
+    const inspection = await response.json();
+    const latestRequest = requestById(request.id);
+    const current = latestRequest && engineeringWaitSteps(latestRequest).find(({task, step}) =>
+      sameEngineeringWaitIntent(engineeringBaselineFacts(latestRequest, task, step), original));
+    if (!current || engineeringBaselinePlan(latestRequest, current.task, current.step)?.plan_sha256 !== plan.plan_sha256)
+      return;
+    if (JSON.stringify(inspection.delta) !== JSON.stringify(delta) || typeof inspection.unified_diff !== "string" ||
+        JSON.stringify(inspection.epoch) !== JSON.stringify(plan.facts.native_rule_change.target))
+      throw new Error("项目规范审阅与精确方案不一致，请重新准备方案。");
+    saveNativeRuleReview(plan, delta.path, {status: "READY", inspection});
+  } catch (error) {
+    saveNativeRuleReview(plan, delta.path, {status: "FAILED", message: error.message});
+  }
+  renderDetail({incremental: true});
+}
 function appendEngineeringBaseline(target, request, task, step) {
   const bound = engineeringBaselineFacts(request, task, step);
   if (!bound) return;
@@ -1309,22 +1496,23 @@ function appendEngineeringBaseline(target, request, task, step) {
   const planSha256 = plan?.plan_sha256;
   const targetBaseRef = plan?.target_base_ref;
   const inputMode = plan?.input_mode;
+  const paused = step.wait_disposition?.facts.classification === "EXECUTION_BASELINE_PAUSED";
   const active = activeOperation(request.id, request.project_id);
   const executed = plan && operations.some(item => item.status === "SUCCEEDED" &&
     item.intent.action === "EXECUTE_EXECUTION_BASELINE" && item.intent.task_id === task.task_id &&
     item.intent.project_id === request.project_id &&
     item.intent.delivery_id === request.id && item.intent.expected_plan_sha256 === plan.plan_sha256);
-  const fold = viewGroup(plan && !executed
+  const fold = viewGroup(paused || plan && !executed
     ? el("section", undefined, "engineering-baseline-panel engineering-baseline-pending")
     : engineeringDetails("可选工程操作 · 更新原分支基线", step.work_item_id + ":baseline"),
     "engineering-baseline:" + step.work_item_id);
   fold.classList.add("engineering-baseline-panel");
-  if (plan && !executed) {
+  if (paused || plan && !executed) {
     fold.setAttribute("data-key", "engineering:" + step.work_item_id + ":baseline");
-    fold.append(el("h4", "工程处理 · 更新原分支基线", "engineering-baseline-title"));
+    fold.append(el("h4", "更新原分支的代码与项目规范", "engineering-baseline-title"));
   }
   fold.append(viewBlock(el("p",
-    "需要同步平台修复时，可在原需求分支更新代码基线。调查先生成计划并保留完整草稿与历史；批准后才更新，之后仍需独立 QA 和 Review。",
+    "目标仓库有新代码时，可以在原需求分支更新基线。准备方案先保存完整草稿，展示代码冲突和项目规范变化；批准更新后仍保持暂停，独立测试和评审在明确继续后执行。",
     "muted engineering-baseline-description"), "engineering-baseline-description", Boolean(plan)));
   if (plan) {
     fold.append(el("p", plan.conflicted ? "原草稿与目标代码存在冲突，原现场保留。需明确提出让 Coder 读取完整旧补丁后适配的新计划。" :
@@ -1336,12 +1524,41 @@ function appendEngineeringBaseline(target, request, task, step) {
     technical.append(el("p", "计划摘要 · " + plan.plan_sha256, "paths"),
       el("p", "当前执行输入 · " + bound.expected_source_revision, "paths"));
     fold.append(technical);
+    const rules = plan.facts.native_rule_change;
+    if (rules) {
+      const changes = viewBlock(el("div", undefined, "engineering-native-rule-changes"),
+        "native-rule-changes", [rules, rules.changes.map(delta => nativeRuleReview(plan, delta.path)),
+          canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
+      changes.append(el("strong", "目标版本包含项目规范变更"),
+        el("p", "这些规范将用于后续 Coder、QA 和 Reviewer；原需求范围与产品批准保持。请审阅所列变更后明确确认。"));
+      const list = el("ul");
+      for (const delta of rules.changes || []) {
+        const item = el("li");
+        item.append(el("p", ({added: "新增", modified: "修改", deleted: "删除"}[delta.change] || "变更") + " · " + delta.path, "paths"));
+        const review = nativeRuleReview(plan, delta.path);
+        if (review?.status === "READY") {
+          const detail = engineeringDetails("完整规范变更 · " + delta.path, "native-rule:" + plan.plan_sha256 + ":" + delta.path);
+          detail.append(el("pre", review.inspection.unified_diff, "paths"));
+          item.append(detail);
+        } else if (canControlCurrentTeam() && consoleSupportsPausedBaseline()) {
+          const inspect = button(review?.status === "LOADING" ? "正在读取规范变更" : "查看规范变更 · " + delta.path,
+            () => loadEngineeringNativeRuleReview(request, task, step, plan, delta), "secondary");
+          inspect.disabled = review?.status === "LOADING";
+          item.append(inspect);
+          if (review?.status === "FAILED") item.append(el("p", review.message, "error"));
+        }
+        list.append(item);
+      }
+      changes.append(list);
+      fold.append(changes);
+    }
   }
   if (executed) {
     fold.append(el("p", "此精确计划已执行，后续进度和验收以新的执行记录为准。", "muted"));
-  } else if (canControlCurrentTeam() && !active) {
+  } else if (canControlCurrentTeam() && consoleSupportsPausedBaseline() && !active) {
     const form = viewBlock(el("div", undefined, "engineering-baseline-form"), "engineering-baseline-controls",
-      [bound, plan, canControlCurrentTeam()]);
+      [bound, plan, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions,
+        plan?.facts.native_rule_change?.changes.map(delta => nativeRuleReview(plan, delta.path)?.status)]);
     const field = el("label", undefined, "engineering-baseline-field");
     field.append(el("span", "目标代码版本"));
     const input = el("input");
@@ -1362,12 +1579,31 @@ function appendEngineeringBaseline(target, request, task, step) {
     if (plan?.conflicted) actions.append(deliveryButton("提出 Coder 适配完整旧补丁的计划", () =>
       submitEngineeringBaselineOperation({...bound, action: "PROPOSE_EXECUTION_BASELINE",
         target_base_ref: targetBaseRef, input_mode: "coder_reapply"}, bound), "secondary"));
-    if (plan && !plan.conflicted) actions.append(deliveryButton("批准并更新原分支基线", () =>
-      submitEngineeringBaselineOperation({action: "EXECUTE_EXECUTION_BASELINE", project_id: request.project_id,
+    if (plan && !plan.conflicted) {
+      const rules = plan.facts.native_rule_change;
+      const confirmation = rules ? el("input") : null;
+      if (confirmation) {
+        confirmation.type = "checkbox";
+        confirmation.checked = false;
+        confirmation.setAttribute("aria-label", "确认目标版本的项目规范变更");
+        confirmation.disabled = !nativeRulePlanReviewed(plan);
+        const label = el("label", undefined, "settings-checkbox-control");
+        label.append(confirmation, el("span", "我已审阅并确认此目标版本的项目规范变更，用于后续独立开发、测试和评审。"));
+        if (confirmation.disabled) label.append(el("small", "请先查看上面每项完整规范变更，再确认。", "muted"));
+        form.append(label);
+      }
+      const approve = deliveryButton("批准更新基线，保持暂停", () =>
+        submitEngineeringBaselineOperation({action: "EXECUTE_EXECUTION_BASELINE", project_id: request.project_id,
         delivery_id: request.id, expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id,
         expected_plan_sha256: planSha256,
+        continuation_mode: "pause",
+        ...(rules && confirmation.checked === true ? {approved_native_rule_change_sha256: rules.change_sha256} : {}),
         reference: inputMode === "coder_reapply" ? "批准 Coder 从精确目标版本适配完整旧补丁" :
-          "批准在原需求分支保留草稿并更新到精确目标版本"}, bound), "primary"));
+          "批准在原需求分支保留草稿并更新到精确目标版本和明确确认的项目规范，保持交付暂停"}, bound), "primary");
+      approve.disabled = Boolean(rules);
+      if (confirmation) confirmation.addEventListener("change", () => {approve.disabled = confirmation.checked !== true;});
+      actions.append(approve);
+    }
     form.append(field, actions);
     fold.append(form);
   } else if (active) {
@@ -1383,6 +1619,8 @@ function deliveryPhase(item) {
     QUEUED: "实现", DELIVERING: "实现", VERIFY_QA: "候选测试", VERIFY_REVIEW: "候选评审", INTEGRATING: "联合验收"}[status] || label(status);
 }
 function operationPurpose(operation) {
+  if (operation.intent.action === "EXECUTE_EXECUTION_BASELINE" && operation.intent.continuation_mode === "pause")
+    return "保存精确工程决定及完整开发进度，更新所批准的代码和规范输入，交付保持暂停；此操作不启动 Coder。";
   if (operation.intent.purpose === "legacy_workspace_rescue")
     return "检查本机执行与恢复前提，封存同一需求的完整合法草稿，准备工程恢复方案。";
   if (operation.intent.action === "EXECUTE_EXECUTION_BASELINE" &&
@@ -1392,11 +1630,15 @@ function operationPurpose(operation) {
     PRODUCT_REPLY: "记录产品回复并继续梳理需求。",
     PRODUCT_APPROVAL: "确认本版产品规格并推进后续交付。",
     CONTINUE_DELIVERY: "接续已保存的交付进度。",
+    RESUME_EXECUTION_BASELINE: "按明确继续决定释放当前保留进度的暂停，使用已预留身份接续原需求。",
     RECOVER_DESIGN: "处理本次技术设计恢复。",
     RECHECK_DESIGN: "核对保留的设计问题与产品需求。",
   }[operation.intent.action] || null;
 }
 function operationActionLabel(operation) {
+  if (operation.intent.action === "EXECUTE_EXECUTION_BASELINE" && operation.intent.continuation_mode === "pause")
+    return operation.intent.confirm_legacy_containment || operation.intent.confirm_local_execution_stopped
+      ? "批准保留进度，保持暂停" : "批准更新基线，保持暂停";
   if (operation.intent.purpose === "legacy_workspace_rescue") return "准备保留进度的恢复方案";
   if (operation.intent.action === "EXECUTE_EXECUTION_BASELINE" &&
       (operation.intent.confirm_legacy_containment === true || operation.intent.confirm_local_execution_stopped === true))
@@ -1861,7 +2103,7 @@ function requestPresentation(request) {
 }
 
 function canContinueDelivery(request) {
-  if (engineeringWaitSteps(request).length) return false;
+  if (engineeringWaitSteps(request).length || engineeringPendingBaselineSteps(request).length) return false;
   if (requestNodeExecution(request).requiresEngineeringCheck) return false;
   if (request.design_recheck_pending)
     return !designBudgetExhausted(request) && !activeOperation(request.id);
@@ -2367,6 +2609,8 @@ function requestBlockerSection(request) {
     section.append(recoveryApprovalBox(request, summary.approval));
   for (const {task, step} of engineeringWaitSteps(request))
     section.append(engineeringWaitBox(request, task, step));
+  for (const {task, step} of engineeringPendingBaselineSteps(request))
+    section.append(engineeringAuthorizedContinuationBox(request, task, step));
   return section;
 }
 
@@ -3362,7 +3606,9 @@ function operationNoticeFor(operation) {
               ? "平台正在检查本机执行与恢复前提并封存完整合法草稿；尚未启动下一轮，也未改变旧执行的未知结果。"
               : "工程团队正在核验原分支、完整草稿和目标代码版本，尚未改变交付或验收结论。"
           : operation.intent.action === "EXECUTE_EXECUTION_BASELINE"
-            ? operation.intent.confirm_legacy_containment === true || operation.intent.confirm_local_execution_stopped === true
+            ? operation.intent.continuation_mode === "pause"
+              ? "平台正在保存精确工程决定和完整开发进度；本次处理完成后仍保持暂停，不会启动 Coder。"
+            : operation.intent.confirm_legacy_containment === true || operation.intent.confirm_local_execution_stopped === true
               ? "平台正在记录工程授权并保留进度继续同一需求；是否恢复和验收通过以新的角色执行记录为准。"
               : "工程团队正在按精确计划更新原需求执行基线，交付进度以之后的角色执行记录为准。"
           : "交付流程正在执行。你可以关闭弹窗或页面，任务会继续运行。",
@@ -3535,6 +3781,9 @@ async function submitOperation(intent) {
       throw new Error("本次恢复请求未被受理，不是原需求新增的阻塞。" + consoleOperationVersionMismatchMessage);
     if (Object.hasOwn(intent, "confirm_local_execution_stopped") && !consoleSupportsLocalRescue())
       throw new Error("本次本机恢复请求未被受理，不是原需求新增的阻塞。" + consoleOperationVersionMismatchMessage);
+    if ((intent.continuation_mode === "pause" || intent.action === "RESUME_EXECUTION_BASELINE") &&
+        !consoleSupportsPausedBaseline())
+      throw new Error("本次保留进度暂停或继续请求未被受理，不是原需求新增的阻塞。" + consoleOperationVersionMismatchMessage);
     const response = await fetch("/api/v1/operations", {
       method: "POST",
       cache: "no-store",
@@ -8196,6 +8445,9 @@ function taskFeedbackSection(history, taskId) {
   return fold;
 }
 function renderDetail({ incremental = false } = {}) {
+  // Retain every repository plan visible in this requirement; prune once for the
+  // complete detail, never while rendering an individual repository's controls.
+  pruneNativeRuleReviews();
   const panel = document.getElementById("detail");
   if (!snapshot || selected?.kind !== "task" || pausedTaskDetailKey !== taskDetailScopeKey() ||
       !taskById(selected.id)) pausedTaskDetailKey = null;

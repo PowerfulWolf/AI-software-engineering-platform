@@ -360,17 +360,14 @@
     },
     "DeliveryNextAction": {
       "enum": [
-        "PREPARE_PROJECT",
-        "CONTINUE_PRODUCT_DISCOVERY",
-        "RECORD_PRODUCT_REPLY",
-        "APPROVE_PRODUCT_SPEC",
-        "RUN_DESIGNER",
-        "RUN_PLANNER",
-        "COMMIT_DISPATCH",
-        "RUN_DELIVERY",
-        "REQUEST_HUMAN",
-        "RETRY_STAGE",
-        "NONE"
+        "RETRY",
+        "REMEDIATE_CANDIDATE",
+        "REQUEST_PRODUCT_DECISION",
+        "REQUEST_ENGINEERING_AUTHORIZATION",
+        "WAIT_DEPENDENCY",
+        "INVESTIGATE_EXECUTION",
+        "RESUME_EXECUTION_BASELINE",
+        "TERMINATE"
       ],
       "title": "DeliveryNextAction",
       "type": "string"

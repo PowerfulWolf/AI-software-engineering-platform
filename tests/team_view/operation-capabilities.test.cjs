@@ -210,3 +210,18 @@ test("old invalid-input rejection is Chinese and does not claim a new requiremen
   assert.match(explanation, /不是原需求新增的阻塞/);
   assert.doesNotMatch(explanation, /Operation input is invalid/);
 });
+
+test("paused source approval and explicit continuation require contract four at public submit", async () => {
+  for (const version of [1, 2, 3, 4]) {
+    for (const intent of [{action: "EXECUTE_EXECUTION_BASELINE", continuation_mode: "pause"}, {action: "RESUME_EXECUTION_BASELINE"}]) {
+      const h = harness();
+      Object.assign(h.context.info, {operation_contract_version: version,
+        supported_actions: ["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE", "RESUME_EXECUTION_BASELINE"]});
+      await h.refresh();
+      h.context.newIntent = intent;
+      const result = await h.run(`submitOperation({...newIntent, project_id: data.request.project_id, delivery_id: data.request.id})`);
+      assert.equal(result?.operation_id || null, version >= 4 ? "operation_accepted" : null);
+      assert.equal(h.posts().length, version >= 4 ? 1 : 0);
+    }
+  }
+});

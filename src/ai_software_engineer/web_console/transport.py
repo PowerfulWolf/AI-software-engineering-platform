@@ -21,6 +21,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
+from ai_software_engineer.domain.execution_native_rules import NativeRuleChangeInspection
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge.administration import ApproveKnowledgeResolution
@@ -33,6 +34,7 @@ from ai_software_engineer.multi_directory.attachments import (
     MAX_REQUIREMENT_SCREENSHOT_BYTES,
     RequirementAttachmentError,
 )
+from ai_software_engineer.repository_workspace import RepositoryWorkspaceError
 from ai_software_engineer.spec_documents import CreateSpecDocument, SpecDocumentError
 from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
 from ai_software_engineer.team_workspace import MAX_TEAM_KNOWLEDGE_SOURCE_BYTES
@@ -69,9 +71,62 @@ from .shutdown import (
 )
 from .store import ConsoleOperationConflict, ConsoleOperationNotFound
 
+
+def _read_native_rule_change(
+    administration: LocalConsoleAdministration,
+    operation: ConsoleOperation,
+    path: str,
+    team_id: str,
+) -> NativeRuleChangeInspection:
+    from pathlib import Path
+
+    from ai_software_engineer.manager.baseline_native_rules import load_native_rule_epoch
+    from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+    from ai_software_engineer.web_console.models import ProposeExecutionBaselineIntent
+
+    intent = operation.intent
+    result = operation.result
+    if (
+        operation.team_id != team_id
+        or operation.status.value != "SUCCEEDED"
+        or not isinstance(intent, ProposeExecutionBaselineIntent)
+        or result is None
+        or result.execution_baseline_plan is None
+    ):
+        raise ValueError("规范审阅必须来自完整已保存的精确基线方案")
+    plan = result.execution_baseline_plan
+    plan.validate_integrity()
+    intent.require_plan(plan)
+    change = plan.facts.native_rule_change
+    if change is None:
+        raise ValueError("本方案没有项目规范变更")
+    project = administration._project(intent.project_id)
+    scope = plan.facts.scope
+    if (scope.team_id, scope.project_id, plan.facts.task.id) != (
+        team_id,
+        project.manifest.project_id,
+        intent.task_id,
+    ):
+        raise ValueError("规范审阅不属于当前项目和原需求")
+    registry = project.repository_registry()
+    workspace = registry._open_existing(
+        scope.repository_id,
+        Path(scope.repository_root),
+        registry.registry_root / scope.repository_id,
+    )
+    store = FileExecutionBaselineStore(
+        workspace.directory("state") / "execution-baselines" / intent.task_id, read_only=True
+    )
+    if store.plan(plan.plan_sha256) != plan:
+        raise ValueError("已保存的规范审阅方案发生变化")
+    epoch = load_native_rule_epoch(store.records, change.target.epoch_sha256)
+    change.require_epoch(epoch)
+    return epoch.inspect_change(path)
+
+
 _MAX_REQUEST_BYTES = 64_000
 _MAX_SPEC_REQUEST_BYTES = 512_000
-_OPERATION_CONTRACT_VERSION = 3
+_OPERATION_CONTRACT_VERSION = 4
 _LOGGER = logging.getLogger(__name__)
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -257,6 +312,32 @@ def create_console_app(
             content,
             media_type=content_type,
         )
+
+    @app.get("/api/v1/operations/{operation_id}/native-rules")
+    async def native_rule_change(operation_id: str, path: str) -> Response:
+        """Read a sealed rule difference through an exact validated proposal, never Host."""
+        if not isinstance(administration, LocalConsoleAdministration):
+            return _error(404, "NOT_AVAILABLE", "项目规范审阅暂不可用。")
+        try:
+            operation = console.get(TypeAdapter(OperationId).validate_python(operation_id))
+            inspection = await run_in_threadpool(
+                _read_native_rule_change, administration, operation, path, command_team_id
+            )
+            return JSONResponse(inspection.to_wire())
+        except (
+            OSError,
+            ValueError,
+            ConsoleOperationConflict,
+            ConsoleOperationNotFound,
+            AdministrationError,
+            KnowledgeError,
+            RepositoryWorkspaceError,
+        ):
+            return _error(
+                409,
+                "NATIVE_RULE_REVIEW_UNAVAILABLE",
+                "无法核验完整项目规范变更, 未授予继续权限。请重新准备当前基线方案。",
+            )
 
     @app.get("/api/v1/team")
     async def team(project_id: str | None = None) -> Response:

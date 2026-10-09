@@ -38,6 +38,7 @@ from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.context.execution_baseline import ExecutionBaselineContext
+from ai_software_engineer.context.native import validate_native_rule_epoch_context
 from ai_software_engineer.domain import (
     AgentDefinition,
     AgentRole,
@@ -55,7 +56,12 @@ from ai_software_engineer.domain import (
 )
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.continuation import task_intent_sha256
-from ai_software_engineer.domain.execution_baseline import BaselineInputMode, BaselinePurpose
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
+    BaselineInputMode,
+    BaselinePurpose,
+)
+from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
 from ai_software_engineer.evaluation import FileEvaluationEventStore, HumanAction, HumanActionEvent
 from ai_software_engineer.execution import SubprocessCommandExecutor
@@ -63,6 +69,7 @@ from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager import production_backend, production_delivery
 from ai_software_engineer.manager.baseline_production import (
+    BaselineContinueCommand,
     BaselineExecuteCommand,
     BaselineProposeCommand,
     ProductionBaselineFactCollector,
@@ -131,6 +138,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     crash_before_consumption: bool,
     local_stop: bool,
 ) -> None:
+    pause_rescue = local_stop and not crash_before_consumption and not sealed_final
     repository = tmp_path / "target"
     repository.mkdir()
     (repository / "hello.txt").write_text("hello\n")
@@ -138,9 +146,11 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     _git("add", "hello.txt", cwd=repository)
     _git("commit", "-m", "initial", cwd=repository)
     source = _git_output("rev-parse", "HEAD", cwd=repository)
+    execution_base = source
     calls: list[Invocation] = []
     results: list[AgentResult] = []
     expected_binding: str | None = None
+    expected_epoch: NativeRuleEpoch | None = None
     original_complete = _ScriptedStructuredClient.complete
 
     def source_inspection(
@@ -234,7 +244,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
                 assert outcome.timed_out and outcome.process_stop is not None
                 return outcome
             assert request.execution_baseline_sha256 == expected_binding
-            assert request.execution_base_ref == source
+            assert request.execution_base_ref == execution_base
             context = FileContextStore(sidecar / "contexts").get(request.context_manifest_id)
             (section,) = tuple(s for s in context.sections if s.name == "execution.baseline")
             trusted = ExecutionBaselineContext.model_validate_json(section.content)
@@ -244,6 +254,11 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
                 trusted.binding.retained_patch.sha256
             )
             assert "+unknown retained draft" in trusted.complete_patch
+            if expected_epoch is not None:
+                assert trusted.binding.native_rule_epoch_sha256 == expected_epoch.epoch_sha256
+                validate_native_rule_epoch_context(context, expected_epoch)
+                assert (cwd / "tooling.txt").read_text() == "fixed platform prerequisite\n"
+                assert (cwd / "README.md").read_text() == "Approved upgraded greeting rules.\n"
             policy = WorkspacePolicy(cwd, request.permissions)
             if request.role is AgentRole.CODER:
                 assert request.attempt == 3
@@ -654,6 +669,9 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         reference="legacy-engineering-confirmation",
         confirm_legacy_containment=None if local_stop else True,
         confirm_local_execution_stopped=True if local_stop else None,
+        continuation_mode=(
+            BaselineContinuationMode.PAUSE if pause_rescue else BaselineContinuationMode.RESUME
+        ),
     )
     with pytest.raises(ValueError, match="明确确认"):
         host.execute_execution_baseline(
@@ -810,6 +828,100 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     )
     monkeypatch.setattr(DispatcherLoop, "tick", original_tick)
     assert host.execute_execution_baseline(execute, project_id="project_test") == binding
+    latest_binding = binding
+    continue_command = None
+    if pause_rescue:
+        assert len(calls) == 2
+        (preserved,) = tuple(
+            item
+            for item in host.work_queue.items_for_task(frozen.id)
+            if item.status is not WorkItemStatus.CLOSED
+        )
+        assert preserved.status is WorkItemStatus.WAITING_HUMAN
+        assert preserved.wait_disposition is not None
+        assert preserved.wait_disposition.facts.classification == "EXECUTION_BASELINE_PAUSED"
+        with MySqlTaskRepository(mysql_dsn) as tasks:
+            assert tasks.get(frozen.id).attempts == preserved.attempt == 3
+        old_continue = BaselineContinueCommand(
+            delivery_id=pending.delivery_id,
+            task_id=frozen.id,
+            expected_task_intent_sha256=task_intent_sha256(frozen),
+            expected_task_revision=revision,
+            expected_work_item_id=preserved.id,
+            expected_source_revision=binding.execution_source_revision,
+            expected_execution_baseline_sha256=binding.binding_sha256,
+            expected_disposition_sha256=preserved.wait_disposition.disposition_sha256,
+            reference="superseded original rescue continuation",
+        )
+        (repository / "tooling.txt").write_text("fixed platform prerequisite\n")
+        (repository / "README.md").write_text("Approved upgraded greeting rules.\n")
+        _git("add", "tooling.txt", "README.md", cwd=repository)
+        _git(
+            "commit", "-m", "upgrade retained original requirement source and rules", cwd=repository
+        )
+        execution_base = _git_output("rev-parse", "HEAD", cwd=repository)
+        upgrade_plan = host.propose_execution_baseline(
+            BaselineProposeCommand(
+                delivery_id=pending.delivery_id,
+                task_id=frozen.id,
+                expected_task_intent_sha256=task_intent_sha256(frozen),
+                expected_task_revision=revision,
+                expected_work_item_id=preserved.id,
+                expected_source_revision=binding.execution_source_revision,
+                target_base_ref=execution_base,
+            ),
+            project_id="project_test",
+        )
+        assert upgrade_plan.purpose is BaselinePurpose.SOURCE_REBIND
+        assert upgrade_plan.previous_binding == binding
+        assert upgrade_plan.facts.native_rule_change is not None
+        assert upgrade_plan.facts.continuation is not None
+        assert upgrade_plan.facts.continuation.retry_cause == "uninvoked"
+        upgrade_execute = BaselineExecuteCommand(
+            delivery_id=pending.delivery_id,
+            task_id=frozen.id,
+            expected_plan_sha256=upgrade_plan.plan_sha256,
+            reference="exact latest main and native rules decision",
+            continuation_mode=BaselineContinuationMode.PAUSE,
+            approved_native_rule_change_sha256=(
+                upgrade_plan.facts.native_rule_change.change_sha256
+            ),
+        )
+        latest_binding = host.execute_execution_baseline(upgrade_execute, project_id="project_test")
+        assert latest_binding.previous_binding_sha256 == binding.binding_sha256
+        assert latest_binding.native_rule_epoch_sha256 is not None
+        expected_binding = latest_binding.binding_sha256
+        expected_epoch = FileExecutionBaselineStore(
+            sidecar / "state/execution-baselines" / frozen.id, read_only=True
+        ).native_rule_epoch(latest_binding.native_rule_epoch_sha256)
+        preserved_after = host.work_queue.get(preserved.id)
+        assert preserved_after.id == preserved.id and preserved_after.attempt == 3
+        assert preserved_after.status is WorkItemStatus.WAITING_HUMAN
+        assert preserved_after.wait_disposition is not None
+        assert (
+            preserved_after.wait_disposition.facts.execution_baseline_sha256
+            == latest_binding.binding_sha256
+        )
+        assert len(calls) == 2
+        with MySqlTaskRepository(mysql_dsn) as tasks:
+            assert tasks.get(frozen.id).attempts == 3
+            assert tasks.get(frozen.id).work_attempt == 3
+        assert (unknown.workspace / "hello.txt").read_text() == "unknown retained draft\n"
+        with pytest.raises(ValueError, match="已变化"):
+            host.continue_execution_baseline(old_continue, project_id="project_test")
+        assert host.work_queue.get(preserved.id) == preserved_after and len(calls) == 2
+        continue_command = BaselineContinueCommand(
+            delivery_id=pending.delivery_id,
+            task_id=frozen.id,
+            expected_task_intent_sha256=task_intent_sha256(frozen),
+            expected_task_revision=revision,
+            expected_work_item_id=preserved.id,
+            expected_source_revision=latest_binding.execution_source_revision,
+            expected_execution_baseline_sha256=latest_binding.binding_sha256,
+            expected_disposition_sha256=preserved_after.wait_disposition.disposition_sha256,
+            reference="explicit upgraded original READY plan continuation",
+        )
+        host.continue_execution_baseline(continue_command, project_id="project_test")
     delivered = service.status(pending.delivery_id).checkpoint
     assert delivered.stage is DeliveryStage.DONE, delivered.failure_summary
     assert [call.request.role for call in calls] == [
@@ -828,6 +940,8 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert len({call.claim.assignment.agent_id for call in calls}) == 3
     candidate = delivered.candidate_revision
     assert candidate and candidate != source
+    assert candidate != execution_base
+    assert all(call.request.execution_base_ref == execution_base for call in calls[2:])
     assert qa_call.request.source_revision == reviewer_call.request.source_revision == candidate
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         completed = tasks.get(frozen.id)
@@ -854,12 +968,11 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     baseline_store = FileExecutionBaselineStore(
         sidecar / "state/execution-baselines" / frozen.id, read_only=True
     )
-    assert baseline_store.bindings_for_task(frozen.id) == (binding,)
-    assert len(consumptions(host.work_queue, frozen.id)) == 1
-    validate_schema(
-        consumptions(host.work_queue, frozen.id)[0].to_wire(),
-        "execution-baseline-queue-consumption.schema.json",
-    )
+    expected_history = (binding, latest_binding) if pause_rescue else (binding,)
+    assert baseline_store.bindings_for_task(frozen.id) == expected_history
+    assert len(consumptions(host.work_queue, frozen.id)) == len(expected_history)
+    for consumption in consumptions(host.work_queue, frozen.id):
+        validate_schema(consumption.to_wire(), "execution-baseline-queue-consumption.schema.json")
     human_evidence = tuple(
         event
         for event in FileEvaluationEventStore(
@@ -884,8 +997,12 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     else:
         assert human_evidence[0].evidence_uri == baseline_store.patch_uri(plan.plan_sha256)
     timeline = engineering_history(sidecar, completed, plan.facts.scope, pending.delivery_id)
-    assert any("原未知执行" in entry.summary for entry in timeline)
-    assert any("下一轮使用原任务剩余工作额度" in entry.summary for entry in timeline)
+    if pause_rescue:
+        assert any("原需求保持暂停" in entry.summary for entry in timeline)
+        assert any("明确继续原需求" in entry.summary for entry in timeline)
+    else:
+        assert any("原未知执行" in entry.summary for entry in timeline)
+        assert any("下一轮使用原任务剩余工作额度" in entry.summary for entry in timeline)
     # Later baseline collection still verifies complete historical containment.
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         collector = (
@@ -925,9 +1042,14 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         # or an obsolete new wait merely because current OS queries are unavailable.
         monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", incomplete_survey)
     assert host.execute_execution_baseline(execute, project_id="project_test") == binding
+    if continue_command is not None:
+        host.continue_execution_baseline(continue_command, project_id="project_test")
     assert len(calls) == calls_before_replay
-    assert len(consumptions(host.work_queue, frozen.id)) == 1
-    assert _git_output("rev-parse", "HEAD", cwd=repository) == source
+    assert len(consumptions(host.work_queue, frozen.id)) == len(expected_history)
+    assert _git_output("rev-parse", "HEAD", cwd=repository) == execution_base
+    assert (
+        _git_output("diff", "--name-only", execution_base, candidate, cwd=repository) == "hello.txt"
+    )
     assert (repository / "hello.txt").read_text() == "hello\n"
     assert all(
         item.status is WorkItemStatus.CLOSED for item in host.work_queue.items_for_task(frozen.id)

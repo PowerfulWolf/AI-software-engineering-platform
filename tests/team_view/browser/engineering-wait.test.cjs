@@ -243,6 +243,7 @@ test("original branch baseline update has a separate exact engineering plan and 
   request.scopes = [{root: "/fixture", selected_paths: ["."], delivery_id: "delivery_baseline"}];
   request.execution = {state: "WAITING", responsibility: "engineering", reason_code: "SOURCE_PREPARATION_DRIFT",
     reason: "代码执行输入需要工程核验。", next_action: "核验原分支和平台修复版本。"};
+  h.state.operationManifest.operation_contract_version = 4;
   const facts = {task_id: "task_baseline", work_item_id: "work_baseline", role: "coder",
     task_intent_sha256: "b".repeat(64), source_revision: "c".repeat(40), checkpoint_sequence: 4};
   const step = {work_item_id: facts.work_item_id, role: "coder", status: "WAITING_HUMAN",
@@ -277,7 +278,7 @@ test("original branch baseline update has a separate exact engineering plan and 
   assert.equal(await baseline.evaluate(node => node.tagName === "DETAILS" && !node.open), true,
     "an optional baseline investigation stays secondary until an exact plan needs review");
   await baseline.locator("summary").first().click();
-  assert.equal(await baseline.getByRole("button", {name: "批准并更新原分支基线", exact: true}).count(), 0);
+  assert.equal(await baseline.getByRole("button", {name: "批准更新基线，保持暂停", exact: true}).count(), 0);
   const input = baseline.getByRole("textbox", {name: "目标代码完整版本"});
   await input.fill("f".repeat(40));
   await input.evaluate(node => {
@@ -344,8 +345,8 @@ test("original branch baseline update has a separate exact engineering plan and 
   assert.match(await baseline.innerText(), /ai\/feature\/original/);
   assert.equal(await baseline.getByRole("textbox", {name: "目标代码完整版本"}).evaluate(node => node !== window.baselineInput), true,
     "an exact new plan replaces the original draft controls rather than retaining stale callbacks");
-  assert.equal(await baseline.getByRole("button", {name: "批准并更新原分支基线", exact: true}).isVisible(), true);
-  await baseline.getByRole("button", {name: "批准并更新原分支基线", exact: true}).click();
+  assert.equal(await baseline.getByRole("button", {name: "批准更新基线，保持暂停", exact: true}).isVisible(), true);
+  await baseline.getByRole("button", {name: "批准更新基线，保持暂停", exact: true}).click();
   await h.close();
   assert.equal(submitted[1].action, "EXECUTE_EXECUTION_BASELINE");
   assert.equal(submitted[1].expected_plan_sha256, plan.plan_sha256);

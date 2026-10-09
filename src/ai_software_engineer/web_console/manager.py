@@ -19,11 +19,16 @@ from ai_software_engineer.domain.delivery_resolution import (
     InspectDeliveryWait,
     ResolveDeliveryWait,
 )
-from ai_software_engineer.domain.execution_baseline import BaselinePurpose, ExecutionBaselineBinding
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
+    BaselinePurpose,
+    ExecutionBaselineBinding,
+)
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError
 from ai_software_engineer.git import WorktreeCaptureRejected
 from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
 from ai_software_engineer.manager.baseline_production import (
+    BaselineContinueCommand,
     BaselineExecuteCommand,
     BaselineProposeCommand,
 )
@@ -88,6 +93,7 @@ from .models import (
     RecoverDesignIntent,
     ResolveDeliveryWaitIntent,
     RestartRequirementIntent,
+    ResumeExecutionBaselineIntent,
     UpdateRequirementIntent,
 )
 
@@ -140,6 +146,14 @@ class TeamConsoleHost(Protocol):
         *,
         project_id: str,
     ) -> ExecutionBaselineBinding: ...
+
+    def continue_execution_baseline(
+        self,
+        command: BaselineContinueCommand,
+        *,
+        project_id: str,
+        require_existing_authorization: bool = False,
+    ) -> DeliveryResumeResult | JointDeliveryResult | ProjectDeliveryResult: ...
 
 
 class ManagerConsoleAdapter:
@@ -338,10 +352,11 @@ class ManagerConsoleAdapter:
                             next_action=(
                                 "请由工程授权者确认原调用始终同机同账户本地、未迁移或远程, "
                                 "原调用及全部派生工具已结束且不会再修改现场; "
-                                "接受旧结果未知及剩余工作额度后, 批准精确方案。"
+                                "接受旧结果未知及剩余工作额度后, 批准保留进度并保持暂停; "
+                                "随后可先更新基线, 再明确继续原需求。"
                                 if local
                                 else "请确认原执行在本机且原执行之后已整机重启, "
-                                "再批准保留进度继续。"
+                                "再批准保留进度并保持暂停; 随后可先更新基线, 再明确继续。"
                             ),
                             responsible_party="工程授权者",
                         )
@@ -370,13 +385,33 @@ class ManagerConsoleAdapter:
                     checkpoint_sha256=current.checkpoint_sha256,
                     stage="ENGINEERING_BASELINE_UPDATED",
                     next_action=(
-                        "原需求的完整草稿已按工程决定保留并安排新执行。"
+                        "完整进度与工程决定已保存, 原需求保持暂停。"
+                        "可以先更新代码及项目规范基线, 确认后点击“继续原需求”。"
+                        if binding.continuation_mode is BaselineContinuationMode.PAUSE
+                        else "原需求的完整草稿已按工程决定保留并安排新执行。"
                         "原执行结果仍记为未知, 后续需独立测试和评审。"
                         if binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
                         else "原分支执行基线已更新并记录工程决定, 继续原需求的独立交付验收。"
                     ),
                     execution_baseline_binding=binding,
                 )
+            if isinstance(intent, ResumeExecutionBaselineIntent):
+                current = (
+                    self._entry(intent.project_id, intent.delivery_id)
+                    .status(intent.delivery_id)
+                    .checkpoint
+                )
+                data = intent.model_dump(
+                    mode="json", exclude={"action", "project_id", "expected_checkpoint_sha256"}
+                )
+                continued = self._host.continue_execution_baseline(
+                    BaselineContinueCommand.model_validate(data),
+                    project_id=intent.project_id,
+                    require_existing_authorization=(
+                        current.checkpoint_sha256 != intent.expected_checkpoint_sha256
+                    ),
+                )
+                return _summarize(continued, project_id=intent.project_id, host=self._host)
             if isinstance(
                 intent,
                 (InspectDeliveryWaitIntent, ResolveDeliveryWaitIntent, HandleDeliveryWaitIntent),

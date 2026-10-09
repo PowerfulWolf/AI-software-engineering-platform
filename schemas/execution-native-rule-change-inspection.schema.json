@@ -1,0 +1,259 @@
+{
+  "$defs": {
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
+      "type": "object"
+    },
+    "NativeRuleDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "change": {
+          "enum": [
+            "added",
+            "modified",
+            "deleted"
+          ],
+          "title": "Change",
+          "type": "string"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeRuleSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeRuleSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "path",
+        "change"
+      ],
+      "title": "NativeRuleDelta",
+      "type": "object"
+    },
+    "NativeRuleEpochBody": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/NativeRuleSource"
+        },
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "content_bytes": {
+          "maximum": 16777216,
+          "minimum": 0,
+          "title": "Content Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source",
+        "content",
+        "content_sha256",
+        "content_bytes"
+      ],
+      "title": "NativeRuleEpochBody",
+      "type": "object"
+    },
+    "NativeRuleEpochReference": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "target_base_ref": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Target Base Ref",
+          "type": "string"
+        },
+        "rules_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Rules Sha256",
+          "type": "string"
+        },
+        "epoch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Epoch Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "task_id",
+        "target_base_ref",
+        "rules_sha256",
+        "epoch_sha256"
+      ],
+      "title": "NativeRuleEpochReference",
+      "type": "object"
+    },
+    "NativeRuleKind": {
+      "description": "Project-native guidance source categories, not interpreted priorities.",
+      "enum": [
+        "agents",
+        "contributing",
+        "readme",
+        "editorconfig",
+        "ci",
+        "trellis-spec"
+      ],
+      "title": "NativeRuleKind",
+      "type": "string"
+    },
+    "NativeRuleSource": {
+      "additionalProperties": false,
+      "description": "A UTF-8 project-native rule source represented without absolute paths.",
+      "properties": {
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "relative_path": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "kinds": {
+          "items": {
+            "$ref": "#/$defs/NativeRuleKind"
+          },
+          "minItems": 1,
+          "title": "Kinds",
+          "type": "array"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "byte_length": {
+          "minimum": 0,
+          "title": "Byte Length",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "uri",
+        "relative_path",
+        "kinds",
+        "sha256",
+        "byte_length"
+      ],
+      "title": "NativeRuleSource",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "epoch": {
+      "$ref": "#/$defs/NativeRuleEpochReference"
+    },
+    "source_revision": {
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+      "title": "Source Revision",
+      "type": "string"
+    },
+    "delta": {
+      "$ref": "#/$defs/NativeRuleDelta"
+    },
+    "before_body": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NativeRuleEpochBody"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "after_body": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NativeRuleEpochBody"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "unified_diff": {
+      "title": "Unified Diff",
+      "type": "string"
+    }
+  },
+  "required": [
+    "epoch",
+    "source_revision",
+    "delta",
+    "unified_diff"
+  ],
+  "title": "NativeRuleChangeInspection",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/execution-native-rule-change-inspection.schema.json"
+}

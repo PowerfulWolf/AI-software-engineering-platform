@@ -1892,3 +1892,33 @@ operations.innerHTML = operations.map(renderOperationCard).join("")
 operations.hidden = true
 renderNotification()
 ```
+
+## 保留进度后暂停与明确继续（2026-10-09）
+
+Console operation contract version 4 新增 `RESUME_EXECUTION_BASELINE`，执行基线的
+`continuation_mode="pause"` 和 `approved_native_rule_change_sha256` 只发给支持版本 4 的服务。
+旧省略字段保持兼容。需求工程卡片直接显示“进度已保留，交付暂停”、当前代码版本、可选
+“更新代码版本”和独立的“继续原需求”；普通继续或 Manager 调查不能代替该精确决定。
+
+规范变化先通过成功提案的 GET
+`/api/v1/operations/{operation_id}/native-rules?path=...` 审阅。只读侧验证 operation、注册仓库
+sidecar、sealed plan 和 full epoch，返回完整脱敏正文与 unified diff；失败使用稳定中文409。
+必须加载所有增改删差异并明确确认匹配本计划的 digest 才能批准。使用 textContent，轮询保留
+展开差异与已审阅状态，缓存仅保留当前计划。审批后依然暂停，最终继续才触发角色执行。
+
+Console 新继续先验证 outer checkpoint。若 checkpoint 已变化，只有内部
+`require_existing_authorization=True` 能进入 Host 精确重放，且必须已有当前 binding 的同主体/
+引用/Task/WorkItem/source/disposition 决定；这不是客户端字段，也不能授权新的过时提交。
+SQL release 后 Host 启动前崩溃，重试仅允许精确仍为 READY 的原 release 工作项启动。已执行、
+重新等待或完成的旧决定只返回现状。完整签名/屏障及测试见 [execution-baseline](execution-baseline.md)。
+
+测试覆盖 Chrome 保存PAUSE→完整规范审阅→更新仍PAUSE→明确继续，恶意正文安全显示、
+轮询不丢审阅内容、旧服务能力门禁、只读 GET 不构造 Host 或准备仓库、过时首次批准拒绝，
+以及执行记录呈现暂停与继续决定但不冒充实际启动/验收。存量 READY 恢复提案使用新版保留
+暂停入口；没有生产审批、数据库补写或同名需求重建。
+
+服务在继续已批准、队列释放之后、实际启动之前中断时，Console 从只读快照中的
+`pending_baseline_continuation` 展示“继续已授权执行”。完整精确决定来自 immutable 文件和 SQL
+release 的联合核验，READY 身份、当前版本和无 ACTIVE claim 均匹配；点击复用同一决定及引用，
+不要求新 checkbox、额度或工程批准。即使此前通过 CLI 批准而没有 Console Operation 也可接续。
+已领取、后续等待或完成后移除入口；仅有授权文件时不显示“已授权待执行”。

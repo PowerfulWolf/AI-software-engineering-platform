@@ -6,13 +6,22 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
-from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
+from ai_software_engineer.domain.execution_native_rules import (
+    NativeRuleChangeInspection,
+    NativeRuleEpoch,
+)
+from ai_software_engineer.manager.baseline_models import (
+    BaselineContinueAuthorization,
+    ExecutionBaselinePlan,
+)
+from ai_software_engineer.team_view.models import TeamSnapshot
 from ai_software_engineer.web_console.models import (
     ConsoleOperation,
     ExecuteExecutionBaselineIntent,
     ProposeExecutionBaselineIntent,
+    ResumeExecutionBaselineIntent,
 )
-from ai_software_engineer.work_queue.baseline import BaselineQueueConsumption
+from ai_software_engineer.work_queue.baseline import BaselineQueueConsumption, BaselineQueueRelease
 from ai_software_engineer.work_queue.execution_store import (
     AcceptedRoleArtifact,
     QueuedRoleStep,
@@ -25,6 +34,11 @@ MODELS = (
     ExecutionBaselinePlan,
     BaselineQueueConsumption,
     ConsoleOperation,
+    BaselineContinueAuthorization,
+    NativeRuleEpoch,
+    NativeRuleChangeInspection,
+    BaselineQueueRelease,
+    TeamSnapshot,
 )
 UPDATED = {
     "ExecutionBaselineBinding",
@@ -37,6 +51,16 @@ UPDATED = {
     "LocalBootObservation",
     "LegacyLocalExecutionSurvey",
     "LegacyRescuePreparation",
+    "BaselineContinuationMode",
+    "BaselineContinueAuthorization",
+    "DeliveryFailureFacts",
+    "DeliveryDisposition",
+    "DeliveryNextAction",
+    "NativeRuleChangePlan",
+    "NativeRuleDelta",
+    "NativeRuleEpochReference",
+    "ResumeExecutionBaselineIntent",
+    "RoleQueueView",
 }
 
 
@@ -46,6 +70,20 @@ def main() -> None:
     nodes.update(
         {source["title"]: {k: v for k, v in source.items() if k != "$defs"} for source in generated}
     )
+    standalone = (
+        ("baseline-continue-authorization", BaselineContinueAuthorization),
+        ("execution-native-rule-epoch", NativeRuleEpoch),
+        ("execution-native-rule-change-inspection", NativeRuleChangeInspection),
+        ("execution-baseline-queue-release", BaselineQueueRelease),
+        ("team-snapshot", TeamSnapshot),
+    )
+    for filename, model in standalone:
+        schema = model.model_json_schema()
+        schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+        schema["$id"] = f"https://ai-software-engineer.local/schemas/{filename}.schema.json"
+        (ROOT / f"{filename}.schema.json").write_text(
+            json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=model is TeamSnapshot) + "\n"
+        )
     for path in ROOT.glob("*.schema.json"):
         document = json.loads(path.read_text())
         before = json.dumps(document)
@@ -69,9 +107,18 @@ def main() -> None:
                 (ProposeExecutionBaselineIntent, "purpose"),
                 (ExecuteExecutionBaselineIntent, "confirm_legacy_containment"),
                 (ExecuteExecutionBaselineIntent, "confirm_local_execution_stopped"),
+                (ExecuteExecutionBaselineIntent, "continuation_mode"),
+                (ExecuteExecutionBaselineIntent, "approved_native_rule_change_sha256"),
             ):
                 source = model.model_json_schema()
                 definitions[model.__name__]["properties"][field] = source["properties"][field]
+        if document.get("title") == "ConsoleOperation":
+            source = ConsoleOperation.model_json_schema()
+            document["properties"]["intent"] = source["properties"]["intent"]
+            definitions["ResumeExecutionBaselineIntent"] = (
+                ResumeExecutionBaselineIntent.model_json_schema()
+            )
+            definitions["ResumeExecutionBaselineIntent"].pop("$defs", None)
         while True:
             references = refs(document)
             missing = references - definitions.keys()
@@ -99,6 +146,15 @@ def main() -> None:
     if queue_document != previous:
         queue_path.write_text(
             json.dumps(queue_document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        )
+    # These new standalone models have no handwritten legacy compatibility gates.
+    # Keep exact generated parity even when an embedded older model has such gates.
+    for filename, model in standalone:
+        schema = model.model_json_schema()
+        schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+        schema["$id"] = f"https://ai-software-engineer.local/schemas/{filename}.schema.json"
+        (ROOT / f"{filename}.schema.json").write_text(
+            json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=model is TeamSnapshot) + "\n"
         )
 
 
