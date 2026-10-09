@@ -1483,7 +1483,7 @@ main[data-page="requests"] #detail {
 }
 .engineering-wait-action-row > .engineering-wait-report {
   width: auto;
-  justify-self: start;
+  margin-left: auto;
 }
 .engineering-wait-binding {
   min-width: 0;
@@ -1549,9 +1549,18 @@ main[data-page="requests"] #detail {
   min-width: 0;
   margin-top: 12px;
 }
+.engineering-rescue-confirmation {
+  padding: 12px 14px;
+  border: 1px solid #c6d6f1;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: #edf3ff;
+  color: #183b7a;
+}
 .engineering-rescue-confirmation > p {
   margin: 0;
   font-size: 0.875rem;
+  font-weight: 700;
   line-height: 1.65;
 }
 .engineering-baseline-pending > .engineering-baseline-form {
