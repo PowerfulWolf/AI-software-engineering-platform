@@ -946,6 +946,7 @@ function engineeringWaitBox(request, task, step) {
     management.append(result);
   }
   if (controlUnavailable) management.append(deliveryControlUnavailableNotice(controlUnavailable));
+  const actionRow = viewGroup(el("div", undefined, "engineering-wait-action-row"), "engineering-wait-action-row");
   if (decision) {
     management.append(el("p", "继续决定已记录；实际进度与验收以新的执行记录为准。", "muted"));
   } else if (canControlCurrentTeam() && !running) {
@@ -982,12 +983,13 @@ function engineeringWaitBox(request, task, step) {
           ...bound, action: "RESOLVE_DELIVERY_WAIT", resolution_kind: kind, proof_sha256: proofSha256,
         }), "primary"));
       }
-    management.append(actions);
+    actionRow.append(actions);
   } else if (running) {
     management.append(el("p", "操作尚未结束；原等待只有在新的执行事实成立后才解除。", "muted"));
   }
-  if (handling?.status === "PLATFORM_ATTENTION") management.append(viewBlock(button("复制处理报告", () =>
+  if (handling?.status === "PLATFORM_ATTENTION") actionRow.append(viewBlock(button("复制处理报告", () =>
     copyEngineeringWaitReport(request, handling), "secondary engineering-wait-report"), "engineering-wait-report", [request.title, handling]));
+  if (actionRow.children.length) management.append(actionRow);
   const technical = viewGroup(engineeringDetails("调查绑定详情", step.work_item_id + ":binding"),
     "engineering-wait-binding:" + step.work_item_id);
   technical.classList.add("engineering-wait-binding");
@@ -1238,26 +1240,29 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
     const controls = viewBlock(el("div", undefined, "engineering-baseline-form"), "rescue-controls",
       [rescue, plan, preparation, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
     if (plan) {
-      const field = el("label", undefined, "settings-checkbox-control");
-      const confirmation = el("input");
-      confirmation.type = "checkbox";
-      confirmation.checked = false;
-      confirmation.setAttribute("aria-label", local ? "确认原调用及全部派生工具已结束" : "确认原执行在同一电脑且已整机重启");
-      field.append(confirmation, el("span", local
-        ? "我以工程授权者身份确认：原调用一直在当前同一电脑、同一账户本地执行，未迁移或远程执行；原调用及全部派生工具已结束，不会再修改保留的现场。我接受旧结果仍为未知，并批准使用剩余工作额度再次执行。此确认是独立人工工程授权，不是平台补出的旧停止记录。"
-        : "我以工程授权者身份确认：原执行一直在当前同一电脑本地运行，未迁移或远程执行；原执行之后已重启整台电脑，并认可平台显示的时间依据。"));
+      const field = el(local ? "div" : "label", undefined,
+        local ? "engineering-rescue-confirmation" : "settings-checkbox-control");
+      const confirmation = local ? null : el("input");
+      if (local) {
+        field.append(el("p", "点击“批准保留进度并继续原需求”即表示你以工程授权者身份确认：原调用一直在当前同一电脑、同一账户本地执行，未迁移或远程执行；原调用及全部派生工具已结束，不会再修改保留的现场。你接受旧结果仍为未知，并批准使用剩余工作额度再次执行。此确认是独立人工工程授权，不是平台补出的旧停止记录。"));
+      } else {
+        confirmation.type = "checkbox";
+        confirmation.checked = false;
+        confirmation.setAttribute("aria-label", "确认原执行在同一电脑且已整机重启");
+        field.append(confirmation, el("span", "我以工程授权者身份确认：原执行一直在当前同一电脑本地运行，未迁移或远程执行；原执行之后已重启整台电脑，并认可平台显示的时间依据。"));
+      }
       const approve = deliveryButton("批准保留进度并继续原需求", () => submitEngineeringLegacyRescueOperation({
         action: "EXECUTE_EXECUTION_BASELINE", project_id: request.project_id, delivery_id: request.id,
         expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id,
         expected_plan_sha256: planSha256,
-        ...(local ? {confirm_local_execution_stopped: confirmation.checked === true}
+        ...(local ? {confirm_local_execution_stopped: true}
           : {confirm_legacy_containment: confirmation.checked === true}),
         reference: local
           ? "工程授权者确认原调用始终同机同账户本地未迁移或远程、原调用及全部派生工具已结束且不会再修改现场；接受旧结果未知，批准保留完整合法草稿使用剩余额度再次执行"
           : "工程授权者确认原执行同机本地且已整机重启，批准保留完整合法草稿继续原需求",
       }, rescue), "primary");
-      approve.disabled = true;
-      confirmation.addEventListener("change", () => {approve.disabled = confirmation.checked !== true;});
+      approve.disabled = !local;
+      if (confirmation) confirmation.addEventListener("change", () => {approve.disabled = confirmation.checked !== true;});
       controls.append(field, approve);
       controls.append(deliveryButton("重新准备恢复方案", () => submitEngineeringLegacyRescueOperation({
         ...rescue.baseline, action: "PROPOSE_EXECUTION_BASELINE", purpose: "legacy_workspace_rescue",

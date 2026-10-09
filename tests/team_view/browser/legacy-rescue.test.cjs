@@ -223,7 +223,7 @@ test("operations read failure explains missing recovery controls after the toast
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
-  await card.getByRole("checkbox").check();
+  assert.equal(await card.getByRole("checkbox").count(), 0);
   await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true})
     .evaluate(node => {window.beforeReadFailureApproval = node;});
   const failRead = route => route.request().method() === "GET"
@@ -243,7 +243,7 @@ test("operations read failure explains missing recovery controls after the toast
   assert.equal(await wait.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).count(), 0);
   assert.equal(await card.count(), 0, "unreadable plans cannot become cached recovery authority");
   await h.page.evaluate(() => window.beforeReadFailureApproval.click());
-  assert.equal(submitted.length, 1, "the retained checked control cannot submit while operation facts are unavailable");
+  assert.equal(submitted.length, 1, "the retained control cannot submit while operation facts are unavailable");
   if (await h.page.locator("#notification").isVisible()) await h.close();
   await h.tick();
   assert.equal(await h.page.locator("#notification").isVisible(), false);
@@ -253,12 +253,10 @@ test("operations read failure explains missing recovery controls after the toast
   if (await h.page.locator("#notification").isVisible()) await h.close();
   assert.equal(await unavailable.count(), 0);
   assert.equal(await card.isVisible(), true);
-  const checkbox = card.getByRole("checkbox", {name: "确认原调用及全部派生工具已结束"});
   const approve = card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true});
-  assert.equal(await checkbox.isChecked(), false, "current records must be read again and the engineering decision confirmed anew");
-  assert.equal(await approve.isDisabled(), true);
+  assert.equal(await card.getByRole("checkbox").count(), 0);
+  assert.equal(await approve.isEnabled(), true, "the current button submits confirmation only when clicked");
   assert.equal(submitted.length, 1, "successful reads do not approve or execute recovery");
-  await checkbox.check();
   await approve.click();
   await h.close();
   assert.equal(submitted[1].expected_plan_sha256, plan.plan_sha256);
@@ -266,7 +264,7 @@ test("operations read failure explains missing recovery controls after the toast
   assert.equal(submitted[1].expected_checkpoint_sha256, request.checkpoint_sha256);
 });
 
-test("simultaneous team and operation read failure revokes checked recovery controls while preserving detail reading state", async t => {
+test("simultaneous team and operation read failure revokes recovery controls while preserving detail reading state", async t => {
   const fixture = await rescueUi(t, 3);
   const {h, request, card, submitted} = fixture;
   await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
@@ -279,7 +277,7 @@ test("simultaneous team and operation read failure revokes checked recovery cont
   const binding = h.page.locator("#detail .engineering-wait-binding");
   await binding.locator("summary").first().click();
   await binding.evaluate(node => {window.beforeFailedRefreshBinding = node;});
-  await card.getByRole("checkbox").check();
+  assert.equal(await card.getByRole("checkbox").count(), 0);
   await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true})
     .evaluate(node => {window.beforeFailedRefreshApproval = node;});
   const failRead = route => route.fulfill({status: 500, json: {error: {message: "read unavailable"}}});
@@ -308,14 +306,12 @@ test("simultaneous team and operation read failure revokes checked recovery cont
   if (await h.page.locator("#notification").isVisible()) await h.close();
   assert.equal(await unavailable.count(), 0);
   assert.equal(await binding.evaluate(node => node === window.beforeFailedRefreshBinding && node.open), true);
-  const checkbox = card.getByRole("checkbox", {name: "确认原调用及全部派生工具已结束"});
   const approve = card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true});
-  assert.equal(await checkbox.isChecked(), false, "an identical re-read plan requires a new engineering confirmation");
-  assert.equal(await approve.isDisabled(), true);
+  assert.equal(await card.getByRole("checkbox").count(), 0);
+  assert.equal(await approve.isEnabled(), true);
   await h.page.evaluate(() => window.beforeFailedRefreshApproval.click());
-  assert.equal(submitted.length, 1, "a disconnected checked approval cannot revive after connectivity returns");
+  assert.equal(submitted.length, 1, "a disconnected approval cannot revive after connectivity returns");
   if (await h.page.locator("#notification").isVisible()) await h.close();
-  await checkbox.check();
   await approve.click();
   await h.close();
   assert.equal(submitted[1].expected_plan_sha256, plan.plan_sha256);
@@ -345,7 +341,7 @@ test("failed Team refresh renders control guidance without replacing a business 
   assert.equal(submitted.length, 0, "read failures and draft preservation do not create requirements or recovery actions");
 });
 
-test("local rescue shows auxiliary checks before a distinct exact human stop authorization", async t => {
+test("local rescue confirms the visible declaration on explicit approval without a separate checkbox", async t => {
   const fixture = await rescueUi(t, 3);
   const {h, request, card, submitted} = fixture;
   await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
@@ -361,16 +357,15 @@ test("local rescue shows auxiliary checks before a distinct exact human stop aut
   assert.match(await card.innerText(), /原调用及全部派生工具已结束/);
   assert.match(await card.innerText(), /此确认是独立人工工程授权/);
   assert.doesNotMatch(await card.innerText(), /方案核验的整机启动|原执行之后已重启整台电脑/);
-  const checkbox = card.getByRole("checkbox", {name: "确认原调用及全部派生工具已结束"});
   const approve = card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true});
-  assert.equal(await approve.isDisabled(), true);
-  await checkbox.check();
-  await checkbox.evaluate(node => {window.localRescueCheckbox = node; window.localRescueApproval = node.closest("div").querySelector("button");});
+  assert.equal(await card.getByRole("checkbox").count(), 0);
+  assert.match(await card.locator(".engineering-rescue-confirmation").innerText(), /点击“批准保留进度并继续原需求”即表示你以工程授权者身份确认/);
+  assert.equal(await approve.isEnabled(), true);
+  await approve.evaluate(node => {window.localRescueApproval = node;});
   request.title += " · harmless polling";
   await h.tick();
-  assert.equal(await checkbox.evaluate(node => node === window.localRescueCheckbox), true);
-  assert.equal(await checkbox.isChecked(), true);
-  assert.equal(submitted.length, 1);
+  assert.equal(await approve.evaluate(node => node === window.localRescueApproval), true);
+  assert.equal(submitted.length, 1, "loading and polling a prepared plan cannot submit confirmation or execute recovery");
   await approve.click();
   await h.close();
   assert.equal(submitted[1].confirm_local_execution_stopped, true);
@@ -422,7 +417,7 @@ test("a local stop approval is withdrawn on version downgrade or changed survey"
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
-  await card.getByRole("checkbox").check();
+  assert.equal(await card.getByRole("checkbox").count(), 0);
   await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).evaluate(node => {window.localStaleApproval = node;});
   h.state.operationManifest.operation_contract_version = 2;
   await h.tick();
@@ -433,12 +428,12 @@ test("a local stop approval is withdrawn on version downgrade or changed survey"
   await h.close();
   h.state.operationManifest.operation_contract_version = 3;
   await h.tick();
-  assert.equal(await card.getByRole("checkbox").isChecked(), false);
-  await card.getByRole("checkbox").check();
+  assert.equal(await card.getByRole("checkbox").count(), 0);
+  assert.equal(await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).isEnabled(), true);
   plan.plan_sha256 = "8".repeat(64);
   plan.facts.legacy_containment.local_execution_survey.survey_sha256 = "9".repeat(64);
   await h.tick();
-  assert.equal(await card.getByRole("checkbox").isChecked(), false);
+  assert.equal(await card.getByRole("checkbox").count(), 0);
   await h.page.evaluate(() => window.localStaleApproval.click());
   assert.equal(submitted.length, 1);
 });
@@ -486,7 +481,7 @@ test("foreign failures do not replace a ready rescue and a current failure revok
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
-  await card.getByRole("checkbox").check();
+  assert.equal(await card.getByRole("checkbox").count(), 0);
   await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).evaluate(node => {window.failureStaleApproval = node;});
   for (const [key, value] of Object.entries({project_id: "project_other", delivery_id: "request_other",
     task_id: "task_other", expected_checkpoint_sha256: "9".repeat(64), expected_task_revision: 5,
@@ -499,7 +494,7 @@ test("foreign failures do not replace a ready rescue and a current failure revok
   }
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
-  assert.equal(await card.getByRole("checkbox").isChecked(), true);
+  assert.equal(await card.getByRole("checkbox").count(), 0);
   assert.equal(await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).isEnabled(), true);
   assert.doesNotMatch(await card.innerText(), /foreign failure|MANAGER_FAILURE/);
   h.state.operations.push(operation("FAILED", {operation_id: "current_rescue_failure",

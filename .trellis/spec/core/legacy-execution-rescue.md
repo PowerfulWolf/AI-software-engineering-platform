@@ -93,6 +93,14 @@ authorize preserved-draft execution from remaining work allowance. Without that 
 no machine EngineeringAdmission may continue. Persist it in immutable authority and
 HumanActionEvent(SUPPLY_EVIDENCE) with the authority URI; preserve old reboot event bytes/notes.
 
+The local-stop Console flow displays the complete declaration next to the approval button;
+clicking “批准保留进度并继续原需求” supplies the exact confirmation and approval together,
+without a separate checkbox. Loading, polling or preparing a plan never supplies that declaration
+or executes recovery. The click callback still validates the current plan, Project/Requirement,
+checkpoint, capabilities, control readiness and connected button before posting
+`confirm_local_execution_stopped=true`. The separate legacy reboot checkbox retains its existing
+behavior. A disconnected, stale or unreadable approval cannot become valid merely by re-rendering.
+
 Before preparation completion, execution and new queue consumption, freshly recheck the survey,
 stable boot, all claims under Task lock/SQL fence and complete snapshots. Survey times and unrelated
 process changes do not invalidate a valid plan: independently verify the typed boundary and retain
