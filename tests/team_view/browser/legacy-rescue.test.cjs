@@ -569,6 +569,10 @@ test("approved preservation stays paused, complete native rule review precedes s
   const pause = h.page.locator("#detail .engineering-baseline-pause");
   assert.equal(await pause.isVisible(), true);
   assert.match(await pause.innerText(), /进度已保留 · 交付暂停/);
+  const guidance = pause.locator(":scope > .engineering-guidance-list > li");
+  assert.equal(await guidance.count(), 3);
+  assert.equal((await guidance.allTextContents()).some(value => /^\d+[.、]/u.test(value)), false);
+  assert.match(await guidance.nth(1).innerText(), /批准基线更新；更新后仍保持暂停/);
   assert.equal(await pause.getByRole("button", {name: "调查工程等待", exact: true}).count(), 0);
   assert.equal(submitted.length, 1, "preservation and polling do not invoke continuation");
   await pause.getByRole("textbox", {name: "目标代码完整版本"}).fill("f".repeat(40));
@@ -619,6 +623,39 @@ test("approved preservation stays paused, complete native rule review precedes s
   assert.equal(submitted[3].action, "RESUME_EXECUTION_BASELINE");
   assert.equal(submitted[3].expected_execution_baseline_sha256, "6".repeat(64));
   assert.equal(submitted[3].expected_source_revision, "f".repeat(40));
+  const progress = pause.locator(".engineering-operation-progress");
+  assert.equal(await progress.isVisible(), true);
+  assert.match(await progress.innerText(), /操作已排队.*等待执行/s);
+  assert.equal(await pause.getByRole("button", {name: "继续原需求", exact: true}).count(), 0);
+  h.state.operations.at(-1).status = "RUNNING";
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.match(await progress.innerText(), /操作执行中.*执行中/s);
+  assert.match(await progress.innerText(), /当前操作 · 继续保留进度的原需求/);
+  await progress.evaluate(node => {window.pauseProgress = node;});
+  request.title += " · 轮询状态展示";
+  await h.tick();
+  assert.equal(await progress.evaluate(node => node === window.pauseProgress), true);
+  const unchangedOperation = JSON.stringify(h.state.operations.at(-1));
+  const originalResponsibility = request.execution.responsibility;
+  request.execution.responsibility = "team";
+  await h.tick();
+  assert.match(await progress.innerText(), /当前阶段 · 实现 · 团队处理中/);
+  assert.equal(JSON.stringify(h.state.operations.at(-1)), unchangedOperation,
+    "phase updates do not rewrite the running operation");
+  request.execution.responsibility = originalResponsibility;
+  await h.tick();
+  assert.match(await progress.innerText(), /当前阶段 · 实现 · 等待工程处理/);
+  for (const width of [1440, 390]) {
+    await h.page.setViewportSize({width, height: 1100});
+    assert.equal(await pause.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
+    assert.equal(await progress.evaluate(node => getComputedStyle(node.querySelector("strong")).fontWeight), "700");
+    if (process.env.ASE_UI_SCREENSHOT_DIR)
+      await pause.screenshot({path: process.env.ASE_UI_SCREENSHOT_DIR + `/pause-progress-${width}.png`});
+  }
+  h.state.operations.at(-1).status = "SUCCEEDED";
+  await h.tick();
+  assert.equal(await progress.count(), 0, "a finished operation is not displayed as still running");
 });
 
 test("two repository rule reviews and explicit consent survive each other and polling", async t => {

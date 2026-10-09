@@ -1356,6 +1356,47 @@ main[data-page="requests"] #detail {
   font-size: 0.875rem;
   line-height: 1.65;
 }
+.engineering-operation-progress {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid #b7c8e7;
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: #edf3ff;
+  font-size: 0.875rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.engineering-operation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #183b7a;
+}
+.engineering-operation-heading > strong {
+  font-size: 0.9375rem;
+  font-weight: 700;
+}
+.engineering-operation-state {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.engineering-operation-progress > p {
+  margin: 0;
+}
+.engineering-operation-action {
+  color: #183b7a;
+  font-weight: 600;
+}
 .engineering-wait-panel > p {
   margin: 0;
   font-size: 0.875rem;

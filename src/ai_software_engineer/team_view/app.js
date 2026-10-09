@@ -699,7 +699,7 @@ function engineeringAuthorizedContinuationBox(request, task, step) {
   const bound = engineeringAuthorizedContinuationIntent(request, step);
   if (unavailable) panel.append(deliveryControlUnavailableNotice(unavailable));
   else if (!consoleSupportsPausedBaseline()) panel.append(el("p", "当前服务不支持此接续入口。请在服务空闲时更新并重启，再刷新原需求。", "muted"));
-  else if (active) panel.append(el("p", "平台正在处理当前操作；等待结果后再接续。", "muted"));
+  else if (active) panel.append(engineeringActiveOperationBox(request, active));
   else if (canControlCurrentTeam()) panel.append(deliveryButton("继续已授权执行", () =>
     submitEngineeringAuthorizedContinuation(bound, authority.authorization_sha256), "primary"));
   const detail = engineeringDetails("已保存的继续决定", step.work_item_id + ":pending-continuation");
@@ -826,11 +826,27 @@ async function submitEngineeringWaitOperation(intent) {
 function engineeringGuidanceList(...descriptions) {
   const list = el("ol", undefined, "engineering-guidance-list");
   for (const description of descriptions) {
-    for (const point of description.split(/(?<=[。；])\s*|\n+/u)) {
+    const points = Array.isArray(description) ? description : description.split(/(?<=[。；])\s*|\n+/u);
+    for (const point of points) {
       if (point.trim()) list.append(el("li", point.trim()));
     }
   }
   return list;
+}
+function engineeringActiveOperationBox(request, operation) {
+  const queued = operation.status === "QUEUED";
+  const progress = currentOperationProgress(operation, request);
+  const panel = viewBlock(el("div", undefined, "engineering-operation-progress"),
+    "engineering-active-operation", [operation, progress]);
+  panel.setAttribute("role", "status");
+  panel.setAttribute("aria-live", "polite");
+  const heading = el("div", undefined, "engineering-operation-heading");
+  heading.append(el("strong", queued ? "操作已排队" : "操作执行中"),
+    el("span", queued ? "等待执行" : "执行中", "engineering-operation-state"));
+  panel.append(heading, el("p", "当前操作 · " + operationActionLabel(operation), "engineering-operation-action"),
+    el("p", queued ? "操作已接收，等待平台开始处理。"
+      : progress?.title || "平台正在处理当前操作，完成后会更新检查结果与可用操作。", "muted"));
+  return panel;
 }
 function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, legacyRescue = false, rescueFailure = null, controlUnavailable = null} = {}) {
   if (historical) {
@@ -1114,10 +1130,11 @@ function engineeringBaselinePauseBox(request, task, step) {
     "engineering-pause:" + step.work_item_id);
   panel.dataset.key = "engineering:" + step.work_item_id + ":pause";
   panel.append(viewBlock(el("h3", "进度已保留 · 交付暂停"), "pause-title", true),
-    viewBlock(engineeringGuidanceList(
-      "1. 完整开发进度和原执行历史已保留，没有启动新的 Coder。\n" +
-      "2. 如需纳入最新代码与规范，先在下面准备并批准基线更新；更新后仍保持暂停。\n" +
-      "3. 确认当前执行基线后，点击“继续原需求”，使用已经预留的执行身份接续开发，再进行独立 QA 和 Review。"),
+    viewBlock(engineeringGuidanceList([
+      "完整开发进度和原执行历史已保留，没有启动新的 Coder。",
+      "如需纳入最新代码与规范，先在下面准备并批准基线更新；更新后仍保持暂停。",
+      "确认当前执行基线后，点击“继续原需求”，使用已经预留的执行身份接续开发，再进行独立 QA 和 Review。",
+    ]),
     "pause-description", true));
   if (!bound) {
     panel.append(el("p", "当前暂停记录缺少完整绑定。请刷新页面；仍缺失时由平台维护者核验，不能直接继续。", "error"));
@@ -1130,8 +1147,8 @@ function engineeringBaselinePauseBox(request, task, step) {
     "当前服务不支持保留进度后暂停并单独继续。请在服务空闲时更新并重启，再刷新原需求。", "muted"));
   appendEngineeringBaseline(panel, request, task, step);
   const continuation = viewBlock(el("div", undefined, "engineering-baseline-actions"), "pause-continue",
-    [bound, active, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
-  if (active) continuation.append(el("p", "平台正在处理当前操作；执行结束后再决定是否继续。", "muted"));
+    [bound, active, active && currentOperationProgress(active, request), canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
+  if (active) continuation.append(engineeringActiveOperationBox(request, active));
   else if (canControlCurrentTeam() && consoleSupportsPausedBaseline()) continuation.append(
     deliveryButton("继续原需求", () => submitEngineeringBaselineContinuation(bound), "primary"));
   panel.append(continuation);

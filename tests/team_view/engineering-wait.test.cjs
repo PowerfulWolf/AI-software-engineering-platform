@@ -910,6 +910,10 @@ test("preserved progress pause separates baseline preparation from exact explici
   const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   assert.match(text(box), /进度已保留 · 交付暂停/);
   assert.match(text(box), /没有启动新的 Coder/);
+  const steps = descend(box).find(node => node.tagName === "OL" && node.className === "engineering-guidance-list");
+  assert.equal(steps.children.length, 3);
+  assert.equal(steps.children.some(node => /^\d+[.、]/u.test(node.textContent)), false, "the list owns the numbering");
+  assert.match(steps.children[1].textContent, /批准基线更新；更新后仍保持暂停/);
   assert.equal(control(box, "调查工程等待"), undefined);
   assert.equal(control(box, "让平台处理中断"), undefined);
   assert.ok(control(box, "调查并保留原草稿"));
