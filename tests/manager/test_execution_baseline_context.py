@@ -39,6 +39,16 @@ def test_baseline_required_context_is_full_for_all_delivery_roles(
     tmp_path: Path, role: AgentRole
 ) -> None:
     f = setup(tmp_path)
+    # These are source references, not literal credentials. The complete
+    # retained draft must survive capture, plan persistence, replay, and the
+    # required Context guard for each independent delivery role.
+    source = f.worktree.path / "src/app.py"
+    source.write_text(
+        source.read_text()
+        + "\ndef connect(settings, foreign):\n"
+        + '    secret = foreign / "secret.json"\n'
+        + "    return client(password=settings.password, path=secret)\n"
+    )
     baseline_plan = f.service.propose(f.target)
     binding = f.service.execute(baseline_plan.plan_sha256, authority=authorize(baseline_plan))
     task = f.collector.facts.task
@@ -122,6 +132,8 @@ def test_baseline_required_context_is_full_for_all_delivery_roles(
     assert execution_baseline_from_context(context, request, task) == binding
     section = next(section for section in context.sections if section.name == "execution.baseline")
     assert "VALUE = 2" in section.content and "EXTRA = 3" in section.content
+    assert "password=settings.password" in section.content
+    assert 'secret = foreign / \\"secret.json\\"' in section.content
     assert not section.truncated
     assert task.base_ref != binding.execution_base_ref and plan.source_revision == task.base_ref
     finalized = append_knowledge_context(

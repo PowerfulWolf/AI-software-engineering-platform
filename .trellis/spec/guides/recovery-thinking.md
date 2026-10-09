@@ -87,3 +87,13 @@ the survey from approval and subsequent execution.
   两次清单分类变化须重查已覆盖路径，不能只验 PID 复用。
 - 原电脑当前没有识别到执行依然不能替代旧调用及派生工具的 exact 工程确认。
   见 `../core/legacy-execution-rescue.md` 的进程归属契约。
+
+### 源码快照与日志不是同一种文本（2026-10-09）
+
+- 通用 secret_assignment 是否把属性引用或路径表达式当成明文？先定位实际捕获文件，
+  不能为了让草稿通过而改业务源码或全局放宽日志脱敏。
+- 例外是否由已校验文件语言及真实代码 token/AST 确认？字符串、注释、插值、配置和 diff
+  metadata 都不能借表达式外观获得例外；强 key/PEM/Bearer 仍扫描完整原文本。
+- 完整正文、staged patch、wire 父级、计划读取/重放、required Context 是否同规则？
+  只改 capture 会在批准后的 Coder 启动再次失败；必须保持 bytes/digest。
+- 页面和复制报告是否保留最近一次精确准备失败？历史 UNKNOWN 三项不应盖住本次实际错误。

@@ -34,7 +34,7 @@ from ai_software_engineer.git.mutation_capture import (
 )
 from ai_software_engineer.git.policy import PathPolicyViolation, WorkspacePolicy
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSnapshot, WorktreeSpec
-from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.redaction import patch_secret_occurrences, redact_text
 
 _GIT_ENV: Final[dict[str, str]] = {
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -860,7 +860,9 @@ class GitWorktreeManager:
                     if len(content) != size:
                         raise ValueError("mutation base blob size drifted")
                     before = MutationTextBody(
-                        content.decode("utf-8"), 0o755 if old_mode == b"100755" else 0o644
+                        content.decode("utf-8"),
+                        0o755 if old_mode == b"100755" else 0o644,
+                        source_path=path,
                     )
                 after = None if new_mode == b"000000" else read_mutation_body(root, path)
                 if after is not None and after.mode != (0o755 if new_mode == b"100755" else 0o644):
@@ -925,7 +927,7 @@ class GitWorktreeManager:
                 text = payload.decode("utf-8")
             except UnicodeError as error:
                 raise WorktreeCaptureRejected("mutation patch is not UTF-8") from error
-            if b"GIT binary patch" in payload or redact_text(text).occurrences:
+            if b"GIT binary patch" in payload or patch_secret_occurrences(text):
                 raise WorktreeCaptureRejected("mutation patch contains binary or sensitive content")
         return WorktreeMutationCapture(
             worktree=worktree,

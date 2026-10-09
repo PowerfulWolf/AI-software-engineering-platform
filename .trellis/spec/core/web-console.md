@@ -13,6 +13,39 @@ Operation 持久化或 `ase-console` 生产装配时必须遵守本规范。只�
 
 v0.1 是可信本机、单用户、loopback 控制台，不是远程多租户控制面。
 
+### 最新恢复准备失败的展示（2026-10-09）
+
+`team_view/app.js` 的 `engineeringBaselineProposalOperation(bound, purpose="source_rebind")`
+共享最近精确 proposal 选择。在当前唯一 Team 的 manifest/control scope 内，legacy 必须匹配
+Project/Requirement、当前 checkpoint、Task
+revision/intent、WorkItem、source、purpose=legacy_workspace_rescue、原 source target 和
+input_mode=preserve_draft。外来或旧绑定不可污染当前结果；通用 source_rebind 保持原契约。
+
+`engineeringLegacyRescuePreparation` 消费 SUCCEEDED 的 typed READY/WAITING；
+`engineeringLegacyRescueFailure` / `legacyRescueFailureNotice` 消费 FAILED/INTERRUPTED 的安全原记录。
+旧 MANAGER_FAILURE/WorktreeCaptureRejected 给固定中文
+“完整草稿捕获失败”和平台维护下一步；UNKNOWN 原因不猜根因，安全摘要、operation_id 和
+error_code 保留在排障说明。失败是当前操作结果，不能生成 plan、审批或新执行。
+
+需求详情、复制处理报告和随后 HANDLE 提示复用最新精确准备结果，不能以历史
+OUTCOME_UNKNOWN/STOP_UNRECORDED/CHECKPOINT_UNAVAILABLE 覆盖最新捕获失败。typed
+WAITING 的用户操作优先具体 next_action，顶部不再建议无条件重复准备。
+新 proposal 失败后旧 plan 和批准闭包均失效。失败只保留“修复后重新检查恢复前提”次要入口，
+让服务更新后可以继续原需求；不改 operation 状态、错误正文或历史处理摘要。
+
+| 当前操作 | 展示 |
+| --- | --- |
+| 同一精确 proposal FAILED/INTERRUPTED | 当前失败+中文平台下一步+可复制错误编号，无审批 |
+| 后续 HANDLE_SUCCEEDED | 保留最近精确 proposal 失败，不让泛化调查盖住它 |
+| SUCCEEDED typed READY/WAITING | 保持原方案/检查事实和工程确认，报告顶部与结果一致 |
+| 外来、旧 Task/checkpoint/source/Project 或更改模式 | 忽略，不能污染当前结果或复用旧批准 |
+
+Good：用户复制报告就能携带具体失败操作给维护者；Base：修复后在原需求复查；
+Bad：只显示历史缺失事实、继续循环引导准备或把失败当可审批方案。
+增量 `engineering-wait.test.cjs` 与真实 Chrome `browser/legacy-rescue.test.cjs` 覆盖复制报告、
+后续HANDLE、11类外来/旧绑定、stale闭包及typed捕获WAITING。
+存量 operation/handling bytes/hash 不重写；服务代码空闲时加载后刷新原需求即可。
+
 ### 跨阶段交付操作的当前进展与完整历史（2026-10-05）
 
 Scope：`src/ai_software_engineer/team_view/app.js` 的需求操作记录与 ACTIVE 通知。一个

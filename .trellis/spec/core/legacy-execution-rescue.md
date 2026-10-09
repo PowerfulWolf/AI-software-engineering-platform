@@ -213,3 +213,65 @@ Console/containment/Schema 增量回归保证 WAITING 无 plan/approval、新浏
 Wrong：`if "codex" in command: block()` 或 `if control_ancestor: ignore_all_files()`。
 Correct：读取内核可执行身份，分类明确控制入口，按原 checkout 的实际 cwd/文件事实核验，
 仅豁免明确空闲终端；再由已有 exact 工程授权供给缺失的历史停止事实。
+
+## 保留源码的敏感信息分类与准备失败（2026-10-09）
+
+### Scope / Signatures
+
+v2 完整 mutation bodies 是可复用代码输入，不能先脱敏再保存。通用文本的
+`secret_assignment` 不能把 Python 的 `password=settings.password`、
+`secret = foreign / "secret.json"` 当成秘密字面值。
+
+- `redaction.source_secret_occurrences(content, *, source_path: str | None = None)` 仅返回
+  `tuple[RedactionOccurrence, ...]`，不返回“已脱敏”的原始正文；默认及未知类型走原
+  `redact_text`。支持经过验证的 `.py` 相对路径、AST 语法与完整 tokenize 边界。
+- `redaction.patch_secret_occurrences(content)` 只从真实 `diff --git a/... b/...` 和
+  无源码标签的 `@@` hunk 选择语言；分开 old/new 侧、验证行计数后检查代码。
+  metadata、未知格式、标签、错数、超长计数始终用通用检测。
+- `MutationTextBody(text, mode, source_path=None)` 的 source_path 只存在内存，
+  `compare=False`，不新增 wire 或 digest 字段。`read_mutation_body(root, relative_path)` 与
+  Git base blob 读取传入已被 WorkspacePolicy 校验的实际路径。
+- `CapturedMutationBody` 校验 UTF-8 大小/NUL/hash/mode，不能单独授予源码例外；拥有
+  `RelativePath` 的 `CapturedMutation` 对 before/after 调 `to_body(source_path=path)`，
+  `CapturedMutations.to_capture` 再检查同一路径。所有计划落盘、读取和重放都经过父级校验。
+
+### Contracts
+
+- 仅语法明确的 single-name 对象同名字段引用，或 single-name `/` 带路径符号的普通固定字符串
+  能获得源码例外。任意 identifier、未知 dotted value、函数调用、下标或插值不获得例外。
+  路径字符串也必须通过通用检测。
+- 字符串、注释、f-string（含嵌套及三引号）和 t-string 全 span 均不获得例外；强特征
+  OpenAI/AWS/GitHub key、Bearer 和 PEM 独立检查整个原正文，不因 span 替换而丢失。
+- AST/tokenize 的未知语法及资源限制使用保守结果，不执行源码。span 游标按位置单调移动，
+  不在每次 assignment 上线性遍历所有字符串。
+- v2 working/staged patch、完整 body、CapturedMutations、baseline replay 和 required execution
+  Context 使用同一入口。Context 的 instructions 仍用通用 redactor；只有已绑定完整 patch
+  用源码检查，任何 body/patch 均保持 byte-for-byte、SHA 和当前 index/HEAD/branch。
+- v1 recovery、普通日志、URI、知识和 Evidence 的 `redact_text` 不变，其他语言和未知配置仍保守。
+  不按 `src/**`、`tests/**` 或调用者提供的“安全”标记豁免。
+- Console 的 legacy proposal 捕获 `WorktreeCaptureRejected` 返回现有 typed
+  `legacy_rescue_preparation(status=WAITING, code=LEGACY_WORKSPACE_CAPTURE_REJECTED)`，
+  固定安全中文 summary/next_action 与 `responsible_party=平台执行服务`。
+  无 plan/approval/binding/新执行；不透出 exception 原文。source_rebind 保持原拒绝契约。
+
+### Validation / Tests
+
+| 情况 | 结果 |
+| --- | --- |
+| `.py` 的合法属性引用或路径表达式 | 保存原 bodies/patch，wire 往返、重放、Context 仍完全相同 |
+| quoted/comment/f-string 内凭证形状或同行真实秘密 | 拒绝，保留原文件，无明文输出 |
+| `.env` 的 `token=my.token` 或未知源码类型 | 通用保守检测，不因 dotted RHS 放行 |
+| staged-only 秘密、metadata/path 秘密、错误 hunk | 拒绝，不改 index |
+| parser 深度/计数资源异常 | 保守结果，不升级成无原因 MANAGER_FAILURE |
+| legacy proposal 捕获拒绝 | 中文 WAITING + 平台维护下一步，无审批 |
+
+Good：合法源码完整捕获后同 Task 继续原需求；Base：真实敏感字面值等维护处理；
+Bad：改 K1 草稿以绕过扫描、按目录关 secret guard、脱敏后当作原完整补丁。
+
+增量测试：`test_source_secret_detection.py`、`test_mutation_capture.py`、
+`test_execution_baseline_context.py` 三角色、`test_legacy_rescue_acceptance.py`，
+并保留 `test_capture.py`、Context/Evidence 原脱敏、legacy inventory 与 Schema 回归。
+
+存量无需迁移或改库。读取原 K1 的实际 24 项完整变更可完成 capture/wire roundtrip；
+全部 2,000 工作树条目与 index 前后摘要一致。用户空闲时加载新服务并刷新，再在原需求点击
+“修复后重新检查恢复前提”，查看精确方案并自行确认/审批；不改旧 UNKNOWN 或历史操作。

@@ -715,7 +715,7 @@ function engineeringGuidanceList(...descriptions) {
   }
   return list;
 }
-function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, legacyRescue = false} = {}) {
+function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, legacyRescue = false, rescueFailure = null} = {}) {
   if (historical) {
     target.append(el("p", "当次调查 · " + humanizeBlockingText(proof.next_action || "调查结果未提供处理建议。")),
       el("p", "这是该次调查保存的结果；当前原因与操作以页面上方为准。", "muted"));
@@ -727,7 +727,8 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
   if (collectionFailed) target.append(el("p", engineeringCollectionFailureNotice, "error"));
   if (legacyRescue) {
     target.append(engineeringGuidanceList("旧执行没有留下完整结果、结束和现场记录，不能把它当作已完成，也不能靠重复调查补齐。",
-      "可使用下方“保留进度的恢复方案”：平台检查当前本机执行并封存完整合法草稿，展示所需工程确认；授权后才可继续同一需求。"));
+      rescueFailure ? "本次恢复方案准备尚未完成，具体失败和平台处理下一步见下方；当前没有可批准的恢复方案。"
+        : "可使用下方“保留进度的恢复方案”：平台检查当前本机执行并封存完整合法草稿，展示所需工程确认；授权后才可继续同一需求。"));
     return;
   }
   if (missing.length) {
@@ -787,11 +788,16 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
   const task = engineeringWaitSteps(request).find(item => item.step.work_item_id === step.work_item_id)?.task;
   if (!active && !decision && task && engineeringLegacyRescueFacts(request, task, step, proof, handling)) {
     const rescue = engineeringLegacyRescueFacts(request, task, step, proof, handling);
+    const failure = engineeringLegacyRescueFailure(request, task, step, rescue);
     const preparation = engineeringLegacyRescuePreparation(request, task, step, rescue);
-    facts.platform = preparation?.summary || "可准备保留进度的恢复方案，检查当前本机执行并封存完整合法草稿；旧执行结果仍保持未知。";
-    facts.user = consoleSupportsLegacyRescue()
-      ? preparation?.next_action || "点击“准备保留进度的恢复方案”。先查看平台检查结果和精确方案，再由工程授权者确认实际执行已结束；不要凭服务重启推断旧执行停止。"
-      : "当前服务尚不支持保留进度的恢复方案。请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。";
+    facts.platform = failure
+      ? `恢复方案准备${failure.status === "INTERRUPTED" ? "被中断" : "失败"}：${failure.summary}`
+      : preparation?.summary || "可准备保留进度的恢复方案，检查当前本机执行并封存完整合法草稿；旧执行结果仍保持未知。";
+    facts.user = failure
+      ? failure.next_action
+      : consoleSupportsLegacyRescue()
+        ? preparation?.next_action || "点击“准备保留进度的恢复方案”。先查看平台检查结果和精确方案，再由工程授权者确认实际执行已结束；不要凭服务重启推断旧执行停止。"
+        : "当前服务尚不支持保留进度的恢复方案。请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。";
   }
   if (consoleAvailable === true && !consoleSupportsOperation("HANDLE_DELIVERY_WAIT")) {
     if (!active && !decision && !handling) {
@@ -809,20 +815,30 @@ async function copyEngineeringWaitReport(request, handling) {
   const rescue = Boolean(current);
   const preparation = current && engineeringLegacyRescuePreparation(request, current.task, current.step,
     engineeringLegacyRescueFacts(request, current.task, current.step, proof, handling));
+  const failure = current && engineeringLegacyRescueFailure(request, current.task, current.step,
+    engineeringLegacyRescueFacts(request, current.task, current.step, proof, handling));
   const missing = (proof?.missing || []).map(item => {
     const [title, owner, action, recheck] = engineeringProofMissingGuidance[item] || [
       "平台返回了未识别的检查项", "平台维护者", "平台需要修复这项检查结果；当前不能安全继续。",
       "平台修复检查结果后再检查。",
     ];
-    return ["待处理事项 · " + title, "处理方 · " + (rescue ? "ASE 平台与工程授权者" : owner),
-      "具体处理 · " + (rescue ? "使用需求详情中的“准备保留进度的恢复方案”，由平台检查当前本机执行并封存合法草稿；查看检查结果后再决定，不补造原执行记录。" : action),
-      "何时复查 · " + (rescue ? "按恢复前提检查所列下一步处理后再检查；重复检查不会补出旧执行结果。" : recheck)].join("\n");
+    return ["待处理事项 · " + title, "处理方 · " + (failure ? "ASE 平台维护者" : rescue ? "ASE 平台与工程授权者" : owner),
+      "具体处理 · " + (failure ? "先处理本次恢复方案准备失败；旧执行的缺失事实仍保留，不能通过重复调查补造。"
+        : rescue ? "使用需求详情中的“准备保留进度的恢复方案”，由平台检查当前本机执行并封存合法草稿；查看检查结果后再决定，不补造原执行记录。" : action),
+      "何时复查 · " + (failure ? "平台修复本次失败后，再重新检查恢复前提。"
+        : rescue ? "按恢复前提检查所列下一步处理后再检查；重复检查不会补出旧执行结果。" : recheck)].join("\n");
   });
   const report = ["ASE 交付处理报告", "需求 · " + request.title,
     ...(handling.collection_failed === true ? ["当前结果 · " + engineeringCollectionFailureNotice] : []),
-    "本次处理 · " + humanizeBlockingText(handling.summary || "未提供处理说明"),
-    "用户操作 · " + (rescue ? "在当前需求详情点击“准备保留进度的恢复方案”；先看平台检查结果，方案准备完成后由工程授权者明确确认所列实际停止前提，再批准继续原需求。" : humanizeBlockingText(handling.user_action || "无")),
-    "复查时机 · " + (rescue ? "按恢复前提检查所列下一步处理后重新检查；旧执行结果仍保持未知。" : humanizeBlockingText(handling.recheck_when || "处理记录或执行前提更新后")),
+    "本次处理 · " + (failure ? `恢复方案准备${failure.status === "INTERRUPTED" ? "被中断" : "失败"}：${failure.summary}`
+      : preparation?.summary || humanizeBlockingText(handling.summary || "未提供处理说明")),
+    "用户操作 · " + (failure ? failure.next_action
+      : preparation?.next_action || (rescue ? "在当前需求详情点击“准备保留进度的恢复方案”；先看平台检查结果，方案准备完成后由工程授权者明确确认所列实际停止前提，再批准继续原需求。" : humanizeBlockingText(handling.user_action || "无"))),
+    "复查时机 · " + (failure ? "平台修复本次失败后，再重新检查恢复前提；重复调查不能修复内部异常。"
+      : rescue ? "按恢复前提检查所列下一步处理后重新检查；旧执行结果仍保持未知。" : humanizeBlockingText(handling.recheck_when || "处理记录或执行前提更新后")),
+    ...(failure ? ["恢复准备操作 · " + failure.operation_id, "准备操作状态 · " + failure.status,
+      "错误编号 · " + failure.error_code, "安全排障说明 · " + failure.detail,
+      "原调查说明 · " + humanizeBlockingText(handling.summary || "未提供处理说明")] : []),
     ...(preparation ? ["当前恢复检查 · " + preparation.summary, "检查处理方 · " + preparation.responsible_party,
       "检查下一步 · " + preparation.next_action] : []),
     ...missing,
@@ -860,6 +876,7 @@ function engineeringWaitBox(request, task, step) {
   const running = activeOperation(request.id, request.project_id);
   const facts = engineeringWaitCurrentFacts(request, step, proof, handling, decision, running);
   const rescue = engineeringLegacyRescueFacts(request, task, step, proof, handling);
+  const rescueFailure = engineeringLegacyRescueFailure(request, task, step, rescue);
   const overview = viewBlock(el("dl", undefined, "engineering-wait-facts"), "engineering-wait-facts", facts);
   for (const [key, title] of [["happened", "发生了什么"], ["preservation", "开发进度"], ["platform", "平台可以做什么"], ["user", "你需要做什么"]]) {
     const row = el("div");
@@ -871,8 +888,8 @@ function engineeringWaitBox(request, task, step) {
   management.append(overview);
   if (proof) {
     const collectionFailed = handling?.collection_failed === true;
-    const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof", [proof, collectionFailed, Boolean(rescue)]);
-    appendEngineeringInvestigation(result, proof, {collectionFailed, legacyRescue: Boolean(rescue)});
+    const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof", [proof, collectionFailed, Boolean(rescue), rescueFailure]);
+    appendEngineeringInvestigation(result, proof, {collectionFailed, legacyRescue: Boolean(rescue), rescueFailure});
     management.append(result);
   }
   if (decision) {
@@ -954,10 +971,7 @@ function engineeringBaselineFacts(request, task, step) {
 function engineeringBaselinePlan(request, task, step, purpose = "source_rebind") {
   const bound = engineeringBaselineFacts(request, task, step);
   if (!bound) return null;
-  const operation = [...operations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    .find(item => item.intent.action === "PROPOSE_EXECUTION_BASELINE" &&
-      (item.intent.purpose || "source_rebind") === purpose &&
-      sameEngineeringWaitIntent(item.intent, bound));
+  const operation = engineeringBaselineProposalOperation(bound, purpose);
   const plan = operation?.status === "SUCCEEDED" ? operation.result?.execution_baseline_plan : null;
   if (!plan || operation.result.checkpoint_sha256 !== request.checkpoint_sha256 ||
       (plan.purpose || "source_rebind") !== purpose ||
@@ -1011,9 +1025,7 @@ function engineeringLegacyRescuePlan(request, task, step, rescue) {
 }
 function engineeringLegacyRescuePreparation(request, task, step, rescue) {
   if (!rescue) return null;
-  const operation = [...operations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    .find(item => item.intent.action === "PROPOSE_EXECUTION_BASELINE" &&
-      item.intent.purpose === "legacy_workspace_rescue" && sameEngineeringWaitIntent(item.intent, rescue.baseline));
+  const operation = engineeringBaselineProposalOperation(rescue.baseline, "legacy_workspace_rescue");
   const preparation = operation?.status === "SUCCEEDED" ? operation.result?.legacy_rescue_preparation : null;
   if (!preparation || operation.result.checkpoint_sha256 !== request.checkpoint_sha256 ||
       preparation.task_id !== task.task_id || preparation.work_item_id !== step.work_item_id ||
@@ -1022,6 +1034,43 @@ function engineeringLegacyRescuePreparation(request, task, step, rescue) {
       !preparation.summary || typeof preparation.next_action !== "string" || !preparation.next_action ||
       !["平台执行服务", "工程授权者"].includes(preparation.responsible_party)) return null;
   return preparation;
+}
+function engineeringBaselineProposalOperation(bound, purpose = "source_rebind") {
+  if (!bound) return null;
+  return [...operations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    .find(item => item.intent?.action === "PROPOSE_EXECUTION_BASELINE" &&
+      (item.intent.purpose || "source_rebind") === purpose && sameEngineeringWaitIntent(item.intent, bound) &&
+      (purpose !== "legacy_workspace_rescue" || item.intent.target_base_ref === bound.expected_source_revision &&
+        item.intent.input_mode === "preserve_draft"));
+}
+function legacyRescueFailureNotice(operation) {
+  if (!operation || !["FAILED", "INTERRUPTED"].includes(operation.status)) return null;
+  const code = operation.error_code || "UNKNOWN_FAILURE";
+  const typedCapture = code === "LEGACY_WORKSPACE_CAPTURE_REJECTED";
+  const internal = code === "MANAGER_FAILURE" || code === "UNKNOWN_FAILURE";
+  const detail = operation.error_summary || "本次操作没有保存安全错误说明。";
+  const summary = internal ? "平台在准备恢复方案时发生内部异常，尚未封存完整可核验的保留进度。"
+    : typedCapture && operation.error_summary ? humanizeBlockingText(operation.error_summary)
+      : operation.status === "INTERRUPTED" ? "平台服务在恢复方案准备完成前停止，本次准备已中断。"
+        : "平台未能完成恢复方案准备，需核对本次失败记录。";
+  return {
+    operation_id: operation.operation_id,
+    status: operation.status,
+    error_code: code,
+    summary,
+    detail,
+    next_action: internal
+      ? "请将操作编号、错误编号和排障说明交给 ASE 平台维护者；修复平台后再重新检查。当前没有恢复方案，也没有保存审批。"
+      : typedCapture
+        ? "请按失败说明处理保留工作区或让平台维护者核对现场；确认平台修复后再重新检查。当前没有恢复方案，也没有保存审批。"
+        : "请将本次失败交给 ASE 平台维护者核对；修复或确认前提后再重新检查。当前没有恢复方案，也没有保存审批。",
+  };
+}
+function engineeringLegacyRescueFailure(request, task, step, rescue) {
+  const bound = engineeringBaselineFacts(request, task, step);
+  if (!rescue || !bound || !sameEngineeringWaitIntent(rescue.baseline, bound)) return null;
+  const operation = engineeringBaselineProposalOperation(bound, "legacy_workspace_rescue");
+  return operation && legacyRescueFailureNotice(operation);
 }
 function engineeringLegacyRescueExecuted(request, task, plan) {
   return plan && operations.some(item => item.status === "SUCCEEDED" &&
@@ -1067,6 +1116,7 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
   if (!rescue) return;
   const plan = engineeringLegacyRescuePlan(request, task, step, rescue);
   const preparation = engineeringLegacyRescuePreparation(request, task, step, rescue);
+  const failure = engineeringLegacyRescueFailure(request, task, step, rescue);
   const local = plan?.facts.legacy_containment.method === "operator_confirmed_local_stop";
   const planSha256 = plan?.plan_sha256;
   const active = activeOperation(request.id, request.project_id);
@@ -1108,6 +1158,21 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
     panel.append(viewBlock(el("p", active.intent.purpose === "legacy_workspace_rescue"
       ? "平台正在检查恢复前提并封存当前草稿，请等待本次处理结果。"
       : "当前操作尚未结束，恢复方案不会同时启动另一次执行。", "muted"), "rescue-active", active));
+  } else if (failure) {
+    const summary = viewBlock(el("div", undefined, "engineering-rescue-failure"), "rescue-failure",
+      [failure, rescue, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
+    summary.append(el("strong", `恢复方案准备${failure.status === "INTERRUPTED" ? "被中断" : "失败"}`),
+      el("p", failure.summary, "error"),
+      el("p", "平台错误编号 · " + failure.error_code, "paths"),
+      el("p", "平台安全排障说明 · " + failure.detail, "muted"),
+      el("p", failure.next_action, "muted"),
+      el("p", "本次失败没有生成恢复方案、保存审批或启动 Coder；原需求、旧执行历史和保留草稿均保持不变。", "muted"));
+    if (supported && canControlCurrentTeam()) summary.append(deliveryButton("修复后重新检查恢复前提", () =>
+      submitEngineeringLegacyRescueOperation({
+        ...rescue.baseline, action: "PROPOSE_EXECUTION_BASELINE", purpose: "legacy_workspace_rescue",
+        target_base_ref: rescue.baseline.expected_source_revision, input_mode: "preserve_draft",
+      }, rescue), "secondary"));
+    panel.append(summary);
   } else if (!supported || local && !consoleSupportsLocalRescue()) {
     panel.append(viewBlock(el("p", "当前服务尚不支持此恢复路径。请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。", "muted"),
       "rescue-unavailable", [consoleOperationContractVersion, consoleSupportedActions]));
@@ -1282,6 +1347,11 @@ function currentEngineeringRescueAdvice(operation, request) {
     engineeringWaitHandling(request, step)?.handling_sha256 === handling.handling_sha256 &&
     engineeringLegacyRescueFacts(request, task, step));
   if (!current) return null;
+  const rescue = engineeringLegacyRescueFacts(request, current.task, current.step);
+  const failure = engineeringLegacyRescueFailure(request, current.task, current.step, rescue);
+  if (failure) return `恢复方案准备${failure.status === "INTERRUPTED" ? "被中断" : "失败"}：${failure.summary}\n${failure.next_action}`;
+  const preparation = engineeringLegacyRescuePreparation(request, current.task, current.step, rescue);
+  if (preparation?.status === "WAITING") return preparation.summary + "\n" + preparation.next_action;
   return "原执行记录仍不完整，旧执行结果保持未知。" + (consoleSupportsLegacyRescue()
     ? "请进入需求详情，点击“准备保留进度的恢复方案”。先查看平台的本机检查结果和精确方案，再由工程授权者确认所列实际停止前提；检查不会自动启动下一轮。"
     : "当前服务尚不支持保留进度的恢复方案，请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。");
@@ -3199,6 +3269,8 @@ function operationNoticeFor(operation) {
     request &&
     operation.result.checkpoint_sha256 === request.checkpoint_sha256 &&
     approvedKnowledge(request);
+  const rescueFailure = operation.intent.action === "PROPOSE_EXECUTION_BASELINE" && operation.intent.purpose === "legacy_workspace_rescue"
+    ? legacyRescueFailureNotice(operation) : null;
   if (["QUEUED", "RUNNING"].includes(operation.status))
     return {
       key: operationNoticeKey(operation),
@@ -3237,7 +3309,10 @@ function operationNoticeFor(operation) {
       state: operation.status,
       kind: "error",
       title: `${context} · ${operationActionLabel(operation)} · ${label(operation.status)}`,
-      message: humanizeBlockingText(operation.error_summary || "操作未完成，请查看需求详情后处理。"),
+      message: rescueFailure
+        ? [rescueFailure.summary, rescueFailure.next_action, "操作编号 · " + rescueFailure.operation_id,
+          "错误编号 · " + rescueFailure.error_code, "安全排障说明 · " + rescueFailure.detail].join("\n")
+        : humanizeBlockingText(operation.error_summary || "操作未完成，请查看需求详情后处理。"),
       target,
       jumpLabel: target ? "打开需求工作区" : null,
     };
@@ -7896,6 +7971,8 @@ function requestOperationHistory(panel, request) {
     technical.append(el("p", "这些标识用于工程核验，无需产品负责人填写。", "muted"));
     technical.append(el("p", "操作 · " + record.operation_id, "paths"));
     technical.append(el("p", "原始命令状态 · " + record.status, "paths"));
+    if (record.intent.action === "PROPOSE_EXECUTION_BASELINE" && record.intent.purpose === "legacy_workspace_rescue" && record.error_code)
+      technical.append(el("p", "平台错误编号 · " + record.error_code, "paths"));
     if (record.intent.expected_checkpoint_sha256)
       technical.append(el("p", "发起操作时的需求版本摘要 · " + record.intent.expected_checkpoint_sha256, "paths"));
     const handling = record.result?.engineering_wait_handling;

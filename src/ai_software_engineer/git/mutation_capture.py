@@ -4,13 +4,13 @@ import hashlib
 import json
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 from ai_software_engineer.git.capture import MAX_CAPTURE_BYTES
 from ai_software_engineer.git.ports import WorktreeRef
-from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.redaction import source_secret_occurrences
 
 RegularMode = Literal[0o644, 0o755]
 MAX_MUTATION_BODY_BYTES = 2 * MAX_CAPTURE_BYTES
@@ -20,6 +20,7 @@ MAX_MUTATION_BODY_BYTES = 2 * MAX_CAPTURE_BYTES
 class MutationTextBody:
     text: str
     mode: RegularMode
+    source_path: str | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         payload = self.text.encode("utf-8")
@@ -27,7 +28,7 @@ class MutationTextBody:
             self.mode not in (0o644, 0o755)
             or len(payload) > MAX_CAPTURE_BYTES
             or b"\0" in payload
-            or redact_text(self.text).occurrences
+            or source_secret_occurrences(self.text, source_path=self.source_path)
         ):
             raise ValueError("mutation body must be bounded nonsensitive regular UTF-8 text")
 
@@ -139,7 +140,11 @@ def read_mutation_body(root: Path, relative_path: str) -> MutationTextBody:
                 or len(payload) > MAX_CAPTURE_BYTES
             ):
                 raise ValueError("mutation file changed during read")
-            return MutationTextBody(payload.decode("utf-8"), 0o755 if mode == 0o755 else 0o644)
+            return MutationTextBody(
+                payload.decode("utf-8"),
+                0o755 if mode == 0o755 else 0o644,
+                source_path=relative_path,
+            )
         finally:
             os.close(descriptor)
     finally:

@@ -1,5 +1,6 @@
 """Immutable v2 full mutation bodies; no candidate, approval or replay authority."""
 
+import hashlib
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
@@ -20,7 +21,7 @@ from ai_software_engineer.git.mutation_capture import (
 )
 from ai_software_engineer.git.ports import WorktreeRef
 from ai_software_engineer.recovery.models import AbsolutePath, FullCommit, RelativePath
-from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.redaction import patch_secret_occurrences
 
 
 class CapturedMutationBody(DomainModel):
@@ -33,13 +34,17 @@ class CapturedMutationBody(DomainModel):
     def from_body(cls, body: MutationTextBody) -> Self:
         return cls(text=body.text, sha256=body.sha256, mode=body.mode, size=body.size)
 
-    def to_body(self) -> MutationTextBody:
-        return MutationTextBody(self.text, self.mode)
+    def to_body(self, *, source_path: str) -> MutationTextBody:
+        return MutationTextBody(self.text, self.mode, source_path=source_path)
 
     @model_validator(mode="after")
     def validate_body(self) -> Self:
-        body = self.to_body()
-        if body.sha256 != self.sha256 or body.size != self.size:
+        # The containing mutation owns the validated relative path and checks
+        # source sensitivity. This body checks only structural byte identity.
+        payload = self.text.encode("utf-8")
+        if b"\0" in payload or len(payload) > MAX_CAPTURE_BYTES:
+            raise ValueError("mutation body must be bounded regular UTF-8 text")
+        if hashlib.sha256(payload).hexdigest() != self.sha256 or len(payload) != self.size:
             raise ValueError("mutation body bytes, digest and size must match")
         return self
 
@@ -53,6 +58,9 @@ class CapturedMutation(DomainModel):
     def validate_mutation(self) -> Self:
         if (self.before is None and self.after is None) or self.before == self.after:
             raise ValueError("mutation must bind changed before/after file facts")
+        for body in (self.before, self.after):
+            if body is not None:
+                body.to_body(source_path=self.path)
         return self
 
 
@@ -124,8 +132,12 @@ class CapturedMutations(DomainModel):
             mutations=tuple(
                 FileMutationCapture(
                     path=item.path,
-                    before=item.before.to_body() if item.before is not None else None,
-                    after=item.after.to_body() if item.after is not None else None,
+                    before=item.before.to_body(source_path=item.path)
+                    if item.before is not None
+                    else None,
+                    after=item.after.to_body(source_path=item.path)
+                    if item.after is not None
+                    else None,
                 )
                 for item in self.mutations
             ),
@@ -141,7 +153,7 @@ class CapturedMutations(DomainModel):
             len(self.patch.encode("utf-8")) > MAX_CAPTURE_BYTES
             or "\0" in self.patch
             or "GIT binary patch" in self.patch
-            or redact_text(self.patch).occurrences
+            or patch_secret_occurrences(self.patch)
             or sum(
                 body.size
                 for item in self.mutations

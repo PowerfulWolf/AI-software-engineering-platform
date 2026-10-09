@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
 
+from ai_software_engineer.git import WorktreeCaptureRejected
 from ai_software_engineer.manager.delivery import ProjectDeliveryResult, UnifiedProjectEntryService
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
@@ -240,6 +241,33 @@ def test_unmet_local_prerequisite_is_persisted_as_a_bound_check_without_executio
     assert persisted.json()["result"]["legacy_rescue_preparation"] == check.to_wire()
     assert host.baseline_calls == 1
     assert len(console.list_operations()) == 1
+
+
+def test_capture_refusal_has_safe_chinese_wait_instead_of_opaque_manager_failure(
+    tmp_path: Path,
+) -> None:
+    console, client, host = _fixture(tmp_path)
+    host.error = WorktreeCaptureRejected("unsafe raw detail: password=never-publish-this")
+    intent = {
+        **_intent("PROPOSE_EXECUTION_BASELINE"),
+        "expected_checkpoint_sha256": host.entry.checkpoint.checkpoint_sha256,
+    }
+    response = client.post(
+        "/api/v1/operations",
+        json={"intent": intent, "idempotency_key": "capture-refusal"},
+    )
+    assert response.status_code == 202
+    completed = console.run_once()
+    assert completed is not None and completed.status is ConsoleOperationStatus.SUCCEEDED
+    assert completed.result is not None and completed.result.execution_baseline_plan is None
+    assert completed.result.execution_baseline_binding is None and completed.result.approval is None
+    check = completed.result.legacy_rescue_preparation
+    assert check is not None and check.status == "WAITING"
+    assert check.code == "LEGACY_WORKSPACE_CAPTURE_REJECTED"
+    assert "草稿" in check.summary and "平台维护者" in check.next_action
+    assert (
+        "never-publish-this" not in client.get(f"/api/v1/operations/{completed.operation_id}").text
+    )
 
 
 @pytest.mark.parametrize("local", [False, "yes"])

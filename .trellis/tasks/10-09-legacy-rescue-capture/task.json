@@ -1,0 +1,24 @@
+{
+  "id": "legacy-rescue-capture-20261009",
+  "title": "修复保留草稿的源码敏感信息误报与恢复失败展示",
+  "status": "completed",
+  "owner": "codex",
+  "created_at": "2026-10-09",
+  "completed_at": "2026-10-09",
+  "baseline": "223bc94",
+  "allowed_paths": [
+    "src/ai_software_engineer/redaction.py",
+    "src/ai_software_engineer/git/mutation_capture.py",
+    "src/ai_software_engineer/git/worktree.py",
+    "src/ai_software_engineer/orchestration/continuation_capture.py",
+    "src/ai_software_engineer/git/baseline.py",
+    "src/ai_software_engineer/orchestration/execution_baseline.py",
+    "src/ai_software_engineer/web_console/manager.py",
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/",
+    ".trellis/spec/",
+    "docs/",
+    ".trellis/tasks/10-09-legacy-rescue-capture/"
+  ],
+  "verification": "verification.md"
+}

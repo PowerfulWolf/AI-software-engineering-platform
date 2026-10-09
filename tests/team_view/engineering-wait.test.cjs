@@ -698,3 +698,109 @@ test("current rescue advice and copied report replace vague maintenance requests
   assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"), "准备保留进度的恢复方案"), undefined,
     "collection rejection cannot be transformed into a salvage approval");
 });
+
+function failedRescueProposal(h, status = "FAILED") {
+  h.run(`operations.push({operation_id: "failed_rescue_proposal", status: ${JSON.stringify(status)},
+    updated_at: "2026-10-07T02:00:00Z", error_code: "MANAGER_FAILURE",
+    error_summary: "Manager 执行异常(WorktreeCaptureRejected); 尚未获得具体原因。请提供此操作编号排查, 不要反复重试。",
+    intent: {...engineeringBaselineFacts(data.request, data.task, data.step), action: "PROPOSE_EXECUTION_BASELINE",
+      purpose: "legacy_workspace_rescue", target_base_ref: "c".repeat(40), input_mode: "preserve_draft"}});`);
+}
+
+test("failed or interrupted rescue preparation stays visible and in copied reports after a later wait handling", async () => {
+  for (const status of ["FAILED", "INTERRUPTED"]) {
+    const h = harness();
+    legacyRescueFixture(h);
+    failedRescueProposal(h, status);
+    h.run(`operations[0].updated_at = "2026-10-08T02:00:00Z";`);
+    h.context.navigator = {clipboard: {writeText: async value => {h.context.copiedReport = value;}}};
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.match(text(box), /恢复方案准备(?:失败|被中断)/);
+    assert.match(text(box), /平台维护者/);
+    assert.match(text(box), /MANAGER_FAILURE/);
+    assert.match(text(box), /WorktreeCaptureRejected/);
+    assert.equal(control(box, "准备保留进度的恢复方案"), undefined);
+    assert.equal(control(box, "批准保留进度并继续原需求"), undefined);
+    await control(box, "复制处理报告").events.click();
+    assert.match(h.context.copiedReport, /恢复方案准备(?:失败|被中断)/);
+    assert.match(h.context.copiedReport, /恢复准备操作 · failed_rescue_proposal/);
+    assert.match(h.context.copiedReport, /错误编号 · MANAGER_FAILURE/);
+    assert.match(h.context.copiedReport, /WorktreeCaptureRejected/);
+    assert.doesNotMatch(h.context.copiedReport, /在当前需求详情点击“准备保留进度的恢复方案”/);
+    assert.match(h.run("operationNoticeFor(operations[0]).message"), /平台维护者/);
+  }
+});
+
+test("rescue failure exact scope prevents foreign and stale operations from changing current preparation", () => {
+  for (const [key, value] of Object.entries({project_id: "project_other", delivery_id: "requirement_other",
+    task_id: "task_other", expected_checkpoint_sha256: digest("9"), expected_task_revision: 5,
+    expected_task_intent_sha256: digest("9"), expected_work_item_id: "work_other",
+    expected_source_revision: "9".repeat(40), purpose: "source_rebind", target_base_ref: "9".repeat(40),
+    input_mode: "coder_reapply"})) {
+    const h = harness();
+    legacyRescueFixture(h);
+    legacyRescuePlan(h);
+    failedRescueProposal(h);
+    h.context.changedValue = value;
+    h.run(`operations[2].intent[${JSON.stringify(key)}] = changedValue;`);
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.doesNotMatch(text(box), /MANAGER_FAILURE/, key);
+    assert.ok(control(box, "批准保留进度并继续原需求"), key);
+  }
+});
+
+test("a newer failed proposal removes a previous rescue approval and its retained callback", async () => {
+  const h = harness();
+  legacyRescueFixture(h);
+  legacyRescuePlan(h);
+  const oldBox = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const checkbox = descend(oldBox).find(node => node.tagName === "INPUT" && node.type === "checkbox");
+  checkbox.checked = true;
+  const oldApprove = control(oldBox, "批准保留进度并继续原需求");
+  failedRescueProposal(h);
+  assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"), "批准保留进度并继续原需求"), undefined);
+  await oldApprove.events.click();
+  assert.equal(h.run("submitted.length"), 0);
+});
+
+test("a repaired platform can recheck the same failed rescue without approval or a new demand", async () => {
+  const h = harness();
+  legacyRescueFixture(h);
+  failedRescueProposal(h);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  await control(box, "修复后重新检查恢复前提").events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.equal(intent.action, "PROPOSE_EXECUTION_BASELINE");
+  assert.equal(intent.delivery_id, h.request.id);
+  assert.equal(intent.task_id, h.task.task_id);
+  assert.equal(intent.expected_work_item_id, h.step.work_item_id);
+  assert.equal(intent.purpose, "legacy_workspace_rescue");
+  assert.equal(intent.input_mode, "preserve_draft");
+  assert.equal(Object.hasOwn(intent, "confirm_local_execution_stopped"), false);
+  assert.equal(Object.hasOwn(intent, "confirm_legacy_containment"), false);
+});
+
+test("typed capture waiting stays distinct from internal failure and drives the copied next step", async () => {
+  const h = harness();
+  legacyRescueFixture(h);
+  legacyRescuePlan(h);
+  const preparation = {status: "WAITING", task_id: h.task.task_id, work_item_id: h.step.work_item_id,
+    source_revision: "c".repeat(40), code: "LEGACY_WORKSPACE_CAPTURE_REJECTED",
+    summary: "保留进度的完整草稿暂时无法封存, 原文件与开发进度已保留。",
+    next_action: "请由平台维护者检查草稿捕获的文件格式、权限和敏感信息校验；处理后重新准备恢复方案，不要清空工作区或重建需求。",
+    responsible_party: "平台执行服务"};
+  h.context.preparation = preparation;
+  h.run(`operations.push({operation_id: "capture_waiting", status: "SUCCEEDED", updated_at: "2026-10-07T02:00:00Z",
+    intent: {...engineeringBaselineFacts(data.request, data.task, data.step), action: "PROPOSE_EXECUTION_BASELINE",
+      purpose: "legacy_workspace_rescue", target_base_ref: "c".repeat(40), input_mode: "preserve_draft"},
+    result: {checkpoint_sha256: data.request.checkpoint_sha256, legacy_rescue_preparation: preparation}});`);
+  h.context.navigator = {clipboard: {writeText: async value => {h.context.copiedReport = value;}}};
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.match(text(box), /恢复前提尚未满足/);
+  assert.doesNotMatch(text(box), /恢复方案准备失败|内部异常/);
+  assert.equal(control(box, "批准保留进度并继续原需求"), undefined);
+  assert.ok(control(box, "重新检查恢复前提"));
+  await control(box, "复制处理报告").events.click();
+  assert.ok(h.context.copiedReport.includes("用户操作 · " + preparation.next_action));
+  assert.doesNotMatch(h.context.copiedReport, /在当前需求详情点击“准备保留进度的恢复方案”/);
+});

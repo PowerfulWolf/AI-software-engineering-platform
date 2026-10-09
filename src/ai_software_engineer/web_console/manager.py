@@ -21,6 +21,7 @@ from ai_software_engineer.domain.delivery_resolution import (
 )
 from ai_software_engineer.domain.execution_baseline import BaselinePurpose, ExecutionBaselineBinding
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError
+from ai_software_engineer.git import WorktreeCaptureRejected
 from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
 from ai_software_engineer.manager.baseline_production import (
     BaselineExecuteCommand,
@@ -281,17 +282,31 @@ class ManagerConsoleAdapter:
                             BaselineProposeCommand.model_validate(data),
                             project_id=intent.project_id,
                         )
-                    except LegacyRescuePrerequisiteError as error:
+                    except (LegacyRescuePrerequisiteError, WorktreeCaptureRejected) as error:
                         if intent.purpose is not BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
                             raise
+                        prerequisite = (
+                            error
+                            if isinstance(error, LegacyRescuePrerequisiteError)
+                            else LegacyRescuePrerequisiteError(
+                                code="LEGACY_WORKSPACE_CAPTURE_REJECTED",
+                                safe_message=(
+                                    "保留进度的完整草稿暂时无法封存, 原文件与开发进度已保留。"
+                                ),
+                                next_action=(
+                                    "请由平台维护者检查草稿捕获的文件格式、权限和敏感信息校验; "
+                                    "处理后重新准备恢复方案, 不要清空工作区或重建需求。"
+                                ),
+                            )
+                        )
                         preparation = LegacyRescuePreparation(
                             status="WAITING",
                             task_id=intent.task_id,
                             work_item_id=intent.expected_work_item_id,
                             source_revision=intent.expected_source_revision,
-                            code=error.code,
-                            summary=error.safe_message,
-                            next_action=error.next_action,
+                            code=prerequisite.code,
+                            summary=prerequisite.safe_message,
+                            next_action=prerequisite.next_action,
                             responsible_party="平台执行服务",
                         )
                         return ConsoleCommandResult(

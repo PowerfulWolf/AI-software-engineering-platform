@@ -19,6 +19,88 @@ from tests.git.test_capture import git
 from tests.git.test_capture import workspace as workspace
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        "def connect(settings):\n"
+        "    return client(password=settings.password, host=settings.host)\n",
+        'def fixture(foreign):\n    secret = foreign / "secret.json"\n    return secret\n',
+    ],
+)
+def test_source_reference_is_captured_unchanged_through_wire_and_verify(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions], code: str
+) -> None:
+    manager, ref, permissions = workspace
+    path = ref.path / "src/new.py"
+    path.write_text(code)
+    index = Path(git(ref.path, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+    before_index = index.read_bytes()
+    captured = manager.capture_mutations(ref, permissions)
+    body = captured.mutations[0].after
+    assert body is not None and body.text == code
+    stored = CapturedMutations.from_capture(captured)
+    assert CapturedMutations.model_validate(stored.to_wire()).to_capture() == captured
+    manager.verify_mutations(captured, permissions)
+    assert path.read_text() == code and index.read_bytes() == before_index
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'password = "clear-text-value"\n',
+        "password=hunter2\n",
+        "token=my.jwt.secret\n",
+        "password=foo.bar\n",
+        'password=settings.password; token="actual-value"\n',
+        'secret = foreign / "sk-' + "x" * 24 + '.json"\n',
+        'secret = foreign / "Bearer abcdefghijkl.json"\n',
+        'payload = "password=settings.password;"\n',
+        "# password=settings.password\n",
+    ],
+)
+def test_source_reference_classifier_still_rejects_secret_values(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions], code: str
+) -> None:
+    manager, ref, permissions = workspace
+    source = ref.path / "src/new.py"
+    source.write_text(code)
+    with pytest.raises(WorktreeCaptureRejected):
+        manager.capture_mutations(ref, permissions)
+    assert source.read_text() == code
+
+
+def test_staged_only_literal_still_blocks_capture_when_working_body_is_safe(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
+) -> None:
+    manager, ref, permissions = workspace
+    source = ref.path / "src/app.py"
+    source.write_text('password="clear-text-value"\n')
+    git(ref.path, "add", "src/app.py")
+    source.write_text("password=settings.password\n")
+    index = Path(git(ref.path, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+    before_index = index.read_bytes()
+    with pytest.raises(WorktreeCaptureRejected):
+        manager.capture_mutations(ref, permissions)
+    assert index.read_bytes() == before_index
+    assert source.read_text() == "password=settings.password\n"
+
+
+def test_wire_mutation_parent_rechecks_source_language_from_its_actual_path(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
+) -> None:
+    from pydantic import ValidationError
+
+    manager, ref, permissions = workspace
+    (ref.path / "src/new.py").write_text("token=settings.token\n")
+    stored = CapturedMutations.from_capture(manager.capture_mutations(ref, permissions))
+    payload = stored.to_wire()
+    mutations = payload["mutations"]
+    assert isinstance(mutations, list) and isinstance(mutations[0], dict)
+    mutations[0]["path"] = "src/new.env"
+    with pytest.raises(ValidationError, match="nonsensitive"):
+        CapturedMutations.model_validate(payload)
+
+
 @pytest.mark.parametrize("change", ["delete", "rename", "mode", "text_and_mode"])
 def test_complete_patch_and_bodies_capture_common_changes_without_writes(
     workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions], change: str

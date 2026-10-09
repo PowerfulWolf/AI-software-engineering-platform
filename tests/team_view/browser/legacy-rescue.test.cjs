@@ -310,3 +310,101 @@ test("a local stop approval is withdrawn on version downgrade or changed survey"
   await h.page.evaluate(() => window.localStaleApproval.click());
   assert.equal(submitted.length, 1);
 });
+
+test("failed rescue preparation is the visible current result and copied report after later handling", async t => {
+  for (const status of ["FAILED", "INTERRUPTED"]) {
+    await t.test(status, async current => {
+      const fixture = await rescueUi(current, 3);
+      const {h, request, card, submitted} = fixture;
+      await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
+      await h.close();
+      const summary = "Manager 执行异常(WorktreeCaptureRejected); 尚未获得具体原因。请提供此操作编号排查, 不要反复重试。";
+      Object.assign(h.state.operations[1], {status, error_code: "MANAGER_FAILURE", error_summary: summary});
+      h.state.operations.push(operation("SUCCEEDED", {operation_id: "later_handling",
+        intent: {...h.state.operations[0].intent}, updated_at: "2026-10-08T02:00:00Z",
+        result: structuredClone(h.state.operations[0].result)}));
+      await h.tick();
+      if (await h.page.locator("#notification").isVisible()) await h.close();
+      assert.match(await card.innerText(), /恢复方案准备(?:失败|被中断)/);
+      assert.match(await card.innerText(), /平台维护者/);
+      assert.match(await h.page.locator("#detail .engineering-wait-facts").innerText(), /平台在准备恢复方案时发生内部异常/);
+      assert.equal(await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).count(), 0);
+      assert.equal(await card.getByRole("checkbox").count(), 0);
+      await h.page.evaluate(() => Object.defineProperty(navigator, "clipboard", {configurable: true,
+        value: {writeText: async value => {window.copiedRecoveryFailure = value;}}}));
+      await h.page.locator("#detail").getByRole("button", {name: "复制处理报告", exact: true}).click();
+      const report = await h.page.evaluate(() => window.copiedRecoveryFailure);
+      assert.match(report, /恢复方案准备(?:失败|被中断)/);
+      assert.match(report, /恢复准备操作 · operation_rescue_1/);
+      assert.match(report, /错误编号 · MANAGER_FAILURE/);
+      assert.ok(report.includes(summary), "preserve the platform's safe original diagnostic");
+      assert.doesNotMatch(report, /在当前需求详情点击“准备保留进度的恢复方案”/);
+      assert.equal(submitted.length, 1, "rendering and copying do not approve or run recovery");
+    });
+  }
+});
+
+test("foreign failures do not replace a ready rescue and a current failure revokes stale approval", async t => {
+  const fixture = await rescueUi(t, 3);
+  const {h, request, card, submitted} = fixture;
+  await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
+  await h.close();
+  const plan = localPlanFor(fixture);
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+    checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  await card.getByRole("checkbox").check();
+  await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).evaluate(node => {window.failureStaleApproval = node;});
+  for (const [key, value] of Object.entries({project_id: "project_other", delivery_id: "request_other",
+    task_id: "task_other", expected_checkpoint_sha256: "9".repeat(64), expected_task_revision: 5,
+    expected_task_intent_sha256: "9".repeat(64), expected_work_item_id: "work_other",
+    expected_source_revision: "9".repeat(40), purpose: "source_rebind", input_mode: "coder_reapply",
+    target_base_ref: "9".repeat(40)})) {
+    h.state.operations.push(operation("FAILED", {operation_id: "foreign_rescue_" + key,
+      updated_at: "2026-10-08T02:00:00Z", error_code: "MANAGER_FAILURE", error_summary: "foreign failure",
+      intent: {...h.state.operations[1].intent, [key]: value}, result: null}));
+  }
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.equal(await card.getByRole("checkbox").isChecked(), true);
+  assert.equal(await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).isEnabled(), true);
+  assert.doesNotMatch(await card.innerText(), /foreign failure|MANAGER_FAILURE/);
+  h.state.operations.push(operation("FAILED", {operation_id: "current_rescue_failure",
+    updated_at: "2026-10-09T02:00:00Z", error_code: "MANAGER_FAILURE", error_summary: "internal failure",
+    intent: {...h.state.operations[1].intent}, result: null}));
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.equal(await card.getByRole("checkbox").count(), 0);
+  assert.equal(await card.getByRole("button", {name: "批准保留进度并继续原需求", exact: true}).count(), 0);
+  assert.match(await card.innerText(), /恢复方案准备失败/);
+  await h.page.evaluate(() => window.failureStaleApproval.click());
+  assert.equal(submitted.length, 1, "the superseded approval cannot submit");
+});
+
+test("a checked capture refusal keeps the saved draft and uses its maintenance step in the report", async t => {
+  const fixture = await rescueUi(t, 3);
+  const {h, request, task, step, card, submitted} = fixture;
+  await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
+  await h.close();
+  const preparation = {status: "WAITING", task_id: task.task_id, work_item_id: step.work_item_id,
+    source_revision: fixture.facts.source_revision, code: "LEGACY_WORKSPACE_CAPTURE_REJECTED",
+    summary: "保留进度的完整草稿暂时无法封存, 原文件与开发进度已保留。",
+    next_action: "请由平台维护者检查草稿捕获的文件格式、权限和敏感信息校验；处理后重新准备恢复方案，不要清空工作区或重建需求。",
+    responsible_party: "平台执行服务"};
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+    checkpoint_sha256: request.checkpoint_sha256, legacy_rescue_preparation: preparation}});
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.match(await card.innerText(), /恢复前提尚未满足/);
+  assert.match(await card.innerText(), /原文件与开发进度已保留/);
+  assert.doesNotMatch(await card.innerText(), /恢复方案准备失败|内部异常/);
+  assert.equal(await card.getByRole("checkbox").count(), 0);
+  await h.page.evaluate(() => Object.defineProperty(navigator, "clipboard", {configurable: true,
+    value: {writeText: async value => {window.copiedCaptureWait = value;}}}));
+  await h.page.locator("#detail").getByRole("button", {name: "复制处理报告", exact: true}).click();
+  const report = await h.page.evaluate(() => window.copiedCaptureWait);
+  assert.ok(report.includes("用户操作 · " + preparation.next_action));
+  assert.doesNotMatch(report, /在当前需求详情点击“准备保留进度的恢复方案”/);
+  assert.equal(submitted.length, 1);
+});

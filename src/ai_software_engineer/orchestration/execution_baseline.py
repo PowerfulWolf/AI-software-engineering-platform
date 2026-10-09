@@ -24,7 +24,7 @@ from ai_software_engineer.domain.execution_baseline import (
 )
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.orchestration.context import RunContextBuilder
-from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.redaction import patch_secret_occurrences, redact_text
 
 
 class ExecutionBaselineStore(Protocol):
@@ -94,9 +94,13 @@ class BaselineRunContextBuilder:
                 raise ContextSourceError("原需求没有可信执行基线, 不能接受外加基线 section")
             return context
         body = self.resolver.required_context(source)
-        if body is None or redact_text(body).occurrences:
+        if body is None:
             raise ContextSourceError("complete execution baseline body is missing or sensitive")
         value = ExecutionBaselineContext.from_required_context(source.baseline, body)
+        if redact_text(value.instructions).occurrences or patch_secret_occurrences(
+            value.complete_patch
+        ):
+            raise ContextSourceError("complete execution baseline body is missing or sensitive")
         content = json.dumps(value.to_wire(), ensure_ascii=False, sort_keys=True)
         tokens = (len(content) + 3) // 4
         section = ContextSection(
