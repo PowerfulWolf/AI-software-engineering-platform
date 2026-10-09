@@ -1,5 +1,19 @@
 "use strict";
 let snapshot = null;
+let teamReadIssue = null;
+class TeamReadFailure extends Error {
+  constructor(kind) { super("Team read failed"); this.kind = kind; }
+}
+function unavailableTeamName() {
+  return teamReadIssue === "busy" ? "Team 数据读取中" : "Team 记录暂不可用";
+}
+function unavailableTeamMessage() {
+  if (teamReadIssue === "busy")
+    return "团队数据正在读取中；上一轮读取尚未完成，页面会自动重试。设置与平台状态仍可查看。";
+  if (teamReadIssue === "timeout")
+    return "团队数据读取超时；后台读取可能仍在进行，页面会自动重试。设置与平台状态仍可查看。";
+  return "团队记录暂时无法读取；设置与平台状态仍可查看。";
+}
 let page = "team";
 let selected = null;
 let selectionIntentRevision = 0;
@@ -150,7 +164,7 @@ function pollingControlFacts() {
     snapshot?.team_id, currentProjectId(), projectSwitchPending()];
 }
 function pollingContentFacts() {
-  const common = [page, pollingControlFacts(), administrationNotice];
+  const common = [page, pollingControlFacts(), administrationNotice, !snapshot && teamReadIssue];
   if (page === "settings") return [...common, administrationAvailable, settingsSnapshot,
     settingsSection, configurationApplyInFlight, configurationApplyResult];
   if (page === "status") return [...common, administrationAvailable, runtimeStatusSnapshot,
@@ -365,11 +379,11 @@ function updatePageContext() {
   const title = document.getElementById("scope-title");
   const projectLabel = document.getElementById("project-context-label");
   const contexts = {
-    team: ["Team 级", snapshot?.team_name || "Team 记录暂不可用", "工作负载筛选"],
+    team: ["Team 级", snapshot?.team_name || unavailableTeamName(), "工作负载筛选"],
     requests: ["Project 级", projectName(), "当前 Project"],
     knowledge:
       knowledgeScope === "team"
-        ? ["Team 知识", snapshot?.team_name || "Team 记录暂不可用", ""]
+        ? ["Team 知识", snapshot?.team_name || unavailableTeamName(), ""]
         : ["Project 知识", projectName(), ""],
     settings: ["平台级", "当前 Team Host", ""],
     status: ["平台级", "当前 Team Host", ""],
@@ -8898,7 +8912,7 @@ function render({ preserveComposer = false, incremental = false } = {}) {
       .filter((n) => n.dataset.key)
       .map((n) => n.dataset.key),
   );
-  document.getElementById("team").textContent = snapshot?.team_name || "Team 记录暂不可用";
+  document.getElementById("team").textContent = snapshot?.team_name || unavailableTeamName();
   document.getElementById("main").dataset.page = page;
   const projects = document.getElementById("projects");
   renderView(projects, `projects:${page}:${currentProjectId()}`,
@@ -8920,7 +8934,7 @@ function render({ preserveComposer = false, incremental = false } = {}) {
     renderView(content, `content:${page}:${scope}`, pollingContentFacts, target => {
       target.className = "";
       if (!snapshot && !["settings", "status"].includes(page))
-        target.append(el("div", "团队记录暂时无法读取；设置与平台状态仍可查看。", "operation-error"));
+        target.append(el("div", unavailableTeamMessage(), teamReadIssue === "busy" ? "muted" : "operation-error"));
       else if (page === "team") renderTeam(target);
       else if (page === "requests") renderRequests(target);
       else if (page === "knowledge") renderKnowledge(target);
@@ -9159,6 +9173,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       render({preserveComposer: Boolean(modalActive && !settingsSaveResult), incremental: true});
   };
   let systemReadFinished = false;
+  let teamPublished = false;
   try {
     const url = target
       ? "/api/v1/team?project_id=" + encodeURIComponent(target)
@@ -9168,7 +9183,11 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
         cache: "no-store",
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error("read failed");
+      if (!response.ok) {
+        let code = null;
+        try { code = (await response.json())?.error?.code; } catch { /* Fixed messages only. */ }
+        throw new TeamReadFailure(code === "TEAM_READ_IN_PROGRESS" ? "busy" : "unavailable");
+      }
       const next = await response.json();
       if (superseded()) return;
       if (
@@ -9186,6 +9205,8 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       const projectChanged = currentProjectId() !== next.selected_project_id;
       const selectedBeforeRefresh = selected;
       snapshot = next;
+      teamReadIssue = null;
+      teamPublished = true;
       if (requestedProjectId === target) requestedProjectId = null;
       if (
         selectedBeforeRefresh?.kind === "request" &&
@@ -9241,17 +9262,28 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
         " · 每 5 秒刷新" + (operationsAvailable ? "" : " · 交付操作记录读取失败，保留上次历史；当前操作暂不可用")
       : consoleAvailable === false ? "只读团队记录已连接；当前服务未提供交付控制接口。"
         : "团队记录已更新；交付控制连接暂不可用，当前操作暂停。";
-  } catch {
+  } catch (error) {
     if (superseded()) return;
-    if (systemViewsChanged()) render({preserveComposer: hasOpenComposer(), incremental: true});
-    status.className = "error";
+    const issue = controller.signal.aborted ? "timeout"
+      : error instanceof TeamReadFailure ? error.kind : "unavailable";
+    teamReadIssue = teamPublished ? null : issue;
+    if (!snapshot || systemViewsChanged()) render({preserveComposer: hasOpenComposer(), incremental: true});
+    status.className = !teamPublished && issue === "busy" ? "" : "error";
     const destination = snapshot?.projects.find(item => item.id === requestedProjectId)?.name
       || requestedProjectId;
+    const oldData = snapshot ? "以下为旧数据 · 上次成功读取 " + time(snapshot.as_of) + "。" : "";
+    const reason = issue === "busy"
+      ? "上一轮团队数据读取尚未完成，页面会自动重试。"
+      : issue === "timeout"
+        ? "团队数据读取超时；后台读取可能仍在进行，页面会自动重试。"
+        : "团队数据读取失败，暂时无法读取数据；请查看平台状态与服务日志，页面会自动重试。";
     status.textContent = projectSwitchPending()
-      ? `切换到「${destination}」失败，仍显示原 Project 数据；刷新将重试该项目。`
-      : snapshot
-        ? "刷新失败，以下为旧数据 · 上次成功读取 " + time(snapshot.as_of)
-        : "暂时无法读取数据。请检查生产配置、MySQL 连接，以及 Team/Project workspace 是否已准备。";
+      ? issue === "busy"
+        ? `切换到「${destination}」尚未完成，仍显示原 Project 数据。${reason}`
+        : `切换到「${destination}」失败，仍显示原 Project 数据；刷新将重试该项目。${reason}`
+      : teamPublished ? "团队数据已更新，但辅助记录刷新失败；请查看平台状态与服务日志。"
+        : issue === "busy" ? reason + oldData
+          : "刷新失败，" + reason + oldData;
   } finally {
     clearTimeout(timeout);
     refreshing = false;

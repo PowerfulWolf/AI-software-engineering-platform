@@ -172,3 +172,109 @@ No migration, SQL write, history truncation, approval or execution restart is ne
 only removes repeated work while reading unchanged facts. Users refresh the same Project after an
 idle controlled service restart loads the repaired code. Rollback restores the previous reader and
 its repeated read cost; all durable records and user decisions remain untouched.
+
+## Diagnostic boundary: baseline capture replay and idle operations (2026-10-09)
+
+After rescue/baseline records are published, include `engineering_history`,
+`FileExecutionBaselineStore.bindings_for_task/plan/required_context` and recursive capture
+validation in the read performance probe. Journal/evaluation reuse alone does not bound this
+cost. Measure SQL execute time separately, and do not sum nested profiler cumulative times.
+Also inspect idle `ProjectConsole._run → claim_next → _list_current`: a short wait interval
+does not bound a full-history scan containing large nested plans. A Team busy admission response
+is not a MySQL connection error, and low RSS alone is not proof of no memory pressure.
+
+The actual 2026-10-09 diagnosis, measurements, limits and diagnosis-stage follow-up proposals are
+recorded in [`docs/archive/2026-10-09-console-slow-read-diagnosis.md`](../../../docs/archive/2026-10-09-console-slow-read-diagnosis.md).
+This records diagnostic knowledge only; it does not authorize caching across reads, skipping
+secret/integrity validation, rewriting history, changing dispatch, or restoring delivery work.
+
+## Bounded source-inspection reuse and idle dispatch (2026-10-09)
+
+### Scope and signatures
+
+Apply to repeated recursive capture validation in one synchronous Team/engineering/Operation read,
+and the existing idle Console dispatch loop. No Schema, SQL, stage or approval changes.
+
+```python
+redaction.source_inspection_scope() -> Iterator[None]  # context manager
+source_secret_occurrences(content: str, *, source_path: str | None = None)
+    -> tuple[RedactionOccurrence, ...]
+patch_secret_occurrences(content: str) -> tuple[RedactionOccurrence, ...]
+ProductionTeamReader.snapshot(project_id: str | None = None) -> TeamSnapshot
+engineering_history(sidecar: Path, task: Task, scope: EngineeringScope,
+                    requirement_id: str) -> tuple[TimelineEntry, ...]
+FileConsoleOperationStore._operation_inventory_sha256() -> str
+FileConsoleOperationStore.claim_next(*, at: datetime) -> ConsoleOperation | None
+```
+
+### Contracts
+
+- `source_inspection_scope` owns a ContextVar cache of pure immutable detection tuples, keyed by
+  exact `(source|patch, source_path|None, complete_text)`. Text equality, not a digest alone,
+  selects reuse. Source and patch are separate namespaces; language/path cannot borrow another
+  entry's exception. Both safe and sensitive results retain the original conservative semantics.
+  Generic `redact_text`, AST/token rules and strong credential detection are unchanged.
+- At most 512 entries / 16 MiB of UTF-8 key text including paths are admitted. An over-bound or
+  non-UTF-8 key is simply not memoized: always return the actual scanner result. Reject oversized
+  keys by character lower bound before allocating their UTF-8 encoding. Complete original keys
+  stay only in this bounded memory scope; never log, return or persist them. Entry count bounds
+  object overhead; the byte limit is key content, not a claim about total Python heap size.
+- Team snapshot, direct engineering history and Operation list/current reads enter the scope.
+  Nested synchronous reads share it; success and exception reset it in `finally`. Independent
+  threads and subsequent polls get fresh scopes. Do not carry it across async work or a worker's
+  lifetime. Domain models, digests, source bytes, path policy, ownership, exact approvals and
+  predecessor chains are still validated; no successful approval or snapshot is cached here.
+- In one `engineering_history`, call `bindings_for_task(task.id)` once and reuse that complete
+  local tuple for timeline and lookup. Every plan/capture still follows the original store checks.
+- `claim_next` retains the existing exclusive flock. Every idle invocation checks all matching
+  operation directories and every complete JSON byte through the regular/no-symlink/16 MiB reader.
+  Its inventory digest includes ordered directory/file names and content hashes, not mtime/inode.
+  Only an identical inventory previously fully replayed with **no QUEUED Operation** can skip
+  model replay and return `None`. Before remembering that conclusion, reread the inventory and
+  require it to equal the pre-replay inventory. A change invokes ordinary full `_list_current`
+  decoding and integrity/sequence/successor checks. `_append` invalidates the idle digest.
+  New processes do a full first replay; public list/get always fully validate the current history.
+  No durable index, cached model, queued-work decision or second dispatch path is introduced.
+
+### Validation matrix / required regressions
+
+| Scenario | Result and assertion |
+| --- | --- |
+| Same complete source/patch in nested read | Expensive parser runs once; next scope runs again |
+| Changed text/path, unknown language or patch-lookalike source path | No borrowed exemption; secrets still detected |
+| Sensitive result already cached | Same immutable rejection facts, not an empty safe tuple |
+| Entry/byte limit or non-UTF-8 key | No new detector semantics or skipped validation |
+| Exception / independent read thread | Scope reset / isolated fresh checks |
+| Existing baseline starts/bindings | One bindings read; complete unchanged timeline and source files |
+| Repeated idle claim, all terminal | One model replay; complete bytes checked every time; no writes |
+| External store submits new queued work | Next claim discovers it; existing lock still prevents double claim |
+| Historical same-size/same-mtime corruption or broken parent | Full validation rejects; never inherit idle conclusion |
+| Same-body symlink or path substitution | Original path/regular-file checks reject |
+| Public list after an idle hit | Full current model validation, not cached idle models |
+
+Tests: `tests/context/test_source_inspection_scope.py`, `test_source_secret_detection.py`,
+`tests/web_console/test_idle_replay.py`, operation core/budget/transport/shutdown cases,
+`tests/team_view/test_engineering_history.py` and the existing verification-memory/baseline cases.
+Good: unchanged captures reuse scans inside one read while the next poll rechecks all bytes.
+Base: no scope means original scanner semantics; a new store replays its first idle check.
+Bad: retaining a SAFE/READY model across polls or using metadata to hide same-byte-length tampering.
+Correct: reuse only pure complete-text detection and a byte-rechecked no-work conclusion.
+
+### Measurements, existing data and rollback
+
+The isolated sequential real-data probe is
+`.trellis/tasks/10-09-console-read-performance/read_probe.py`. It loads the trusted baseline modules
+from Git in memory or the working tree, calls only ProductionTeamReader's existing READ ONLY SQL
+and pure operation reads, and prints counts/timings/digests, not content or credentials. Never call
+production `claim_next` to benchmark it: that could dispatch authorized work.
+
+With the old service still running, baseline `ab5dead` took 25.4233 s and the repair 4.5794 s.
+Snapshot source scans fell 14,848 → 67; all 190 SQL calls remain, totaling about 0.28 s. Full operation
+replay fell 2.6256 → 0.3206 s; unchanged idle byte inventory took 0.1057 s. These are online-load
+measurements, not universal latency bounds or a deployed HTTP comparison. Complete wire SHA-256
+excluding `as_of` is identical; 15,935 JSON files / 688,207,263 bytes stayed unchanged.
+
+No migration, history trimming, evidence repair, requirement recreation or automatic continuation
+is needed. Load code and frozen frontend assets through an idle controlled service restart, then
+refresh the same Project. Rollback this repair and restart restores the previous repeated-work
+cost; Task, Operation, approvals, candidate and history are unaffected.

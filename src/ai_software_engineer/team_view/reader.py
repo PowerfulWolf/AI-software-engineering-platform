@@ -83,7 +83,7 @@ from ai_software_engineer.recovery.store import (
     authority_approved,
     authority_sha256,
 )
-from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.redaction import redact_text, source_inspection_scope
 from ai_software_engineer.repository_workspace import RepositoryWorkspaceManifest
 from ai_software_engineer.runtime_workspace import (
     FileTeamWorkforceStore,
@@ -323,7 +323,8 @@ class ProductionTeamReader:
 
     def snapshot(self, project_id: str | None = None) -> TeamSnapshot:
         try:
-            return self._snapshot(project_id)
+            with source_inspection_scope():
+                return self._snapshot(project_id)
         except Exception as error:
             # Read failure must not become a successful empty team or expose a DSN/path secret.
             raise TeamReadError(

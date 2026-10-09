@@ -34,7 +34,7 @@ from ai_software_engineer.manager.verifier_preparation import (
 )
 from ai_software_engineer.projection.models import ProjectionEventKind, TimelineEntry
 from ai_software_engineer.recovery.verification_records import VerificationExecutionRecord
-from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.redaction import redact_text, source_inspection_scope
 
 
 def _read(path: Path) -> bytes:
@@ -106,6 +106,16 @@ def _decision_matches_proof(decision: DeliveryResolution, proof: DeliveryWaitInv
 
 
 def engineering_history(
+    sidecar: Path,
+    task: Task,
+    scope: EngineeringScope,
+    requirement_id: str,
+) -> tuple[TimelineEntry, ...]:
+    with source_inspection_scope():
+        return _engineering_history(sidecar, task, scope, requirement_id)
+
+
+def _engineering_history(
     sidecar: Path,
     task: Task,
     scope: EngineeringScope,
@@ -544,7 +554,8 @@ def engineering_history(
                     ),
                 )
             )
-        for binding in store.bindings_for_task(task.id):
+        bindings = store.bindings_for_task(task.id)
+        for binding in bindings:
             binding.require_task(task)
             if binding.scope != scope:
                 raise ValueError("baseline history belongs to another registered repository")
@@ -579,9 +590,7 @@ def engineering_history(
                     },
                 )
             )
-        bindings_by_sha = {
-            binding.binding_sha256: binding for binding in store.bindings_for_task(task.id)
-        }
+        bindings_by_sha = {binding.binding_sha256: binding for binding in bindings}
         for continuation in store.records.list(
             "baseline-continuations", BaselineContinueAuthorization
         ):

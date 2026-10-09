@@ -2,6 +2,32 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { ui, operation } = require("./fixture.cjs");
 
+test("Team busy preserves an expanded document and later polling recovers without replacing it", async t => {
+  const h = await ui(t);
+  const request = h.team.requests[0];
+  request.documents = [{name: "Saved document", source_uri: "artifact://busy-saved",
+    sha256: "f".repeat(64), content: "Preserved evidence while reading"}];
+  await h.tick();
+  await h.requests();
+  const document = h.page.locator('details[data-key="artifact://busy-saved"]');
+  await document.locator(":scope > summary").click();
+  await document.evaluate(node => {window.busyReadDocument = node;});
+  let busy = true;
+  await h.page.route("**/api/v1/team?**", route => busy
+    ? route.fulfill({status: 503, json: {error: {code: "TEAM_READ_IN_PROGRESS",
+      message: "untrusted database diagnosis"}}}) : route.fulfill({json: h.team}));
+  await h.tick();
+  assert.match(await h.page.locator("#connection").innerText(), /上一轮.*未完成.*旧数据/);
+  assert.doesNotMatch(await h.page.locator("#connection").innerText(), /刷新失败|MySQL|untrusted/);
+  assert.equal(await document.evaluate(node => node === window.busyReadDocument && node.open), true);
+  busy = false;
+  request.next_action = "Updated after read recovery";
+  await h.tick();
+  assert.match(await h.page.locator("#connection").innerText(), /已连接/);
+  assert.match(await h.page.locator("#detail").innerText(), /Updated after read recovery/);
+  assert.equal(await document.evaluate(node => node === window.busyReadDocument && node.open), true);
+});
+
 test("a slow independent Operations read cannot hold updated Requirement text or its preserved document", async t => {
   const h = await ui(t);
   const request = h.team.requests[0];

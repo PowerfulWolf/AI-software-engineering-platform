@@ -116,6 +116,11 @@ the survey from approval and subsequent execution.
   要回放旧 key、只读历史和处理幂等，不只比较 `to_wire()`。详见 live-team-view.md。
 - 页面很慢时先测成功读的完整历史 bytes、解码次数和独立请求依赖；单次 snapshot 复用
   完整已校验 prefix，与跨轮询缓存或截断历史是不同方案。见 read-memory-lifecycle.md。
+- 新恢复/基线计划发布后，是否新增了同一 capture 的递归扫描热点？分别测 SQL、完整
+  history、敏感信息解析和空闲 claim。轮询间隔不限制一次重放的成本；SHA/mtime缓存也
+  不能替代每次对完整历史字节和路径的校验。详见 read-memory-lifecycle.md 的有界复用。
+- 忙碌机器码与客户端deadline是否被通用数据库错误覆盖？保留阅读状态并测试下一轮
+  恢复；客户端结束观察不等于后台worker或Agent停止。见 incremental-polling.md。
 
 ## 保留后的执行权必须持久暂停
 

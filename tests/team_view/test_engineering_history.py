@@ -29,7 +29,10 @@ from ai_software_engineer.domain.engineering_authority import (
     OperatorDuty,
 )
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
-from ai_software_engineer.domain.execution_baseline import BaselineContinuationMode
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineContinuationMode,
+    ExecutionBaselineBinding,
+)
 from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.knowledge.models import KnowledgeError, digest
@@ -775,6 +778,7 @@ def test_unused_verifier_preparation_is_history_and_not_an_invocation_or_verdict
 
 def test_baseline_history_validates_real_actor_start_and_complete_same_branch_binding(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ports = import_module("tests.manager.test_execution_baseline")
     fixture = ports.setup(tmp_path)
@@ -790,6 +794,16 @@ def test_baseline_history_validates_real_actor_start_and_complete_same_branch_bi
         submitted_at=NOW,
     )
     binding = fixture.service.execute(plan.plan_sha256, authority=authority)
+    original = FileExecutionBaselineStore.bindings_for_task
+    calls = [0]
+
+    def counted(
+        current: FileExecutionBaselineStore, task_id: str
+    ) -> tuple[ExecutionBaselineBinding, ...]:
+        calls[0] += 1
+        return original(current, task_id)
+
+    monkeypatch.setattr(FileExecutionBaselineStore, "bindings_for_task", counted)
     before = _bytes(sidecar)
     history = engineering_history(sidecar, task, fixture.collector.facts.scope, "delivery_history")
     assert len(history) == 3
@@ -798,6 +812,7 @@ def test_baseline_history_validates_real_actor_start_and_complete_same_branch_bi
     assert history[2].details["execution_source_revision"] == binding.execution_source_revision
     assert history[2].details["branch_name"] == task.branch_name
     assert before == _bytes(sidecar)
+    assert calls[0] == 1, "one history projection must not repeat all binding checks"
 
 
 @pytest.mark.parametrize("changed_source", [False, True])

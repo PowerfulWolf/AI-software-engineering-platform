@@ -630,6 +630,61 @@ test("Settings and Status remain usable when the first Team projection is unavai
   assert.match(text(ui.get("connection")), /暂时无法读取|不可用/);
 });
 
+test("Team busy is a read-in-progress message, not a database failure", async () => {
+  let busy = true;
+  const ui = await browser({ ready: true, restart: false,
+    teamRead: (_url, _request, team, response) => busy
+      ? response({error: {code: "TEAM_READ_IN_PROGRESS", message: "untrusted provider detail"}}, false)
+      : response(team),
+  });
+  assert.match(text(ui.get("connection")), /上一轮.*读取.*未完成/);
+  assert.match(ui.content(), /团队数据.*读取中/);
+  assert.doesNotMatch(text(ui.get("connection")) + ui.content(), /MySQL|untrusted provider/);
+  busy = false;
+  await ui.tick();
+  assert.match(text(ui.get("connection")), /已连接/);
+  const snapshotBefore = vm.runInContext("snapshot", ui.context);
+  busy = true;
+  await ui.tick();
+  assert.equal(vm.runInContext("snapshot", ui.context), snapshotBefore);
+  assert.match(text(ui.get("connection")), /旧数据/);
+  assert.doesNotMatch(text(ui.get("connection")), /MySQL|刷新失败/);
+});
+
+test("Team read timeout is distinct and cannot claim the backend execution stopped", async () => {
+  const ui = await browser({ready: true, restart: false,
+    teamRead: (_url, request) => new Promise((_resolve, reject) => {
+      request.signal.addEventListener("abort", () => reject(new Error("aborted")), {once:true});
+    }),
+  });
+  await ui.runTimer(40000);
+  assert.match(text(ui.get("connection")), /读取超时/);
+  assert.match(text(ui.get("connection")), /后台读取可能仍在进行/);
+  assert.doesNotMatch(text(ui.get("connection")), /MySQL|停止执行/);
+});
+
+test("a stalled error response body still reports the Team read deadline", async () => {
+  const ui = await browser({ready: true, restart: false,
+    teamRead: (_url, request) => ({ok: false, json: () => new Promise((_resolve, reject) => {
+      request.signal.addEventListener("abort", () => reject(new Error("body aborted")), {once:true});
+    })}),
+  });
+  await ui.runTimer(40000);
+  assert.match(text(ui.get("connection")), /读取超时/);
+  assert.match(ui.content(), /后台读取可能仍在进行/);
+  assert.equal(ui.get("refresh").disabled, false);
+});
+
+test("Team unavailable never exposes the server body or guesses database failure", async () => {
+  const ui = await browser({ ready: true, restart: false,
+    teamRead: (_url, _request, _team, response) => response({error: {
+      code: "TEAM_UNAVAILABLE", message: "mysql+pymysql://user:private-secret@host/db",
+    }}, false),
+  });
+  assert.match(text(ui.get("connection")), /团队数据读取失败/);
+  assert.doesNotMatch(text(ui.get("connection")) + ui.content(), /private-secret|MySQL/);
+});
+
 test("manual restart updates an open save-result dialog without leaving stale apply instructions", async () => {
   const ui = await browser();
   await ui.navigate("settings");

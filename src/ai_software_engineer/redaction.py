@@ -6,8 +6,11 @@ import re
 import shlex
 import textwrap
 import tokenize
-from dataclasses import dataclass
-from typing import Final
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from typing import Final, Literal
 
 _SECRET_PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
     (
@@ -89,6 +92,57 @@ class RedactedText:
     occurrences: tuple[RedactionOccurrence, ...]
 
 
+_MAX_INSPECTION_ENTRIES = 512
+_MAX_INSPECTION_BYTES = 16 * 1024 * 1024
+
+
+@dataclass(slots=True)
+class _SourceInspectionCache:
+    # Full text equality is required; path controls the conservative language
+    # exception. Only immutable detection facts, never a domain approval, are reused.
+    facts: dict[
+        tuple[Literal["source", "patch"], str | None, str], tuple[RedactionOccurrence, ...]
+    ] = field(default_factory=dict)
+    bytes: int = 0
+
+    def remember(
+        self,
+        key: tuple[Literal["source", "patch"], str | None, str],
+        facts: tuple[RedactionOccurrence, ...],
+    ) -> None:
+        if len(self.facts) >= _MAX_INSPECTION_ENTRIES:
+            return
+        # Avoid a large temporary encoding for keys already over the byte bound.
+        if len(key[2]) + len(key[1] or "") > _MAX_INSPECTION_BYTES - self.bytes:
+            return
+        try:
+            size = len(key[2].encode("utf-8")) + len((key[1] or "").encode("utf-8"))
+        except UnicodeEncodeError:
+            # Memoization cannot add a new rejection to the original detector.
+            return
+        if self.bytes + size <= _MAX_INSPECTION_BYTES:
+            self.facts[key] = facts
+            self.bytes += size
+
+
+_SOURCE_INSPECTION_CACHE: ContextVar[_SourceInspectionCache | None] = ContextVar(
+    "source_inspection_cache", default=None
+)
+
+
+@contextmanager
+def source_inspection_scope() -> Iterator[None]:
+    """Bound repeated pure source/patch scans to one synchronous read lifetime."""
+    if _SOURCE_INSPECTION_CACHE.get() is not None:
+        yield
+        return
+    token = _SOURCE_INSPECTION_CACHE.set(_SourceInspectionCache())
+    try:
+        yield
+    finally:
+        _SOURCE_INSPECTION_CACHE.reset(token)
+
+
 def redact_text(content: str) -> RedactedText:
     """Replace supported secret shapes without retaining original values."""
     redacted = content
@@ -104,6 +158,20 @@ def redact_text(content: str) -> RedactedText:
 
 
 def source_secret_occurrences(
+    content: str, *, source_path: str | None = None
+) -> tuple[RedactionOccurrence, ...]:
+    """Inspect complete source, reusing only pure facts within an explicit read scope."""
+    cache = _SOURCE_INSPECTION_CACHE.get()
+    key: tuple[Literal["source", "patch"], str | None, str] = ("source", source_path, content)
+    if cache is not None and (found := cache.facts.get(key)) is not None:
+        return found
+    result = _inspect_source(content, source_path=source_path)
+    if cache is not None:
+        cache.remember(key, result)
+    return result
+
+
+def _inspect_source(
     content: str, *, source_path: str | None = None
 ) -> tuple[RedactionOccurrence, ...]:
     """Check bounded source while preserving safe reference expressions.
@@ -182,6 +250,18 @@ def source_secret_occurrences(
 
 
 def patch_secret_occurrences(content: str) -> tuple[RedactionOccurrence, ...]:
+    """Inspect complete hunks with a separate, read-scoped patch cache namespace."""
+    cache = _SOURCE_INSPECTION_CACHE.get()
+    key: tuple[Literal["source", "patch"], str | None, str] = ("patch", None, content)
+    if cache is not None and (found := cache.facts.get(key)) is not None:
+        return found
+    result = _inspect_patch(content)
+    if cache is not None:
+        cache.remember(key, result)
+    return result
+
+
+def _inspect_patch(content: str) -> tuple[RedactionOccurrence, ...]:
     """Inspect code hunk sides separately; headers and unknown patches stay generic.
 
     Never infer a language from arbitrary leading +/- characters. Only explicit

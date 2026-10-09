@@ -1,5 +1,42 @@
 # Console incremental polling
 
+## Team busy, deadline and unavailable messages (2026-10-09)
+
+Scope: `app.js::refreshSnapshot`, `TeamReadFailure(kind)`, `teamReadIssue`,
+`unavailableTeamName()` and `unavailableTeamMessage()`. The Team wire, 40-second GET deadline,
+serial five-second polling and server worker-owned admission remain unchanged.
+
+- Non-2xx Team JSON recognizes only fixed `error.code=TEAM_READ_IN_PROGRESS`. Render read-in-progress
+  guidance and automatic retry, not a red database-failure diagnosis. Never display server message,
+  validation inputs, paths or credentials. Other errors use fixed Chinese unavailable guidance.
+- An aborted observation has deadline precedence, including a non-2xx body that stalled and then
+  failed JSON parsing. Explain that backend reading may still be running; never infer execution
+  stop, quota reset or lost evidence. Release the UI lane/timer and allow the next serial read.
+- Keep the last snapshot and mark it as old data with its successful read time. Initial busy has
+  a reading placeholder, while Settings/Status can still load independently. A later success clears
+  the issue. Include the initial issue in content signatures so recovery changes the placeholder.
+- If Team already published before an auxiliary branch failed, say Team updated but auxiliary
+  records failed; do not label the successful Team read as a database outage. Existing system-fact
+  rendering must still revoke unavailable command controls without erasing editor drafts.
+- Use existing incremental reconciliation on failure/recovery. Readable old documents stay open
+  with the same DOM and input/selection; retained history does not grant new approval authority.
+
+| Case | Required assertion |
+| --- | --- |
+| Initial busy / busy with a previous snapshot | Reading placeholder / same snapshot, old-data marker, no MySQL guess |
+| Fetch or error-body deadline | Explicit timeout and backend-may-still-read text; refresh button/lane released |
+| Unavailable with credential-like server text | Fixed Chinese text, no raw message or secret in any rendered surface |
+| Busy while a document is open, then successful change | Same open document node; new next action visible |
+| Concurrent system/control failure | Existing readiness and exact callback guards remain effective |
+
+Good: show read-in-progress and preserve the paragraph being read. Base: unavailable uses safe
+retry/status/log guidance. Bad: report every non-2xx as MySQL failure or rebuild the entire view.
+Correct: classify fixed read outcomes and patch only changed source facts.
+
+Regression: focused readiness tests and `browser/polling-state.test.cjs`, alongside engineering-wait,
+operation-capabilities and UI contracts. No database or journal migration; controlled asset reload
+and browser refresh activate the display change. Revert assets and reload to roll back.
+
 ## Independent read publication and outage history (2026-10-09)
 
 ```javascript

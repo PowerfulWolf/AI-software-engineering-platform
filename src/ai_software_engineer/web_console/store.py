@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
 import tempfile
 from collections.abc import Iterator
@@ -15,6 +16,7 @@ from typing import Protocol
 from pydantic import TypeAdapter
 
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
+from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.team_workspace import _read_regular
 
 from .models import (
@@ -236,6 +238,7 @@ class FileConsoleOperationStore:
     def __init__(self, root: Path, *, team_id: str) -> None:
         self.root = root.absolute()
         self.team_id = team_id
+        self._idle_inventory_sha256: str | None = None
         _reject_symlinks(self.root)
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -323,6 +326,9 @@ class FileConsoleOperationStore:
 
     def claim_next(self, *, at: datetime) -> ConsoleOperation | None:
         with self._locked():
+            inventory = self._operation_inventory_sha256()
+            if self._idle_inventory_sha256 == inventory:
+                return None
             queued = sorted(
                 (
                     item
@@ -332,7 +338,13 @@ class FileConsoleOperationStore:
                 key=lambda item: (item.requested_at, item.operation_id),
             )
             if not queued:
+                # Only reuse a fully validated no-QUEUED conclusion for exactly
+                # the same complete bytes, not mtime or a retained model object.
+                self._idle_inventory_sha256 = (
+                    inventory if inventory == self._operation_inventory_sha256() else None
+                )
                 return None
+            self._idle_inventory_sha256 = None
             claimed = queued[0].transition(ConsoleOperationStatus.RUNNING, updated_at=at)
             self._append(claimed, expected=queued[0].operation_sha256)
             return claimed
@@ -422,13 +434,39 @@ class FileConsoleOperationStore:
             os.close(descriptor)
 
     def _list_current(self) -> tuple[ConsoleOperation, ...]:
-        return tuple(
-            item
-            for path in sorted(self.root.glob("operation_*"))
-            if path.is_dir() and (item := self._current(path.name)) is not None
-        )
+        with source_inspection_scope():
+            return tuple(
+                item
+                for path in sorted(self.root.glob("operation_*"))
+                if path.is_dir() and (item := self._current(path.name)) is not None
+            )
+
+    def _operation_inventory_sha256(self) -> str:
+        """Recheck every relevant complete file under the existing dispatch lock."""
+        inventory = hashlib.sha256()
+        for directory in sorted(self.root.glob("operation_*")):
+            _reject_symlinks(directory)
+            if not directory.is_dir():
+                continue
+            # Include empty directories, so newly admitted identities cannot
+            # inherit a prior idle conclusion before their first record appears.
+            name = directory.name.encode("utf-8")
+            inventory.update(len(name).to_bytes(8, "big"))
+            inventory.update(name)
+            for path in sorted(directory.glob("*.json")):
+                _reject_symlinks(path)
+                name = path.name.encode("utf-8")
+                body = _read_regular(path, MAX_CONSOLE_OPERATION_BYTES)
+                inventory.update(len(name).to_bytes(8, "big"))
+                inventory.update(name)
+                inventory.update(hashlib.sha256(body).digest())
+        return inventory.hexdigest()
 
     def _current(self, operation_id: str) -> ConsoleOperation | None:
+        with source_inspection_scope():
+            return self._read_current(operation_id)
+
+    def _read_current(self, operation_id: str) -> ConsoleOperation | None:
         TypeAdapter(OperationId).validate_python(operation_id)
         directory = self.root / operation_id
         _reject_symlinks(directory)
@@ -448,6 +486,7 @@ class FileConsoleOperationStore:
         return previous
 
     def _append(self, operation: ConsoleOperation, *, expected: str | None) -> None:
+        self._idle_inventory_sha256 = None
         operation.validate_integrity()
         payload = _bounded_json_bytes(
             operation.model_dump_json(indent=2), MAX_CONSOLE_OPERATION_BYTES
