@@ -706,6 +706,15 @@ async function submitEngineeringWaitOperation(intent) {
   }
   return submitOperation(intent);
 }
+function engineeringGuidanceList(...descriptions) {
+  const list = el("ol", undefined, "engineering-guidance-list");
+  for (const description of descriptions) {
+    for (const point of description.split(/(?<=[。；])\s*|\n+/u)) {
+      if (point.trim()) list.append(el("li", point.trim()));
+    }
+  }
+  return list;
+}
 function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, legacyRescue = false} = {}) {
   if (historical) {
     target.append(el("p", "当次调查 · " + humanizeBlockingText(proof.next_action || "调查结果未提供处理建议。")),
@@ -717,8 +726,8 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
   const missing = proof.missing || [];
   if (collectionFailed) target.append(el("p", engineeringCollectionFailureNotice, "error"));
   if (legacyRescue) {
-    target.append(el("p", "旧执行没有留下完整结果、结束和现场记录，不能把它当作已完成，也不能靠重复调查补齐。"),
-      el("p", "可使用下方“保留进度的恢复方案”：平台检查当前本机执行并封存完整合法草稿，展示所需工程确认；授权后才可继续同一需求。"));
+    target.append(engineeringGuidanceList("旧执行没有留下完整结果、结束和现场记录，不能把它当作已完成，也不能靠重复调查补齐。",
+      "可使用下方“保留进度的恢复方案”：平台检查当前本机执行并封存完整合法草稿，展示所需工程确认；授权后才可继续同一需求。"));
     return;
   }
   if (missing.length) {
@@ -854,7 +863,9 @@ function engineeringWaitBox(request, task, step) {
   const overview = viewBlock(el("dl", undefined, "engineering-wait-facts"), "engineering-wait-facts", facts);
   for (const [key, title] of [["happened", "发生了什么"], ["preservation", "开发进度"], ["platform", "平台可以做什么"], ["user", "你需要做什么"]]) {
     const row = el("div");
-    row.append(el("dt", title), el("dd", facts[key]));
+    const description = el("dd");
+    description.append(engineeringGuidanceList(facts[key]));
+    row.append(el("dt", title), description);
     overview.append(row);
   }
   management.append(overview);
@@ -1065,7 +1076,7 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
     "engineering-rescue:" + step.work_item_id);
   panel.dataset.key = "engineering:" + step.work_item_id + ":rescue";
   panel.append(viewBlock(el("h4", "保留进度的恢复方案", "engineering-baseline-title"), "rescue-title", true),
-    viewBlock(el("p", "这是同一需求的工程恢复，不会新建需求或丢弃原分支的合法草稿。旧执行结果仍未知；下一轮使用剩余工作额度，完成后继续独立 QA 和 Review。"),
+    viewBlock(engineeringGuidanceList("这是同一需求的工程恢复，不会新建需求或丢弃原分支的合法草稿。旧执行结果仍未知；下一轮使用剩余工作额度，完成后继续独立 QA 和 Review。"),
       "rescue-description", true));
   if (plan) {
     const containment = plan.facts.legacy_containment;
@@ -1130,7 +1141,9 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
         target_base_ref: rescue.baseline.expected_source_revision, input_mode: "preserve_draft",
       }, rescue), "secondary"));
     } else {
-      controls.append(el("p", "先由平台检查当前本机执行和保留进度。检查通过后会展示精确方案与需要确认的前提；检查本身不会继续交付。", "muted"),
+      const preparationSteps = engineeringGuidanceList("先由平台检查当前本机执行和保留进度。检查通过后会展示精确方案与需要确认的前提；检查本身不会继续交付。");
+      preparationSteps.classList.add("muted");
+      controls.append(preparationSteps,
         deliveryButton(preparation?.status === "WAITING" ? "重新检查恢复前提" : "准备保留进度的恢复方案", () => submitEngineeringLegacyRescueOperation({
           ...rescue.baseline, action: "PROPOSE_EXECUTION_BASELINE", purpose: "legacy_workspace_rescue",
           target_base_ref: rescue.baseline.expected_source_revision, input_mode: "preserve_draft",
