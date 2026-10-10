@@ -22,7 +22,7 @@ package/spec discovery used the repository's root/core indexes and relevant actu
 
 Browser authentication is unavailable. Native disclosure semantics and real incremental
 reconciliation are covered by the Node DOM harness, but live browser layout, keyboard focus and
-visual acceptance are **not verified** in this session. Read-only independent code review pending.
+visual acceptance are **not verified** in this session.
 Independent read-only reviewer found the nonblocked ancestor fold and prerequisite-repair
 consumption omission; both were reproduced red, corrected and independently replayed green.
 Final reviewer result: no additional implementation blocker; actual browser visual acceptance
