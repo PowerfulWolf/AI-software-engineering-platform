@@ -1,5 +1,49 @@
 # Console incremental polling
 
+## 详情就近标明保留数据的读取情况（2026-10-10）
+
+Scope：需求标题区与 Task 固定阅读工具栏。浏览器保留的交付状态可以继续阅读，但
+Team GET busy/unavailable/timeout 时，用户必须在所读详情内看到这是上次读取结果。
+不以全局可关闭提示代替，不把读取失败翻译为 Agent 停止或新的交付 BLOCKED。
+
+```javascript
+detailReadFreshnessSlot() -> HTMLElement
+syncDetailReadFreshness(panel: HTMLElement) -> void
+detailReadSources: WeakMap<HTMLElement, {teamId, projectId, kind, id, asOf}>
+```
+
+- 槽的来源绑定实际显示的 snapshot Team/Project/实体/as_of，进入 viewBlock/renderView
+  签名；只在同作用域且存在 teamReadIssue 时显示固定中文说明与可读来源时间。
+  非法或缺失时间明示未记录，不使用现在时间补造成功读取。服务器自由文本不进入说明。
+- 需求 masthead 和 Task header 使用同一 helper；正常读取时槽隐藏、不占间距。
+  提示使用蓝色信息样式与 role=status，不能重新着色原阶段节点或修改 execution 事实。
+- Task 暂停正文更新时，只同步此独立槽和既有阅读工具栏。槽继续使用保留正文的旧
+  as_of，不冒用暂停后新 snapshot 的时间；正文、选择、展开、草稿保持。跨 Team、Project
+  或实体不复用旧来源。新增消息允许浏览器保持正文屏幕位置，不强行重置 scrollTop。
+- 读取失败、恢复和同内容重读均增量协调槽。提示只解释当前读取情况，不建立或恢复
+  执行权限；原 current control、精确 checkpoint/plan、旧 callback 门禁独立重验。
+  暂停期间关闭读取故障提示也不表示冻结正文已经更新，原暂停/新进展提示继续有效。
+
+| 场景 | 展示与断言 |
+| --- | --- |
+| 有真实 RUNNING role/lease，Team busy/unavailable/timeout | 保留原角色事实，就近标记上次读取时间；不声称仍在运行或后台停止 |
+| 原 BLOCKED 且存在精确待审批 | 保留后台 BLOCKED 事实，旧审批不可提交；读取恢复后按最新精确事实重建控件 |
+| Task 暂停后后台新 snapshot，再读取失败 | 正文来源仍是暂停时旧 as_of，仅说明槽更新，DOM/选择/草稿保持 |
+| 同 Project 正常读取恢复 | 隐藏读取故障槽；没有人工批准、后台恢复或新角色启动副作用 |
+| 切换 Project/实体 | 不沿用旧来源时间、故障说明或旧审批闭包 |
+| 390px/长提示 | 无横向溢出，正文可阅读；提示不变成新的嵌套滚动区 |
+
+Good：用户在需求标题旁读懂“这是上次读取结果，正在自动重新读取”。Base：正常详情
+无额外警告。Bad：保留“执行中”却只在页面顶部说明数据旧，或给暂停正文套最新时间。
+Wrong：Team 读取失败时改写 Task 为 BLOCKED。Correct：只标记所读数据来源，继续保留
+原持久化状态，并由现有精确控制门禁暂停提交。
+
+增量 `tests/team_view/browser/detail-read-freshness.test.cjs` 覆盖真实角色 RUNNING、BLOCKED
+旧 callback 零 POST、读取恢复与 checkpoint 变化、Task 暂停来源、Project 隔离、选区/
+草稿/正文 DOM 和 390px 布局。相关 polling、Task reading 与 recovery-read-contention
+回归继续独立验证。没有新 API/Schema/GET 或数据库迁移；存量只需在空闲维护边界加载
+兼容资产并刷新原需求。回滚资产和本节，不改 Task、审批、Operation、历史或工作区。
+
 ## 恢复准备使用独立只读刷新通道（2026-10-10）
 
 Scope：当前选中 Requirement（含其 Task 详情的父 Requirement）的精确恢复操作。

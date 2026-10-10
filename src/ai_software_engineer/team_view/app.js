@@ -113,6 +113,7 @@ let nativeRuleReviewsRevision = 0;
 // Signatures stay in memory; draft values and credentials must never become DOM attributes.
 const renderedSurfaces = new WeakMap();
 const renderedBlocks = new WeakMap();
+const detailReadSources = new WeakMap();
 function viewBlock(node, key, facts) {
   renderedBlocks.set(node, {key, signature: JSON.stringify(facts)});
   return node;
@@ -9065,6 +9066,32 @@ function taskFeedbackSection(history, taskId) {
   fold.append(list);
   return fold;
 }
+function detailReadFreshnessSlot() {
+  const source = {teamId: snapshot?.team_id, projectId: currentProjectId(),
+    kind: selected?.kind, id: selected?.id, asOf: snapshot?.as_of};
+  const slot = viewBlock(el("div", undefined, "detail-read-freshness-slot"), "detail-read-freshness-slot", source);
+  slot.hidden = true;
+  detailReadSources.set(slot, source);
+  return slot;
+}
+function syncDetailReadFreshness(panel) {
+  const slot = panel.querySelector(".detail-read-freshness-slot");
+  const source = slot && detailReadSources.get(slot);
+  if (!source) return;
+  const visible = Boolean(teamReadIssue && source.teamId === snapshot?.team_id &&
+    source.projectId === currentProjectId() && source.kind === selected?.kind && source.id === selected?.id);
+  const facts = [source, teamReadIssue, visible];
+  renderView(slot, "detail-read-freshness:" + JSON.stringify(source), () => facts, target => {
+    target.className = "detail-read-freshness-slot";
+    target.hidden = !visible;
+    if (!visible) return;
+    const observedAt = Number.isFinite(Date.parse(source.asOf)) ? time(source.asOf) : "读取时间未记录";
+    const notice = viewBlock(el("p", `当前展示上次读取结果 · ${observedAt}。页面会自动重新读取，暂无法确认最新执行状态。`,
+      "detail-read-freshness"), "detail-read-freshness", facts);
+    notice.setAttribute("role", "status");
+    target.append(notice);
+  }, true);
+}
 function renderDetail({ incremental = false } = {}) {
   syncRecoveryPreparationTarget();
   // Retain every repository plan visible in this requirement; prune once for the
@@ -9076,6 +9103,8 @@ function renderDetail({ incremental = false } = {}) {
   // The Task modal contains only read-side facts and navigation, never approvals.
   // Requirement controls still reconcile against fresh checkpoint/authorization facts.
   if (pausedTaskDetailKey && renderedSurfaces.has(panel)) {
+    // Freshness remains visible while the Task body keeps its original read source.
+    syncDetailReadFreshness(panel);
     syncTaskReadingToolbar(panel);
     return;
   }
@@ -9084,6 +9113,7 @@ function renderDetail({ incremental = false } = {}) {
     .filter(node => node.dataset.key).map(node => node.dataset.key));
   renderView(document.getElementById("detail"), `detail:${page}:${currentProjectId()}:${selected?.kind}:${selected?.id}`,
     pollingDetailFacts, buildDetail, incremental);
+  syncDetailReadFreshness(panel);
   rememberModalOpener(document.getElementById("detail"), opener);
   for (const node of document.querySelectorAll("details"))
     if (node.dataset.key && expanded.has(node.dataset.key)) node.open = true;
@@ -9232,7 +9262,8 @@ function buildDetail(panel = document.getElementById("detail")) {
     const titleRow = viewGroup(el("div", undefined, "request-title-row"), "request-title-row");
     titleRow.append(viewBlock(el("p", item.title, "request-detail-title"), "request-heading-title", item.title),
       viewBlock(requestNodeBadge(item), "request-heading-status", [deliveryPhase(item), requestNodeExecution(item)]));
-    masthead.append(viewBlock(top, "request-heading-actions", [item, pollingControlFacts(), operations]), titleRow);
+    masthead.append(viewBlock(top, "request-heading-actions", [item, pollingControlFacts(), operations]), titleRow,
+      detailReadFreshnessSlot());
     panel.append(masthead, requestChapterNavigation(item));
     const current = requestChapter("current");
     const processingControlIssue = requestNodeExecution(item).platformProcessing
@@ -9347,7 +9378,7 @@ function buildDetail(panel = document.getElementById("detail")) {
   dialog.setAttribute("aria-labelledby", "task-detail-dialog-heading");
   const header = viewGroup(el("header", undefined, "task-detail-header"), "task-detail-header");
   viewBlock(top, "task-heading", [item.id, historicalTask]);
-  header.append(top, taskReadingToolbar());
+  header.append(top, taskReadingToolbar(), detailReadFreshnessSlot());
   dialog.append(header);
   const masthead = viewGroup(el("div", undefined, "task-detail-masthead"), "task-detail-masthead");
   const taskTitleRow = viewGroup(el("div", undefined, "task-title-row"), "task-title-row");

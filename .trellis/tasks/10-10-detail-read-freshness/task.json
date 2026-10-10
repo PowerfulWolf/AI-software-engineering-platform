@@ -1,0 +1,14 @@
+{
+  "name": "detail-read-freshness",
+  "title": "需求与任务详情就近说明保留状态的读取新鲜度",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "src/ai_software_engineer/team_view/style.css",
+    "tests/team_view/browser/detail-read-freshness.test.cjs",
+    ".trellis/tasks/10-10-detail-read-freshness",
+    ".trellis/spec/core/incremental-polling.md"
+  ]
+}

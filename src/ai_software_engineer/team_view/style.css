@@ -668,6 +668,17 @@ main[data-page="requests"] #detail {
   border-radius: 12px;
   background: white;
 }
+.detail-read-freshness {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: #eef3fd;
+  color: #294b82;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .request-detail-masthead > .row {
   align-items: center;
   gap: 12px;
