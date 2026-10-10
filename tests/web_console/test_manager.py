@@ -759,11 +759,13 @@ def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(
 @pytest.mark.parametrize("joint", [False, True])
 @pytest.mark.parametrize("semantic", [False, True])
 @pytest.mark.parametrize("quarantine", [False, True])
+@pytest.mark.parametrize("audited", [False, True])
 def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_entry(
     tmp_path: Path,
     joint: bool,
     semantic: bool,
     quarantine: bool,
+    audited: bool,
 ) -> None:
     adapter, host, entry = _adapter(tmp_path)
     plan = make_plan(tmp_path / "project")
@@ -781,6 +783,31 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
                 "target_branch_name": "ai/feature/trends-recovery",
             }
         )
+    if audited:
+        from ai_software_engineer.git.mutation import MutationFile, WorkspaceMutationInventory
+        from ai_software_engineer.recovery.workspace_records import (
+            RecoveryExcludedPath,
+            RecoveryWorkspaceSnapshot,
+        )
+        from tests.recovery.test_workspace_plan import snapshot_for
+
+        inventory = WorkspaceMutationInventory(
+            files=(MutationFile(".venv/pyvenv.cfg", "file", "a" * 64, 0o644, 12),)
+        )
+        snapshot = snapshot_for(plan)
+        snapshot = RecoveryWorkspaceSnapshot.create(
+            **{
+                **snapshot.to_wire(),
+                "inventory_after": inventory,
+                "inventory_after_sha256": inventory.sha256,
+                "excluded_paths": (
+                    RecoveryExcludedPath(
+                        path=".venv/pyvenv.cfg", kind="file", sha256="a" * 64, mode=0o644, size=12
+                    ),
+                ),
+            }
+        )
+        plan = RecoveryPlan.create(**{**plan.to_wire(), "workspace_snapshot": snapshot})
     store = FileRecoveryStore.initialize(tmp_path / "recovery", scope=plan.source.scope)
     store.put_plan(plan)
     plan_path = tmp_path / "recovery" / f"plan-{plan.plan_sha256}.json"
@@ -832,6 +859,13 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
 
     assert result.approval is not None
     assert result.approval.kind == "coder_recovery"
+    assert result.approval.title == "保留开发进度，继续原需求"  # noqa: RUF001
+    assert any("不会新建同名需求" in fact for fact in result.approval.facts)
+    assert any("独立 QA 和 Reviewer" in fact for fact in result.approval.facts)
+    assert any(fact.startswith("源任务 ") for fact in result.approval.technical_facts)
+    assert any("已核验本轮开发执行确已停止" in fact for fact in result.approval.facts) is audited
+    assert any("不会复制到恢复工作区" in fact for fact in result.approval.facts) is audited
+    assert any("现场核验摘要" in fact for fact in result.approval.technical_facts) is audited
     if quarantine:
         assert "从干净基线重新实现; 完整旧补丁作为历史输入, 不直接应用。" in result.approval.facts
         assert any(
@@ -839,7 +873,7 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
             for fact in result.approval.facts
         )
     if semantic:
-        assert "目标分支 ai/feature/trends-recovery" in result.approval.facts
+        assert "目标分支 ai/feature/trends-recovery" in result.approval.technical_facts
     assert result.approval.plan_sha256 == plan.plan_sha256
     assert host.opened_plan_paths == [plan_path]
     if joint:

@@ -13,6 +13,48 @@ Operation 持久化或 `ase-console` 生产装配时必须遵守本规范。只�
 
 v0.1 是可信本机、单用户、loopback 控制台，不是远程多租户控制面。
 
+### 恢复审批的决定内容与技术引用（2026-10-10）
+
+`ConsoleApprovalRequest.technical_facts: tuple[NonEmptyStr, ...] = ()` 在空值时从所有 wire/digest
+省略，原 Operation 不改写。`facts` 表达当前需要批准的恢复行为；非空 `technical_facts` 由
+`recoveryApprovalBox` 使用既有 `engineeringDetails` 归入“技术核对信息”，普通事实和批准按钮
+直接可见。全部文本使用 textContent，不拼接用户 HTML。完整 approvalSignature 包括技术引用，
+仍由原 Project/checkpoint/plan/control gate 重验，折叠不是扩大权限或省略证据。
+
+Coder 恢复审批说明保留开发进度、继续同一个 Requirement、保留旧 Task/工作区和失败历史，以及
+后续独立 QA/Reviewer。原批准基线、草稿执行基线、目标基线分别展示，不能把工程更新当业务
+改动。仅有已核验 workspace snapshot 才能声明原执行停止、完整现场已核对或异常环境隔离。
+
+Good：用户可以读懂本次恢复决定，工程人员仍能展开原 Task 与所有来源引用。
+Base：历史审批没有可选字段时完全保持原 canonical digest 和直接展示。
+Bad：把未知执行写成已停止、使用旧审批、要求产品使用者填写 lease/hash，或把批准按钮折叠。
+`test_scope_contract.py` 覆盖旧字段缺省和正反 Schema；`test_manager.py -k recovery` 覆盖原生/联合
+恢复摘要；`product-execution.test.cjs` 覆盖事实分组和直接批准；`engineering-wait.test.cjs` 保持失效
+事实和 detached callback 拒绝。无数据库迁移；部署后读取原需求的当前精确方案。新记录发布后
+回滚需保留字段读兼容，不能删除技术事实或改写历史来兼容旧进程。
+
+`recoveryApprovalCapabilityIssue() -> {kind, title, message} | null` 复用当前 Console contract
+version/supported_actions 判断 `CONTINUE_DELIVERY` 能力。`recoveryApprovalBox` 在能力缺失时
+直接展示中文服务原因并禁用范围/计划批准，不能把必然失败的操作留作可点击入口。
+`submitRecoveryApprovalOperation` 保持原 Project/checkpoint/signature/control/active 门禁，之后
+再检查具体能力；能力撤回显示“当前服务不支持恢复审批”，不误称为审批方案变化。恢复支持后
+必须从当前 facts 重新渲染并核对原精确方案；不保存或伪造批准。
+
+`requestBlockerSection` 的 `coder_scope` 原因按可信 `approval.coder_scope_request` 区分：存在时
+说明 Coder 申请补充尚未修改的文件；没有请求时保留对已产生越权改动的原始阻塞说明。不能以
+审批类型一概断言所有申请都已经修改文件。
+
+| 输入 | 展示与提交 |
+| --- | --- |
+| 当前精确方案且支持 CONTINUE_DELIVERY | 事实与批准按钮直接可见，提交原精确摘要 |
+| 服务不支持或 contract version 过旧 | 可读事实与具体服务说明，批准按钮禁用，无提交 |
+| 按钮创建后具体能力撤回 | 点击时拒绝，显示服务能力原因，不能复用旧闭包提交 |
+| 范围审批附带 coder_scope_request | 标明申请文件尚未修改，不称已越权 |
+| 范围审批无申请 artifact | 保留已有越权改动的原始说明 |
+
+增量 `engineering-wait.test.cjs` 的三个 capability/scope regression 与既有精确摘要、消耗、
+detached guards 验证上述矩阵。无需存量改库或重写 Operation；刷新原需求后按当前能力核对即可。
+
 ### 完整操作记录字节预算与控制不可用说明（2026-10-09）
 
 签名：`web_console.store.MAX_CONSOLE_OPERATION_BYTES = 16 * 1024 * 1024`，

@@ -137,6 +137,21 @@ test("exact technical approval and its facts are directly visible to the enginee
   assert.match(text(approval), /SHA exact/);
 });
 
+test("recovery approval keeps human facts visible and technical facts grouped", () => {
+  const run = setup();
+  const approval = run('recoveryApprovalBox(request, {kind: "coder_recovery", title: "保留进度并继续原需求", facts: ["保留 4 个业务文件"], technical_facts: ["旧执行已由受控 runner 停止", ".venv 只保留在历史工作区审计，不会进入候选"], plan_sha256: "exact"})');
+  const box = approval.children[1];
+  assert.match(text(box), /保留 4 个业务文件/);
+  assert.match(text(box), /技术核对信息/);
+  assert.match(text(box), /旧执行已由受控 runner 停止/);
+  assert.match(text(box), /批准并继续/);
+  const details = box.children.find(child => child.tag === "details");
+  assert.ok(details);
+  assert.notEqual(details.open, true);
+  assert.ok(details.children.every(child => child.tag !== "button"));
+  assert.equal(box.children.at(-1).tag, "button");
+});
+
 test("an active upstream operation shows node processing while executor facts stay unknown", () => {
   const run = setup();
   for (const stage of ["PRODUCT_DISCOVERY", "DESIGNING", "PLANNING", "INTEGRATING"]) {

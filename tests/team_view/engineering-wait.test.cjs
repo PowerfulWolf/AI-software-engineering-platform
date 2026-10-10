@@ -1307,6 +1307,54 @@ test("current exact approval remains visible through the nonblocked request oper
   assert.equal(h.run("submitted.length"), 0);
 });
 
+test("unsupported recovery approvals show the service capability reason and disable their controls", async () => {
+  for (const kind of ["coder_scope", "coder_recovery", "prerequisite_repair", "candidate_verification"]) {
+    const h = harness();
+    currentApprovalFixture(h, kind);
+    h.run('consoleSupportedActions = consoleSupportedActions.filter(action => action !== "CONTINUE_DELIVERY")');
+    const box = h.run("recoveryApprovalBox(data.request, approval)");
+    const name = kind === "coder_scope" ? "批准文件范围" : "批准并继续";
+    const approve = control(box, name);
+    assert.equal(approve.disabled, true, kind);
+    assert.ok(visibleDescend(box).some(node => /当前服务不支持恢复审批/.test(node.textContent)),
+      "the capability reason must be visible without expanding technical details");
+    assert.match(text(box), /原需求和已保存进度保留/);
+    assert.doesNotMatch(text(box), /当前审批方案已变化/);
+    await approve.events.click();
+    assert.equal(h.run("submitted.length"), 0);
+    assert.equal(h.run("operationNotice.title"), "当前服务不支持恢复审批");
+  }
+});
+
+test("withdrawn recovery capability is checked again before submitting a retained approval", async () => {
+  const h = harness();
+  currentApprovalFixture(h);
+  const old = control(h.run("recoveryApprovalBox(data.request, approval)"), "批准并继续");
+  assert.notEqual(old.disabled, true);
+  h.run('consoleOperationContractVersion = 0');
+  await old.events.click();
+  assert.equal(h.run("submitted.length"), 0);
+  assert.equal(h.run("operationNotice.title"), "当前服务不支持恢复审批");
+  h.run('consoleOperationContractVersion = 1');
+  const current = control(h.run("recoveryApprovalBox(data.request, approval)"), "批准并继续");
+  assert.equal(current.disabled, false);
+  await current.events.click();
+  assert.equal(h.run("submitted.length"), 1);
+});
+
+test("scope approval distinguishes an unchanged requested file from retained out-of-scope edits", () => {
+  const h = harness();
+  currentApprovalFixture(h, "coder_scope");
+  h.request.blocker = "文件范围需要确认";
+  const requested = text(h.run("requestBlockerSection(data.request)"));
+  assert.match(requested, /申请补充文件范围.*尚未修改/);
+  assert.doesNotMatch(requested, /文件改动超出原任务授权范围/);
+  h.run('delete approval.coder_scope_request');
+  const retained = text(h.run("requestBlockerSection(data.request)"));
+  assert.match(retained, /文件改动超出原任务授权范围/);
+  assert.doesNotMatch(retained, /尚未修改/);
+});
+
 test("every exact approval kind is consumed by its corresponding submitted digest", async () => {
   for (const kind of ["coder_scope", "coder_recovery", "prerequisite_repair", "candidate_verification"]) {
     const h = harness();

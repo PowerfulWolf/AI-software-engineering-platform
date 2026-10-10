@@ -687,6 +687,14 @@
           "title": "Facts",
           "type": "array"
         },
+        "technical_facts": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Technical Facts",
+          "type": "array"
+        },
         "coder_scope_request": {
           "anyOf": [
             {

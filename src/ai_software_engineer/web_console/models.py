@@ -308,6 +308,7 @@ class ConsoleApprovalRequest(DomainModel):
     plan_sha256: CheckpointDigest
     title: NonEmptyStr
     facts: tuple[NonEmptyStr, ...]
+    technical_facts: tuple[NonEmptyStr, ...] = Field(default=(), exclude_if=lambda value: not value)
     coder_scope_request: RecoveryScopeRequest | None = None
 
     @model_validator(mode="after")

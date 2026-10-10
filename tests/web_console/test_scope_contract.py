@@ -44,3 +44,31 @@ def test_scope_request_cannot_be_smuggled_into_another_approval_kind() -> None:
         legacy = {k: v for k, v in invalid.items() if k != "coder_scope_request"}
         validator.validate(legacy)
         ConsoleApprovalRequest.model_validate(legacy)
+
+
+def test_approval_technical_facts_are_optional_and_preserve_legacy_serialization() -> None:
+    legacy = ConsoleApprovalRequest(
+        kind="coder_recovery",
+        plan_sha256="a" * 64,
+        title="保留进度并继续原需求",
+        facts=("继续原需求并重新经过独立 QA/Reviewer",),
+    )
+    wire = legacy.to_wire()
+    assert "technical_facts" not in wire
+    assert ConsoleApprovalRequest.model_validate(wire).to_wire() == wire
+    current = legacy.model_copy(update={"technical_facts": ("源 Task ID 用于核验",)})
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/console-operation.schema.json").read_text()
+    )
+    validator = Draft202012Validator(
+        {"$ref": "#/$defs/ConsoleApprovalRequest", "$defs": schema["$defs"]}
+    )
+    validator.validate(wire)
+    validator.validate(current.to_wire())
+    assert ConsoleApprovalRequest.model_validate(current.to_wire()) == current
+    for value in (("",), (1,)):
+        invalid = {**wire, "technical_facts": value}
+        with pytest.raises(ValidationError):
+            ConsoleApprovalRequest.model_validate(invalid)
+        with pytest.raises(SchemaValidationError):
+            validator.validate({**invalid, "technical_facts": list(value)})

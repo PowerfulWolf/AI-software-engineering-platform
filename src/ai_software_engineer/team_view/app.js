@@ -2672,7 +2672,9 @@ function requestBlockerSection(request) {
       el(
         "p",
         scopeApproval
-          ? "Coder 的文件改动超出原任务授权范围，平台已保留工作现场并进入文件范围审批。"
+          ? summary.approval.coder_scope_request
+            ? "Coder 申请补充文件范围，尚未修改所申请的文件；平台保留已有进度，等待本次精确范围审批。"
+            : "Coder 的文件改动超出原任务授权范围，平台已保留工作现场并进入文件范围审批。"
           : humanizeBlockingText(item.reason),
         "request-blocking-reason",
       ),
@@ -2712,6 +2714,12 @@ function requestBlockerSection(request) {
   return section;
 }
 
+function recoveryApprovalCapabilityIssue() {
+  return consoleSupportsOperation("CONTINUE_DELIVERY") ? null : {
+    kind: "error", title: "当前服务不支持恢复审批",
+    message: "当前服务未提供继续交付和恢复审批能力。" + consoleOperationVersionMismatchMessage,
+  };
+}
 async function submitRecoveryApprovalOperation(intent, approvalSignature) {
   const request = requestById(intent.delivery_id);
   const current = request && latestApproval(request.id, request.checkpoint_sha256);
@@ -2719,14 +2727,20 @@ async function submitRecoveryApprovalOperation(intent, approvalSignature) {
       ["DONE", "CLOSED"].includes(request.stage) ||
       request.checkpoint_sha256 !== intent.expected_checkpoint_sha256 ||
       JSON.stringify(current) !== approvalSignature || !canControlCurrentTeam() ||
-      !consoleSupportsOperation("CONTINUE_DELIVERY") || activeOperation(request.id, request.project_id)) {
+      activeOperation(request.id, request.project_id)) {
     operationNotice = {kind: "error", title: "当前审批方案已变化",
       message: "请查看当前需求并重新核对所列方案；已失效的审批不能用于继续交付。"};
+    renderDetail(); renderNotification(); return null;
+  }
+  const capabilityIssue = recoveryApprovalCapabilityIssue();
+  if (capabilityIssue) {
+    operationNotice = capabilityIssue;
     renderDetail(); renderNotification(); return null;
   }
   return submitOperation(intent);
 }
 function recoveryApprovalBox(request, approval) {
+  const capabilityIssue = recoveryApprovalCapabilityIssue();
   const intent = {
     action: "CONTINUE_DELIVERY", project_id: request.project_id, delivery_id: request.id,
     expected_checkpoint_sha256: request.checkpoint_sha256,
@@ -2740,24 +2754,32 @@ function recoveryApprovalBox(request, approval) {
   const approvalSignature = JSON.stringify(approval);
   const management = viewBlock(el("section", undefined, "engineering-current-decision"),
     "current-recovery-decision", [intent, approvalSignature, canControlCurrentTeam(),
-      consoleSupportsOperation("CONTINUE_DELIVERY")]);
+      capabilityIssue]);
   management.append(el("p", "当前需要工程授权者确认。请阅读下方具体方案后决定；平台会核验工程权限并记录实际批准者。", "muted"));
   const box = el("div", undefined, "approval-box request-blocking-approval");
   box.append(el("h3", approval.title));
-  for (const fact of approval.facts) box.append(el("p", fact, "paths"));
+  for (const fact of approval.facts) box.append(el("p", fact));
+  if (Array.isArray(approval.technical_facts) && approval.technical_facts.length) {
+    const details = engineeringDetails("技术核对信息", "current-recovery-technical-facts");
+    for (const fact of approval.technical_facts) details.append(el("p", fact, "paths"));
+    box.append(details);
+  }
+  if (capabilityIssue) box.append(el("strong", capabilityIssue.title), el("p", capabilityIssue.message, "muted"));
+  const approve = deliveryButton(
+    approval.kind === "coder_scope" ? "批准文件范围" : "批准并继续",
+    () => submitRecoveryApprovalOperation(intent, approvalSignature),
+    "primary",
+  );
+  setDeliveryControlDisabled(approve, Boolean(capabilityIssue));
   box.append(
     el(
       "p",
       approval.kind === "coder_scope"
         ? "批准后平台按上方精确范围准备恢复计划，不会启动 Agent；执行前仍需审批恢复计划。"
-        : "批准后平台只执行上方计划；页面会把精确计划身份安全地带回 Manager。",
+        : "批准只对当前方案有效；方案变化后需要重新确认。",
       "muted",
     ),
-    deliveryButton(
-      approval.kind === "coder_scope" ? "批准文件范围" : "批准并继续",
-      () => submitRecoveryApprovalOperation(intent, approvalSignature),
-      "primary",
-    ),
+    approve,
   );
   management.append(box);
   return management;

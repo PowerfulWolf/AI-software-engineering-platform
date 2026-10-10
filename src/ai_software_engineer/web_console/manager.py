@@ -871,14 +871,31 @@ def _summarize(
             )
             if recovery_plan.plan_sha256 != result.recovery_plan_sha256:
                 raise ValueError("Coder recovery plan identity mismatch")
+            snapshot = recovery_plan.workspace_snapshot
             approval = ConsoleApprovalRequest(
                 kind="coder_recovery",
                 plan_sha256=recovery_plan.plan_sha256,
-                title="批准 Coder 恢复任务",
+                title="保留开发进度，继续原需求",  # noqa: RUF001
                 facts=(
-                    f"源任务 {recovery_plan.source.task_id}",
+                    *(
+                        (
+                            "平台已核验本轮开发执行确已停止，并检查保留工作区的完整文件清单。",  # noqa: RUF001
+                        )
+                        if snapshot is not None
+                        else ()
+                    ),
                     f"保留改动 {len(recovery_plan.capture.files)} 个文件",
-                    f"目标基线 {recovery_plan.target_base_revision}",
+                    *(
+                        (
+                            "本轮误建的 Python 环境只保留在历史工作区，"  # noqa: RUF001
+                            "不会复制到恢复工作区，也不会获得文件写入授权。",  # noqa: RUF001
+                        )
+                        if snapshot is not None and snapshot.excluded_paths
+                        else ()
+                    ),
+                    "继续同一个需求，原失败记录和历史工作区保留；不会新建同名需求。",  # noqa: RUF001
+                    "批准本次精确恢复方案后由 Coder 继续开发，"  # noqa: RUF001
+                    "实现完成后仍须独立 QA 和 Reviewer 验收。",
                     *(
                         ("从干净基线重新实现; 完整旧补丁作为历史输入, 不直接应用。",)
                         if recovery_plan.input_mode == "coder_reapply"
@@ -887,11 +904,6 @@ def _summarize(
                     *(
                         f"仅保留审计, 禁止重新应用的规范改动 {path}"
                         for path in (recovery_plan.quarantined_paths or ())
-                    ),
-                    *(
-                        (f"目标分支 {recovery_plan.target_branch_name}",)
-                        if recovery_plan.target_branch_name is not None
-                        else ()
                     ),
                     *(
                         f"已补充文件范围 {path}"
@@ -906,8 +918,30 @@ def _summarize(
                         for item in recovery_plan.effective_path_rebindings
                     ),
                 ),
+                technical_facts=(
+                    f"源任务 {recovery_plan.source.task_id}",
+                    *(
+                        (
+                            f"原执行 {snapshot.run_id}",
+                            f"真实停止时间 {snapshot.stopped_at.isoformat()}",
+                            f"完整现场 {len(snapshot.inventory_after.files)} 项; "
+                            f"仅留在原工作区的环境条目 {len(snapshot.excluded_paths)} 项",
+                            f"现场核验摘要 {snapshot.snapshot_sha256}",
+                        )
+                        if snapshot is not None
+                        else ()
+                    ),
+                    f"原批准基线 {recovery_plan.source.base_revision}",
+                    f"草稿执行基线 {recovery_plan.source.effective_base_revision}",
+                    f"目标基线 {recovery_plan.target_base_revision}",
+                    *(
+                        (f"目标分支 {recovery_plan.target_branch_name}",)
+                        if recovery_plan.target_branch_name is not None
+                        else ()
+                    ),
+                ),
             )
-            next_action = "请检查并批准精确的 Coder 恢复计划。"
+            next_action = "请阅读恢复方案，确认保留开发进度后点击“批准并继续”。"  # noqa: RUF001
         elif result.scope_supplement_sha256 is not None:
             approval = ConsoleApprovalRequest(
                 kind="coder_scope",
