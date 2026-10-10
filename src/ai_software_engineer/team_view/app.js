@@ -4148,8 +4148,8 @@ function buildNotification() {
   header.append(
     el(
       "span",
-      notice.kind === "error" ? "!" : notice.kind === "warning" ? "i" : "✓",
-      `settings-result-icon ${notice.kind === "error" ? "error" : notice.kind === "warning" ? "warning" : "success"}`,
+      notice.kind === "error" ? "!" : notice.kind === "success" ? "✓" : "i",
+      `settings-result-icon ${["error", "warning", "success"].includes(notice.kind) ? notice.kind : "info"}`,
     ),
     el("div", notice.title, "section-title"),
   );

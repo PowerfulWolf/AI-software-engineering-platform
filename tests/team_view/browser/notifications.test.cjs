@@ -9,6 +9,55 @@ async function assertNoOverlay(page) {
   assert.deepEqual(display, { hidden: true, display: "none", boxes: 0 }, "closed notification must leave no painted or clickable backdrop");
 }
 
+test("notification semantic colors distinguish queued and running info from success", async (t) => {
+  const h = await ui(t, { operations: [operation("QUEUED")] });
+  await h.requests();
+  const icon = h.page.locator("#notification .settings-result-icon");
+  for (const status of ["QUEUED", "RUNNING"]) {
+    h.state.operations[0].status = status;
+    await h.tick();
+    assert.equal(await icon.innerText(), "i");
+    assert.equal(await icon.getAttribute("class"), "settings-result-icon info");
+    assert.deepEqual(await icon.evaluate(node => ({
+      color: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor,
+    })), {color: "rgb(36, 89, 204)", background: "rgb(233, 239, 253)"});
+  }
+  await h.close();
+  await h.tick();
+  await assertNoOverlay(h.page);
+});
+
+test("notification semantic colors preserve success warning error and ordinary info", async (t) => {
+  const h = await ui(t);
+  const cases = [
+    ["success", "✓", "rgb(20, 122, 75)", "rgb(230, 245, 237)"],
+    ["warning", "i", "rgb(138, 91, 0)", "rgb(255, 245, 217)"],
+    ["error", "!", "rgb(154, 72, 18)", "rgb(255, 240, 226)"],
+    ["info", "i", "rgb(36, 89, 204)", "rgb(233, 239, 253)"],
+  ];
+  for (const [kind, symbol, color, background] of cases) {
+    await h.page.evaluate(kind => {
+      operationNotice = {kind, title: "语义图标fixture", message: "固定信息"};
+      renderNotification();
+    }, kind);
+    const icon = h.page.locator("#notification .settings-result-icon");
+    assert.equal(await icon.innerText(), symbol);
+    assert.equal(await icon.getAttribute("class"), `settings-result-icon ${kind}`);
+    assert.deepEqual(await icon.evaluate(node => ({
+      color: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor,
+    })), {color, background});
+  }
+  await h.page.evaluate(() => {
+    operationNotice = null;
+    administrationNotice = {page, text: "普通操作提示"};
+    renderNotification();
+  });
+  assert.equal(await h.page.locator("#notification .settings-result-icon").getAttribute("class"),
+    "settings-result-icon info");
+  await h.close();
+  await assertNoOverlay(h.page);
+});
+
 test("acknowledging a notification releases the real CSS backdrop and page clicks", async (t) => {
   const h = await ui(t, { operations: [operation()] });
   await h.requests();

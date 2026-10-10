@@ -206,3 +206,37 @@ Continue恢复方案已准备好时仍弹出，关闭多个旧通知后还挡住
 revision6，均max_attempts40，冻结retry_policy工作额度10且Coder/QA/Reviewer临时故障各10。
 新terminal recovery builder继承原Task冻结policy，没有擅自扩额。剩余7工作包并非因工作额度
 小于7而必然失败；返工和后续实际消耗仍需按durable counters监管。
+
+
+## 60fa1f4与最新未消费方案
+
+d3b8ac7与60fa1f4均已提交推送，分别修复已批准dirty输入在provider失败时的本轮变更判定、
+同Project/Requirement跨action旧通知回流。确认无活动Operation后，受控restart完整收尾，
+新PID52966。registered clean main已快进至60fa1f45aa9ebd663899d04c7c8a66c77950fbe8。
+HTTP app.js SHAb510d2451f6bf46945acc0100464d951a1eb2e31f787f82657491f9287d16dfc，
+style.css SHA不变dead05c2760d2042739d973e8d3ceba6817218d48326451b0648fb650275b3d8，
+均与commit一致。Console ready且contract4。旧已消费approved workspace未改变。
+
+同Requirement公开Continue operation_89083c9cfbc15a0e4585e218c89e27c6从10:45:09.620219Z
+到10:46:06.464596Z（56.844秒）成功生成f88b78a7888c3e28c91bf298c5f0efd68763a9a1a1733980f166b8bb4d88ab49。
+目标60fa1f4，源为task_recovery_edc70…的27文件合法草稿，target branch保持短recovery-2。
+旧5a88没有批准，新target对应重新准备，不沿用旧exact approval。
+
+root实际Chrome仅GET打开生产K1详情已成功，未写入/审批，无pageerror。当前恢复准备、列表/
+标题/节点和下一步一致，完整操作历史43条可见而非固定8。旧ProductApproval中断modal未
+再回流阻挡；最新ACTIVE提示可以关闭。截图在/tmp/ase-k1-supervision-20261010。
+仍发现ACTIVE通知图标绿check造成成功暗示，将独立定位；不能以此推断Coder已运行。
+
+
+f88方案独立只读验证通过，与5a88仅created_at/planSHA/targetRevision/targetPreparation变化，
+source/capture/acceptedprogress/完整27file patch全部相同且未消费。root依用户持续授权，通过
+公开POST提交exact批准，HTTP202 operation_fbe1791bcae44062771836ef582ce090，idempotency
+k1-approve-exact-f88b78a7-20261010-01。未创建同名Requirement、未重置终态、未改SQL。
+接纳操作不表示Coder调用或K1完成，后续新独立准备明细与原角色/心跳事实分别核验。
+
+
+本次批准的独立明细已真实保存：AUTHORIZATION_RECORDED10:48:41.517784Z，
+TASK_SEALED10:49:31.002209Z。root在真实Chrome仅GET读取该明细，页面与公开API一致、
+零写请求/零pageerror。不能用空model-calls判断调用；准备观察不冒充当前角色claim。
+活动Operation期间只提交已独立验证的通知info蓝色i补丁，资产不热替换；待安全idle加载，
+当前f88执行目标60fa1f4保持冻结，不为了图标重新创建需求或改变批准基线。

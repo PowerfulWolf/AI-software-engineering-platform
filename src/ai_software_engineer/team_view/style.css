@@ -2999,6 +2999,10 @@ main[data-page="requests"] .page-context {
   background: #e6f5ed;
   color: #147a4b;
 }
+.settings-result-icon.info {
+  background: #e9effd;
+  color: var(--accent);
+}
 .settings-result-icon.error {
   background: #fff0e2;
   color: #9a4812;

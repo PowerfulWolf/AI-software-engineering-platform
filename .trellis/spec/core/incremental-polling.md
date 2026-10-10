@@ -466,3 +466,22 @@ Base：只有最新失败，仍显示失败原因和详情入口。Bad：关闭�
 `tests/team_view/browser/notifications.test.cjs`。断言跨action旧失败失效、关闭不复活、当前
 精确审批仍可读、新失败能提示、跨Project/target隔离；真实浏览器点击页面与完整历史可读。
 存量无需改库，兼容资产加载后按原历史重算通知资格。回滚筛选会恢复旧弹窗问题，历史不变。
+
+
+## 通知语义颜色不冒充执行或验收（2026-10-10）
+
+`app.js::buildNotification(notice)` 按notice.kind渲染图标，不能将所有非error/warning
+都作为绿色成功。`style.css::settings-result-icon.info` 使用蓝色信息样式。
+
+| kind | 图标/样式 | 含义 |
+| --- | --- | --- |
+| info | i / info，蓝色 | 操作已接收、正在处理或普通信息，不表达验收成功 |
+| success | ✓ / success，绿色 | 当前通知所描述操作成功，不替代Task/QA/Review结论 |
+| warning | i / warning | 待处理提醒，按既有当前事实 |
+| error | ! / error | 失败提醒，按既有当前事实 |
+
+通知key、ack、signature、focus、草稿与control资格不变。节点颜色继续仅由真实node.state
+决定；RUNNING Operation不能将无claim的Coder变蓝，已完成claim不能冒充当前模型调用。
+增量browser notifications用例断言QUEUED/RUNNING info无success/✓，普通success保留绿✓，
+warning/error不变，关闭和轮询不复活。无需改库；兼容资产在安全维护边界加载后刷新生效。
+回滚两行映射与info样式仅恢复旧图标问题，不改变任何后台事实。

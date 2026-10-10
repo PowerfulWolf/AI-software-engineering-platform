@@ -1,0 +1,14 @@
+{
+  "name": "notice-semantic-colors",
+  "title": "执行中与普通信息通知使用蓝色信息图标，不冒充成功",
+  "status": "in_progress",
+  "phase": "verified_pending_review",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "src/ai_software_engineer/team_view/style.css",
+    "tests/team_view/browser/notifications.test.cjs",
+    ".trellis/tasks/10-10-notice-semantic-colors",
+    ".trellis/spec/core/incremental-polling.md"
+  ]
+}
