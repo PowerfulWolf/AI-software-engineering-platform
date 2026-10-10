@@ -28,6 +28,7 @@ from ai_software_engineer.manager.baseline_models import (
 )
 from ai_software_engineer.manager.baseline_native_rules import load_native_rule_epoch
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
+from ai_software_engineer.redaction import source_inspection_scope
 
 
 class FileExecutionBaselineStore:
@@ -64,10 +65,12 @@ class FileExecutionBaselineStore:
             os.close(descriptor)
             os.close(directory)
 
+    @source_inspection_scope()
     def put_plan(self, plan: ExecutionBaselinePlan) -> ExecutionBaselinePlan:
         plan.validate_integrity()
         return self.records.put("baseline-plans", plan.plan_sha256, plan)
 
+    @source_inspection_scope()
     def plan(self, sha256: str) -> ExecutionBaselinePlan:
         plan = self.records.get("baseline-plans", sha256, ExecutionBaselinePlan)
         plan.validate_integrity()
@@ -84,16 +87,19 @@ class FileExecutionBaselineStore:
         authority.validate_integrity()
         self.records.put("baseline-authorities", authority.plan_sha256, authority)
 
+    @source_inspection_scope()
     def put_start(self, start: BaselineOperationStart) -> BaselineOperationStart:
         start.validate_integrity()
         return self.records.put("baseline-starts", start.plan.plan_sha256, start)
 
+    @source_inspection_scope()
     def start(self, plan_sha256: str) -> BaselineOperationStart | None:
         start = self.records.find("baseline-starts", plan_sha256, BaselineOperationStart)
         if start is not None:
             start.validate_integrity()
         return start
 
+    @source_inspection_scope()
     def bindings_for_task(self, task_id: str) -> tuple[ExecutionBaselineBinding, ...]:
         all_records = self.records.list("baseline-bindings", ExecutionBaselineBinding)
         selected = tuple(
@@ -124,6 +130,7 @@ class FileExecutionBaselineStore:
             previous = item
         return selected
 
+    @source_inspection_scope()
     def put_binding(self, binding: ExecutionBaselineBinding) -> ExecutionBaselineBinding:
         existing = self.bindings_for_task(binding.task_id)
         matched = next((item for item in existing if item.sequence == binding.sequence), None)
@@ -237,6 +244,7 @@ class FileExecutionBaselineStore:
         ):
             raise ValueError("旧执行救援没有对应的精确人工工程确认")
 
+    @source_inspection_scope()
     def required_context(self, binding: ExecutionBaselineBinding) -> str:
         binding.validate_integrity()
         plan = self.plan(binding.plan_sha256)

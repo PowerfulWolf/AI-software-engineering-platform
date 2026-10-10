@@ -278,3 +278,76 @@ No migration, history trimming, evidence repair, requirement recreation or autom
 is needed. Load code and frozen frontend assets through an idle controlled service restart, then
 refresh the same Project. Rollback this repair and restart restores the previous repeated-work
 cost; Task, Operation, approvals, candidate and history are unaffected.
+
+## Synchronous baseline validation scopes (2026-10-10)
+
+### 1. Scope / trigger
+
+Baseline proposal/execution/explicit continuation recursively validate complete retained source.
+The read-side scope above does not cover these synchronous mutation services by itself.
+
+### 2. Signatures
+
+```python
+ExecutionBaselineService.propose(target_base_ref, *, input_mode, purpose) -> ExecutionBaselinePlan
+ExecutionBaselineService.execute(plan_sha256, *, authority) -> ExecutionBaselineBinding
+ExecutionBaselineService.continue_execution(binding_sha256, *, authority) -> bool
+FileExecutionBaselineStore.plan(sha256) -> ExecutionBaselinePlan
+FileExecutionBaselineStore.start(plan_sha256) -> BaselineOperationStart | None
+FileExecutionBaselineStore.bindings_for_task(task_id) -> tuple[ExecutionBaselineBinding, ...]
+FileExecutionBaselineStore.required_context(binding) -> str
+FileContinuationStore.get_receipt(run_id) -> ExecutionInterruptionReceipt
+FileContinuationStore.receipts_for_task(task_id) -> tuple[ExecutionInterruptionReceipt, ...]
+```
+
+### 3. Contracts
+
+- Each service enters `source_inspection_scope` around its existing execution lock, fact fence,
+  complete current capture, preview/apply, publication and validation. Nested leaf reads share only
+  exact pure scanner facts. The service exits before Host's subsequent delivery/model kickoff;
+  never place this scope around the whole Host, an async task or a worker lifetime.
+- Standalone plan/start/bindings/context reads and plan/start/binding publications own their own
+  scope. Receipt reads/list/publication likewise include predecessor/admission recursion. Independent
+  calls start fresh; all outer scopes reset on both success and failure. Existing 512-entry / 16 MiB
+  admission limits, complete-text/path keys and conservative scanner fallbacks remain unchanged.
+- Every file, envelope/body/plan digest, structural model, predecessor, exact authority, native-rule
+  epoch, Task/queue/claim/stop fact and current Git/worktree observation is still read/checked.
+  This is neither a model cache nor authorization reuse. Preserve all original wire and audit bytes.
+
+### 4. Validation / error matrix
+
+| Scenario | Required result |
+| --- | --- |
+| Real proposal, execution and explicit continue with repeated complete Python body | One parse of that exact body/path per call; unchanged complete inputs/results |
+| Standalone plan/start/bindings/context or receipt/list/replayed put | Recursive validators share scanning; next call scans anew; store bytes unchanged |
+| Service returned to caller/model kickoff | Cache absent; caller's same-source scan is fresh |
+| Plan integrity fails after valid source inspection | Original rejection; cache absent after exception |
+| Same outer scope, file body/path changes or envelope digest corrupts | Fresh file read rejects; changed sensitive body/path cannot borrow safe scan |
+| Actual current Git/index/inventory or exact authorization changes | Original service/fence rejection; no cached observation or approval |
+
+### 5. Good / base / bad
+
+Good: complete retained source is parsed once while all nested digest/authority checks still execute.
+Base: a later independent call reads and scans the same source again. Bad: scope the entire Host
+resume, cache an approved plan/binding, or remove independent live capture observations.
+
+### 6. Required tests and measurement limits
+
+`tests/manager/test_baseline_source_inspection_scope.py` uses real Git/private store interfaces,
+a large complete Python body and stdlib AST work counters. It checks unchanged models/bytes,
+success/exception release, explicit caller-after-service lifetime, and same-scope text/path/hash
+tampering. Keep existing baseline/pause/receipt/source-scope tests for permission, integrity and
+serialization behavior. Operation construction/publication also runs Git and I/O: sealed reread
+speedups do not prove that all minutes of a historical operation were AST work.
+
+### 7. Wrong / correct, existing data and rollback
+
+Wrong: only wrap a leaf plan read while proposal repeatedly captures/parses outside it, or wrap
+`TeamHost.continue_execution_baseline` so a long model call retains complete source keys.
+Correct: wrap the synchronous service and standalone leaf validation boundaries; let nested scopes
+share detection tuples and end before the caller starts a model.
+
+No Schema, SQL or durable record migration is needed. Existing K1 plans, complete receipts,
+bindings and approvals keep their original hashes and validity. An idle code restart loads the
+optimization; continuation still requires its original exact authorization. Roll back only code
+while idle to restore previous cost; never erase history, reset the workspace or recreate a Requirement.

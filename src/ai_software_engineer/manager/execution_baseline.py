@@ -48,6 +48,7 @@ from ai_software_engineer.manager.legacy_containment import LegacyExecutionConta
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.recovery.models import digest
+from ai_software_engineer.redaction import source_inspection_scope
 
 
 class BaselineFactCollector(Protocol):
@@ -94,7 +95,7 @@ class ExecutionBaselineService:
         input_mode: BaselineInputMode = BaselineInputMode.PRESERVE_DRAFT,
         purpose: BaselinePurpose = BaselinePurpose.SOURCE_REBIND,
     ) -> ExecutionBaselinePlan:
-        with self.store.execution_lock(), self.facts.execution_scope():
+        with source_inspection_scope(), self.store.execution_lock(), self.facts.execution_scope():
             facts = self.facts.collect(target_base_ref)
             self._require_facts(facts)
             previous = self.store.bindings_for_task(facts.task.id)
@@ -288,7 +289,7 @@ class ExecutionBaselineService:
     def execute(
         self, plan_sha256: str, *, authority: EngineeringAdmission | BaselineOperatorAuthorization
     ) -> ExecutionBaselineBinding:
-        with self.store.execution_lock(), self.facts.execution_scope():
+        with source_inspection_scope(), self.store.execution_lock(), self.facts.execution_scope():
             plan = self.store.plan(plan_sha256)
             source, authority_sha = self._require_authority(plan, authority)
             if plan.conflicted:
@@ -474,7 +475,7 @@ class ExecutionBaselineService:
             raise ValueError("继续决定与当前已保存版本不同, 请刷新后确认")
         if self.publish_continuation is None:
             raise ValueError("平台未提供受控继续入口, 已保存进度保持暂停")
-        with self.store.execution_lock(), self.facts.execution_scope():
+        with source_inspection_scope(), self.store.execution_lock(), self.facts.execution_scope():
             bindings = self.store.bindings_for_task(authority.task_id)
             if not bindings or bindings[-1].binding_sha256 != binding_sha256:
                 raise ValueError("代码或恢复方案已经更新, 原继续决定已失效")

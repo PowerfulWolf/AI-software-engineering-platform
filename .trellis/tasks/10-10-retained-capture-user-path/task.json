@@ -1,8 +1,8 @@
 {
   "id": "retained-capture-user-path-20261010",
   "title": "修复中断源码误报、真实停止展示和用户重新处理入口",
-  "status": "in_progress",
-  "phase": "verified_pending_deployment",
+  "status": "completed",
+  "phase": "verified_deployed",
   "owner": "codex",
   "created_at": "2026-10-10",
   "baseline": "95deb17",

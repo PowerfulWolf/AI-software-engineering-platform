@@ -24,6 +24,7 @@ from ai_software_engineer.orchestration.continuation_models import (
     ExecutionInterruptionReceipt,
 )
 from ai_software_engineer.recovery.models import canonical_bytes, digest
+from ai_software_engineer.redaction import source_inspection_scope
 
 MAX_CONTINUATION_RECORD_BYTES = 8_000_000
 type _Record = (
@@ -111,6 +112,7 @@ class FileContinuationStore:
             raise ContinuationRejected("continuation root must be an absolute exact Task directory")
         return target, checked_task
 
+    @source_inspection_scope()
     def put_receipt(self, receipt: ExecutionInterruptionReceipt) -> ExecutionInterruptionReceipt:
         receipt.validate_integrity()
         self._validate_receipt(receipt)
@@ -169,6 +171,7 @@ class FileContinuationStore:
             raise ContinuationRejected("capture stop changed its original invocation")
         return record
 
+    @source_inspection_scope()
     def get_receipt(self, run_id: str) -> ExecutionInterruptionReceipt:
         checked_run = self._checked_run(run_id)
         try:
@@ -185,6 +188,7 @@ class FileContinuationStore:
         self._validate_predecessor(record)
         return record
 
+    @source_inspection_scope()
     def receipts_for_task(self, task_id: str) -> tuple[ExecutionInterruptionReceipt, ...]:
         self._require_task(task_id)
         records = []
