@@ -1,0 +1,17 @@
+{
+  "name": "recovery-admission-lifecycle",
+  "title": "恢复首轮准入与正常Coder续跑分离，适配每轮新建provider adapter",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/agents/workspace_admission.py",
+    "src/ai_software_engineer/agents/codex_cli.py",
+    "src/ai_software_engineer/agents/responses.py",
+    "src/ai_software_engineer/recovery/entry.py",
+    "tests/agents/test_initial_admission_scope.py",
+    "tests/agents/test_codex_cli.py",
+    ".trellis/spec/core/delivery-recovery.md",
+    ".trellis/tasks/10-10-recovery-admission-lifecycle"
+  ]
+}

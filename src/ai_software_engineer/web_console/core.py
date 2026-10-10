@@ -11,8 +11,14 @@ from time import monotonic
 from typing import Protocol
 
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic, capture_model_calls
+from ai_software_engineer.recovery.preparation_progress import (
+    PreparationProgressView,
+    observe_recovery_preparation,
+    preparation_scope,
+)
 
 from .models import ConsoleCommandResult, ConsoleIntent, ConsoleOperation
+from .preparation_store import InMemoryPreparationProgressStore, PreparationProgressStore
 from .shutdown import ShutdownResult, ShutdownState, shutdown_deadline
 from .store import ConsoleOperationError, ConsoleOperationStore
 
@@ -44,6 +50,7 @@ class ProjectConsole:
         clock: Clock | None = None,
         poll_seconds: float = 0.25,
         operation_scope: Callable[[str], AbstractContextManager[None]] | None = None,
+        preparation_store: PreparationProgressStore | None = None,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError("console poll interval must be positive")
@@ -52,6 +59,7 @@ class ProjectConsole:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._poll_seconds = poll_seconds
         self._operation_scope = operation_scope or (lambda _: nullcontext())
+        self._preparation_store = preparation_store or InMemoryPreparationProgressStore()
         self._wake = Event()
         self._stop = Event()
         self._lifecycle = Lock()
@@ -84,6 +92,12 @@ class ProjectConsole:
 
     def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]:
         return self._store.model_calls(operation_id)
+
+    def preparation_progress(self, operation: ConsoleOperation) -> PreparationProgressView:
+        scope = preparation_scope(operation)
+        if scope is None:
+            return PreparationProgressView(scope=None)
+        return self._preparation_store.read(scope)
 
     def _record_model_call(self, operation_id: str, call: ModelCallDiagnostic) -> None:
         try:
@@ -125,8 +139,13 @@ class ProjectConsole:
 
     def _execute_operation(self, running: ConsoleOperation) -> ConsoleOperation:
         try:
-            with capture_model_calls(
-                lambda call: self._record_model_call(running.operation_id, call)
+            with (
+                capture_model_calls(
+                    lambda call: self._record_model_call(running.operation_id, call)
+                ),
+                observe_recovery_preparation(
+                    running, self._preparation_store.append, clock=self._clock
+                ),
             ):
                 result = self._executor.execute(running.intent)
         except ConsoleCommandRejected as error:

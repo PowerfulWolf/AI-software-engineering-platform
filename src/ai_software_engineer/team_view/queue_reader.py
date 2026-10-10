@@ -17,6 +17,8 @@ from ai_software_engineer.work_queue.baseline import BaselineQueueConsumption, B
 from ai_software_engineer.work_queue.execution_store import RoleQueueAdmission, _decode
 from ai_software_engineer.work_queue.models import QueuedWorkItem
 
+from .baseline_snapshot import BaselineBindingSnapshot
+
 
 def read_role_queue(
     cursor: DictCursor, *, task_id: str, repository_id: str, allocation_sha256: str, now: datetime
@@ -134,6 +136,7 @@ def read_pending_baseline_continuation(
     scope: EngineeringScope,
     baselines: FileExecutionBaselineStore | None,
     views: tuple[RoleQueueView, ...],
+    baseline_bindings: BaselineBindingSnapshot | None = None,
 ) -> tuple[RoleQueueView, ...]:
     """Expose only a verified saved release still awaiting its first real claim.
 
@@ -148,7 +151,11 @@ def read_pending_baseline_continuation(
     if not baselines.read_only:
         raise ValueError("继续状态读取只能使用既有只读工程记录")
     store = baselines
-    bindings = store.bindings_for_task(task.id)
+    bindings = (
+        baseline_bindings.bindings_for_task(store, task.id)
+        if baseline_bindings is not None
+        else store.bindings_for_task(task.id)
+    )
     if not bindings:
         return views
     binding = bindings[-1]

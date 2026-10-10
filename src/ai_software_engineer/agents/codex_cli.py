@@ -47,6 +47,9 @@ from ai_software_engineer.agents.ports import (
 from ai_software_engineer.agents.workspace_admission import (
     InitialWorkspaceAdmission as InitialWorkspaceAdmission,
 )
+from ai_software_engineer.agents.workspace_admission import (
+    workspace_admission_for_request,
+)
 from ai_software_engineer.config.codex_proxy import (
     codex_cli_proxy_key_environment,
     codex_cli_proxy_overrides,
@@ -428,7 +431,6 @@ class CodexCliAgentAdapter:
         self._execution_guard = execution_guard
         self._runner = runner or SubprocessCodexCommandRunner(execution_guard)
         self._initial_admission = initial_workspace_admission
-        self._initial_admission_consumed = False
         self._candidate_commit = candidate_commit_skill or GitCandidateCommitSkill(
             root, environment=environment
         )
@@ -528,12 +530,13 @@ class CodexCliAgentAdapter:
             )
         if continuation_prompt is not None:
             pass  # The trusted control has checked the exact one-use admission.
-        elif self._initial_admission is not None and not self._initial_admission_consumed:
+        elif (
+            admission := workspace_admission_for_request(self._initial_admission, request)
+        ) is not None:
             try:
-                self._initial_admission.authorize(request, self._workspace_root)
+                admission.authorize(request, self._workspace_root)
             except Exception as error:
                 raise CodexCliError("recovery seed admission rejected") from error
-            self._initial_admission_consumed = True
         else:
             initial_changed = self._candidate_commit.changed_paths()
             if request.continuation_checkpoint_id is None:

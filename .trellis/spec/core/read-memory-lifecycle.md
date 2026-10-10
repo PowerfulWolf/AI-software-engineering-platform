@@ -558,3 +558,73 @@ The current K1 parent has 41 sealed JSON files /58,218,393 bytes; its Project pa
 contains 229 files /261,344,996 bytes. These are bounded read-only size observations, not an end-to-end
 profile. The four-record regression's copy reduction does not establish production speed or prove
 the absence of a memory leak. Measure the actual public operation separately.
+
+## Snapshot-local complete baseline bindings (2026-10-10)
+
+### Scope and signatures
+
+Engineering history, pending continuation and interruption history can project the same Task's
+complete baseline prefix in one HTTP read. A finite read projection may share that already verified
+immutable prefix, without changing execution services or current authorization observations.
+
+```python
+BaselineBindingSnapshot.bindings_for_task(
+    store: FileExecutionBaselineStore, task_id: str,
+) -> tuple[ExecutionBaselineBinding, ...]
+engineering_history(..., *, baseline_bindings: BaselineBindingSnapshot | None = None)
+read_pending_baseline_continuation(..., baseline_bindings: BaselineBindingSnapshot | None = None)
+_continuation_history(..., *, baseline_bindings: BaselineBindingSnapshot | None = None)
+```
+
+### Contracts and validation matrix
+
+- `_TaskReadSnapshot` owns a fresh `BaselineBindingSnapshot`; it explicitly passes that object
+  through `_read_task_details` to all three read callers. No global, ContextVar, reader-instance,
+  writer-store or execution-service cache is allowed.
+- Only an already constructed `read_only=True` store is accepted. Exact absolute store root and
+  Task ID form the key. The first access invokes the original full `bindings_for_task`, including
+  plan/start/authority/capture/context/predecessor checks. Register only a successful tuple,
+  including empty. Callers inspect these immutable binding models without mutation.
+- Existing caller Task/scope/receipt/policy validation, authority-file reads, SQL release/claim and
+  heartbeat observations remain unchanged. `None` preserves standalone full-read behavior.
+- A subsequent snapshot starts empty and rereads every historical byte, path and digest. Finite
+  prefix sharing is not a current execution authorization and never enters an Agent call.
+
+| Scenario | Required result |
+| --- | --- |
+| Three actual projections, exact root and Task | One complete binding validation; equal projection results |
+| Different root or Task, even with shared helper | Separate complete reads |
+| Empty prefix, followed by append | Empty stays finite in this read; next snapshot sees appended binding |
+| Historical plan/authority/capture tamper or symlink | Next snapshot rejects, with original checks intact |
+| First full validation fails | No registered tuple; retry performs complete validation |
+| Writer store supplied | Reject before reading or reusing a tuple |
+| HTTP success or failure returns | Snapshot-local helper and complete prefix can be released |
+
+Good: three presentation callers consume one verified immutable binding prefix. Base: independent
+direct callers retain complete reads. Bad: reuse between polls or treat a saved binding as current
+authority to execute. Tests must exercise the real three callers and `_TaskReadSnapshot` wiring,
+not only the helper. Latency claims require a short-deadline real read comparison.
+
+### Existing data and rollback
+
+No Schema, SQL, Requirement, Task, approval or historical file migration is required. Original
+progress and audit bytes remain valid. Load the read optimization at an idle controlled service
+maintenance boundary, then refresh the same Project; it neither starts nor approves execution.
+Rollback removes only the helper and read-side wiring, restoring repeated complete validation.
+
+### Bounded measurements and limits
+
+Sequential fresh-process probes on 2026-10-10 compared pre-change `267da45` with the working tree.
+Both verified 263 selected Project journal/baseline JSON records /293,873,960 bytes with identical
+before/after inventory SHA and identical wire SHA excluding top-level `as_of`; 2 Requirements,
+25 Tasks, 202 read-only SQL statements and 2,023,014 response bytes were unchanged. Snapshot time
+was 6.7796 -> 5.2838 seconds; complete binding validations 3 -> 2 (3.1226 -> 1.5624 seconds), plan
+reads 20 -> 12, start/context reads 8 -> 4 each. These counts span two exact root/Task identities:
+2+1 -> 1+1. The earlier aggregate of three calls did not establish that all three belonged to one
+Task. A real three-caller fixture separately proves same-root/Task 3 -> 1 and equal projections.
+
+The comparison used a 25-second process alarm, existing read-only transactions and no Host,
+initialization, claims, approvals or source writes. Results are machine/input specific; active
+heartbeats or appended facts can legitimately change later wire hashes. This optimization is not
+evidence of, or a repair claim for, a continuous hours-long read or gate leak. Successful public
+Team GETs must be considered when interpreting repeated busy responses.

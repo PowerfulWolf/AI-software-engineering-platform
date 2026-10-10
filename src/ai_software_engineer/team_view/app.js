@@ -26,6 +26,13 @@ let refreshQueued = false;
 let requestedRuntimeStatus = false;
 let operations = [];
 let operationsAvailable = false;
+let recoveryPreparationObservation = null;
+let recoveryPreparationFlight = null;
+let recoveryPreparationTargetKey = null;
+let recoveryPreparationTargetRevision = null;
+const preparationScopeFields = ["operation_id", "team_id", "project_id", "delivery_id",
+  "expected_checkpoint_sha256", "approved_plan_sha256"];
+const preparationKinds = ["AUTHORIZATION_RECORDED", "TASK_SEALED", "DISPATCH_COMMITTED", "SEED_VERIFIED", "EXECUTION_CLAIMED"];
 let consoleAvailable = null;
 let consoleConnectionFailed = false;
 let consoleTeamId = null;
@@ -173,7 +180,7 @@ function pollingContentFacts() {
     knowledgeScope, knowledgeMode, knowledgeDocuments, knowledgeIndexStatus, specDocuments,
     learningProposals, knowledgeLoading, knowledgeError];
   return [...common, snapshot?.team_name, snapshot?.projects, snapshot?.agents, snapshot?.tasks,
-    snapshot?.requests, operations, selected, selectedAgentId, requestFilter];
+    snapshot?.requests, operations, selected, selectedAgentId, requestFilter, recoveryPreparationDisplayFacts()];
 }
 function pollingKnowledgeFacts() {
   return [knowledgeDocuments, knowledgeIndexStatus, specDocuments, learningProposals,
@@ -188,7 +195,168 @@ function pollingDetailFacts() {
   return [page, selected, item, parent, tasks, snapshot?.agents, pollingControlFacts(),
     item ? operations.filter(operation => operationTarget(operation) === item.id ||
       (parent && operationTarget(operation) === parent.id && operation.intent.project_id === parent.project_id)) : [],
-    page === "requests" && Boolean(snapshot?.requests.length), nativeRuleReviewsRevision];
+    page === "requests" && Boolean(snapshot?.requests.length), nativeRuleReviewsRevision, recoveryPreparationDisplayFacts()];
+}
+function recoveryPreparationDisplayFacts() {
+  const facts = recoveryPreparationObservation;
+  return facts && {...facts, readAt: facts.issue || !operationsAvailable ? facts.readAt : null};
+}
+function selectedPreparationRequest() {
+  const item = selected?.kind === "task" ? taskById(selected.id)
+    : selected?.kind === "request" ? requestById(selected.id) : null;
+  return selected?.kind === "task" && item ? taskParentRequest(item) : item;
+}
+function currentRecoveryPreparationScope() {
+  const request = selectedPreparationRequest();
+  if (!request || projectSwitchPending() || request.project_id !== currentProjectId()) return null;
+  // Saved Operation facts may still be read during an outage; they cannot authorize a command.
+  const operation = operations.find(value => operationTarget(value) === request.id &&
+    value.intent.project_id === request.project_id && ["QUEUED", "RUNNING"].includes(value.status));
+  if (!operation || operation.status !== "RUNNING" || operation.team_id !== snapshot?.team_id ||
+      operation.intent.action !== "CONTINUE_DELIVERY" ||
+      !/^[a-f0-9]{64}$/.test(operation.intent.approved_plan_sha256 || "") ||
+      !/^[a-f0-9]{64}$/.test(operation.intent.expected_checkpoint_sha256 || "")) return null;
+  return {operation_id: operation.operation_id, team_id: operation.team_id, project_id: request.project_id,
+    delivery_id: request.id, expected_checkpoint_sha256: operation.intent.expected_checkpoint_sha256,
+    approved_plan_sha256: operation.intent.approved_plan_sha256};
+}
+const preparationScopeKey = scope => scope && JSON.stringify(preparationScopeFields.map(field => scope[field]));
+const samePreparationScope = (left, right) => Boolean(left && right &&
+  preparationScopeFields.every(field => left[field] === right[field]));
+function recoveryPreparationFacts(request) {
+  const scope = currentRecoveryPreparationScope();
+  return request && request.id === scope?.delivery_id && request.project_id === scope.project_id &&
+    samePreparationScope(scope, recoveryPreparationObservation?.scope) ? recoveryPreparationObservation : null;
+}
+function verifiedPreparationRecords(value, scope) {
+  if (!value || value.schema_version !== "v0.1" || !samePreparationScope(value.scope, scope) ||
+      !Array.isArray(value.records) || value.records.length > 5) throw new Error("invalid preparation records");
+  const seen = new Set(), taskId = "task_recovery_" + scope.approved_plan_sha256.slice(0, 32);
+  return value.records.map(record => {
+    if (!record || !preparationKinds.includes(record.kind) || seen.has(record.kind) ||
+        !samePreparationScope(record.scope, scope) || typeof record.observed_at !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(record.observed_at) ||
+        !Number.isFinite(Date.parse(record.observed_at)) || typeof record.record_sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/.test(record.record_sha256) ||
+        !record.evidence || typeof record.evidence !== "object") throw new Error("invalid preparation record");
+    seen.add(record.kind);
+    const evidence = record.evidence;
+    const fields = {
+      AUTHORIZATION_RECORDED: ["authorization_sha256"],
+      TASK_SEALED: ["task_id", "task_record_sha256", "source_revision"],
+      DISPATCH_COMMITTED: ["task_id", "dispatch_id", "dispatch_sha256", "task_record_sha256"],
+      SEED_VERIFIED: ["task_id", "seed_record_sha256", "dispatch_sha256", "input_mode"],
+      EXECUTION_CLAIMED: ["task_id", "work_item_id", "lease_id", "assignment_id", "claim_sha256", "dispatch_sha256", "source_revision", "role", "attempt"],
+    }[record.kind];
+    if (Object.keys(evidence).some(field => !fields.includes(field)) ||
+        fields.some(field => evidence[field] === undefined) ||
+        fields.filter(field => field.endsWith("_sha256")).some(field => typeof evidence[field] !== "string" || !/^[a-f0-9]{64}$/.test(evidence[field])) ||
+        (fields.includes("task_id") && evidence.task_id !== taskId) ||
+        (fields.includes("source_revision") && (typeof evidence.source_revision !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(evidence.source_revision))) ||
+        (record.kind === "DISPATCH_COMMITTED" && evidence.dispatch_id !== "dispatch_commit_" + scope.approved_plan_sha256) ||
+        (record.kind === "SEED_VERIFIED" && !["preserve_draft", "coder_reapply"].includes(evidence.input_mode)) ||
+        (record.kind === "EXECUTION_CLAIMED" && (evidence.role !== "coder" || evidence.attempt !== 1 ||
+          ["work_item_id", "lease_id", "assignment_id"].some(field => typeof evidence[field] !== "string") ||
+          !/^work_[a-z0-9][a-z0-9_-]{2,95}$/.test(evidence.work_item_id) ||
+          !/^lease_[a-z0-9][a-z0-9_-]{2,63}$/.test(evidence.lease_id) ||
+          !/^assignment_[a-z0-9][a-z0-9_-]{2,63}$/.test(evidence.assignment_id))))
+      throw new Error("invalid preparation evidence");
+    return {kind: record.kind, scope: {...scope}, observed_at: record.observed_at, record_sha256: record.record_sha256,
+      evidence: Object.fromEntries(fields.map(field => [field, evidence[field]]))};
+  }).sort((left, right) => preparationKinds.indexOf(left.kind) - preparationKinds.indexOf(right.kind));
+}
+function syncRecoveryPreparationTarget() {
+  const scope = currentRecoveryPreparationScope(), key = preparationScopeKey(scope);
+  if (key === recoveryPreparationTargetKey && selectionIntentRevision === recoveryPreparationTargetRevision) return;
+  recoveryPreparationTargetKey = key;
+  recoveryPreparationTargetRevision = selectionIntentRevision;
+  if (!samePreparationScope(scope, recoveryPreparationObservation?.scope))
+    recoveryPreparationObservation = scope ? {scope, records: [], issue: "loading", readAt: null} : null;
+  if (recoveryPreparationFlight) recoveryPreparationFlight.controller.abort();
+  else if (scope) void refreshRecoveryPreparationProgress();
+}
+async function refreshRecoveryPreparationProgress() {
+  const scope = currentRecoveryPreparationScope(), revision = selectionIntentRevision;
+  if (!scope) {syncRecoveryPreparationTarget(); return;}
+  if (recoveryPreparationFlight) return recoveryPreparationFlight.promise;
+  recoveryPreparationTargetKey = preparationScopeKey(scope);
+  recoveryPreparationTargetRevision = revision;
+  if (!samePreparationScope(scope, recoveryPreparationObservation?.scope))
+    recoveryPreparationObservation = {scope, records: [], issue: "loading", readAt: null};
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 8000);
+  const flight = {scope, revision, controller, promise: null};
+  recoveryPreparationFlight = flight;
+  const current = () => selectionIntentRevision === revision && samePreparationScope(scope, currentRecoveryPreparationScope());
+  flight.promise = (async () => {
+    try {
+      const response = await fetch("/api/v1/operations/" + encodeURIComponent(scope.operation_id) + "/preparation-progress",
+        {cache: "no-store", signal: controller.signal});
+      if (!response.ok) throw new Error(response.status === 404 ? "unsupported" : "unavailable");
+      const records = verifiedPreparationRecords(await response.json(), scope);
+      if (!current()) return;
+      if (controller.signal.aborted) throw new Error("unavailable");
+      if (recoveryPreparationObservation.records.some(saved =>
+        !records.some(record => record.kind === saved.kind && record.record_sha256 === saved.record_sha256)))
+        throw new Error("preparation records changed");
+      recoveryPreparationObservation = {scope, records, issue: null, readAt: new Date().toISOString()};
+    } catch (error) {
+      if (!current()) return;
+      recoveryPreparationObservation = {...recoveryPreparationObservation,
+        issue: error?.message === "unsupported" ? "unsupported" : "unavailable"};
+    } finally {
+      clearTimeout(timeout);
+      recoveryPreparationFlight = null;
+      if (current()) render({preserveComposer: true, incremental: true});
+      else if (currentRecoveryPreparationScope()) void refreshRecoveryPreparationProgress();
+    }
+  })();
+  return flight.promise;
+}
+function preparationRecordLabel(record) {
+  return {AUTHORIZATION_RECORDED: "恢复授权已核验", TASK_SEALED: "恢复任务输入已封存",
+    DISPATCH_COMMITTED: "派发记录已保存", EXECUTION_CLAIMED: "开发执行已领取（历史记录）"}[record.kind] ||
+    (record.evidence.input_mode === "coder_reapply" ? "恢复输入已核验，旧进度交由开发继续适配" : "保留改动已载入并核验");
+}
+function preparationReadMessage(facts) {
+  if (facts.issue === "unsupported") return "当前服务不提供恢复准备明细；请以交付流程和执行记录为准。";
+  if (facts.issue === "unavailable") return "恢复准备明细暂不可读取，将自动重试；这不能说明交付已停止。";
+  if (facts.issue === "loading") return "正在读取已保存的恢复准备明细。";
+  if (!facts.records.length) return "本次操作没有已保存的准备明细。当前执行状态仍以交付流程和执行记录为准。";
+  return null;
+}
+function recoveryPreparationSection(request) {
+  const facts = recoveryPreparationFacts(request);
+  if (!facts) return null;
+  const section = viewGroup(el("section", undefined, "detail-section recovery-preparation"),
+    "recovery-preparation:" + preparationScopeKey(facts.scope));
+  section.setAttribute("aria-label", "恢复准备明细");
+  const title = selected?.kind === "task" ? "当前需求的恢复准备明细" : "恢复准备明细";
+  section.append(viewBlock(el("h3", title), "preparation-heading", title),
+    viewBlock(el("p", "以下是平台已保存的准备事实；不代表当前执行状态或验收结论。", "muted"), "preparation-note", []));
+  const message = preparationReadMessage(facts);
+  if (message) section.append(viewBlock(el("p", message, "muted preparation-read-notice"), "preparation-read-notice", message));
+  if (facts.records.length) {
+    const list = viewGroup(el("ol", undefined, "preparation-milestones"), "preparation-milestones");
+    for (const record of facts.records) {
+      const row = viewBlock(el("li"), "preparation-record:" + record.kind, record);
+      const timestamp = el("time", time(record.observed_at), "muted");
+      timestamp.setAttribute("datetime", record.observed_at);
+      row.append(el("span", preparationRecordLabel(record)), timestamp);
+      list.append(row);
+    }
+    section.append(list);
+  }
+  if (facts.readAt && (facts.issue || !operationsAvailable))
+    section.append(viewBlock(el("p", "保留上次读取的明细 · " + time(facts.readAt), "muted preparation-read-notice"),
+      "preparation-saved-read", facts.readAt));
+  return section;
+}
+function preparationLatestSummary(request) {
+  const facts = recoveryPreparationFacts(request);
+  if (!facts) return null;
+  const latest = [...facts.records].sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at))[0];
+  return latest ? "最近准备记录 · " + preparationRecordLabel(latest) + " · " + time(latest.observed_at) +
+    (facts.issue || !operationsAvailable ? "（上次读取）" : "") : preparationReadMessage(facts);
 }
 const acknowledgedOperationNoticeKeys = new Set(
   (() => {
@@ -1792,6 +1960,7 @@ function currentOperationProgress(operation, request) {
     responsibility: {product: "产品负责人", team: "ASE 团队", engineering: "工程团队"}[responsibility] || null,
     nextAction: node.upstreamProcessing ? "请等待本轮处理完成。"
       : humanizeBlockingText(node.nextAction || execution?.next_action || request.next_action),
+    preparation: preparationLatestSummary(request),
   };
 }
 function productExecutionSummary(item, {guidance = true} = {}) {
@@ -8574,6 +8743,7 @@ function requestOperationHistory(panel, request) {
       if (progress.reason) item.append(el("p", "当前原因 · " + progress.reason));
       if (progress.responsibility) item.append(el("p", "处理方 · " + progress.responsibility, "muted"));
       if (progress.nextAction) item.append(el("p", "下一步 · " + progress.nextAction));
+      if (progress.preparation) item.append(el("p", progress.preparation, "muted"));
     } else if (outcome) {
       item.append(el("strong", outcome.title, outcome.className), el("p", "发起操作 · " + operationActionLabel(record), "muted"),
         el("p", "记录的是当次操作结束时的交付状态；当前进度请查看上方交付流程。", "muted"));
@@ -8800,6 +8970,7 @@ function taskFeedbackSection(history, taskId) {
   return fold;
 }
 function renderDetail({ incremental = false } = {}) {
+  syncRecoveryPreparationTarget();
   // Retain every repository plan visible in this requirement; prune once for the
   // complete detail, never while rendering an individual repository's controls.
   pruneNativeRuleReviews();
@@ -8991,6 +9162,8 @@ function buildDetail(panel = document.getElementById("detail")) {
         ),
       );
     current.append(overview);
+    const preparation = recoveryPreparationSection(item);
+    if (preparation) current.append(preparation);
     if (blocking) current.append(blocking);
     const currentKnowledgeVisible = Boolean(item.knowledge_gap?.is_current);
     if (currentKnowledgeVisible)
@@ -9104,6 +9277,8 @@ function buildDetail(panel = document.getElementById("detail")) {
   activity.classList.add("task-activity-block");
   viewBlock(activity, "task-activity", [item.status, item.terminal, item.role_queue, historicalTask]);
   current.append(overview, activity);
+  const preparation = recoveryPreparationSection(taskParentRequest(item));
+  if (preparation) current.append(preparation);
   const engineering = engineeringDetails("任务工程详情", item.id);
   viewGroup(engineering, "task-engineering");
   const engineeringBody = viewBlock(el("div"), "task-engineering-facts",
@@ -9366,6 +9541,7 @@ async function refreshOperations(signal) {
     if (!Array.isArray(values)) throw new Error("invalid operations response");
     operations = values;
     operationsAvailable = true;
+    syncRecoveryPreparationTarget();
   } catch {
     // Retain the last verified history for reading; it is no longer current authority.
     operationsAvailable = false;
@@ -9618,4 +9794,4 @@ document
   .getElementById("refresh")
   .addEventListener("click", () => refresh(undefined, true));
 refresh();
-setInterval(refresh, 5000);
+setInterval(() => {refresh(); void refreshRecoveryPreparationProgress();}, 5000);

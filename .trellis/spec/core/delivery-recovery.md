@@ -1126,19 +1126,26 @@ mistake cleanup latency for a model call. Diagnose via bounded stack/progress, n
 
 ### 1. Scope / Trigger
 
-Applies when the first admitted Coder run in a recovery Task creates a candidate, then QA returns
-`FAIL` or Reviewer returns `REJECT` and the same live serial runtime routes the Task back to Coder.
-This is an ordinary later Task attempt, not a replay of the recovery seed admission.
+Applies when the first admitted Coder run in a recovery Task saves a valid `coder-progress`, or
+creates a candidate that QA/Reviewer returns for correction. Each subsequent serial request is an
+ordinary later Task attempt, not a replay of recovery seed admission. Production dispatch can create
+a fresh provider adapter for every request; adapter object lifetime cannot define admission scope.
 
 ### 2. Signatures
 
 ```python
 InitialWorkspaceAdmission.authorize(request: AgentRequest, workspace_root: Path) -> None
+FirstCoderRunWorkspaceAdmission(delegate: InitialWorkspaceAdmission)
+workspace_admission_for_request(admission, request) -> InitialWorkspaceAdmission | None
 CodexCliAgentAdapter.run(request: AgentRequest) -> AgentResult
+ResponsesAgentAdapter.run(request: AgentRequest) -> AgentResult
 ```
 
-The adapter consumes its injected `InitialWorkspaceAdmission` exactly once after a successful
-authorization. Later requests on that same adapter use the normal Codex worktree preconditions.
+Terminal recovery explicitly wraps its seed/interruption admission in
+`FirstCoderRunWorkspaceAdmission`. Both provider adapters select this admission for attempt 1,
+including fresh adapter instances; attempt 2+ uses ordinary checkpoint/candidate guards. An
+unwrapped admission, including `BaselineInitialWorkspaceAdmission`, is checked on every applicable
+request against current claim and complete retained facts. There is no adapter-local consumed flag.
 
 ### 3. Contracts
 
@@ -1149,9 +1156,15 @@ authorization. Later requests on that same adapter use the normal Codex worktree
   checkpoint supplies the exact changed-path inventory.
 - Later attempts still enforce `WorkspacePolicy`, candidate inventory, commit binding, artifact
   parent/supersedes lineage and run replay guards. Consuming seed admission never widens permissions.
+- After accepted `coder-progress`, HEAD remains the input revision and the actual changed paths
+  must exactly match the persisted checkpoint. An extra path or mismatched checkpoint is rejected
+  before the provider, even though first-run seed admission is no longer selected.
+- Default baseline admission is not a one-shot seed: it rechecks each current Run/claim and can
+  reject a later request even when a previous request passed on the same adapter instance.
 - Process loss after the first admission remains non-replayable through `recovery execute`; only the
-  already-running serial runtime may continue to a later Coder attempt after a sealed QA/Review
-  verdict. A new process still requires the normal explicit successor recovery plan.
+  already-running serial runtime may continue to a later Coder attempt after an accepted
+  `coder-progress` checkpoint or sealed QA/Review verdict. A new process still requires the normal
+  explicit successor recovery plan.
 
 ### 4. Validation & Error Matrix
 
@@ -1159,10 +1172,12 @@ authorization. Later requests on that same adapter use the normal Codex worktree
 |---|---|
 | First recovery Coder request | authorize exact seed once, then run provider |
 | First authorization rejects | do not consume admission; no provider invocation |
+| Accepted progress followed by a fresh adapter | verify exact HEAD/dirty inventory/checkpoint, without replaying seed |
 | Reviewer rejects candidate in the same live runtime | run Coder attempt 2 at prior candidate SHA under normal clean-worktree policy |
 | Later HEAD differs from request source revision | fail closed before provider |
 | Later worktree is dirty without exact continuation checkpoint | fail closed before provider |
 | Recovery entry is restarted after admitted invocation | reject replay; require current recovery workflow |
+| Unwrapped baseline on a later attempt | recheck current authorization; rejection prevents provider call |
 
 ### 5. Good / Base / Bad Cases
 
@@ -1174,22 +1189,28 @@ authorization. Later requests on that same adapter use the normal Codex worktree
 
 ### 6. Tests Required
 
-`tests/agents/test_codex_cli.py` must run two Coder requests through one adapter with a one-shot fake
-admission. Assert admission count is one, both runs succeed, the second request starts from the first
-candidate, and the final worktree is clean. Existing recovery execution tests continue to prove that
-a restarted recovery entry cannot replay an already-admitted seed invocation.
+`tests/agents/test_initial_admission_scope.py` must exercise real Git worktrees and a new adapter per
+request, for both Codex and Responses. Assert first seed authorization occurs once; an accepted
+progress and a clean candidate can each reach a later provider without seed replay. Extra dirty
+paths, checkpoint mismatch and HEAD drift must still reject before provider. An unwrapped baseline
+must authorize every later Run and reject the second request when current authority changes.
+`tests/agents/test_codex_cli.py` also retains the same-adapter candidate correction case. Recovery
+entry replay protections remain unchanged; provider admission selection never authorizes a restart
+of the terminal recovery entry.
 
 ### 7. Wrong vs Correct
 
 ```python
-# Wrong: seed authorization is a permanent wrapper around every Coder correction.
-admission.authorize(second_attempt, candidate_worktree)
-
-# Correct: admit the approved seed once; later serial attempts use ordinary candidate guards.
+# Wrong: production recreates adapters, so an instance flag forgets prior admission.
 if not initial_admission_consumed:
-    admission.authorize(first_attempt, seeded_worktree)
+    seed.authorize(request, worktree)
+
+# Correct: only the explicitly wrapped terminal seed has first-Run scope.
+admission = workspace_admission_for_request(configured_admission, request)
+if admission is not None:
+    admission.authorize(request, worktree)
 else:
-    require_exact_head_and_clean_or_checkpointed_changes(second_attempt)
+    require_exact_head_and_clean_or_checkpointed_changes(request)
 ```
 
 ## D3: Explicit Coder reapplication on a clean base

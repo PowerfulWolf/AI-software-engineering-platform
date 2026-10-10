@@ -36,6 +36,8 @@ from ai_software_engineer.projection.models import ProjectionEventKind, Timeline
 from ai_software_engineer.recovery.verification_records import VerificationExecutionRecord
 from ai_software_engineer.redaction import redact_text, source_inspection_scope
 
+from .baseline_snapshot import BaselineBindingSnapshot
+
 
 def _read(path: Path) -> bytes:
     if any(value.is_symlink() for value in (path, *path.parents)):
@@ -110,9 +112,13 @@ def engineering_history(
     task: Task,
     scope: EngineeringScope,
     requirement_id: str,
+    *,
+    baseline_bindings: BaselineBindingSnapshot | None = None,
 ) -> tuple[TimelineEntry, ...]:
     with source_inspection_scope():
-        return _engineering_history(sidecar, task, scope, requirement_id)
+        return _engineering_history(
+            sidecar, task, scope, requirement_id, baseline_bindings=baseline_bindings
+        )
 
 
 def _engineering_history(
@@ -120,6 +126,8 @@ def _engineering_history(
     task: Task,
     scope: EngineeringScope,
     requirement_id: str,
+    *,
+    baseline_bindings: BaselineBindingSnapshot | None = None,
 ) -> tuple[TimelineEntry, ...]:
     entries: list[TimelineEntry] = []
     if scope.repository_root != task.repository:
@@ -559,7 +567,11 @@ def _engineering_history(
                     ),
                 )
             )
-        bindings = store.bindings_for_task(task.id)
+        bindings = (
+            baseline_bindings.bindings_for_task(store, task.id)
+            if baseline_bindings is not None
+            else store.bindings_for_task(task.id)
+        )
         for binding in bindings:
             binding.require_task(task)
             if binding.scope != scope:

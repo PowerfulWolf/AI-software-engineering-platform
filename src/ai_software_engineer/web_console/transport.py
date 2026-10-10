@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager, nullcontext
 from contextvars import ContextVar
 from importlib.resources import files
 from threading import Lock
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool as _threadpool
@@ -33,6 +33,10 @@ from ai_software_engineer.learning import DecideLearningProposal, LearningError
 from ai_software_engineer.multi_directory.attachments import (
     MAX_REQUIREMENT_SCREENSHOT_BYTES,
     RequirementAttachmentError,
+)
+from ai_software_engineer.recovery.preparation_progress import (
+    PreparationProgressView,
+    preparation_scope,
 )
 from ai_software_engineer.repository_workspace import RepositoryWorkspaceError
 from ai_software_engineer.spec_documents import CreateSpecDocument, SpecDocumentError
@@ -58,6 +62,7 @@ from .lifecycle import (
     ConfigurationLifecycle,
 )
 from .models import ConsoleAction, ConsoleIntent, ConsoleOperation, IdempotencyKey, OperationId
+from .preparation_store import PreparationProgressError
 from .service_lifecycle import (
     ConsoleShutdownCoordinator,
     OwnedProcessShutdownPort,
@@ -213,6 +218,29 @@ class ConsoleApplication(Protocol):
     def get(self, operation_id: str) -> ConsoleOperation: ...
     def list_operations(self) -> tuple[ConsoleOperation, ...]: ...
     def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]: ...
+
+
+@runtime_checkable
+class _PreparationProgressReader(Protocol):
+    def preparation_progress(self, operation: ConsoleOperation) -> PreparationProgressView: ...
+
+
+def _read_preparation_progress(
+    console: ConsoleApplication, operation_id: str, team_id: str
+) -> PreparationProgressView:
+    operation = console.get(operation_id)
+    if operation.operation_id != operation_id or operation.team_id != team_id:
+        raise PreparationProgressError("preparation operation scope differs from current Team")
+    value = (
+        console.preparation_progress(operation)
+        if isinstance(console, _PreparationProgressReader)
+        else PreparationProgressView(scope=preparation_scope(operation))
+    )
+    if value.scope != preparation_scope(operation) or any(
+        record.observed_at < operation.requested_at for record in value.records
+    ):
+        raise PreparationProgressError("preparation observations differ from original operation")
+    return value
 
 
 class SubmitOperation(DomainModel):
@@ -1017,6 +1045,26 @@ def create_console_app(
             value = await run_in_threadpool(administration.status)
         except AdministrationError:
             return _error(503, "ADMIN_UNAVAILABLE", "Runtime status is unavailable.")
+        return JSONResponse(value.to_wire())
+
+    @app.get("/api/v1/operations/{operation_id}/preparation-progress")
+    async def preparation_progress(operation_id: str) -> Response:
+        try:
+            TypeAdapter(OperationId).validate_python(operation_id)
+        except ValidationError:
+            return _error(404, "NOT_FOUND", "未找到该操作记录。")
+        try:
+            value = await run_in_threadpool(
+                _read_preparation_progress, console, operation_id, command_team_id
+            )
+        except ConsoleOperationNotFound:
+            return _error(404, "NOT_FOUND", "未找到该操作记录。")
+        except (PreparationProgressError, ConsoleOperationConflict, ValueError, OSError):
+            return _error(
+                503,
+                "PREPARATION_PROGRESS_UNAVAILABLE",
+                "平台暂时无法读取并核验恢复准备明细。已批准操作仍按原记录处理，请稍后刷新查看。",  # noqa: RUF001
+            )
         return JSONResponse(value.to_wire())
 
     @app.get("/api/v1/operations/{operation_id}/model-calls")

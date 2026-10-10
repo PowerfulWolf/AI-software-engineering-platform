@@ -32,6 +32,7 @@ from .directories import NativeDirectoryChooser
 from .lifecycle import ConfigurationApplyError, FileConfigurationLifecycle
 from .manager import ManagerConsoleAdapter
 from .models import ConsoleIntent, ConsoleOperation
+from .preparation_store import open_preparation_progress_store
 from .service_lifecycle import (
     ConsoleShutdownCoordinator,
     ServiceInstance,
@@ -153,6 +154,9 @@ def production_console_app(
             store=store,
             executor=ManagerConsoleAdapter(host),
             operation_scope=owned_processes.operation_scope,
+            preparation_store=open_preparation_progress_store(
+                host.team_workspace.directory("work-items") / "console-preparation-progress"
+            ),
         )
         reader = ProductionTeamReader(config, variables)
     except (OSError, ProductionConfigError, QueueError, StoreError, ValueError):

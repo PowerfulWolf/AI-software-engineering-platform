@@ -1,5 +1,43 @@
 # Console incremental polling
 
+## 恢复准备使用独立只读刷新通道（2026-10-10）
+
+Scope：当前选中 Requirement（含其 Task 详情的父 Requirement）的精确恢复操作。
+GET `/api/v1/operations/{operation_id}/preparation-progress` 返回已完成准备观察；
+wire/存储/真实发布边界见 `web-console.md` 的恢复准备明细契约。
+
+- 每五秒仅读取当前选中的一个精确恢复操作；独立 single flight、短 read deadline 与
+  AbortController，不能排在 `refreshFlight` 等待慢 Team GET 的尾部。重复 tick合并，
+  不并发重读全部历史 Operation，不因准备明细失败重试审批或执行。
+- 冻结并在每次返回时重新核对 Team/Project/Requirement/Operation、发起checkpoint、
+  approved plan 和 `selectionIntentRevision`；项目切换、需求切换、操作变化或终结后，
+  旧回调不得污染新的当前页面。读取明细不能清除 Team/Operations freshness故障或恢复controls。
+- 正文直接呈现已记录的准备明细与观察时间，重要内容不藏在排障折叠区。概览与当前操作行
+  复用同源最后观察；保留真实当前角色节点，历史领取不能覆盖新的QA/Review或当前阻塞。
+- seed `input_mode=coder_reapply` 显示“恢复输入已核验，旧进度交由开发继续适配”；
+  `preserve_draft` 才可显示“保留改动已载入并核验”。无记录明确“本次操作未记录准备明细”。
+  不渲染服务器自由文本、哈希、进程、lease或百分比作为产品下一步。
+- 读取失败/旧服务404/非法view给固定中文说明，不冒充执行失败；同scope以前成功明细可保留，
+  明示上次读取/观察时间，不推断仍在执行。不接受缺证据、重复kind、scope漂移或未知enum；
+  合法缺中间记录只展示实际已有项，不补齐未观察阶段。
+- 明细进入 keyed content/detail/block signatures，以增量协调保持原文档DOM、展开、阅读
+  位置、选择与业务草稿。明细每次读取相同内容不替换正文，不重复弹出ACTIVE通知。
+
+| 场景 | 用户展示与验证 |
+| --- | --- |
+| Team GET被hold或返回busy，新准备记录可读 | 独立读取明细并展示，原Team控制仍暂停 |
+| Project/Requirement/plan切换后旧response返回 | 不采纳旧response，零审批POST |
+| 旧Operation空记录/旧服务404 | 未记录/暂不能读取，不能说恢复失败或建议重建 |
+| 明细暂不可读，先前同scope记录存在 | 保留时间标记的旧明细，原正文DOM/草稿不变 |
+| seed以coder_reapply适配 | 明示开发继续适配，不声称旧补丁已合入 |
+| 已领取观察之后新QA/Review或失败 | 当前节点以原已核验事实为准，观察仅描述过去时刻 |
+
+Good：用户无需技术标识即可理解平台已完成什么，当前角色状态仍有独立事实来源。
+Base：普通交付无新观察轮询。Bad：为了取得“进度”重复提交Continue、重置页面或放宽审批门禁。
+增量用例：`preparation-progress.test.cjs` 与 `browser/preparation-progress.test.cjs`；
+真实390/1024/1440布局、无横溢出、正文DOM/草稿与旧callback测试。存量无需改库；
+加载兼容资产后刷新原需求，旧操作仍按实际无观察降级；回滚资产保留所有后台事实。
+
 ## Retained Team data cannot authorize current decisions (2026-10-10)
 
 ```javascript

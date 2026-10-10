@@ -132,3 +132,41 @@ old callbacks and no fixture writes. Real screenshots at 1440/1024/390px exposed
 line still calling the old BLOCKED phase current; its separate focused task is in progress.
 These checks use fully intercepted fixture APIs; they do not claim live production browser or
 deployment acceptance. Only affected incremental tests are run.
+
+267da45 completed and independently checked that recovery summaries use the same current node
+for their phase. Real 390/1440 screenshots show recovery preparation rather than the old BLOCKED
+phase. The focused Node set passed 134 cases; independent subset passed 17. This asset remains
+undeployed while the same already accepted Operation is active.
+
+At 09:51:57 UTC, typed invocation verification succeeded with SHA-256
+8ccbbe105a6868484cbf5d53f6c134ce29bfcc4800c04ba0bedb959cd9923203; the service's actual process
+tree then included codex PID 13186, code-mode-host 13946 and its Python child 24314. Thus new
+provider execution actually started, while Task remained IMPLEMENTING / attempts 1 / revision 2.
+No QA, Reviewer, candidate or completion is inferred from invocation admission or process launch.
+Operation remains RUNNING, no duplicate approval POST and no maintenance restart was issued.
+
+Bounded old/current Team read probes both completed in about seven seconds. At 10:00:42 UTC the
+actual public Team GET also completed in 6.919 seconds and returned current DELIVERING / Coder
+RUNNING with a valid actual role claim. Repeated earlier busy replies do not establish one worker
+holding the gate for that whole interval. No stuck-worker root cause or deployed speedup is claimed.
+The separate recovery-preparation-progress task adds future operation-scoped observed milestones;
+it does not retrofit this old RUNNING Operation or alter its approvals, Task or execution history.
+
+
+## 本次恢复已结束，第二轮准入缺陷（2026-10-10）
+
+operation_bacb1b32b242923bc2d4dbad68818733于10:06:33.161766Z结束，Operation为
+SUCCEEDED但result.stage=BLOCKED；命令处理成功不等于K1验收通过。最终checkpoint为
+9a1a02899a6ac5d394962dfe88bb3140917af473e502bbae129e62d6fa1190ff。
+第一轮真实Coder已接纳progress art_coder_1cbfcc0ef2253347573fa3b712088a76，SHA
+92851014ea34681668a377b4bb75e327ad78b91fe6e99765aaf53e201a8e4f04，共27文件。
+它正常经过CONTINUE_REQUIRED→QUEUED→IMPLEMENTING；第二轮run_7c1dccc000b848f0bcacbe02c6840b23
+在provider前因重复seed准入失败进入BLOCKED。生产每request创建新adapter，旧对象内consumed
+标志无法表达首Run准入。这次以显式typed scope修复，默认baseline仍每Run检查。
+原需求、原Task和恢复Task历史不重置，下一次需同Requirement新exact恢复计划保留最新progress。
+
+恢复准备观察、read snapshot复用和首Run准入三项均使用单独Trellis任务，增量验证与独立review。
+真实fixture Chrome 4项通过，root查看1440与390截图，三尺寸无横溢出、阅读/草稿保持。
+这些是隔离fixture验收，尚未冒充生产部署验收。10-10-baseline-read-snapshot真实顺序测量
+6.7796→5.2838秒，完整bindings3→2；精确root/task为2+1→1+1，wire与263项封存inventory
+SHA均不变。未宣称修复连续小时read gate或内存泄漏。当前新增修改待提交与受控加载。

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, cast
 from pydantic import TypeAdapter, ValidationError
 
 from ai_software_engineer.agents.codex_cli import InitialWorkspaceAdmission
+from ai_software_engineer.agents.workspace_admission import FirstCoderRunWorkspaceAdmission
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import (
     ModelProviderKind,
@@ -75,6 +76,12 @@ from ai_software_engineer.recovery.models import (
     digest,
 )
 from ai_software_engineer.recovery.native import NativeRecoverySourceReader
+from ai_software_engineer.recovery.preparation_progress import (
+    record_authorization,
+    record_dispatch_committed,
+    record_seed_verified,
+    record_task_sealed,
+)
 from ai_software_engineer.recovery.scope import (
     expanded_recovery_permissions,
     inspect_recovery_scope_supplement,
@@ -490,8 +497,10 @@ class NativeRecoveryEntry:
                 raise RecoveryRejected("approval replay differs from original confirmation")
             command = prior.command
         service, _, sealing = self._services(store, plan, confirmed_plan)
-        service.authorize(command)
-        sealing.seal(plan.plan_sha256)
+        authorization = service.authorize(command)
+        record_authorization(plan, authorization)
+        sealed = sealing.seal(plan.plan_sha256)
+        record_task_sealed(plan, sealed)
 
     def _manager(
         self, scope: RecoveryScope, branch_names: Mapping[str, BranchName | None] | None = None
@@ -647,7 +656,9 @@ class NativeRecoveryEntry:
             factory = (
                 route_factory(interruption)
                 if route_factory
-                else ConfiguredDeliveryRouteAdapterFactory(initial_workspace_admission=interruption)
+                else ConfiguredDeliveryRouteAdapterFactory(
+                    initial_workspace_admission=FirstCoderRunWorkspaceAdmission(interruption)
+                )
             )
             try:
                 result: RetryResult | KnowledgeGap = self._execute(
@@ -812,6 +823,7 @@ class NativeRecoveryEntry:
             agents=saved_agents,
             policies=(policy,),
         ).allocate(plan.plan_sha256)
+        record_dispatch_committed(plan, dispatch)
         definitions = _agent_definitions(dispatch, _task_commands(draft.facts.profile))
         if definitions[AgentRole.CODER].permissions != plan.effective_target_permissions:
             raise RecoveryRejected("new Coder permissions differ from approved recovery")
@@ -843,7 +855,8 @@ class NativeRecoveryEntry:
             contexts=contexts,
         )
         if interruption is None:
-            seed.seed(binding.worktree)
+            seed_record = seed.seed(binding.worktree)
+            record_seed_verified(plan, seed_record, dispatch.task_id)
         else:
             interruption.prepare_workspace(binding.worktree)
         extra = (
@@ -874,7 +887,9 @@ class NativeRecoveryEntry:
         factory = (
             route_factory(seed)
             if route_factory is not None
-            else ConfiguredDeliveryRouteAdapterFactory(initial_workspace_admission=seed)
+            else ConfiguredDeliveryRouteAdapterFactory(
+                initial_workspace_admission=FirstCoderRunWorkspaceAdmission(seed)
+            )
         )
         return self.backend.run_prepared_allocation(
             dispatch,

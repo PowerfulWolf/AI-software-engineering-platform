@@ -102,6 +102,7 @@ from ai_software_engineer.team_workspace import (
 )
 from ai_software_engineer.work_queue.models import QueuedWorkItem
 
+from .baseline_snapshot import BaselineBindingSnapshot
 from .blocker_text import localize_blocking_text
 from .models import (
     AgentView,
@@ -280,6 +281,7 @@ class _TaskReadSnapshot:
     _route_attempts: _ModelRouteAttemptCache
     _branches: _CandidateBranchCache
     _evaluations: _EvaluationEventCache = field(default_factory=_EvaluationEventCache)
+    _baselines: BaselineBindingSnapshot = field(default_factory=BaselineBindingSnapshot)
     _views: dict[tuple[Path, str | None, str, str, str, str | None], TaskView] = field(
         default_factory=dict
     )
@@ -308,6 +310,7 @@ class _TaskReadSnapshot:
                 route_attempts=self._route_attempts,
                 branch_cache=self._branches,
                 evaluation_events=self._evaluations,
+                baseline_bindings=self._baselines,
             )
         return self._views[identity]
 
@@ -1138,6 +1141,8 @@ def _continuation_history(
     task: Task,
     expected_scope: ContinuationScope,
     artifacts: tuple[Artifact, ...] = (),
+    *,
+    baseline_bindings: BaselineBindingSnapshot | None = None,
 ) -> tuple[tuple[TimelineEntry, ...], ExecutionInterruptionReceipt | None]:
     """Read every immutable interruption/admission, including feedback-bound sources."""
     root = sidecar / "state" / "continuations" / task.id
@@ -1156,12 +1161,13 @@ def _continuation_history(
     if baseline_root.is_dir():
         from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 
-        baselines = {
-            binding.binding_sha256: binding
-            for binding in FileExecutionBaselineStore(
-                baseline_root, read_only=True
-            ).bindings_for_task(task.id)
-        }
+        baseline_store = FileExecutionBaselineStore(baseline_root, read_only=True)
+        bindings = (
+            baseline_bindings.bindings_for_task(baseline_store, task.id)
+            if baseline_bindings is not None
+            else baseline_store.bindings_for_task(task.id)
+        )
+        baselines = {binding.binding_sha256: binding for binding in bindings}
     entries: list[TimelineEntry] = []
     for receipt in receipts:
         receipt.validate_integrity()
@@ -1948,6 +1954,7 @@ def _read_task_details(
     route_attempts: _ModelRouteAttemptCache | None = None,
     branch_cache: _CandidateBranchCache | None = None,
     evaluation_events: _EvaluationEventCache | None = None,
+    baseline_bindings: BaselineBindingSnapshot | None = None,
 ) -> TaskView:
     cp = native.checkpoint
     if cp.dispatch_commit_id is None and dispatch_override is None:
@@ -2103,6 +2110,7 @@ def _read_task_details(
                 repository_root=task.repository,
             ),
             cp.delivery_id,
+            baseline_bindings=baseline_bindings,
         )
         from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
         from ai_software_engineer.team_view.queue_reader import read_pending_baseline_continuation
@@ -2122,6 +2130,7 @@ def _read_task_details(
             if baseline_root.exists()
             else None,
             views=role_queue,
+            baseline_bindings=baseline_bindings,
         )
         history, continuation_receipt = _continuation_history(
             native.sidecar,
@@ -2134,6 +2143,7 @@ def _read_task_details(
                 dispatch_sha256=dispatch.dispatch_sha256,
             ),
             artifacts,
+            baseline_bindings=baseline_bindings,
         )
         timeline = tuple(
             sorted(

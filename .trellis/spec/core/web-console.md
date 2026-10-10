@@ -2041,3 +2041,60 @@ SQL release 后 Host 启动前崩溃，重试仅允许精确仍为 READY 的原 
 release 的联合核验，READY 身份、当前版本和无 ACTIVE claim 均匹配；点击复用同一决定及引用，
 不要求新 checkbox、额度或工程批准。即使此前通过 CLI 批准而没有 Console Operation 也可接续。
 已领取、后续等待或完成后移除入口；仅有授权文件时不显示“已授权待执行”。
+## 恢复准备的独立观察明细（2026-10-10）
+
+Scope：`CONTINUE_DELIVERY` 携带精确 `approved_plan_sha256` 的恢复执行。Operation RUNNING
+只证明该命令已领取，准备可能包括完整旧现场检查与输入封存；更新时间不是角色心跳。
+观察明细独立于执行权威，不能成为再次审批、角色启动、候选或 verdict 的证明。
+
+Signatures：`recovery.preparation_progress.PreparationProgressScope`、
+`PreparationProgressView(schema_version="v0.1", scope, records)`、
+`observe_recovery_preparation(operation, sink)`、
+`web_console.preparation_store.PreparationProgressStore.append(record)/read(scope)`；
+GET `/api/v1/operations/{operation_id}/preparation-progress`。独立 wire 契约为
+`schemas/recovery-preparation-progress.schema.json`，不扩展原 Operation hash chain。
+
+Contracts：scope 精确包含 `operation_id/team_id/project_id/delivery_id/`
+`expected_checkpoint_sha256/approved_plan_sha256`。每项记录带相同 scope、`observed_at`、
+`record_sha256` 与 discriminated typed `evidence`。只有已成功返回的真实应用服务边界
+允许发布：
+
+| kind | 已完成观察边界 | evidence |
+| --- | --- | --- |
+| AUTHORIZATION_RECORDED | 精确批准保存、核验返回 | authorization_sha256 |
+| TASK_SEALED | 恢复 Task 输入封存返回 | task_id/task_record_sha256/source_revision |
+| DISPATCH_COMMITTED | allocator 返回，派发事务已提交 | task_id/dispatch_id/dispatch_sha256/task_record_sha256 |
+| SEED_VERIFIED | seed 返回且完整输入核验完成 | task_id/seed_record_sha256/dispatch_sha256/input_mode |
+| EXECUTION_CLAIMED | Dispatcher 成功返回真实首轮 Coder claim | task_id/work_item_id/lease_id/assignment_id/claim_sha256/dispatch_sha256/source_revision/role=coder/attempt=1 |
+
+- 真实 claim 的边界在 MySQL commit 后、Worker 执行之前；不能用 dispatch 的预分配三阶段
+  lease 冒充领取，也不能把历史领取变成当前 RUNNING、heartbeat 或 provider 调用。
+- `observed_at` 仅为当前真实返回的观察时间，不倒填旧 artifact 原时间。缺少一个观察
+  不代表对应执行失败，不补造完整前缀；scope reset 后不附着下一次 Operation。
+- 只接受 enum、精确身份、digest 与时刻，不保存路径、补丁、owner token、环境或模型正文。
+  观察构造、clock、hash、sink及存储均 best effort；失败仅固定脱敏诊断，不使已经成功的
+  授权/dispatch/claim失败，不重试执行或增加计费。
+- 独立不可变文件与非阻塞锁；每 Operation 最多五项，每项 serialized UTF-8 ≤8192 bytes，
+  总预算40960 bytes。同 kind/同证据保留首次观察，证据不同拒绝覆盖；精确 scope、digest、
+  文件名、regular/no-symlink与条数/预算校验不可跳过。
+- GET 只核验已有 Operation 的 frozen intent 与独立观察记录，不调用 TeamReader、Host、
+  prepare、reconcile 或 SQL 初始化。非精确恢复操作返回 `scope=null,records=[]`；
+  已有恢复操作无观察返回精确 scope 与空数组。未知 Operation 返回404；损坏记录返回
+  固定中文 `503 PREPARATION_PROGRESS_UNAVAILABLE`，无异常正文或部分成功。
+- 读、观察失败都不修改 Task、WorkItem、Operation、审批或 verdict。旧 Operation 不倒填；
+  新增记录不授权基线更新、恢复继续、候选接纳或跳过独立 QA/Review。
+
+Good：Team GET 正在读取时，用户仍能独立看到已保存的恢复输入/派发观察与时间。
+Base：旧 Operation 无观察，诚实显示未记录准备明细，原执行不受影响。
+Bad：用时间推算百分比、把领取叫模型正在运行、通过观测失败触发重复执行、为旧记录倒填。
+Wrong：从 recovery dispatch 的 phase assignment 生成“Coder 已领取”。
+Correct：只在 Dispatcher tick 已提交实际 claim 返回后，匹配精确恢复 Task/首轮 Coder再观察。
+
+增量验证：`tests/web_console/test_preparation_progress.py`（包含真实 recovery entry 与
+supervisor 返回边界）及 Node/真实 fixture Chrome准备明细用例。
+断言 Schema/digest/scope/秘密字段/幂等/篡改/symlink/预算；观察失败仍一次执行；Team正在读取
+时GET可独立返回；只读前后 Operation sequence/hash及已封存bytes不变。
+
+存量数据处置：不改SQL、不重写旧 Operation、不补造历史 milestone；当前已接受命令继续按
+原运行事实监管。服务空闲后受控加载，新增观察仅覆盖以后真实开始的操作。回滚观察/API/
+资产并受控加载，保留原执行历史和已保存明细；这些明细不影响任何审批或执行权限。

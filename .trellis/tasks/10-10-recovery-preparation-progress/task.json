@@ -1,0 +1,27 @@
+{
+  "name": "recovery-preparation-progress",
+  "title": "为真实恢复准备提供独立可读明细，保持交付与审批事实分离",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/recovery/preparation_progress.py",
+    "src/ai_software_engineer/web_console/preparation_store.py",
+    "src/ai_software_engineer/web_console/core.py",
+    "src/ai_software_engineer/web_console/host.py",
+    "src/ai_software_engineer/web_console/transport.py",
+    "src/ai_software_engineer/recovery/entry.py",
+    "src/ai_software_engineer/work_queue/worker.py",
+    "src/ai_software_engineer/team_view/app.js",
+    "src/ai_software_engineer/team_view/style.css",
+    "tests/web_console/test_preparation_progress.py",
+    "tests/team_view/preparation-progress.test.cjs",
+    "tests/team_view/browser/preparation-progress.test.cjs",
+    "schemas/recovery-preparation-progress.schema.json",
+    ".trellis/spec/core/web-console.md",
+    ".trellis/spec/core/incremental-polling.md",
+    "docs/user/team-console.md",
+    ".trellis/tasks/10-10-recovery-preparation-progress",
+    "tests/team_view/browser/polling-state.test.cjs"
+  ]
+}

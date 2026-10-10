@@ -1438,6 +1438,51 @@ main[data-page="requests"] #detail {
 .engineering-wait-recheck-help .settings-help-text {
   white-space: pre-line;
 }
+.recovery-preparation,
+.request-chapter > .recovery-preparation,
+.task-chapter > .recovery-preparation {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8f9fb;
+}
+.recovery-preparation > h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+.recovery-preparation > p {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+.preparation-milestones {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding-left: 22px;
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+.preparation-milestones > li {
+  margin: 0;
+  padding-left: 2px;
+  overflow-wrap: anywhere;
+}
+.preparation-milestones time {
+  display: inline-block;
+  margin-left: 12px;
+  font-size: 0.8125rem;
+}
+.recovery-preparation > .preparation-read-notice {
+  margin-top: 8px;
+}
+@media (max-width: 620px) {
+  .preparation-milestones time {
+    display: block;
+    margin-left: 0;
+  }
+}
 .engineering-investigation-result {
   display: grid;
   gap: 8px;

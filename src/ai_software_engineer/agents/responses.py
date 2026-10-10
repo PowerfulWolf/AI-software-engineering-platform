@@ -48,7 +48,10 @@ from ai_software_engineer.agents.ports import (
     AgentError,
     AgentRequestConflict,
 )
-from ai_software_engineer.agents.workspace_admission import InitialWorkspaceAdmission
+from ai_software_engineer.agents.workspace_admission import (
+    InitialWorkspaceAdmission,
+    workspace_admission_for_request,
+)
 from ai_software_engineer.domain import AgentDefinition, AgentRole
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.artifact import (
@@ -903,10 +906,10 @@ def _validate_request_binding(
     if continuation_admitted:
         # Only the trusted control's exact one-use admission can reach this seam.
         return
-    if initial_admission is not None:
+    if (admission := workspace_admission_for_request(initial_admission, request)) is not None:
         if request.role is not AgentRole.CODER:
             raise ResponsesAgentConfigurationError("workspace seed admission is Coder-only")
-        initial_admission.authorize(request, root)
+        admission.authorize(request, root)
         return
     observed = candidate_commit.changed_paths()
     if request.continuation_checkpoint_id is None:

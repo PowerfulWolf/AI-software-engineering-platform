@@ -27,6 +27,7 @@ from ai_software_engineer.agents.codex_cli import (
     SubprocessCodexCommandRunner,
     _completion_reserve_seconds,
 )
+from ai_software_engineer.agents.workspace_admission import FirstCoderRunWorkspaceAdmission
 from ai_software_engineer.domain import (
     AgentRole,
     ChangedFile,
@@ -537,7 +538,7 @@ def test_recovery_seed_admission_is_consumed_before_review_remediation(
         agent_version="v0.1",
         prompt_builder=StaticPromptBuilder(),
         runner=runner,
-        initial_workspace_admission=admission,
+        initial_workspace_admission=FirstCoderRunWorkspaceAdmission(admission),
     )
 
     first = adapter.run(first_request)

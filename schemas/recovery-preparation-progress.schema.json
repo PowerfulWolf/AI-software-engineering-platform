@@ -1,0 +1,462 @@
+{
+  "$defs": {
+    "AuthorizationEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorization_sha256"
+      ],
+      "title": "AuthorizationEvidence",
+      "type": "object"
+    },
+    "AuthorizationRecorded": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/PreparationProgressScope"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "AUTHORIZATION_RECORDED",
+          "default": "AUTHORIZATION_RECORDED",
+          "title": "Kind",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/AuthorizationEvidence"
+        }
+      },
+      "required": [
+        "scope",
+        "observed_at",
+        "record_sha256",
+        "evidence"
+      ],
+      "title": "AuthorizationRecorded",
+      "type": "object"
+    },
+    "DispatchCommitted": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/PreparationProgressScope"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "DISPATCH_COMMITTED",
+          "default": "DISPATCH_COMMITTED",
+          "title": "Kind",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/DispatchCommittedEvidence"
+        }
+      },
+      "required": [
+        "scope",
+        "observed_at",
+        "record_sha256",
+        "evidence"
+      ],
+      "title": "DispatchCommitted",
+      "type": "object"
+    },
+    "DispatchCommittedEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "dispatch_id": {
+          "pattern": "^dispatch_commit_[a-f0-9]{64}$",
+          "title": "Dispatch Id",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        },
+        "task_record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "dispatch_id",
+        "dispatch_sha256",
+        "task_record_sha256"
+      ],
+      "title": "DispatchCommittedEvidence",
+      "type": "object"
+    },
+    "ExecutionClaimed": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/PreparationProgressScope"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "EXECUTION_CLAIMED",
+          "default": "EXECUTION_CLAIMED",
+          "title": "Kind",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/ExecutionClaimedEvidence"
+        }
+      },
+      "required": [
+        "scope",
+        "observed_at",
+        "record_sha256",
+        "evidence"
+      ],
+      "title": "ExecutionClaimed",
+      "type": "object"
+    },
+    "ExecutionClaimedEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "work_item_id": {
+          "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "lease_id": {
+          "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "assignment_id": {
+          "pattern": "^assignment_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Assignment Id",
+          "type": "string"
+        },
+        "claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Claim Sha256",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "role": {
+          "const": "coder",
+          "default": "coder",
+          "title": "Role",
+          "type": "string"
+        },
+        "attempt": {
+          "const": 1,
+          "default": 1,
+          "title": "Attempt",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "task_id",
+        "work_item_id",
+        "lease_id",
+        "assignment_id",
+        "claim_sha256",
+        "dispatch_sha256",
+        "source_revision"
+      ],
+      "title": "ExecutionClaimedEvidence",
+      "type": "object"
+    },
+    "PreparationProgressScope": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "pattern": "^[a-z][a-z0-9_.:-]{0,127}$",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "delivery_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "expected_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Expected Checkpoint Sha256",
+          "type": "string"
+        },
+        "approved_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Approved Plan Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "team_id",
+        "project_id",
+        "delivery_id",
+        "expected_checkpoint_sha256",
+        "approved_plan_sha256"
+      ],
+      "title": "PreparationProgressScope",
+      "type": "object"
+    },
+    "PreparationRecord": {
+      "discriminator": {
+        "mapping": {
+          "AUTHORIZATION_RECORDED": "#/$defs/AuthorizationRecorded",
+          "DISPATCH_COMMITTED": "#/$defs/DispatchCommitted",
+          "EXECUTION_CLAIMED": "#/$defs/ExecutionClaimed",
+          "SEED_VERIFIED": "#/$defs/SeedVerified",
+          "TASK_SEALED": "#/$defs/TaskSealed"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AuthorizationRecorded"
+        },
+        {
+          "$ref": "#/$defs/TaskSealed"
+        },
+        {
+          "$ref": "#/$defs/DispatchCommitted"
+        },
+        {
+          "$ref": "#/$defs/SeedVerified"
+        },
+        {
+          "$ref": "#/$defs/ExecutionClaimed"
+        }
+      ]
+    },
+    "SeedVerified": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/PreparationProgressScope"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "SEED_VERIFIED",
+          "default": "SEED_VERIFIED",
+          "title": "Kind",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/SeedVerifiedEvidence"
+        }
+      },
+      "required": [
+        "scope",
+        "observed_at",
+        "record_sha256",
+        "evidence"
+      ],
+      "title": "SeedVerified",
+      "type": "object"
+    },
+    "SeedVerifiedEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "seed_record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Seed Record Sha256",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        },
+        "input_mode": {
+          "enum": [
+            "preserve_draft",
+            "coder_reapply"
+          ],
+          "title": "Input Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "seed_record_sha256",
+        "dispatch_sha256",
+        "input_mode"
+      ],
+      "title": "SeedVerifiedEvidence",
+      "type": "object"
+    },
+    "TaskSealed": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/PreparationProgressScope"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "TASK_SEALED",
+          "default": "TASK_SEALED",
+          "title": "Kind",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/TaskSealedEvidence"
+        }
+      },
+      "required": [
+        "scope",
+        "observed_at",
+        "record_sha256",
+        "evidence"
+      ],
+      "title": "TaskSealed",
+      "type": "object"
+    },
+    "TaskSealedEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Record Sha256",
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Source Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "task_record_sha256",
+        "source_revision"
+      ],
+      "title": "TaskSealedEvidence",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PreparationProgressScope"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "records": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PreparationRecord"
+      },
+      "maxItems": 5,
+      "title": "Records",
+      "type": "array"
+    }
+  },
+  "required": [
+    "scope"
+  ],
+  "title": "PreparationProgressView",
+  "type": "object",
+  "$id": "https://ase.dev/schemas/recovery-preparation-progress.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

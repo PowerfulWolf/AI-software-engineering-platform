@@ -43,6 +43,7 @@ from ai_software_engineer.knowledge.queue import QueueKnowledgeWaitPort
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.orchestration import RetryResult
 from ai_software_engineer.orchestration.steps import BoundedRunControl, RoleRunBoundary
+from ai_software_engineer.recovery.preparation_progress import record_execution_claimed
 from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.runtime import RuntimeRunResult, RuntimeSession
 from ai_software_engineer.store import MySqlTaskRepository
@@ -456,6 +457,7 @@ class QueuedDeliverySupervisor:
                     "Role is queued or its previous execution lease has not expired"
                 )
             assert tick.claim is not None and tick.lease_owner_token is not None
+            record_execution_claimed(tick.claim, step.boundary, self.allocation_sha256)
             lease = WorkerLease(self.queue, tick.claim, tick.lease_owner_token)
             lease.start()
             self.guard.lease = lease
