@@ -69,8 +69,9 @@ Correct：新增字段显式排除 absent 默认，并回放原报告 key/读取
   路由请求产品操作。PRODUCT/DESIGNER/RESEARCH 是团队工作；未知 legacy route 和工程等待进入
   工程核验。责任不能从 question、Manager 自由文本、英文诊断或“人工等待”字样猜测。
   gap-routes 必须与当前 gap ID 精确绑定并验证 canonical digest。
-- `action_required` 指产品是否需要作业务决定。工程管理员沿用可信本机操作入口，技术审批与
-  知识处理放“工程管理”折叠区，明确这只是职责分流，并未引入独立账户 RBAC。
+- `action_required` 指产品是否需要作业务决定。工程管理员沿用可信本机操作入口；当前需要
+  人决定的精确恢复/文件范围审批直接可见，工程标识与可选证据才放折叠区。责任标注只是职责
+  分流，并未引入独立账户 RBAC，不能以“工程管理”为由隐藏当前可执行的审批。
 - 产品摘要回答当前阶段、实际执行、原因、责任方和下一步。Task/Run/lease/hash/source URI/
   policy/receipt 位于工程详情，不能成为正常产品推进的输入。
 - receipt/admission 只作为完整历史。读取必须绑定同 Team/Project/Repository/native delivery ID、
@@ -97,7 +98,8 @@ Correct：新增字段显式排除 absent 默认，并回放原报告 key/读取
 | receipt scope/intent/policy drift | fail closed，不写库或修补 sealed 事实 |
 | 等待转活跃、12+返工记录 | 详情选择保持，全部历史保留 |
 
-Good：产品只看到工程团队处理前提，管理员展开工程管理后操作精确计划；已保存故障与准入均可审计。
+Good：产品看到工程团队处理前提，当前工程授权事项与具体方案直接可见；可选证据可展开，
+已保存故障与准入均可审计。
 Base：旧 payload 没有 execution 时保留兼容渲染；read-side 不追溯授权旧 Task。
 Bad：隐藏 hash 但仍要求产品逐次批准技术故障；把已失效 lease 当作进程停止证明；
 用旧中断 receipt 掩盖已开始的 QA；切换状态后清空已选择的需求。
@@ -1240,3 +1242,85 @@ New readers keep old absent-field bytes and keys compatible. After new typed dia
 persisted, retain their domain/schema/history reading support during a behavior rollback;
 an older strict runtime cannot silently ignore the new field. Never strip new fields or delete
 reports to make rollback appear successful. Reader failure remains explicit and fail closed.
+
+## 当前审批与暂停版本必须可见（2026-10-10）
+
+### 1. Scope / Signatures
+
+Applies to `team_view/app.js` current Requirement recovery/file-scope decisions and the
+`EXECUTION_BASELINE_PAUSED` panel. This is a read-side correction, not a new engineering approval,
+target-selection service, role permission or state transition.
+
+```javascript
+recoveryApprovalBox(request, approval) -> HTMLElement
+submitRecoveryApprovalOperation(intent, approvalSignature) -> Promise<Operation | null>
+engineeringBaselinePauseFacts(request, task, step) -> ExactBaselineBinding | null
+engineeringBaselinePauseBox(request, task, step) -> HTMLElement
+```
+
+### 2. Contracts
+
+- A current unconsumed `latestApproval(id, checkpoint)` appears in `阻塞信息` as a visible section.
+  Its title, exact decision facts, consequence and approval button cannot be descendants of a
+  closed native `details`. Optional opaque identities/evidence remain secondary disclosures;
+  duties and server-side engineering-authority checks remain unchanged.
+  The nonblocked `requestOperation` placement must preserve this visibility too, rather than
+  wrapping the visible section in another engineering disclosure. Consumption checks include
+  `approved_plan_sha256`, `approved_scope_sha256` and `approved_repair_sha256`; a consumed repair
+  decision cannot reappear merely because its Requirement checkpoint did not change.
+- Rendering freezes the exact `CONTINUE_DELIVERY` input and the displayed approval signature.
+  Before submission, recheck Project/Requirement/checkpoint, current unconsumed approval facts,
+  nonterminal Requirement, `CONTINUE_DELIVERY` capability, control readiness and no active operation.
+  A retained/detached callback cannot approve changed facts, historical decisions or another Project.
+  The exact `approved_scope_sha256`/`coder_scope_request`, `approved_repair_sha256` or
+  `approved_plan_sha256` mapping is preserved; displaying or polling never submits it.
+- A validated pause binding always shows its `expected_source_revision` under
+  `继续使用的代码版本`, even when no current proposal exists. This is the actual saved execution
+  source that `RESUME_EXECUTION_BASELINE` will carry, not an assertion of latest main, a candidate
+  verdict or delivery completion. Optional target input stays empty without an exact proposal.
+- The saved-source `viewBlock` signature includes the full validated binding, including source,
+  execution-baseline digest and disposition. Unrelated heartbeats retain the same readable node;
+  a binding change replaces displayed version and continuation callback together. Missing/invalid
+  binding remains unavailable, and stale source callbacks keep the existing fail-closed behavior.
+- Complete stage/history presentation and independent Coder/QA/Review remain unchanged. Generic
+  baseline target input still requires an exact committed version; do not silently fill main/HEAD
+  or claim that this presentation fix adds automatic target selection.
+
+### 3. Validation Matrix / Good, Base, Bad
+
+| Case | Required behavior |
+| --- | --- |
+| Current scope/recovery/prerequisite/verification approval | Exact title/facts/action visible under native disclosure rules; original payload mapping |
+| Current approval placed through nonblocked `requestOperation` | Directly visible action; caller does not add a closed ancestor disclosure |
+| Changed checkpoint, digest/facts, consumed approval, closed Requirement or another Project | Old callback produces no POST |
+| Operation-read/control/capability unavailable or an active command | Old callback produces no POST; current control gates remain effective |
+| Pause with no current proposal | Saved current source visible, optional target blank, exact continue available only under original gates |
+| Same pause + unrelated heartbeat | Same saved-source node; no automatic continuation |
+| Pause source/baseline/disposition changed | Saved-source node updates, old callback rejected, fresh continue uses the displayed binding |
+
+Good: operator reads a visible exact decision, then confirms it; a paused operator sees the saved
+version before continuing. Base: no current approval exists, or binding is incomplete; no approval
+or version is invented. Bad: assert only that a button exists under a closed disclosure, or instruct
+the user to confirm a version while showing only an empty optional target field.
+
+### 4. Tests / Wrong vs Correct
+
+`tests/team_view/ui.test.cjs` must use native disclosure-aware visibility traversal for the actual
+Requirement blocker, not only DOM membership. `engineering-wait.test.cjs` covers all four approval
+payload/consumption kinds, full nonblocked `requestOperation` placement, stale callbacks across
+the matrix, and `reconcileViewChildren` of pause without a
+proposal: unchanged heartbeat retains source DOM; changed binding updates text and rejects the old
+callback before the new exact continuation is submitted. Use `textContent` throughout.
+
+Wrong: `engineeringDetails(...).append(approvalButton)` or bind saved-source text to `Boolean(plan)`.
+Correct: visible exact decision with rechecked current authority; saved-source block binds the
+validated pause facts, independent of proposal history. Incremental Node tests and syntax/diff
+checks cover the contract; browser authentication failure is not visual acceptance.
+
+### 5. 存量数据处置 / Rollback
+
+No SQL, Operation, journal, plan or historical approval rewrite. Refresh compatible frontend assets
+on the original Requirement to expose its current decision/saved version. Server-frozen assets may
+require loading the repaired service while idle; ordinary polling then retains reading state.
+Revert these frontend changes and refresh to roll back; all audit facts, exact plan authority,
+saved progress and independent QA/Review remain intact.

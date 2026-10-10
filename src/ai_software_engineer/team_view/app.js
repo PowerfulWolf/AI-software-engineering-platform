@@ -506,7 +506,8 @@ const latestApproval = (deliveryId, checkpoint) => {
           return !operations.some((candidate) => {
             const submittedApproval =
               candidate.intent.approved_plan_sha256 ||
-              candidate.intent.approved_scope_sha256;
+              candidate.intent.approved_scope_sha256 ||
+              candidate.intent.approved_repair_sha256;
             return (
               operationTarget(candidate) === deliveryId &&
               candidate.intent.action === "CONTINUE_DELIVERY" &&
@@ -1196,6 +1197,11 @@ function engineeringBaselinePauseBox(request, task, step) {
   if (unavailable) panel.append(deliveryControlUnavailableNotice(unavailable));
   else if (!consoleSupportsPausedBaseline()) panel.append(el("p",
     "当前服务不支持保留进度后暂停并单独继续。请在服务空闲时更新并重启，再刷新原需求。", "muted"));
+  const savedSource = viewBlock(el("div", undefined, "engineering-paused-source"), "pause-saved-source", bound);
+  savedSource.append(el("strong", "继续使用的代码版本"),
+    el("p", bound.expected_source_revision, "paths"),
+    el("p", "这是当前已保存的执行输入。点击“继续原需求”将使用此版本和保留的开发进度；更新代码需要先确认新的方案。", "muted"));
+  panel.append(savedSource);
   appendEngineeringBaseline(panel, request, task, step);
   const continuation = viewBlock(el("div", undefined, "engineering-baseline-actions"), "pause-continue",
     [bound, active, active && currentOperationProgress(active, request), canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
@@ -2685,9 +2691,36 @@ function requestBlockerSection(request) {
   return section;
 }
 
+async function submitRecoveryApprovalOperation(intent, approvalSignature) {
+  const request = requestById(intent.delivery_id);
+  const current = request && latestApproval(request.id, request.checkpoint_sha256);
+  if (!request || request.project_id !== intent.project_id || currentProjectId() !== intent.project_id ||
+      ["DONE", "CLOSED"].includes(request.stage) ||
+      request.checkpoint_sha256 !== intent.expected_checkpoint_sha256 ||
+      JSON.stringify(current) !== approvalSignature || !canControlCurrentTeam() ||
+      !consoleSupportsOperation("CONTINUE_DELIVERY") || activeOperation(request.id, request.project_id)) {
+    operationNotice = {kind: "error", title: "当前审批方案已变化",
+      message: "请查看当前需求并重新核对所列方案；已失效的审批不能用于继续交付。"};
+    renderDetail(); renderNotification(); return null;
+  }
+  return submitOperation(intent);
+}
 function recoveryApprovalBox(request, approval) {
-  const management = engineeringDetails("工程管理 · 需工程授权者处理");
-  management.append(el("p", "以下操作供工程授权者使用；产品负责人无需决定技术恢复方式。服务检查可信本机主体的工程职责，并记录实际批准者。", "muted"));
+  const intent = {
+    action: "CONTINUE_DELIVERY", project_id: request.project_id, delivery_id: request.id,
+    expected_checkpoint_sha256: request.checkpoint_sha256,
+    ...(approval.kind === "coder_scope"
+      ? { approved_scope_sha256: approval.plan_sha256,
+          ...(approval.coder_scope_request ? { coder_scope_request: approval.coder_scope_request } : {}) }
+      : approval.kind === "prerequisite_repair"
+        ? { approved_repair_sha256: approval.plan_sha256 }
+        : { approved_plan_sha256: approval.plan_sha256 }),
+  };
+  const approvalSignature = JSON.stringify(approval);
+  const management = viewBlock(el("section", undefined, "engineering-current-decision"),
+    "current-recovery-decision", [intent, approvalSignature, canControlCurrentTeam(),
+      consoleSupportsOperation("CONTINUE_DELIVERY")]);
+  management.append(el("p", "当前需要工程授权者确认。请阅读下方具体方案后决定；平台会核验工程权限并记录实际批准者。", "muted"));
   const box = el("div", undefined, "approval-box request-blocking-approval");
   box.append(el("h3", approval.title));
   for (const fact of approval.facts) box.append(el("p", fact, "paths"));
@@ -2701,20 +2734,7 @@ function recoveryApprovalBox(request, approval) {
     ),
     deliveryButton(
       approval.kind === "coder_scope" ? "批准文件范围" : "批准并继续",
-      () =>
-        submitOperation({
-          action: "CONTINUE_DELIVERY",
-          project_id: request.project_id,
-          delivery_id: request.id,
-          expected_checkpoint_sha256: request.checkpoint_sha256,
-          ...(approval.kind === "coder_scope"
-            ? { approved_scope_sha256: approval.plan_sha256,
-                ...(approval.coder_scope_request
-                  ? { coder_scope_request: approval.coder_scope_request } : {}) }
-            : approval.kind === "prerequisite_repair"
-              ? { approved_repair_sha256: approval.plan_sha256 }
-            : { approved_plan_sha256: approval.plan_sha256 }),
-        }),
+      () => submitRecoveryApprovalOperation(intent, approvalSignature),
       "primary",
     ),
   );
@@ -4397,7 +4417,7 @@ function requestOperation(panel, request, discussionSection) {
   const approval = latestApproval(request.id, request.checkpoint_sha256);
   if (approval && !running) {
     if (requestPresentation(request).group !== "blocked")
-      appendOperation(recoveryApprovalBox(request, approval));
+      appendOperation(recoveryApprovalBox(request, approval), true);
     return;
   }
   if (request.stage === "WAITING_PRODUCT_APPROVAL" && !running) {

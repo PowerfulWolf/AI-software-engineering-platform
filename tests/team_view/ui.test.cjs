@@ -62,6 +62,8 @@ const descend = (node) => [
   node,
   ...node.children.filter((n) => typeof n !== "string").flatMap(descend),
 ];
+const visibleDescend = node => [node, ...node.children.filter(item => typeof item !== "string" && !item.hidden &&
+  (node.tag !== "details" || node.open === true || item.tag === "summary")).flatMap(visibleDescend)];
 
 test("long Requirement identifiers cannot expand the master column", () => {
   const styles = fs.readFileSync(
@@ -2467,9 +2469,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   vm.runInContext('showDetail("request","r1")', context);
   assert.match(text(get("detail")), /批准 Coder 启动前重启/);
   assert.match(text(get("detail")), /新 Task 重启计划/);
-  assert.ok(descend(get("detail")).find(
+  assert.ok(visibleDescend(get("detail")).find(
     (node) => node.tag === "button" && node.textContent === "批准并继续",
-  ));
+  ), "a current exact decision must be visible under native disclosure rules");
   storedOperations[1].result.approval = priorScopeApproval;
   fixture.tasks.forEach((task) => {
     task.blocker =
@@ -2484,6 +2486,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.tag === "button" && node.textContent === "批准文件范围",
   );
   assert.ok(approveScope, "WAITING_HUMAN renders its exact scope approval");
+  assert.ok(visibleDescend(get("detail")).includes(approveScope),
+    "current file-scope approval is visible without opening optional engineering details");
   // Synchronizing a native child appends a successor parent checkpoint.
   // The returned approval belongs to that result cursor, not the old input.
   fixture.requests[0].checkpoint_sha256 = "b".repeat(64);

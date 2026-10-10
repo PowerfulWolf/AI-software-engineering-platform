@@ -46,6 +46,8 @@ class Element {
 const descend = node => [node, ...node.children.filter(item => typeof item !== "string").flatMap(descend)];
 const text = node => node.textContent + node.children.map(item => typeof item === "string" ? item : text(item)).join(" ");
 const control = (node, name) => descend(node).find(item => item.tagName === "BUTTON" && item.textContent === name);
+const visibleDescend = node => [node, ...node.children.filter(item => typeof item !== "string" && !item.hidden &&
+  (node.tagName !== "DETAILS" || node.open === true || item.tagName === "SUMMARY")).flatMap(visibleDescend)];
 const digest = value => value.repeat(64);
 
 function fixture() {
@@ -1168,4 +1170,125 @@ test("old continuation retry cannot start changed work or an ordinary ready queu
     await old.events.click();
     assert.equal(h.run("submitted.length"), 0, mutation);
   }
+});
+
+function currentApprovalFixture(h, kind = "coder_recovery") {
+  const approval = {kind, plan_sha256: digest("e"), title: "确认保留进度的继续方案",
+    facts: ["保留原需求和开发进度，按精确方案继续独立验收。"],
+    ...(kind === "coder_scope" ? {coder_scope_request: {paths: ["tests/test_contract.py"],
+      progress_artifact_id: "art_progress", progress_sha256: digest("f"), reason: "调整本需求测试"}} : {})};
+  h.context.approval = approval;
+  h.run(`operations = [{operation_id: "current_approval", status: "SUCCEEDED", updated_at: "2026-10-05T01:00:00Z",
+    intent: {action: "CONTINUE_DELIVERY", project_id: data.request.project_id, delivery_id: data.request.id,
+      expected_checkpoint_sha256: data.request.checkpoint_sha256},
+    result: {delivery_id: data.request.id, checkpoint_sha256: data.request.checkpoint_sha256, approval}}];`);
+  return approval;
+}
+
+test("current exact approvals and their facts are visible without opening engineering details", async () => {
+  for (const kind of ["coder_scope", "coder_recovery", "prerequisite_repair", "candidate_verification"]) {
+    const h = harness();
+    const approval = currentApprovalFixture(h, kind);
+    const box = h.run("recoveryApprovalBox(data.request, approval)");
+    const visible = visibleDescend(box);
+    const name = kind === "coder_scope" ? "批准文件范围" : "批准并继续";
+    assert.ok(visible.some(node => node.tagName === "BUTTON" && node.textContent === name), kind);
+    assert.ok(visible.some(node => node.textContent === approval.facts[0]), "the exact decision facts are not folded");
+    assert.doesNotMatch(text(box), new RegExp(approval.plan_sha256), "opaque approval digest is never user input");
+    assert.equal(h.run("submitted.length"), 0, "rendering never approves");
+    await control(box, name).events.click();
+    const submitted = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+    const field = kind === "coder_scope" ? "approved_scope_sha256" :
+      kind === "prerequisite_repair" ? "approved_repair_sha256" : "approved_plan_sha256";
+    assert.equal(submitted[field], approval.plan_sha256);
+    assert.equal(submitted.expected_checkpoint_sha256, h.request.checkpoint_sha256);
+    if (kind === "coder_scope") assert.deepEqual(submitted.coder_scope_request, approval.coder_scope_request);
+  }
+});
+
+test("current exact approval remains visible through the nonblocked request operation container", () => {
+  const h = harness();
+  currentApprovalFixture(h);
+  h.task.status = "QUEUED";
+  h.step.status = "READY";
+  h.step.wait_disposition = null;
+  h.request.execution = {state: "QUEUED", responsibility: "engineering"};
+  const panel = new Element("section");
+  h.context.operationPanel = panel;
+  assert.notEqual(h.run("requestPresentation(data.request).group"), "blocked", "exercise the distinct current-action placement");
+  h.run("requestOperation(operationPanel, data.request)");
+  assert.ok(visibleDescend(panel).some(node => node.tagName === "BUTTON" && node.textContent === "批准并继续"),
+    "a caller cannot put the visible decision inside another closed engineering disclosure");
+  assert.equal(h.run("submitted.length"), 0);
+});
+
+test("every exact approval kind is consumed by its corresponding submitted digest", async () => {
+  for (const kind of ["coder_scope", "coder_recovery", "prerequisite_repair", "candidate_verification"]) {
+    const h = harness();
+    const approval = currentApprovalFixture(h, kind);
+    const old = control(h.run("recoveryApprovalBox(data.request, approval)"),
+      kind === "coder_scope" ? "批准文件范围" : "批准并继续");
+    const field = kind === "coder_scope" ? "approved_scope_sha256" :
+      kind === "prerequisite_repair" ? "approved_repair_sha256" : "approved_plan_sha256";
+    h.context.consumedField = field;
+    h.run(`operations.push({operation_id: "approved", status: "SUCCEEDED", updated_at: "2026-10-05T02:00:00Z",
+      intent: {action: "CONTINUE_DELIVERY", project_id: data.request.project_id, delivery_id: data.request.id,
+        [consumedField]: approval.plan_sha256}})`);
+    assert.equal(h.run("latestApproval(data.request.id, data.request.checkpoint_sha256)"), null, kind);
+    await old.events.click();
+    assert.equal(h.run("submitted.length"), 0, kind + " cannot revive the consumed current decision");
+  }
+});
+
+test("detached exact approval callbacks cannot revive changed or historical decisions", async () => {
+  for (const mutation of [
+    'data.request.checkpoint_sha256 = "7".repeat(64)',
+    'data.request.stage = "CLOSED"',
+    'operations[0].result.approval.plan_sha256 = "8".repeat(64)',
+    'operations[0].result.approval.facts = ["不同的继续范围"]',
+    'operations[0].status = "FAILED"',
+    'operationsAvailable = false',
+    'consoleSupportedActions = consoleSupportedActions.filter(action => action !== "CONTINUE_DELIVERY")',
+    'snapshot.selected_project_id = "other_project"',
+    'operations.push({operation_id: "consumed", status: "SUCCEEDED", updated_at: "2026-10-05T02:00:00Z", intent: {action: "CONTINUE_DELIVERY", project_id: data.request.project_id, delivery_id: data.request.id, approved_plan_sha256: "e".repeat(64)}})',
+    'operations.push({operation_id: "active", status: "RUNNING", updated_at: "2026-10-05T02:00:00Z", intent: {action: "CONTINUE_DELIVERY", project_id: data.request.project_id, delivery_id: data.request.id}})',
+  ]) {
+    const h = harness();
+    currentApprovalFixture(h);
+    const old = control(h.run("recoveryApprovalBox(data.request, approval)"), "批准并继续");
+    h.run(mutation);
+    await old.events.click();
+    assert.equal(h.run("submitted.length"), 0, mutation);
+  }
+});
+
+test("pause shows its saved source without a proposal and refreshes the exact version during reconciliation", async () => {
+  const h = harness();
+  baselineFixture(h);
+  Object.assign(h.step.wait_disposition.facts, {classification: "EXECUTION_BASELINE_PAUSED", execution_baseline_sha256: digest("8")});
+  h.step.wait_disposition.action = "RESUME_EXECUTION_BASELINE";
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const source = () => descend(box).find(node => node.className === "engineering-paused-source");
+  const initialSource = source();
+  assert.ok(initialSource, "the actual saved version is visible independently of the optional target form");
+  assert.ok(visibleDescend(box).includes(initialSource));
+  assert.match(text(initialSource), new RegExp("c".repeat(40)));
+  assert.equal(descend(box).find(node => node.tagName === "INPUT").value, "", "no unverified target is guessed");
+  const previousContinue = control(box, "继续原需求");
+  h.context.retainedPause = box;
+  h.task.last_activity = "2026-10-05T02:00:00Z";
+  h.run("reconcileViewChildren(retainedPause, engineeringWaitBox(data.request, data.task, data.step))");
+  assert.equal(source(), initialSource, "unrelated polling keeps the same saved-version node");
+  Object.assign(h.step.wait_disposition.facts, {source_revision: "e".repeat(40), execution_baseline_sha256: digest("9")});
+  h.step.wait_disposition_sha256 = digest("6");
+  h.run("reconcileViewChildren(retainedPause, engineeringWaitBox(data.request, data.task, data.step))");
+  assert.notEqual(source(), initialSource, "source/baseline binding changes invalidate the visible version");
+  assert.match(text(source()), new RegExp("e".repeat(40)));
+  assert.doesNotMatch(text(box), new RegExp("c".repeat(40)));
+  assert.equal(h.run("submitted.length"), 0, "polling does not decide to continue");
+  await previousContinue.events.click();
+  assert.equal(h.run("submitted.length"), 0, "old callback cannot continue the new version");
+  await control(box, "继续原需求").events.click();
+  assert.equal(h.run("submitted[0].expected_source_revision"), "e".repeat(40));
+  assert.equal(h.run("submitted[0].expected_execution_baseline_sha256"), digest("9"));
 });

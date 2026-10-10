@@ -1,0 +1,17 @@
+{
+  "id": "visible-delivery-decisions-20261010",
+  "title": "突出当前交付审批并说明暂停中使用的代码版本",
+  "status": "completed",
+  "phase": "verified",
+  "owner": "codex",
+  "created_at": "2026-10-10",
+  "allowed_paths": [
+    "src/ai_software_engineer/team_view/app.js",
+    "src/ai_software_engineer/team_view/style.css",
+    "tests/team_view/ui.test.cjs",
+    "tests/team_view/engineering-wait.test.cjs",
+    ".trellis/spec/core/live-team-view.md",
+    ".trellis/tasks/10-10-visible-delivery-decisions/"
+  ],
+  "verification": "verification.md"
+}

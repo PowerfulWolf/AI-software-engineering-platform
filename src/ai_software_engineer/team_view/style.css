@@ -1552,6 +1552,19 @@ main[data-page="requests"] #detail {
   background: white;
   overflow-wrap: anywhere;
 }
+.engineering-paused-source {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #c6d6f1;
+  border-radius: 6px;
+  background: #f8faff;
+}
+.engineering-paused-source > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 .engineering-baseline-panel > summary,
 .engineering-baseline-panel > h4 {
   margin: 0;
