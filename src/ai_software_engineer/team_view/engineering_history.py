@@ -279,6 +279,11 @@ def _engineering_history(
                         "recheck_when": handling.recheck_when,
                         "manual_resolution_allowed": handling.manual_resolution_allowed,
                         "collection_failed": handling.collection_failed,
+                        **(
+                            {"collection_failure": handling.collection_failure.value}
+                            if handling.collection_failure is not None
+                            else {}
+                        ),
                         "proof_sha256": proof.proof_sha256,
                         "work_item_id": handling.work_item_id,
                     },

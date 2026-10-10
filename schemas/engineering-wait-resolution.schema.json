@@ -752,6 +752,14 @@
       "title": "DeliveryRetryFailure",
       "type": "object"
     },
+    "DeliveryWaitCollectionFailure": {
+      "description": "Safe bounded diagnosis; no rejected body, path or exception text.",
+      "enum": [
+        "WORKSPACE_CAPTURE_REJECTED"
+      ],
+      "title": "DeliveryWaitCollectionFailure",
+      "type": "string"
+    },
     "DeliveryWaitHandling": {
       "additionalProperties": false,
       "description": "Immutable platform handling report, separate from execution and verdict.",
@@ -848,6 +856,17 @@
           "title": "Collection Failed",
           "type": "boolean"
         },
+        "collection_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryWaitCollectionFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "handled_at": {
           "format": "date-time",
           "title": "Handled At",
@@ -900,6 +919,58 @@
             "properties": {
               "resolution": {
                 "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "collection_failure"
+            ],
+            "properties": {
+              "collection_failure": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "collection_failed"
+            ],
+            "properties": {
+              "collection_failed": {
+                "const": true
+              },
+              "status": {
+                "const": "PLATFORM_ATTENTION"
+              },
+              "resolution": {
+                "type": "null"
+              },
+              "investigation": {
+                "required": [
+                  "process_stop_sha256",
+                  "missing"
+                ],
+                "properties": {
+                  "process_stop_sha256": {
+                    "type": "string"
+                  },
+                  "missing": {
+                    "contains": {
+                      "const": "CHECKPOINT_UNAVAILABLE"
+                    },
+                    "not": {
+                      "contains": {
+                        "const": "STOP_UNRECORDED"
+                      }
+                    }
+                  },
+                  "permitted_resolutions": {
+                    "maxItems": 0
+                  }
+                }
               }
             }
           }

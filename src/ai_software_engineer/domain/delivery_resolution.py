@@ -53,6 +53,12 @@ class DeliveryProofMissing(StrEnum):
     NATIVE_EXECUTION_UNCERTAIN = "NATIVE_EXECUTION_UNCERTAIN"
 
 
+class DeliveryWaitCollectionFailure(StrEnum):
+    """Safe bounded diagnosis; no rejected body, path or exception text."""
+
+    WORKSPACE_CAPTURE_REJECTED = "WORKSPACE_CAPTURE_REJECTED"
+
+
 RESULT_REPLAY_REJECTED_CLASSIFICATIONS: frozenset[str] = frozenset(
     {
         "INVALID_OUTPUT",
@@ -415,6 +421,9 @@ class DeliveryWaitHandling(DomainModel):
     recheck_when: NonEmptyStr
     manual_resolution_allowed: StrictBool
     collection_failed: StrictBool = Field(default=False, exclude_if=lambda value: value is False)
+    collection_failure: DeliveryWaitCollectionFailure | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     handled_at: AwareDatetime
     handling_sha256: DispositionSha256
 
@@ -440,6 +449,18 @@ class DeliveryWaitHandling(DomainModel):
             raise ValueError("platform handling changed its exact waiting facts")
         if (self.status == "RESOLVED") != (self.resolution is not None):
             raise ValueError("resolved handling requires its sealed resolution")
+        if self.collection_failure is not None and (
+            not self.collection_failed
+            or self.status != "PLATFORM_ATTENTION"
+            or self.resolution is not None
+            or proof.process_stop_sha256 is None
+            or DeliveryProofMissing.STOP_UNRECORDED in proof.missing
+            or DeliveryProofMissing.CHECKPOINT_UNAVAILABLE not in proof.missing
+            or proof.permitted_resolutions
+        ):
+            raise ValueError(
+                "capture refusal requires a verified stop and an unavailable checkpoint"
+            )
         if self.resolution is not None:
             decision = self.resolution
             decision.validate_integrity()
@@ -486,6 +507,7 @@ class DeliveryWaitHandling(DomainModel):
             self.investigation,
             manual_resolution_allowed=self.manual_resolution_allowed,
             collection_failed=self.collection_failed,
+            collection_failure=self.collection_failure,
         )
 
     def validate_integrity(self) -> None:
@@ -500,6 +522,7 @@ def delivery_wait_handling_record_key(
     *,
     manual_resolution_allowed: bool,
     collection_failed: bool = False,
+    collection_failure: DeliveryWaitCollectionFailure | None = None,
 ) -> str:
     return _digest(
         {
@@ -514,6 +537,7 @@ def delivery_wait_handling_record_key(
             ),
             "manual_resolution_allowed": manual_resolution_allowed,
             "collection_failed": collection_failed,
+            **({"collection_failure": collection_failure.value} if collection_failure else {}),
         }
     )
 

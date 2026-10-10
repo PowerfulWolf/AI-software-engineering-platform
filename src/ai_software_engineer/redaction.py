@@ -31,6 +31,9 @@ _SECRET_PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
         ),
     ),
 )
+_SECRET_ASSIGNMENT_PATTERN: Final[re.Pattern[str]] = next(
+    pattern for kind, pattern in _SECRET_PATTERNS if kind == "secret_assignment"
+)
 
 # A source snapshot is code, rather than a log or a URI.  These are the only
 # assignment RHS forms that may be treated as references while checking a
@@ -171,6 +174,261 @@ def source_secret_occurrences(
     return result
 
 
+def _source_type_reference(node: ast.expr) -> bool:
+    """Recognize type syntax without treating a string/call as a type name."""
+    if isinstance(node, ast.Name):
+        return True
+    if isinstance(node, ast.Attribute):
+        return _source_type_reference(node.value)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _source_type_reference(node.left) and _source_type_reference(node.right)
+    if isinstance(node, ast.Subscript):
+        return _source_type_reference(node.value) and _source_type_reference(node.slice)
+    if isinstance(node, ast.Tuple):
+        return all(_source_type_reference(value) for value in node.elts)
+    return isinstance(node, ast.Constant) and node.value in (None, Ellipsis)
+
+
+def _source_root_name(node: ast.expr) -> str | None:
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _source_stdlib_imports(tree: ast.Module) -> dict[str, tuple[str, str | None, int]]:
+    """Require an exact module-level import with no alias or observed rebinding.
+
+    This is static inspection, not import execution. A parameter, definition,
+    assignment, deletion, another import or member mutation anywhere in the file
+    conservatively denies that name, including uses in other lexical scopes.
+    Imported modules/functions may only occur as exact constructor callees: an
+    unknown function argument or container alias could mutate them indirectly.
+    """
+    allowed: dict[str, tuple[str, str | None, int]] = {}
+    trusted_aliases: set[int] = set()
+    ambiguous: set[str] = set()
+    members = {"dataclasses": {"field"}, "secrets": {"token_bytes", "token_hex", "token_urlsafe"}}
+    for statement in tree.body:
+        if not isinstance(statement, (ast.Import, ast.ImportFrom)):
+            continue
+        for alias in statement.names:
+            if alias.asname is not None:
+                continue
+            binding: tuple[str, str | None, int]
+            if isinstance(statement, ast.Import) and alias.name in members:
+                import_name, binding = alias.name, (alias.name, None, statement.lineno)
+            elif (
+                isinstance(statement, ast.ImportFrom)
+                and statement.level == 0
+                and statement.module in members
+                and alias.name in members[statement.module]
+            ):
+                import_name, binding = (
+                    alias.name,
+                    (
+                        statement.module,
+                        alias.name,
+                        statement.lineno,
+                    ),
+                )
+            else:
+                continue
+            if import_name in allowed:
+                ambiguous.add(import_name)
+            allowed[import_name] = binding
+            trusted_aliases.add(id(alias))
+    nodes = tuple(ast.walk(tree))
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    dynamic_names = {"exec", "eval", "globals", "locals", "__import__", "__builtins__"}
+    reflective_names = {"getattr", "setattr", "delattr", "vars"}
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            ambiguous.add(node.id)
+        elif isinstance(node, ast.arg):
+            ambiguous.add(node.arg)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            ambiguous.add(node.name)
+        elif isinstance(node, ast.alias) and id(node) not in trusted_aliases:
+            if node.name == "*":
+                ambiguous.update(allowed)
+            ambiguous.add(node.asname or node.name.split(".")[0])
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and (
+            node.name is not None
+        ):
+            ambiguous.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest is not None:
+            ambiguous.add(node.rest)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Name):
+            # A module alias could mutate a generator without writing its import name.
+            ambiguous.add(node.value.id)
+        elif isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(
+            node.ctx, (ast.Store, ast.Del)
+        ):
+            if (modified := _source_root_name(node)) is not None:
+                ambiguous.add(modified)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in {"exec", "eval"}:
+                ambiguous.update(allowed)
+            elif node.func.id in {"setattr", "delattr", "vars"} and node.args:
+                if (modified := _source_root_name(node.args[0])) is not None:
+                    ambiguous.add(modified)
+            elif node.func.id in {"globals", "locals"}:
+                ambiguous.update(allowed)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            parent = parents.get(node)
+            if node.id in dynamic_names or (
+                node.id in reflective_names
+                and not (isinstance(parent, ast.Call) and parent.func is node)
+            ):
+                # Aliasing exec/eval or a reflective builtin is still dynamic authority.
+                ambiguous.update(allowed)
+            if node.id in allowed:
+                module, member, _ = allowed[node.id]
+                callee: ast.expr = node
+                if member is None:
+                    if (
+                        not isinstance(parent, ast.Attribute)
+                        or parent.value is not node
+                        or parent.attr not in members[module]
+                    ):
+                        ambiguous.add(node.id)
+                        continue
+                    callee = parent
+                call = parents.get(callee)
+                if not isinstance(call, ast.Call) or call.func is not callee:
+                    ambiguous.add(node.id)
+        elif isinstance(node, ast.Import) and any(alias.name == "builtins" for alias in node.names):
+            # An imported builtin namespace can expose exec even through getattr/aliases.
+            ambiguous.update(allowed)
+        elif isinstance(node, ast.ImportFrom) and node.module == "builtins":
+            if any(alias.name in dynamic_names | reflective_names for alias in node.names):
+                ambiguous.update(allowed)
+        elif isinstance(node, ast.Attribute) and node.attr in dynamic_names:
+            ambiguous.update(allowed)
+    return {name: binding for name, binding in allowed.items() if name not in ambiguous}
+
+
+def _source_proven_value(
+    value: ast.expr, field_name: str, imports: dict[str, tuple[str, str | None, int]]
+) -> bool:
+    """Allow references or exact stdlib constructors with no credential input."""
+    if isinstance(value, ast.Constant) and value.value is None:
+        return True
+    if (
+        isinstance(value, ast.Attribute)
+        and isinstance(value.value, ast.Name)
+        and value.attr.casefold() == field_name.casefold()
+    ):
+        return True
+    if (
+        isinstance(value, ast.BinOp)
+        and isinstance(value.op, ast.Div)
+        and isinstance(value.left, ast.Name)
+        and isinstance(value.right, ast.Constant)
+        and isinstance(value.right.value, str)
+        and re.search(r"(?:[./\\\\])", value.right.value)
+        and not redact_text(value.right.value).occurrences
+    ):
+        return True
+    if (
+        isinstance(value, ast.Subscript)
+        and isinstance(value.value, ast.Name)
+        and isinstance(value.slice, ast.Constant)
+        and value.slice.value == field_name + "_hash"
+    ):
+        return True
+    if not isinstance(value, ast.Call):
+        return False
+    if isinstance(value.func, ast.Name):
+        imported = imports.get(value.func.id)
+        member = imported[1] if imported is not None else None
+    elif isinstance(value.func, ast.Attribute) and isinstance(value.func.value, ast.Name):
+        imported = imports.get(value.func.value.id)
+        member = value.func.attr
+        if imported is not None and imported[1] is not None:
+            return False
+    else:
+        return False
+    if imported is None or imported[2] >= value.lineno:
+        return False
+    if imported[0] == "dataclasses" and member == "field":
+        return not value.args and all(
+            keyword.arg in {"init", "repr", "compare", "hash", "kw_only"}
+            and isinstance(keyword.value, ast.Constant)
+            and (
+                type(keyword.value.value) is bool
+                or (keyword.arg == "hash" and keyword.value.value is None)
+            )
+            for keyword in value.keywords
+        )
+    return (
+        imported[0] == "secrets"
+        and member in {"token_bytes", "token_hex", "token_urlsafe"}
+        and not value.keywords
+        and len(value.args) == 1
+        and isinstance(value.args[0], ast.Constant)
+        and type(value.args[0].value) is int
+        and 1 <= value.args[0].value <= 4096
+    )
+
+
+def _source_assignment_facts(
+    tree: ast.Module, content: str, lines: list[str], offsets: list[int]
+) -> tuple[frozenset[int], tuple[RedactionOccurrence, ...]]:
+    """Mask only syntactic field declarations; inspect each default/RHS separately."""
+    imports = _source_stdlib_imports(tree)
+    safe_starts: set[int] = set()
+    extra: list[RedactionOccurrence] = []
+
+    def field_start(name: str, node: ast.expr | ast.arg) -> int | None:
+        if not re.fullmatch(r"(?i)(?:password|passwd|secret|token|api[_-]?key)", name):
+            return None
+        # AST columns count UTF-8 bytes; tokenize and regex columns count characters.
+        prefix = lines[node.lineno - 1].encode("utf-8")[: node.col_offset].decode("utf-8")
+        return offsets[node.lineno - 1] + len(prefix)
+
+    def annotation(
+        name: str, node: ast.expr | ast.arg, declared: ast.expr | None, value: ast.expr | None
+    ) -> None:
+        start = field_start(name, node)
+        if start is None or declared is None or not _source_type_reference(declared):
+            return
+        safe_starts.add(start)
+        if value is not None and not _source_proven_value(value, name, imports):
+            expression = ast.get_source_segment(content, value)
+            if expression is None:
+                extra.append(RedactionOccurrence("secret_assignment", 1))
+            else:
+                extra.extend(redact_text(name + "=" + expression).occurrences)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            annotation(node.target.id, node.target, node.annotation, node.value)
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            target = node.targets[0]
+            start = field_start(target.id, target)
+            if start is not None and _source_proven_value(node.value, target.id, imports):
+                safe_starts.add(start)
+        elif isinstance(node, ast.arguments):
+            positional = (*node.posonlyargs, *node.args)
+            default_offset = len(positional) - len(node.defaults)
+            for index, argument in enumerate(positional):
+                default = node.defaults[index - default_offset] if index >= default_offset else None
+                annotation(argument.arg, argument, argument.annotation, default)
+            for argument, default in zip(node.kwonlyargs, node.kw_defaults, strict=True):
+                annotation(argument.arg, argument, argument.annotation, default)
+            for variadic_argument in (node.vararg, node.kwarg):
+                if variadic_argument is not None:
+                    annotation(
+                        variadic_argument.arg, variadic_argument, variadic_argument.annotation, None
+                    )
+    return frozenset(safe_starts), tuple(extra)
+
+
 def _inspect_source(
     content: str, *, source_path: str | None = None
 ) -> tuple[RedactionOccurrence, ...]:
@@ -194,7 +452,7 @@ def _inspect_source(
     try:
         # Syntax is inspected, never evaluated. Unknown/incomplete source gets
         # no exception; quotes/comments cannot manufacture a field reference.
-        ast.parse(content)
+        tree = ast.parse(content)
         tokens = tuple(tokenize.generate_tokens(io.StringIO(content).readline))
     except (
         SyntaxError,
@@ -204,12 +462,17 @@ def _inspect_source(
         RecursionError,
         MemoryError,
         OverflowError,
+        UnicodeError,
     ):
         return redact_text(content).occurrences
     lines = content.splitlines(keepends=True)
     offsets = [0]
     for line in lines:
         offsets.append(offsets[-1] + len(line))
+    try:
+        safe_starts, extra = _source_assignment_facts(tree, content, lines, offsets)
+    except (ValueError, RecursionError, MemoryError, OverflowError, UnicodeError):
+        return detected
     excluded: list[tuple[int, int]] = []
     interpolated: list[int] = []
     for token in tokens:
@@ -232,7 +495,12 @@ def _inspect_source(
             excluded_index += 1
         if excluded_index < len(excluded) and excluded[excluded_index][0] <= match.start():
             return match[0]
-        return _source_reference(match)
+        if match.start() in safe_starts:
+            return "source_reference"
+        reference = _SOURCE_REFERENCE_ASSIGNMENT.match(content, match.start())
+        if reference is not None and _source_reference(reference) != reference[0]:
+            return "source_reference"
+        return match[0]
 
     # Never mask a credential inside an otherwise valid reference/path span.
     strong = tuple(
@@ -240,13 +508,13 @@ def _inspect_source(
         for kind, pattern in _SECRET_PATTERNS
         if kind != "secret_assignment" and pattern.search(content)
     )
-    protected = _SOURCE_REFERENCE_ASSIGNMENT.sub(protect, content)
+    protected = _SECRET_ASSIGNMENT_PATTERN.sub(protect, content)
     assignments = tuple(
         occurrence
         for occurrence in redact_text(protected).occurrences
         if occurrence.kind == "secret_assignment"
     )
-    return (*strong, *assignments)
+    return (*strong, *assignments, *extra)
 
 
 def patch_secret_occurrences(content: str) -> tuple[RedactionOccurrence, ...]:

@@ -12,8 +12,10 @@ from ai_software_engineer.domain.delivery_disposition import (
     decide_delivery_disposition,
 )
 from ai_software_engineer.domain.delivery_resolution import (
+    DeliveryProofMissing,
     DeliveryResolution,
     DeliveryResolutionKind,
+    DeliveryWaitCollectionFailure,
     DeliveryWaitHandling,
     DeliveryWaitHandlingStatus,
     DeliveryWaitInvestigation,
@@ -346,7 +348,33 @@ def test_handling_history_refuses_a_valid_report_stored_under_another_key(tmp_pa
 
     with pytest.raises(KnowledgeError):
         engineering_history(sidecar, task, _scope(task), "delivery_history")
+    assert before == _bytes(sidecar)
 
+
+def test_capture_refusal_history_retains_safe_diagnosis_and_the_known_stop(tmp_path: Path) -> None:
+    task = make_task()
+    sidecar = tmp_path / "sidecar"
+    proof = _proof(task).model_copy(
+        update={
+            "process_stop_sha256": "c" * 64,
+            "missing": (
+                DeliveryProofMissing.OUTCOME_UNKNOWN,
+                DeliveryProofMissing.CHECKPOINT_UNAVAILABLE,
+            ),
+            "permitted_resolutions": (),
+        }
+    )
+    proof = proof.model_copy(update={"proof_sha256": proof.recompute_sha256()})
+    handling = _handling(proof, collection_failed=True).model_copy(
+        update={"collection_failure": DeliveryWaitCollectionFailure.WORKSPACE_CAPTURE_REJECTED}
+    )
+    handling = handling.model_copy(update={"handling_sha256": handling.recompute_sha256()})
+    _publish(sidecar, proof, handling=handling)
+    before = _bytes(sidecar)
+    history = engineering_history(sidecar, task, _scope(task), "delivery_history")
+    entry = next(value for value in history if value.source_sha256 == handling.handling_sha256)
+    assert entry.details["collection_failure"] == "WORKSPACE_CAPTURE_REJECTED"
+    assert entry.details["collection_failed"] is True
     assert before == _bytes(sidecar)
 
 

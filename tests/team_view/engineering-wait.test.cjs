@@ -14,7 +14,26 @@ class Element {
     this.attributes = {};
     this.textContent = "";
   }
-  append(...nodes) { this.children.push(...nodes); }
+  append(...nodes) {
+    this.children.push(...nodes);
+    for (const node of nodes) if (typeof node !== "string") node.parentNode = this;
+  }
+  get childNodes() { return this.children; }
+  get lastChild() { return this.children.at(-1); }
+  insertBefore(node, reference) {
+    if (node === reference) return;
+    node.remove();
+    const index = reference === null ? this.children.length : this.children.indexOf(reference);
+    this.children.splice(index, 0, node);
+    node.parentNode = this;
+  }
+  moveBefore(node, reference) { this.insertBefore(node, reference); }
+  remove() {
+    if (!this.parentNode) return;
+    const children = this.parentNode.children;
+    children.splice(children.indexOf(this), 1);
+    this.parentNode = null;
+  }
   get classList() {
     return {add: (...tokens) => {
       this.className = [...new Set([...(this.className || "").split(/\s+/).filter(Boolean), ...tokens])].join(" ");
@@ -118,6 +137,81 @@ test("handling with missing records names the platform owner and meaningful rech
   assert.equal(control(box, "让平台处理中断"), undefined, "unchanged maintenance failures do not encourage repeated handling");
   assert.doesNotMatch(text(box), /Manager.*(?:正在|已经)|平台已修复|确认.*可信停止/);
   assert.match(text(h.run("productExecutionSummary(data.request)")), /等待工程处理/);
+});
+
+test("platform repair retry handles the exact original wait instead of only inspecting it", async () => {
+  const h = harness();
+  const result = handling(h, "PLATFORM_ATTENTION", ["OUTCOME_UNKNOWN", "CHECKPOINT_UNAVAILABLE"]);
+  result.collection_failed = true;
+  result.collection_failure = "WORKSPACE_CAPTURE_REJECTED";
+  result.investigation.process_stop_sha256 = digest("2");
+  result.investigation.retry_cause = "local_execution_limit";
+  result.summary = "原 Coder 已到本地执行时限并停止，但保留进度的完整封存未通过平台校验。";
+  result.user_action = "平台维护者修复完整进度封存问题后，点击“平台修复后重新处理”。";
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.match(text(box), /原 Coder 已到本地执行时限并停止/);
+  assert.match(text(box), /已核验原执行停止/);
+  assert.doesNotMatch(text(box), /原执行是否已结束还没有可靠记录/);
+  assert.equal(control(box, "继续原交付"), undefined);
+  const retry = control(box, "平台修复后重新处理");
+  assert.ok(retry, "fixed platform must be able to reconcile preserved facts through HANDLE");
+  await retry.events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.deepEqual(intent, {...JSON.parse(h.run("JSON.stringify(engineeringWaitIntent(data.request, data.step))")),
+    action: "HANDLE_DELIVERY_WAIT"});
+  h.context.navigator = {clipboard: {writeText: async value => {h.context.copiedReport = value;}}};
+  await control(box, "复制处理报告").events.click();
+  assert.match(h.context.copiedReport, /进度封存校验未通过/);
+  assert.doesNotMatch(h.context.copiedReport, /WORKSPACE_CAPTURE_REJECTED|STOP_UNRECORDED/);
+});
+
+test("incremental wait rendering refreshes changed capture diagnosis with the same proof", () => {
+  const h = harness();
+  const result = handling(h, "PLATFORM_ATTENTION", ["OUTCOME_UNKNOWN", "CHECKPOINT_UNAVAILABLE"]);
+  result.collection_failed = true;
+  result.investigation.process_stop_sha256 = digest("2");
+  const first = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const firstProof = descend(first).find(node => node.className === "engineering-investigation-result");
+  const heading = descend(first).find(node => node.className === "engineering-wait-heading");
+  assert.match(text(firstProof), /部分执行事实已核验，但收集校验失败/);
+  const proofBytes = JSON.stringify(result.investigation);
+  result.collection_failure = "WORKSPACE_CAPTURE_REJECTED";
+  h.context.currentWait = first;
+  h.run("reconcileViewChildren(currentWait, engineeringWaitBox(data.request, data.task, data.step))");
+  const updatedProof = descend(first).find(node => node.className === "engineering-investigation-result");
+  assert.notEqual(updatedProof, firstProof, "changed diagnostic must invalidate retained result DOM");
+  assert.equal(descend(first).find(node => node.className === "engineering-wait-heading"), heading,
+    "unaffected keyed blocks are preserved during the same incremental update");
+  assert.match(text(updatedProof), /已核验原执行停止，但进度封存校验未通过/);
+  assert.doesNotMatch(text(updatedProof), /部分执行事实已核验，但收集校验失败/);
+  assert.equal(JSON.stringify(result.investigation), proofBytes);
+  h.run(`consoleSupportedActions = consoleSupportedActions.filter(action => action !== "HANDLE_DELIVERY_WAIT");
+    reconcileViewChildren(currentWait, engineeringWaitBox(data.request, data.task, data.step));`);
+  const unavailableProof = descend(first).find(node => node.className === "engineering-investigation-result");
+  assert.notEqual(unavailableProof, updatedProof, "capability changes also refresh retry guidance");
+  assert.doesNotMatch(text(unavailableProof), /点击“平台修复后重新处理”/);
+});
+
+test("unavailable platform retry does not promise a hidden action or let an old retry submit", async () => {
+  const h = harness();
+  const result = handling(h, "PLATFORM_ATTENTION", ["OUTCOME_UNKNOWN", "CHECKPOINT_UNAVAILABLE"]);
+  result.collection_failed = true;
+  result.collection_failure = "WORKSPACE_CAPTURE_REJECTED";
+  result.investigation.process_stop_sha256 = digest("2");
+  result.user_action = "修复后点击“平台修复后重新处理”。";
+  const old = control(h.run("engineeringWaitBox(data.request, data.task, data.step)"), "平台修复后重新处理");
+  h.run(`consoleSupportedActions = consoleSupportedActions.filter(action => action !== "HANDLE_DELIVERY_WAIT")`);
+  await old.events.click();
+  assert.equal(h.run("submitted.length"), 0);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.equal(control(box, "平台修复后重新处理"), undefined);
+  const user = descend(box).find(node => node.tagName === "DIV" &&
+    node.children.some(child => child.tagName === "DT" && child.textContent === "你需要做什么"));
+  assert.match(text(user), /版本不匹配.*重启/);
+  assert.doesNotMatch(text(user), /点击“平台修复后重新处理”/);
+  h.context.navigator = {clipboard: {writeText: async value => {h.context.copiedReport = value;}}};
+  await control(box, "复制处理报告").events.click();
+  assert.doesNotMatch(h.context.copiedReport, /用户操作 · .*点击“平台修复后重新处理”/);
 });
 
 test("retained complete proof cannot present readiness after platform collection is rejected", async () => {

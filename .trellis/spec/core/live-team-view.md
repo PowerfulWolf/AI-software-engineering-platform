@@ -1111,3 +1111,132 @@ authorized action. Roll back code while idle and preserve all old/current immuta
    verification/remediation descendants, member queues and counters, not only list deduplication.
 5. **Knowledge capture:** this contract and the new Trellis task document the historical/current
    boundary. No generated specification/template mirror exists for this read-side module.
+
+## Scenario: actionable known-stop capture failure (2026-10-10)
+
+### 1. Scope / Trigger
+
+Apply when an engineering wait has a trusted original stop but complete preserved-progress
+sealing failed. A user must be able to distinguish what happened, retained progress, the platform's
+responsibility and the next available action. Historical uncertainty must not override newly
+validated stop facts, and a successful Console command must not imply restored delivery or QA.
+
+### 2. Signatures / wire inputs
+
+```text
+engineeringCaptureRefusal(proof, handling) -> boolean
+engineeringCollectionNotice(proof, handling) -> Chinese string
+engineeringMissingGuidance(missing, captureRefused=false) -> [title, owner, action, recheck]
+engineeringWaitCurrentFacts(request, step, proof, handling, decision, active) -> overview facts
+submitEngineeringWaitOperation(intent) -> Promise<ConsoleOperation | null>
+copyEngineeringWaitReport(request, handling) -> Promise<void>
+engineering_history(sidecar, task, scope, delivery_id) -> tuple[TimelineEntry, ...]
+```
+
+`handling.collection_failure` is an optional typed enum currently containing only
+`WORKSPACE_CAPTURE_REJECTED`. Its absence is omitted from wire/hash/store-key material.
+`proof.process_stop_sha256` and actual `retry_cause` may exist without a complete interruption
+receipt. Missing result/checkpoint and empty `permitted_resolutions` remain authoritative.
+The server contracts and immutable identity are specified in
+[`engineering-continuation.md`](engineering-continuation.md#scenario-known-stop-with-refused-complete-capture-2026-10-10).
+
+### 3. Contracts
+
+- UI consumes verified handling/investigation bound to the current Project, Requirement
+  checkpoint, WorkItem, disposition, Task intent, source and checkpoint sequence. It cannot
+  invent stop or capture readiness from Task status, service restart, a process count or prose.
+- `engineeringCaptureRefusal` requires the safe code, collection_failed, a valid stop digest,
+  no STOP_UNRECORDED, CHECKPOINT_UNAVAILABLE and empty permitted resolutions. Unknown codes or
+  incomplete shapes retain conservative Chinese guidance; do not show raw internal codes/errors.
+- When the stop is validated but progress is not sealed, the current overview reports that the
+  original execution has stopped and still lacks an accepted completion. The preservation row
+  names retained files/stop records and unavailable complete progress; it cannot say progress is
+  reusable. A real local execution-limit cause may explain that the Coder reached its time window.
+- The investigation and copied report share safe Chinese cause/owner/action/recheck mappings.
+  They show a complete-progress sealing failure, not a missing stop or an instruction for the
+  product user to verify leases, hashes or process ownership. Current-state explanation differs
+  from immutable historical explanations; old reports remain historical data.
+- The keyed investigation-result `viewBlock` signature includes `handling.collection_failure`
+  and current HANDLE support as well as proof/collection_failed and existing rescue/control
+  facts. A changed diagnosis with unchanged proof must replace that result block; unaffected
+  heading/reading blocks remain retained. Capability loss must remove stale retry guidance too.
+- On PLATFORM_ATTENTION, expose the primary action **“平台修复后重新处理”** when HANDLE is
+  supported and current controls are available. Submit exact `HANDLE_DELIVERY_WAIT` with the
+  existing binding; never create another Requirement, submit a fabricated stop flag, or translate
+  it into RESOLVE. Explain that the platform issue must first be fixed. Existing **“重新检查状态”**
+  remains INSPECT and cannot reconcile or seal missing capture by itself.
+- `submitEngineeringWaitOperation` rechecks the current exact wait, team/control availability,
+  operation capability and absence of an active operation before submission. RESOLVE additionally
+  requires its current proof/digest/permitted kind and engineering permission. Capability loss,
+  Project/checkpoint/disposition changes and stale callbacks deny submission without new authority.
+- If HANDLE is unsupported or controls are unavailable, user action and copied report name the
+  actual service/control prerequisite rather than promise a hidden retry button. Preserve the
+  original stop/failure facts and use the existing version/readiness/connectivity guidance.
+- History projection includes the safe `collection_failure` only when present and continues to
+  validate immutable handling key/digest and its independent original proof. It is read-only and
+  never constructs a Host, captures source, resumes queue work, writes verdict or debits budget.
+  INSPECT's read observer needs the service Task lock plus Host queue idle fence; that belongs
+  to the Console command seam, not the read-side snapshot or Renderer.
+
+### 4. Validation & Error Matrix
+
+| Current facts | Required human-facing behavior |
+|---|---|
+| Valid stop + local window exhausted + typed capture refusal | Explain stopped Coder and failed progress sealing; show platform owner; no direct continue |
+| Valid stop + checkpoint missing after INSPECT | Retain known stop; explain result/progress still unavailable; no claimed receipt or approval |
+| PLATFORM_ATTENTION + current HANDLE capability | Show explicit retry-after-platform-fix action bound to the same original wait |
+| Still missing result/checkpoint | No RESOLVE/continue or QA/Review pass indication |
+| Unknown diagnostic or malformed stop/capture shape | Conservative Chinese maintenance guidance; no raw enum or readiness inference |
+| Active handling/other operation | Visible executing/queued operation; no duplicate retry |
+| Capability removed or current scope changed after button render | Old callback rejects; no submitted Operation |
+| Control unavailable / old service lacks HANDLE | Persistent prerequisite guidance and truthful copied user action; no hidden-button promise |
+| Later inspection has unchanged semantic facts | Retain applicable handling explanation; history/timestamps remain accurate |
+| Old capture failure followed by successful newly sealed continuation | Show new current facts; preserve the old failed handling in full history |
+
+### 5. Good / Base / Bad Cases
+
+Good: after a platform sealing fix, the user retries handling on the same visible Requirement;
+platform receipt/queue policy determines whether it continues. Base: the issue remains and the
+same original wait displays precise cause, owner and recheck timing. Bad: hide HANDLE after a
+failed handling and provide only INSPECT, tell the user to confirm internal stop facts, or show
+“continue” merely because a stop digest exists.
+
+### 6. Tests Required
+
+`tests/team_view/engineering-wait.test.cjs` exercises actual UI functions: typed refusal shows
+known stop, safe Chinese sealing issue and exact HANDLE retry; copies the same explanation;
+never offers direct continuation; capability removal rejects a retained callback and removes
+hidden-action instructions from the current user row and report. Retain existing exact-scope,
+proof drift, unsupported-code, control-unavailability, active-operation and history >8 tests.
+The incremental DOM regression invokes actual `reconcileViewChildren` with an unchanged proof
+and collection_failed, updates only the safe code, asserts result-node replacement/current
+diagnosis and unaffected heading identity, then removes HANDLE capability and asserts guidance
+is updated without altering the sealed proof.
+
+`tests/team_view/test_engineering_history.py` covers safe-code preservation, original sealed
+proof/store-key binding and unchanged read inventory. `tests/manager/test_wait_fact_collection.py`
+backs UI inputs with real Git refused capture and read-only stop observations;
+`tests/manager/test_delivery_wait.py` covers active claims as execution waits;
+`tests/orchestration/test_capture_reconciliation.py` keeps full receipt and independent recovery
+gates. Standalone/embedded Schema must reject unknown code, false collection failure and absent
+required stop/checkpoint conditions. Use these increments; do not run unrelated full tests.
+
+### 7. Wrong vs Correct
+
+Wrong: show “old execution stop unknown” from the original disposition while the current proof
+already validates stop, then leave only “recheck status.” Correct: use current verified facts to
+explain the failed sealing, keep result/checkpoint limitations visible, and offer exact HANDLE
+after the platform fix. Preserve the older explanation in history without rewriting its bytes.
+
+### 存量数据处置与回滚
+
+No historical Operation/Task/Requirement deletion or SQL rewrite. Load the repaired service while
+idle and refresh the original Requirement; retry handling against its current binding. A new
+immutable report supersedes the current presentation only when it matches actual new facts.
+Old handling/proof/stop/history remain independently readable. The UI cannot repair or approve
+missing engineering evidence on the user's behalf.
+
+New readers keep old absent-field bytes and keys compatible. After new typed diagnoses are
+persisted, retain their domain/schema/history reading support during a behavior rollback;
+an older strict runtime cannot silently ignore the new field. Never strip new fields or delete
+reports to make rollback appear successful. Reader failure remains explicit and fail closed.

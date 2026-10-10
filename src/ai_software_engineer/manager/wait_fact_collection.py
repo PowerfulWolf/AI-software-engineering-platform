@@ -14,14 +14,20 @@ from ai_software_engineer.domain import AgentRole, WorkItemStatus
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.task import Task
-from ai_software_engineer.git import GitWorktreeManager
+from ai_software_engineer.git import GitWorktreeManager, WorktreeCaptureRejected
+from ai_software_engineer.git.mutation import MutationInventoryRejected
 from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
-from ai_software_engineer.orchestration.capture_reconciliation import reconcile_capture
+from ai_software_engineer.orchestration.capture_reconciliation import (
+    reconcile_capture,
+    validate_capture_stop,
+)
 from ai_software_engineer.orchestration.continuation_models import (
     ContinuationRecordMissing,
     ContinuationRejected,
     ContinuationScope,
+    ExecutionCaptureStart,
+    ExecutionCaptureStop,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.work_queue.execution_store import AcceptedRoleArtifact, QueuedRoleStep
@@ -39,6 +45,13 @@ class WaitCollectionQueue(Protocol):
     def step(self, work_item_id: str) -> QueuedRoleStep: ...
     def original_claim(self, lease_id: str) -> QueueClaim: ...
     def accepted(self, task_id: str) -> tuple[AcceptedRoleArtifact, ...]: ...
+
+
+class WaitWorkspaceCaptureRejected(ContinuationRejected):
+    """A fully bound stop was checked, but no complete source receipt was sealed."""
+
+    def __init__(self) -> None:
+        super().__init__("原执行停止已核验, 完整进度封存未通过校验, 原现场保留")
 
 
 class DeliveryWaitFactCollector:
@@ -64,17 +77,19 @@ class DeliveryWaitFactCollector:
         except (ValidationError, QueueCorruption, QueueNotFound) as error:
             raise ContinuationRejected("原执行结果或权限记录无法通过完整校验, 现场保留") from error
 
-    def _collect(self, task: Task, step: QueuedRoleStep, guard: WorkerExecutionGuard) -> None:
+    def _original_invocation(
+        self, task: Task, step: QueuedRoleStep, guard: WorkerExecutionGuard
+    ) -> tuple[DeliveryInvocationStart, QueueClaim] | None:
         if not guard.inherited_fds:
             raise ContinuationRejected("工程事实收集缺少独占任务锁")
         self._require_current(task, step)
         root = self.state / "invocations"
         if not root.is_dir():
-            return
-        records = KnowledgeRecordStore(root)
+            return None
+        records = KnowledgeRecordStore(root, read_only=True)
         start = records.find("invocation-starts", step.work_item.id, DeliveryInvocationStart)
         if start is None:
-            return
+            return None
         start.validate_integrity()
         if (
             start.request.task_id,
@@ -107,6 +122,14 @@ class DeliveryWaitFactCollector:
             start.checkpoint_sequence,
         ):
             raise ContinuationRejected("原执行权限历史缺失或与当前等待不一致")
+        return start, historical
+
+    def _collect(self, task: Task, step: QueuedRoleStep, guard: WorkerExecutionGuard) -> None:
+        original = self._original_invocation(task, step, guard)
+        if original is None:
+            return
+        start, historical = original
+        records = KnowledgeRecordStore(self.state / "invocations")
         outcome = records.find("invocation-outcomes", step.work_item.id, DeliveryInvocationOutcome)
         if outcome is not None:
             outcome.validate_integrity()
@@ -154,11 +177,66 @@ class DeliveryWaitFactCollector:
             return
         except ContinuationRecordMissing:
             pass
+        observation = self._capture_observation(task, step, start, historical, guard)
+        if observation is None:
+            return
+        capture_start, capture_stop = observation
+        try:
+            reconcile_capture(
+                start=capture_start,
+                stop=capture_stop,
+                task=task,
+                task_revision=start.checkpoint_sequence,
+                historical_claim=historical,
+                store=store,
+                git=self.git,
+                task_lock=guard,
+                validate_inputs=lambda request: self._validate_capture_inputs(
+                    task, step, start, request
+                ),
+                has_output=lambda request: any(
+                    item.run_id == request.run_id
+                    and item.context_manifest_id == request.context_manifest_id
+                    for item in self.queue.accepted(task.id)
+                ),
+            )
+        except (WorktreeCaptureRejected, MutationInventoryRejected) as error:
+            # Recheck the stop after capture refusal; never transfer rejected
+            # source, exception text or checkpoint authority into the report.
+            if self._capture_observation(task, step, start, historical, guard) is None:
+                raise ContinuationRejected("原执行停止观察已不可用, 现场保留") from error
+            raise WaitWorkspaceCaptureRejected() from error
+
+    def observe_stop(
+        self, task: Task, step: QueuedRoleStep, guard: WorkerExecutionGuard
+    ) -> ExecutionCaptureStop | None:
+        """Read-only original stop observation, also usable by INSPECT."""
+        original = self._original_invocation(task, step, guard)
+        if original is None:
+            return None
+        start, historical = original
+        observation = self._capture_observation(task, step, start, historical, guard)
+        return observation[1] if observation else None
+
+    def _capture_observation(
+        self,
+        task: Task,
+        step: QueuedRoleStep,
+        start: DeliveryInvocationStart,
+        historical: QueueClaim,
+        guard: WorkerExecutionGuard,
+    ) -> tuple[ExecutionCaptureStart, ExecutionCaptureStop] | None:
+        if start.request.role is not AgentRole.CODER:
+            return None
+        root = self.state / "continuations" / task.id
+        if not root.is_dir():
+            return None
+        store = FileContinuationStore(root, task_id=task.id)
         try:
             capture_start = store.capture_start(start.request.run_id)
             capture_stop = store.capture_stop(start.request.run_id)
         except ContinuationRecordMissing:
-            return  # Old missing facts remain a diagnosed platform issue, never fabricated.
+            return None  # Missing historical facts are never fabricated.
         if (
             capture_start.request != start.request
             or capture_start.scope != self.expected_continuation_scope
@@ -170,32 +248,33 @@ class DeliveryWaitFactCollector:
             != (self.scope.team_id, self.scope.project_id, self.scope.repository_id)
         ):
             raise ContinuationRejected("执行现场记录不属于当前项目与原调用")
-
-        def validate_inputs(request: AgentRequest) -> None:
-            self._require_current(task, step)
-            if request != start.request or request.source_revision != step.boundary.source_revision:
-                raise ContinuationRejected("原调用输入已经变化")
-            # Accepted input facts may not have advanced since the exact request.
-            accepted = self.queue.accepted(task.id)
-            if any(item.checkpoint_sequence > start.checkpoint_sequence for item in accepted):
-                raise ContinuationRejected("原调用之后已有新的接纳事实, 必须重新核验输入")
-
-        reconcile_capture(
+        validate_capture_stop(
             start=capture_start,
             stop=capture_stop,
             task=task,
             task_revision=start.checkpoint_sequence,
             historical_claim=historical,
-            store=store,
-            git=self.git,
             task_lock=guard,
-            validate_inputs=validate_inputs,
-            has_output=lambda request: any(
-                item.run_id == request.run_id
-                and item.context_manifest_id == request.context_manifest_id
-                for item in self.queue.accepted(task.id)
+            validate_inputs=lambda request: self._validate_capture_inputs(
+                task, step, start, request
             ),
         )
+        return capture_start, capture_stop
+
+    def _validate_capture_inputs(
+        self,
+        task: Task,
+        step: QueuedRoleStep,
+        start: DeliveryInvocationStart,
+        request: AgentRequest,
+    ) -> None:
+        self._require_current(task, step)
+        if request != start.request or request.source_revision != step.boundary.source_revision:
+            raise ContinuationRejected("原调用输入已经变化")
+        # Accepted input facts may not have advanced since the exact request.
+        accepted = self.queue.accepted(task.id)
+        if any(item.checkpoint_sequence > start.checkpoint_sequence for item in accepted):
+            raise ContinuationRejected("原调用之后已有新的接纳事实, 必须重新核验输入")
 
     def _require_current(self, task: Task, step: QueuedRoleStep) -> None:
         current = self.queue.get(step.work_item.id)

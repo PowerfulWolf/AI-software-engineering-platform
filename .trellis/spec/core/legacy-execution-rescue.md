@@ -331,9 +331,27 @@ v2 完整 mutation bodies 是可复用代码输入，不能先脱敏再保存。
 
 ### Contracts
 
-- 仅语法明确的 single-name 对象同名字段引用，或 single-name `/` 带路径符号的普通固定字符串
-  能获得源码例外。任意 identifier、未知 dotted value、函数调用、下标或插值不获得例外。
-  路径字符串也必须通过通用检测。
+- `.py` 源码例外只按 AST 可证明的声明和值分类：敏感字段可无默认值地声明，或使用
+  Name/Attribute、`|` union、Subscript、Tuple、`None`/Ellipsis 组成的类型注解；函数参数
+  遵守同一规则。字符串 forward annotation、调用及任意字符串类型不获得例外。注解本身
+  不批准 RHS/default，后者必须独立检查，不能把 `token: str = "实际凭证"` 当成声明放行。
+- 可证明的 RHS 仅包括 `None`、single-name 对象同名字段引用、single-name `/` 带路径符号
+  且通过通用检测的普通固定字符串，以及 single-name 对象的精确 `field_name + "_hash"`
+  固定下标，如 `token = row["token_hash"]`。任意 identifier、未知 dotted value、其他
+  下标、调用接收者、动态下标和插值不获得例外。
+- 构造调用例外仅限在调用之前已出现的、无 alias 的 module-level `dataclasses`/`secrets`
+  导入或对应成员导入。`dataclasses.field` 不接受 positional、`default`、`default_factory`、
+  `metadata` 或 `**kwargs`，仅接受布尔 `init/repr/compare/hash/kw_only`，`hash` 另允许
+  `None`。`secrets.token_bytes/token_hex/token_urlsafe` 必须只有一个 1–4096 的整数
+  literal positional size；布尔、变量、字符串、keyword 或额外参数均不获得例外。
+- 可信导入须经完整源码的保守静态绑定检查：任意作用域的重绑、同名参数/定义、删除、重复
+  或 wildcard 导入、match capture、成员变更均撤销例外；模块或函数只能在精确构造 callee
+  位置使用，传给未知调用、容器或 alias 等 escape 也撤销例外。`exec/eval/globals/locals/`
+  `__import__/__builtins__`、相关 alias、builtins 命名空间或动态/反射入口不能绕过检查。
+  不执行 import、构造函数或源码，不推断未知调用的安全性。
+- partial patch 只使用已观察到且计数有效的 old/new hunk 事实，不能从遗漏的完整文件推断
+  导入或可信绑定；未观察到 `secrets` 导入的 `token = secrets.token_urlsafe(32)` 仍拒绝。
+  完整 capture 的源码结论不能冒充 partial patch 的额外上下文。
 - 字符串、注释、f-string（含嵌套及三引号）和 t-string 全 span 均不获得例外；强特征
   OpenAI/AWS/GitHub key、Bearer 和 PEM 独立检查整个原正文，不因 span 替换而丢失。
 - AST/tokenize 的未知语法及资源限制使用保守结果，不执行源码。span 游标按位置单调移动，
@@ -343,6 +361,10 @@ v2 完整 mutation bodies 是可复用代码输入，不能先脱敏再保存。
   用源码检查，任何 body/patch 均保持 byte-for-byte、SHA 和当前 index/HEAD/branch。
 - v1 recovery、普通日志、URI、知识和 Evidence 的 `redact_text` 不变，其他语言和未知配置仍保守。
   不按 `src/**`、`tests/**` 或调用者提供的“安全”标记豁免。
+- 工程授权者明确授权的外部测试修改必须记录 `HumanActionEvent(MODIFY_TESTS)`，保存完整
+  before/after diff、证据与原历史，按修改后的真实源码重新检查，并作为人工介入排除自治归因。
+  该授权不能关闭扫描、接受未校验补丁、改写旧结果或绕过原生 QA/Review；它与未审计的语义
+  改写是不同事实，不能仅因修改发生在测试目录就视为扫描绕过或自治开发。
 - Console 的 legacy proposal 捕获 `WorktreeCaptureRejected` 返回现有 typed
   `legacy_rescue_preparation(status=WAITING, code=LEGACY_WORKSPACE_CAPTURE_REJECTED)`，
   固定安全中文 summary/next_action 与 `responsible_party=平台执行服务`。
@@ -353,18 +375,31 @@ v2 完整 mutation bodies 是可复用代码输入，不能先脱敏再保存。
 | 情况 | 结果 |
 | --- | --- |
 | `.py` 的合法属性引用或路径表达式 | 保存原 bodies/patch，wire 往返、重放、Context 仍完全相同 |
+| `.py` 类型声明、`None` 默认值、精确同名 hash 下标 | 仅声明/可证明值获得例外，RHS/default 与原字节强特征检测保持独立 |
+| 完整源码中的未重绑标准库导入及有界构造 | 仅接受上述 exact callee/参数；不执行源码或返回脱敏替代内容 |
+| 导入缺失/alias/重绑/escape、动态执行或 `__builtins__` 路线 | 拒绝构造例外，使用保守检测 |
+| partial patch 未展示可信导入 | 保守拒绝，不借完整文件或其他 hunk 外的假设放行 |
 | quoted/comment/f-string 内凭证形状或同行真实秘密 | 拒绝，保留原文件，无明文输出 |
 | `.env` 的 `token=my.token` 或未知源码类型 | 通用保守检测，不因 dotted RHS 放行 |
 | staged-only 秘密、metadata/path 秘密、错误 hunk | 拒绝，不改 index |
 | parser 深度/计数资源异常 | 保守结果，不升级成无原因 MANAGER_FAILURE |
 | legacy proposal 捕获拒绝 | 中文 WAITING + 平台维护下一步，无审批 |
+| 经授权的外部测试修改 | 保存 `MODIFY_TESTS` 人工审计后重新校验；不计自治，不改原结果/历史 |
 
 Good：合法源码完整捕获后同 Task 继续原需求；Base：真实敏感字面值等维护处理；
-Bad：改 K1 草稿以绕过扫描、按目录关 secret guard、脱敏后当作原完整补丁。
+Bad：未审计地改写 K1 草稿语义以绕过扫描、按目录关 secret guard、脱敏后当作原完整补丁。
+获授权且带 `MODIFY_TESTS` 审计的外部测试修改属于人工介入，不等于上述 Bad，也不能宣称自治。
 
 增量测试：`test_source_secret_detection.py`、`test_mutation_capture.py`、
 `test_execution_baseline_context.py` 三角色、`test_legacy_rescue_acceptance.py`，
 并保留 `test_capture.py`、Context/Evidence 原脱敏、legacy inventory 与 Schema 回归。
+`test_source_secret_detection.py` 必须覆盖类型/默认值分离、标准库 exact 构造边界、完整源码
+绑定/escape/dynamic/`__builtins__` 拒绝以及 partial patch 缺失导入；测试中的每个拒绝分支都
+须保持真实敏感字面值检测，不能只验证合法声明成功。
+
+Wrong：按 `token:` 或 `secrets.` 前缀放行，或因外部测试修改已获授权而关闭 capture 检查。
+Correct：完整源码提供 AST/tokenize 与绑定事实，partial patch 只用自身可验证事实；人工修改
+单独落审计，原 bytes/hash、秘密检测和 QA/Review 仍按原契约执行。
 
 存量无需迁移或改库。读取原 K1 的实际 24 项完整变更可完成 capture/wire roundtrip；
 全部 2,000 工作树条目与 index 前后摘要一致。用户空闲时加载新服务并刷新，再在原需求点击

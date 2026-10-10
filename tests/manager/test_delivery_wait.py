@@ -247,6 +247,8 @@ def test_upgrade_reuses_a_handling_sealed_before_baseline_extension(
     handling = entry._handling_record(
         proof, None, status, summary, user_action, recheck_when, at=NOW
     )
+    assert "collection_failure" not in handling.to_wire()
+    assert "collection_failure" not in handling.model_dump(mode="json")
     legacy_facts = proof.model_dump(
         mode="json", exclude={"proof_sha256", "inspected_at", "prerequisite_receipt_sha256"}
     )
@@ -439,6 +441,25 @@ def test_handling_live_claim_fence_does_not_collect_or_authorize_retry(
     assert handling.status == "WAITING_EXECUTION" and handling.resolution is None
     assert handling.investigation.missing == (DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN,)
     assert queue.consumed == []
+
+
+def test_stop_observer_active_claim_remains_execution_wait_not_record_failure(
+    native: Fixture, tmp_path: Path
+) -> None:
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    entry = service(native, queue, tmp_path)
+
+    def live(task: Task, step: QueuedRoleStep, guard: WorkerExecutionGuard) -> None:
+        raise QueueLeaseLost("active original claim")
+
+    entry.stop_observer = live
+    proof = entry.inspect(queue.command())
+    assert DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN in proof.missing
+    assert proof.process_stop_sha256 is None and proof.permitted_resolutions == ()
+    handling = entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire()))
+    assert handling.status == "WAITING_EXECUTION" and not handling.collection_failed
+    assert handling.resolution is None and queue.consumed == []
 
 
 def test_preflight_detail_action_is_deduplicated_and_chinese() -> None:

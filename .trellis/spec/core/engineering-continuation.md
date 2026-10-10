@@ -210,3 +210,134 @@ and `tests/tools/test_registry.py`. Assert both the HTTP-return and decode-retur
 late-final boundaries, all completed operation identities, no same-Run dirty
 fallback, provider versus local budget debit, v1/synchronous Schema refusal, mode
 preservation and real executor uncertainty escaping the tool registry.
+
+## Scenario: known stop with refused complete capture (2026-10-10)
+
+### 1. Scope / Trigger
+
+Use this contract when the original native runner has sealed valid `ExecutionCaptureStart` and
+`ExecutionCaptureStop`, but no complete `ExecutionInterruptionReceipt` exists because capture
+publication failed. A real local TIMEOUT, a stopped invocation, a complete reusable checkpoint and
+a permitted recovery are four separate facts. Losing the latter facts must not turn a validated
+stop into `STOP_UNRECORDED`, and knowing the stop must not grant recovery authority.
+
+### 2. Signatures
+
+```python
+validate_capture_stop(
+    *, start: ExecutionCaptureStart, stop: ExecutionCaptureStop, task: Task,
+    task_revision: int, historical_claim: QueueClaim, task_lock: ExecutionGuard,
+    validate_inputs: Callable[[AgentRequest], None],
+) -> None
+
+DeliveryWaitFactCollector.observe_stop(
+    task: Task, step: QueuedRoleStep, guard: WorkerExecutionGuard,
+) -> ExecutionCaptureStop | None
+
+DeliveryWaitService(..., fact_collector: WaitFactCollector | None = None,
+                    stop_observer: WaitStopObserver | None = None)
+WaitStopObserver = Callable[
+    [Task, QueuedRoleStep, WorkerExecutionGuard], ExecutionCaptureStop | None
+]
+DeliveryWaitHandling.collection_failure: DeliveryWaitCollectionFailure | None
+DeliveryWaitCollectionFailure.WORKSPACE_CAPTURE_REJECTED
+```
+
+`CaptureStopProcessUncertain` is an internal typed rejection for a live or uncheckable original
+process group. `WaitWorkspaceCaptureRejected` is an internal capture refusal emitted only after
+the full original stop validation and a recheck after capture fails. Neither carries rejected
+source, filesystem paths or exception text into the wire diagnostic.
+
+### 3. Contracts
+
+- `reconcile_capture` and `observe_stop` share `validate_capture_stop`. It validates start/stop
+  integrity; exact original request/Task/attempt/revision/frozen intent/policy; matching stop
+  Task/Run/start digest; monotonic start/stop time; full original assignment/model/work-item and
+  immutable lease/worker/claim-time fields; held Task process lock; unchanged accepted inputs;
+  and the current owned process-group stop check. A Lease heartbeat may update `expires_at`;
+  the other lease fields cannot drift. Expiry is never stop evidence.
+- The Host gives the collector an exact native child `ContinuationScope`, including Requirement
+  ID and dispatch digest. Parent Requirement addressing cannot replace that child identity.
+  The Host runs both collection and stop observation within `queue.idle_task_scope`, while the
+  service holds `WorkerExecutionGuard.task_scope`. A live claim or process refuses observation.
+- `observe_stop` only reopens original invocation/capture records. It does not recover a final
+  route, scan/copy source bodies, publish a receipt, modify Task/queue/budgets or invoke a model.
+  INSPECT may seal its ordinary immutable investigation, but cannot reconcile missing capture.
+- A valid stop alone may set investigation `process_stop_sha256` and the actual `retry_cause`.
+  Missing outcome and complete checkpoint remain missing, and `permitted_resolutions=()`.
+  Stop observation does not require absent output; it proves no output acceptance. HANDLE's
+  full reconciliation still separately requires known cause/error, absent original/accepted
+  output, complete legal capture/current inventory and all normal receipt checks.
+- A `WorktreeCaptureRejected` or mutation-inventory refusal after validated stop becomes
+  `collection_failed=true`, `collection_failure=WORKSPACE_CAPTURE_REJECTED`,
+  `status=PLATFORM_ATTENTION`, no resolution and `CHECKPOINT_UNAVAILABLE`. An unknown result
+  stays `OUTCOME_UNKNOWN`. The fixed Chinese report names complete-progress sealing as the
+  problem; it does not advertise a missing stop or copy the rejected body/error.
+- Typed collection failure requires a stop digest, checkpoint missing, no `STOP_UNRECORDED`,
+  no permitted resolution and no resolution. The optional field is omitted when None from
+  wire and model dump; `delivery_wait_handling_record_key` adds the field only when present.
+  Old absent-field bytes, hashes and record keys remain readable. New failures participate in
+  a new immutable identity rather than changing old reports.
+- `engineering-wait-resolution.schema.json` and its `console-operation.schema.json` embedded
+  definitions carry the same enum and conditional failure validation. Synchronize generated
+  definitions without erasing unrelated hand-written contract matrices. History consumes the
+  sealed handling record and records the safe code without producing any execution authority.
+
+### 4. Validation & Error Matrix
+
+| Original facts / operation | Required result |
+|---|---|
+| Exact stop, local TIMEOUT, complete legal capture and remaining frozen authority | HANDLE may seal receipt and use the ordinary exact policy resolution |
+| Exact stop, capture refused | Safe typed capture failure; stop digest retained; outcome/checkpoint missing; no resolution |
+| Exact stop, INSPECT only | Read stop and seal investigation; no receipt, role invocation or budget debit |
+| Real stop with unknown cause or observed output | Stop may be reported; reconciliation still refuses automatic continuation |
+| Missing/tampered start or stop, different native Requirement/dispatch, Task/claim drift | No known-stop proof or recovery; original records and draft remain |
+| Lease expiry changed by legitimate heartbeat only | Stop identity remains valid; expiry does not itself prove stopping |
+| Lease acquired-at, worker, model or original claim drift | Reject observation; no new receipt or authority |
+| Active queue claim or original group live/uncheckable | Execution wait; no capture-failure claim, model restart or stop assertion |
+| Failure code unknown, missing stop, false collection_failed or absent checkpoint missing | Pydantic and published nested/standalone Schema reject |
+
+### 5. Good / Base / Bad Cases
+
+Good: the runner actually times out and seals a real stop; capture later succeeds after a platform
+fix, and HANDLE generates a new receipt and frozen-policy decision for the same Requirement.
+Base: capture still refuses; the user sees the known stop and precise sealing issue, with all
+draft/audit facts retained. Bad: treat stopped status as a complete checkpoint, refund a local
+window as a provider failure, or reset/recreate the Task to evade an incomplete capture.
+
+### 6. Tests Required
+
+- `tests/manager/test_wait_fact_collection.py` uses real Git v2 source capture: a sensitive body
+  refuses sealing while valid original start/stop remain unchanged. Assert known stop/cause,
+  no copied body/path, no receipt/resolution, no Task/event/budget mutation and exact replay.
+  INSPECT must independently retain the stop without creating capture. The authority matrix
+  rejects Requirement/dispatch, model, immutable lease, worker, Task and current-group drift;
+  legitimate heartbeat expiry remains valid and a missing Task lock rejects.
+- `tests/orchestration/test_capture_reconciliation.py` keeps the shared validator and full
+  receipt gates exercised for v1/v2, output/cause/lock refusal, source/HEAD/claim/permission
+  drift and final-inventory races. Stop-only support must not relax these receipt gates.
+- `tests/manager/test_delivery_wait.py` covers an active claim as execution waiting and
+  absent-field historical handling keys/digests. Capture diagnosis cannot authorize a retry.
+- `tests/domain/test_delivery_resolution_schema.py` and the capture fixture validate both
+  standalone and Console-embedded failure shape, including unknown/false/missing-field refusal.
+- `tests/team_view/test_engineering_history.py` keeps safe diagnostic/history/store-key linkage
+  and asserts unchanged read-side file inventories.
+
+### 7. Wrong vs Correct
+
+Wrong: `receipt is None` therefore report that the original stop is unrecorded; or if the stop
+is found, offer RETRY directly. Correct: validate and report the original stop independently,
+keep checkpoint/outcome missing, and let HANDLE satisfy the separate complete-receipt gates.
+
+### 存量数据处置与回滚
+
+No SQL migration, stop fabrication or in-place report rewrite. For an existing exact K1 wait,
+load the fix while idle, preserve its worktree/ledgers, then HANDLE the same Requirement and
+current WorkItem binding. Complete sealing yields new immutable proof/receipt/handling facts;
+old failed handling, invocation, claim and role history remain. If capture still refuses, repair
+the typed sealing issue before retrying; do not approve a stop-only proof or delete the draft.
+
+The optional diagnostic is backward-readable by the new runtime, not forward-readable by an
+older strict `extra=forbid` runtime. After new failure records exist, a behavior rollback must
+retain the new diagnostic domain/schema/history readers. Do not delete or rewrite audit records
+to make an older binary accept them. Reader rollback without compatibility must fail closed.

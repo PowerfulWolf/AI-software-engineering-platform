@@ -650,6 +650,29 @@ const engineeringProofMissingGuidance = {
 const engineeringHandlingStatuses = new Set(["RESOLVED", "WAITING_EXECUTION", "NEEDS_AUTHORIZATION",
   "PLATFORM_ATTENTION", "WAITING_PREREQUISITES", "BUDGET_EXHAUSTED"]);
 const engineeringCollectionFailureNotice = "部分执行事实已核验，但收集校验失败，当前不能继续。平台需处理校验问题后重新检查。";
+function engineeringCaptureRefusal(proof, handling) {
+  return handling?.collection_failed === true && handling.collection_failure === "WORKSPACE_CAPTURE_REJECTED" &&
+    /^[a-f0-9]{64}$/.test(proof?.process_stop_sha256 || "") &&
+    !proof?.missing?.includes("STOP_UNRECORDED") &&
+    proof?.missing?.includes("CHECKPOINT_UNAVAILABLE") && !proof?.permitted_resolutions?.length;
+}
+function engineeringCollectionNotice(proof, handling) {
+  return engineeringCaptureRefusal(proof, handling)
+    ? "已核验原执行停止，但进度封存校验未通过。平台维护者修复后需要重新处理，当前不能直接继续。"
+    : engineeringCollectionFailureNotice;
+}
+function engineeringMissingGuidance(item, captureRefused = false) {
+  if (captureRefused && item === "OUTCOME_UNKNOWN") return [
+    "原执行没有已接纳的完成结果", "ASE 平台", "原执行停止已核验，平台需在完整保留进度后接续开发。", "进度封存问题修复后重新处理。",
+  ];
+  if (captureRefused && item === "CHECKPOINT_UNAVAILABLE") return [
+    "保留进度的完整封存未通过校验", "ASE 平台维护者", "修复完整进度封存校验问题；保留现有文件和停止记录，不能直接清空或重建需求。",
+    consoleSupportsOperation("HANDLE_DELIVERY_WAIT") ? "平台修复后，点击“平台修复后重新处理”。" : "服务支持处理中断操作后，重新处理保留的进度。",
+  ];
+  return engineeringProofMissingGuidance[item] || [
+    "平台返回了未识别的检查项", "平台维护者", "平台需要修复这项检查结果；当前不能安全继续。", "平台修复检查结果后再检查。",
+  ];
+}
 function engineeringWaitSteps(request) {
   if (["DONE", "CLOSED"].includes(request.stage)) return [];
   return currentRequestTasks(request).filter(task => !task.terminal).flatMap(task =>
@@ -824,7 +847,9 @@ async function submitEngineeringWaitOperation(intent) {
   const current = request && engineeringWaitSteps(request).find(({step}) =>
     sameEngineeringWaitIntent(intent, engineeringWaitIntent(request, step)));
   const proof = current && engineeringWaitProof(request, current.step);
-  if (!current || !["INSPECT_DELIVERY_WAIT", "HANDLE_DELIVERY_WAIT", "RESOLVE_DELIVERY_WAIT"].includes(intent.action) ||
+  if (!current || !canControlCurrentTeam() || !consoleSupportsOperation(intent.action) ||
+      activeOperation(request.id, request.project_id) ||
+      !["INSPECT_DELIVERY_WAIT", "HANDLE_DELIVERY_WAIT", "RESOLVE_DELIVERY_WAIT"].includes(intent.action) ||
       (intent.action === "RESOLVE_DELIVERY_WAIT" &&
       (!proof || proof.proof_sha256 !== intent.proof_sha256 ||
        !(proof.permitted_resolutions || []).includes(intent.resolution_kind) ||
@@ -862,7 +887,7 @@ function engineeringActiveOperationBox(request, operation) {
       : progress?.title || "平台正在处理当前操作，完成后会更新检查结果与可用操作。", "muted"));
   return panel;
 }
-function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, legacyRescue = false, rescueFailure = null, controlUnavailable = null} = {}) {
+function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, handling = null, legacyRescue = false, rescueFailure = null, controlUnavailable = null} = {}) {
   if (historical) {
     target.append(el("p", "当次调查 · " + humanizeBlockingText(proof.next_action || "调查结果未提供处理建议。")),
       el("p", "这是该次调查保存的结果；当前原因与操作以页面上方为准。", "muted"));
@@ -871,7 +896,9 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
     return;
   }
   const missing = proof.missing || [];
-  if (collectionFailed) target.append(el("p", engineeringCollectionFailureNotice, "error"));
+  if (collectionFailed) target.append(el("p", engineeringCollectionNotice(proof, handling), "error"));
+  else if (/^[a-f0-9]{64}$/.test(proof.process_stop_sha256 || "") && !missing.includes("STOP_UNRECORDED"))
+    target.append(el("p", "已核验原执行停止；结果与完整进度是否可复用，请查看下面的检查项。", "muted"));
   if (legacyRescue) {
     target.append(engineeringGuidanceList("旧执行没有留下完整结果、结束和现场记录，不能把它当作已完成，也不能靠重复调查补齐。",
       controlUnavailable ? "当前恢复操作不可用，具体原因和下一步见下方；操作恢复后须重新读取并核对方案，不能使用旧页面的审批。"
@@ -883,10 +910,7 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
     target.append(el("strong", "当前尚未解决的事项"));
     const list = el("ul", undefined, "engineering-wait-issues");
     for (const item of missing) {
-      const [title, owner, action, recheck] = engineeringProofMissingGuidance[item] || [
-        "平台返回了未识别的检查项", "平台维护者", "平台需要修复这项检查结果；当前不能安全继续。",
-        "平台修复检查结果后再检查。",
-      ];
+      const [title, owner, action, recheck] = engineeringMissingGuidance(item, engineeringCaptureRefusal(proof, handling));
       const entry = el("li", undefined, "engineering-wait-issue");
       entry.append(el("strong", title), el("p", "处理方 · " + owner, "muted"), el("p", action),
         el("p", "何时复查 · " + recheck, "muted"));
@@ -915,6 +939,13 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
     platform: "可以检查原执行，并在现有授权允许时处理和继续。不会改变需求范围，也不会替代测试与评审。",
     user: "你可以点击“让平台处理中断”。如果需要额外授权，页面会明确列出待决定的方案。",
   };
+  if (/^[a-f0-9]{64}$/.test(proof?.process_stop_sha256 || "") &&
+      !missing.includes("STOP_UNRECORDED") && missing.includes("CHECKPOINT_UNAVAILABLE")) {
+    facts.happened = proof.retry_cause === "local_execution_limit"
+      ? "本轮 Coder 达到本地执行时限后已停止，尚无可接纳的完成结果。"
+      : "原执行停止已核验，完整结果与保留进度仍需平台核对。";
+    facts.preservation = "原开发文件和停止记录已保留，尚未形成可安全复用的完整进度记录。平台不会自动清空原工作区。";
+  }
   if (activeHandling) {
     facts.platform = active.status === "QUEUED" ? "处理中断的操作已接收，等待平台执行。" : "平台正在处理中断，原等待状态会保留到新的执行事实成立。";
     facts.user = "当前不需要决定，请等待这次处理返回结果。";
@@ -927,6 +958,8 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
   } else if (handling) {
     facts.platform = humanizeBlockingText(handling.summary || "本次平台处理已完成，仍需根据检查结果继续。");
     facts.user = humanizeBlockingText(handling.user_action || "当前没有可执行的用户决定，请按页面所列处理方完成前提。");
+    if (handling.status === "PLATFORM_ATTENTION" && !facts.user.includes("平台修复后重新处理"))
+      facts.user += " 平台问题修复后，点击“平台修复后重新处理”，由平台重新核验并尝试继续原需求。";
   } else if (proof?.missing?.length) {
     facts.user = "你无需判断内部执行记录。可以让平台尝试处理；若平台仍无法继续，会说明处理方和具体事项。";
   } else if (engineeringWaitCanResolve(request, step, proof)) {
@@ -948,8 +981,8 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
         : "当前服务尚不支持保留进度的恢复方案。请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。";
   }
   if (consoleAvailable === true && !consoleSupportsOperation("HANDLE_DELIVERY_WAIT")) {
-    if (!active && !decision && !handling) {
-      facts.platform = "当前页面的处理操作未获当前服务支持，请先更新运行中的服务。";
+    if (!active && !decision) {
+      if (!handling) facts.platform = "当前页面的处理操作未获当前服务支持，请先更新运行中的服务。";
       facts.user = consoleOperationVersionMismatchMessage;
     } else facts.user += " " + consoleOperationVersionMismatchMessage;
   }
@@ -972,10 +1005,7 @@ async function copyEngineeringWaitReport(request, handling) {
   const failure = current && engineeringLegacyRescueFailure(request, current.task, current.step,
     engineeringLegacyRescueFacts(request, current.task, current.step, proof, handling));
   const missing = (proof?.missing || []).map(item => {
-    const [title, owner, action, recheck] = engineeringProofMissingGuidance[item] || [
-      "平台返回了未识别的检查项", "平台维护者", "平台需要修复这项检查结果；当前不能安全继续。",
-      "平台修复检查结果后再检查。",
-    ];
+    const [title, owner, action, recheck] = engineeringMissingGuidance(item, engineeringCaptureRefusal(proof, handling));
     return ["待处理事项 · " + title, "处理方 · " + (failure ? "ASE 平台维护者" : rescue ? "ASE 平台与工程授权者" : owner),
       "具体处理 · " + (controlUnavailable ? controlUnavailable.next_action
         : failure ? "先处理本次恢复方案准备失败；旧执行的缺失事实仍保留，不能通过重复调查补造。"
@@ -985,10 +1015,12 @@ async function copyEngineeringWaitReport(request, handling) {
   });
   const report = ["ASE 交付处理报告", "需求 · " + request.title,
     ...(controlUnavailable ? ["操作可用性 · " + controlUnavailable.title + "；" + controlUnavailable.reason] : []),
-    ...(handling.collection_failed === true ? ["当前结果 · " + engineeringCollectionFailureNotice] : []),
+    ...(handling.collection_failed === true ? ["当前结果 · " + engineeringCollectionNotice(proof, handling)] : []),
     "本次处理 · " + (failure ? `恢复方案准备${failure.status === "INTERRUPTED" ? "被中断" : "失败"}：${failure.summary}`
       : preparation?.summary || humanizeBlockingText(handling.summary || "未提供处理说明")),
-    "用户操作 · " + (controlUnavailable ? controlUnavailable.next_action : failure ? failure.next_action
+    "用户操作 · " + (controlUnavailable ? controlUnavailable.next_action
+      : handling.status === "PLATFORM_ATTENTION" && !consoleSupportsOperation("HANDLE_DELIVERY_WAIT") ? consoleOperationVersionMismatchMessage
+      : failure ? failure.next_action
       : preparation?.next_action || (rescue ? "在当前需求详情点击“准备保留进度的恢复方案”；先看平台检查结果，方案准备完成后由工程授权者明确确认所列实际停止前提，再批准继续原需求。" : humanizeBlockingText(handling.user_action || "无"))),
     "复查时机 · " + (failure ? "平台修复本次失败后，再重新检查恢复前提；重复调查不能修复内部异常。"
       : rescue ? "按恢复前提检查所列下一步处理后重新检查；旧执行结果仍保持未知。" : humanizeBlockingText(handling.recheck_when || "处理记录或执行前提更新后")),
@@ -1047,8 +1079,9 @@ function engineeringWaitBox(request, task, step) {
   management.append(overview);
   if (proof) {
     const collectionFailed = handling?.collection_failed === true;
-    const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof", [proof, collectionFailed, Boolean(rescue), rescueFailure, controlUnavailable]);
-    appendEngineeringInvestigation(result, proof, {collectionFailed, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable});
+    const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof",
+      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable]);
+    appendEngineeringInvestigation(result, proof, {collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable});
     management.append(result);
   }
   if (controlUnavailable) management.append(deliveryControlUnavailableNotice(controlUnavailable));
@@ -1062,6 +1095,10 @@ function engineeringWaitBox(request, task, step) {
     if (consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve &&
       !["NEEDS_AUTHORIZATION", "PLATFORM_ATTENTION", "BUDGET_EXHAUSTED", "WAITING_PREREQUISITES"].includes(handling?.status))
       actions.append(deliveryButton("让平台处理中断", () => submitEngineeringWaitOperation({
+        ...bound, action: "HANDLE_DELIVERY_WAIT",
+      }), "primary"));
+    if (consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && handling?.status === "PLATFORM_ATTENTION")
+      actions.append(deliveryButton("平台修复后重新处理", () => submitEngineeringWaitOperation({
         ...bound, action: "HANDLE_DELIVERY_WAIT",
       }), "primary"));
     if (consoleSupportsOperation("INSPECT_DELIVERY_WAIT")) {

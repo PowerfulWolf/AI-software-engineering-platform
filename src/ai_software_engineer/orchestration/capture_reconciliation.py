@@ -31,6 +31,56 @@ from ai_software_engineer.recovery.models import CapturedChanges
 from ai_software_engineer.work_queue.models import QueueClaim
 
 
+class CaptureStopProcessUncertain(ContinuationRejected):
+    """The exact original process group is live or cannot be checked safely."""
+
+
+def validate_capture_stop(
+    *,
+    start: ExecutionCaptureStart,
+    stop: ExecutionCaptureStop,
+    task: Task,
+    task_revision: int,
+    historical_claim: QueueClaim,
+    task_lock: ExecutionGuard,
+    validate_inputs: Callable[[AgentRequest], None],
+) -> None:
+    """Verify the original owned stop; it proves no outcome or checkpoint readiness."""
+    start.validate_integrity()
+    stop.validate_integrity()
+    request, policy = start.request, task.interruption_continuation_policy
+    claim, recorded = historical_claim, start.claim
+    if (
+        not task_lock.inherited_fds
+        or task.status is not TaskStatus.IMPLEMENTING
+        or request.task_id != task.id
+        or task.attempts != request.attempt
+        or task_intent_sha256(task) != start.task_intent_sha256
+        or task_revision != start.task_revision
+        or policy is None
+        or policy.policy_sha256 != start.policy_sha256
+        or stop.task_id != task.id
+        or stop.run_id != request.run_id
+        or stop.capture_start_sha256 != start.start_sha256
+        or stop.process_stop.stopped_at < start.started_at
+        or claim.assignment != recorded.assignment
+        or claim.model_selection != recorded.model_selection
+        # Heartbeats legitimately extend expires_at; all immutable lease and
+        # producer fields must still match the original sealed claim.
+        or claim.lease.model_dump(exclude={"expires_at"})
+        != recorded.lease.model_dump(exclude={"expires_at"})
+        or claim.work_item != recorded.work_item
+        or claim.worker_id != recorded.worker_id
+        or claim.claimed_at != recorded.claimed_at
+    ):
+        raise ContinuationRejected("原执行事实不足以安全保存接续现场, 原记录与草稿保留")
+    validate_inputs(request)
+    try:
+        NativeCoderContinuation._require_stopped(stop.process_stop, request)
+    except ContinuationRejected as error:
+        raise CaptureStopProcessUncertain("原执行进程组仍在运行或状态未知, 暂不能处理") from error
+
+
 def reconcile_capture(
     *,
     start: ExecutionCaptureStart,
@@ -50,35 +100,24 @@ def reconcile_capture(
     Composition also holds the queue's idle Task fence. No original live claim,
     retry budget transaction, provider call, candidate or verdict is fabricated.
     """
-    start.validate_integrity()
-    stop.validate_integrity()
+    validate_capture_stop(
+        start=start,
+        stop=stop,
+        task=task,
+        task_revision=task_revision,
+        historical_claim=historical_claim,
+        task_lock=task_lock,
+        validate_inputs=validate_inputs,
+    )
     request, policy = start.request, task.interruption_continuation_policy
-    claim, recorded = historical_claim, start.claim
+    assert policy is not None
     if (
-        not task_lock.inherited_fds
-        or task.status is not TaskStatus.IMPLEMENTING
-        or request.task_id != task.id
-        or task.attempts != request.attempt
-        or task_intent_sha256(task) != start.task_intent_sha256
-        or task_revision != start.task_revision
-        or policy is None
-        or policy.policy_sha256 != start.policy_sha256
-        or stop.task_id != task.id
-        or stop.run_id != request.run_id
-        or stop.capture_start_sha256 != start.start_sha256
-        or stop.process_stop.stopped_at < start.started_at
-        or stop.cause is None
+        stop.cause is None
         or stop.original_error_code is None
         or stop.output_present
         or has_output(request)
-        or claim.assignment != recorded.assignment
-        or claim.model_selection != recorded.model_selection
-        or claim.lease.id != recorded.lease.id
-        or claim.work_item != recorded.work_item
     ):
         raise ContinuationRejected("原执行事实不足以安全保存接续现场, 原记录与草稿保留")
-    validate_inputs(request)
-    NativeCoderContinuation._require_stopped(stop.process_stop, request)
     worktree = git.recover(
         WorktreeSpec(
             task_id=task.id,
@@ -118,8 +157,8 @@ def reconcile_capture(
         request=request,
         task_intent_sha256=start.task_intent_sha256,
         task_revision=start.task_revision,
-        original_work_item_id=recorded.work_item.id,
-        claim_lease_id=recorded.lease.id,
+        original_work_item_id=start.claim.work_item.id,
+        claim_lease_id=start.claim.lease.id,
         policy_sha256=start.policy_sha256,
         cause=stop.cause,
         original_error_code=stop.original_error_code,

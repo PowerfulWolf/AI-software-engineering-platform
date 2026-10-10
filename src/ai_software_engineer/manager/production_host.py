@@ -86,7 +86,10 @@ from ai_software_engineer.multi_directory.deletion import ProductionRequirementD
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
 from ai_software_engineer.multi_directory.production import ProductionJointBackend
 from ai_software_engineer.multi_directory.service import JointDeliveryService
-from ai_software_engineer.orchestration.continuation_models import ContinuationScope
+from ai_software_engineer.orchestration.continuation_models import (
+    ContinuationScope,
+    ExecutionCaptureStop,
+)
 from ai_software_engineer.product import HumanProductDecisionVerifier
 from ai_software_engineer.project_workspace import ProjectWorkspace, ProjectWorkspaceRegistry
 from ai_software_engineer.runtime_workspace import (
@@ -803,6 +806,12 @@ class TeamHost:
             with self._work_queue.idle_task_scope(current.id):
                 collector.collect(current, step, guard)
 
+        def observe_wait_stop(
+            current: Task, step: QueuedRoleStep, guard: WorkerExecutionGuard
+        ) -> ExecutionCaptureStop | None:
+            with self._work_queue.idle_task_scope(current.id):
+                return collector.observe_stop(current, step, guard)
+
         return DeliveryWaitService(
             repository=repository,
             queue=self._work_queue,
@@ -814,6 +823,7 @@ class TeamHost:
             artifacts=FileArtifactStore(workspace.directory("artifacts"), read_only=True),
             engineering_authority=EngineeringAuthority(self._team.directory("work-items")),
             fact_collector=collect_wait_facts,
+            stop_observer=observe_wait_stop,
             prerequisite_collector=lambda current, step: (
                 runtime.backend.inspect_delivery_wait_prerequisites(
                     current,

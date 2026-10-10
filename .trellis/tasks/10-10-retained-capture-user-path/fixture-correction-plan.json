@@ -1,0 +1,14 @@
+{
+  "action": "MODIFY_TESTS",
+  "after_sha256": "25aa6a22377dad832cdb762af17bfc805ef10924c1283ed2479685288304f7df",
+  "before_sha256": "769f4b99e1034fb60ae88f8d9c82c010d40d185bd032391a63ea3d07c9ef6467",
+  "description": "\u65e0\u6548\u4ee4\u724c\u8d1f\u5411\u6d4b\u8bd5\u6539\u7528\u7a7a\u503c; \u4fdd\u7559\u62d2\u7edd\u65ad\u8a00, \u4ecd\u987b\u72ec\u7acb QA \u548c Review; \u4e0d\u7b97 ASE \u81ea\u4e3b\u4ea7\u51fa",
+  "inventory_before_sha256": "24daf0a0e6f0183b30f5219fda351eb66baffdad8613aa503a3476735af2abde",
+  "mode": "delegated_external_maintenance",
+  "path": "tests/learning/test_recovery.py",
+  "process_stop_sha256": "f419f38f547106045cc1adb8f8f6f28c9a23aa70ce7cb1091bb7b579b65a8aae",
+  "run_id": "run_ace680664bb14ad8abadc70f967d9d2a",
+  "task_id": "task_dc5cf0aee44e5ffe0cb600557204e0d0",
+  "task_revision": 17,
+  "work_item_id": "work_1a09d8b41082a0e328cbc484b09f5ac6604d5491a85e0cc6c1d6efe405bdf446"
+}

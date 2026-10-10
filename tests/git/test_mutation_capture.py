@@ -25,6 +25,10 @@ from tests.git.test_capture import workspace as workspace
         "def connect(settings):\n"
         "    return client(password=settings.password, host=settings.host)\n",
         'def fixture(foreign):\n    secret = foreign / "secret.json"\n    return secret\n',
+        "from dataclasses import dataclass, field\n"
+        "@dataclass\nclass Session:\n    token: str = field(repr=False)\n",
+        "import secrets\ndef issue():\n    token = secrets.token_urlsafe(32)\n    return token\n",
+        "def read(row):\n    token: object = row['token_hash']\n    return token\n",
     ],
 )
 def test_source_reference_is_captured_unchanged_through_wire_and_verify(
@@ -56,6 +60,14 @@ def test_source_reference_is_captured_unchanged_through_wire_and_verify(
         'secret = foreign / "Bearer abcdefghijkl.json"\n',
         'payload = "password=settings.password;"\n',
         "# password=settings.password\n",
+        'token: str = "clear-text-value"\n',
+        'from dataclasses import field\ntoken: str = field(default="clear-text-value")\n',
+        "import secrets\nsecrets = factory\ntoken = secrets.token_urlsafe(32)\n",
+        'import secrets\ntoken = secrets.token_urlsafe("clear-text-value")\n',
+        "import secrets\ndef mutate(mod):\n"
+        "    mod.token_urlsafe = lambda n: 'clear-text-value'\n"
+        "mutate(secrets)\ntoken = secrets.token_urlsafe(32)\n",
+        "import secrets\nexecute = exec\nexecute(code)\ntoken = secrets.token_urlsafe(32)\n",
     ],
 )
 def test_source_reference_classifier_still_rejects_secret_values(
@@ -69,20 +81,29 @@ def test_source_reference_classifier_still_rejects_secret_values(
     assert source.read_text() == code
 
 
+@pytest.mark.parametrize(
+    ("unsafe", "safe"),
+    [
+        ('password="clear-text-value"\n', "password=settings.password\n"),
+        ('token: str = "clear-text-value"\n', "token: object = row['token_hash']\n"),
+    ],
+)
 def test_staged_only_literal_still_blocks_capture_when_working_body_is_safe(
     workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
+    unsafe: str,
+    safe: str,
 ) -> None:
     manager, ref, permissions = workspace
     source = ref.path / "src/app.py"
-    source.write_text('password="clear-text-value"\n')
+    source.write_text(unsafe)
     git(ref.path, "add", "src/app.py")
-    source.write_text("password=settings.password\n")
+    source.write_text(safe)
     index = Path(git(ref.path, "rev-parse", "--path-format=absolute", "--git-path", "index"))
     before_index = index.read_bytes()
     with pytest.raises(WorktreeCaptureRejected):
         manager.capture_mutations(ref, permissions)
     assert index.read_bytes() == before_index
-    assert source.read_text() == "password=settings.password\n"
+    assert source.read_text() == safe
 
 
 def test_wire_mutation_parent_rechecks_source_language_from_its_actual_path(

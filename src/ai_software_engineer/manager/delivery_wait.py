@@ -26,6 +26,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryProofMissing,
     DeliveryResolution,
     DeliveryResolutionKind,
+    DeliveryWaitCollectionFailure,
     DeliveryWaitHandling,
     DeliveryWaitHandlingStatus,
     DeliveryWaitInvestigation,
@@ -76,11 +77,14 @@ from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationIntent,
     observe_verifier_preparation,
 )
+from ai_software_engineer.manager.wait_fact_collection import WaitWorkspaceCaptureRejected
+from ai_software_engineer.orchestration.capture_reconciliation import CaptureStopProcessUncertain
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.orchestration.continuation_models import (
     ContinuationRecordMissing,
     ContinuationRejected,
+    ExecutionCaptureStop,
     ExecutionInterruptionReceipt,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
@@ -157,6 +161,9 @@ class DeliveryNativeExecutionUncertain(DeliveryWaitRejected):
 
 PrerequisiteCollector = Callable[[Task, QueuedRoleStep], DeliveryPreflightReceipt | None]
 WaitFactCollector = Callable[[Task, QueuedRoleStep, WorkerExecutionGuard], None]
+WaitStopObserver = Callable[
+    [Task, QueuedRoleStep, WorkerExecutionGuard], ExecutionCaptureStop | None
+]
 
 
 class DeliveryWaitService:
@@ -174,6 +181,7 @@ class DeliveryWaitService:
         artifacts: ArtifactStore | None = None,
         engineering_authority: EngineeringAuthority | None = None,
         fact_collector: WaitFactCollector | None = None,
+        stop_observer: WaitStopObserver | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.repository, self.queue, self.sidecar_state = repository, queue, sidecar_state
@@ -182,18 +190,20 @@ class DeliveryWaitService:
         self.prerequisite_collector = prerequisite_collector
         self.artifacts = artifacts
         self.engineering_authority, self.fact_collector = engineering_authority, fact_collector
+        self.stop_observer = stop_observer
         self.clock = clock or (lambda: datetime.now(UTC))
         self.records = KnowledgeRecordStore(sidecar_state / "delivery-waits")
 
     def inspect(self, command: InspectDeliveryWait) -> DeliveryWaitInvestigation:
         self.principal.require_duty(OperatorDuty.ENGINEERING)
         item, step, task = self._current(command)
+        guard = WorkerExecutionGuard()
         try:
-            with WorkerExecutionGuard().task_scope(
+            with guard.task_scope(
                 self.sidecar_state / "queue-worker-locks",
                 task.id,
             ):
-                proof = self._collect(item, step, task)
+                proof = self._collect(item, step, task, guard=guard)
         except DeliveryQueuePending:
             proof = self._proof(item, step, task, missing=(DeliveryProofMissing.TASK_PROCESS_LIVE,))
         proof.validate_integrity()
@@ -252,6 +262,7 @@ class DeliveryWaitService:
         item, step, task = self._current(command)
         guard = WorkerExecutionGuard()
         collector_failed = False
+        capture_failed = False
         try:
             with guard.task_scope(self.sidecar_state / "queue-worker-locks", task.id):
                 # This seam can recover sealed original facts. It cannot grant new
@@ -259,6 +270,10 @@ class DeliveryWaitService:
                 if self.fact_collector is not None:
                     try:
                         self.fact_collector(task, step, guard)
+                    except CaptureStopProcessUncertain:
+                        raise
+                    except WaitWorkspaceCaptureRejected:
+                        collector_failed = capture_failed = True
                     except (
                         ContinuationRejected,
                         ModelRouteAttemptStoreError,
@@ -267,14 +282,19 @@ class DeliveryWaitService:
                         MutationInventoryRejected,
                     ):
                         collector_failed = True
-                proof = self._collect(item, step, task)
+                proof = self._collect(item, step, task, guard=guard)
         except QueueLeaseLost:
+            proof = self._proof(
+                item, step, task, missing=(DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN,)
+            )
+        except CaptureStopProcessUncertain:
             proof = self._proof(
                 item, step, task, missing=(DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN,)
             )
         except DeliveryQueuePending:
             proof = self._proof(item, step, task, missing=(DeliveryProofMissing.TASK_PROCESS_LIVE,))
         status, summary, user_action, recheck_when = self._handling_presentation(proof)
+        collection_failure = None
         if collector_failed:
             status = "PLATFORM_ATTENTION"
             summary = "平台收集原执行事实时校验失败, 原记录和工作现场保留。"
@@ -283,7 +303,29 @@ class DeliveryWaitService:
                 "本次没有批准恢复, 也没有修改原调查证明或角色结论。"
             )
             recheck_when = "原记录校验问题修复后再检查; 重复调查不能绕过完整性校验。"
-        identity = self._handling_identity(command, proof, collector_failed=collector_failed)
+            if (
+                capture_failed
+                and proof.process_stop_sha256
+                and (
+                    DeliveryProofMissing.STOP_UNRECORDED not in proof.missing
+                    and DeliveryProofMissing.CHECKPOINT_UNAVAILABLE in proof.missing
+                    and not proof.permitted_resolutions
+                )
+            ):
+                collection_failure = DeliveryWaitCollectionFailure.WORKSPACE_CAPTURE_REJECTED
+                summary = (
+                    "原 Coder 已到本地执行时限并停止, 但保留进度的完整封存未通过平台校验。"
+                    if proof.retry_cause == "local_execution_limit"
+                    else "原 Coder 停止已核验, 但保留进度的完整封存未通过平台校验。"
+                )
+                user_action = (
+                    "ASE 平台维护者需修复完整进度封存问题; 修复后点击“平台修复后重新处理”, "
+                    "由平台核验并继续原需求。现有源码和停止记录保留, 本次没有批准恢复。"
+                )
+                recheck_when = "完整进度封存问题修复后再处理; 仅重新检查状态不能补齐封存记录。"
+        identity = self._handling_identity(
+            command, proof, collector_failed=collector_failed, collection_failure=collection_failure
+        )
         prior = self.records.find("wait-handlings", identity, DeliveryWaitHandling)
         if prior is not None:
             prior.validate_integrity()
@@ -308,7 +350,15 @@ class DeliveryWaitService:
                 frozen = concurrent
         frozen.validate_integrity()
         self._require_proof_binding(frozen, command)
-        if self._handling_identity(command, frozen, collector_failed=collector_failed) != identity:
+        if (
+            self._handling_identity(
+                command,
+                frozen,
+                collector_failed=collector_failed,
+                collection_failure=collection_failure,
+            )
+            != identity
+        ):
             raise DeliveryWaitRejected("平台处理记录绑定的原调查事实已变化")
         proof = frozen
         proof = self.records.put("wait-investigations", proof.proof_sha256, proof)
@@ -366,6 +416,7 @@ class DeliveryWaitService:
             recheck_when,
             at=self.clock(),
             collection_failed=collector_failed,
+            collection_failure=collection_failure,
         )
         try:
             sealed = self.records.put("wait-handlings", identity, record)
@@ -392,12 +443,14 @@ class DeliveryWaitService:
         proof: DeliveryWaitInvestigation,
         *,
         collector_failed: bool = False,
+        collection_failure: DeliveryWaitCollectionFailure | None = None,
     ) -> str:
         return delivery_wait_handling_record_key(
             command,
             proof,
             manual_resolution_allowed=OperatorDuty.ENGINEERING in self.principal.duties,
             collection_failed=collector_failed,
+            collection_failure=collection_failure,
         )
 
     def _handling_record(
@@ -411,6 +464,7 @@ class DeliveryWaitService:
         *,
         at: datetime,
         collection_failed: bool = False,
+        collection_failure: DeliveryWaitCollectionFailure | None = None,
     ) -> DeliveryWaitHandling:
         record = DeliveryWaitHandling(
             task_id=proof.task_id,
@@ -427,6 +481,7 @@ class DeliveryWaitService:
             recheck_when=recheck_when,
             manual_resolution_allowed=OperatorDuty.ENGINEERING in self.principal.duties,
             collection_failed=collection_failed,
+            collection_failure=collection_failure,
             handled_at=at,
             handling_sha256="0" * 64,
         )
@@ -471,6 +526,18 @@ class DeliveryWaitService:
                 "所列工具或环境处理完成后, 再检查状态。",
             )
         if missing:
+            if (
+                proof.process_stop_sha256 is not None
+                and DeliveryProofMissing.STOP_UNRECORDED not in missing
+                and DeliveryProofMissing.CHECKPOINT_UNAVAILABLE in missing
+            ):
+                return (
+                    "PLATFORM_ATTENTION",
+                    "原执行停止已核验, 但尚无可安全继续的完整进度记录。",
+                    "ASE 平台需核对原结果与完整进度; 处理完成后点击“平台修复后重新处理”, "
+                    "重新核验并继续原需求。原现场和执行历史保留。",
+                    "原结果与完整进度记录补齐后重新处理; 仅重新检查状态不会封存进度。",
+                )
             return (
                 "PLATFORM_ATTENTION",
                 "平台已检查原执行, 但恢复所需的可信记录仍不完整。",
@@ -503,12 +570,13 @@ class DeliveryWaitService:
         if command.resolution_kind not in proof.permitted_resolutions or proof.missing:
             raise DeliveryWaitRejected(proof.next_action)
         item, step, task = self._current(command)
+        guard = WorkerExecutionGuard()
         try:
-            with WorkerExecutionGuard().task_scope(
+            with guard.task_scope(
                 self.sidecar_state / "queue-worker-locks",
                 task.id,
             ):
-                current = self._collect(item, step, task)
+                current = self._collect(item, step, task, guard=guard)
                 excluded = {"proof_sha256", "inspected_at", "prerequisite_receipt_sha256"}
                 if current.model_dump(mode="json", exclude=excluded) != proof.model_dump(
                     mode="json", exclude=excluded
@@ -666,7 +734,12 @@ class DeliveryWaitService:
             )
 
     def _collect(
-        self, item: QueuedWorkItem, step: QueuedRoleStep, task: Task
+        self,
+        item: QueuedWorkItem,
+        step: QueuedRoleStep,
+        task: Task,
+        *,
+        guard: WorkerExecutionGuard | None = None,
     ) -> DeliveryWaitInvestigation:
         assert item.wait_disposition is not None
         missing: list[DeliveryProofMissing] = []
@@ -696,6 +769,7 @@ class DeliveryWaitService:
         verifier_preparation = None
         original_authority = None
         inventory: WorkspaceMutationInventory | None = None
+        observed_stop: ExecutionCaptureStop | None = None
         if outcome is not None and not reverify and not rejected_outcome:
             # This decision never makes another model call. Worker uses the
             # sealed original request/result and normal artifact/verdict guards.
@@ -708,7 +782,31 @@ class DeliveryWaitService:
         elif start is not None and receipt is None and (outcome is None or rejected_outcome):
             if outcome is None:
                 missing.append(DeliveryProofMissing.OUTCOME_UNKNOWN)
-            missing.append(DeliveryProofMissing.STOP_UNRECORDED)
+            if self.stop_observer is not None and guard is not None:
+                try:
+                    observed_stop = self.stop_observer(task, step, guard)
+                    if observed_stop is not None:
+                        observed_stop.validate_integrity()
+                        if (observed_stop.task_id, observed_stop.run_id) != (
+                            task.id,
+                            start.request.run_id,
+                        ):
+                            raise ContinuationRejected("停止观察未绑定当前原执行")
+                        try:
+                            NativeCoderContinuation._require_stopped(
+                                observed_stop.process_stop, start.request
+                            )
+                        except ContinuationRejected as error:
+                            raise CaptureStopProcessUncertain(
+                                "原执行进程组仍在运行或状态未知, 暂不能处理"
+                            ) from error
+                except (QueueLeaseLost, CaptureStopProcessUncertain):
+                    observed_stop = None
+                    missing.append(DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN)
+                except (ContinuationRejected, ValueError, OSError, KnowledgeError, QueueError):
+                    observed_stop = None
+            if observed_stop is None:
+                missing.append(DeliveryProofMissing.STOP_UNRECORDED)
             missing.append(DeliveryProofMissing.CHECKPOINT_UNAVAILABLE)
         elif receipt is not None and start is not None:
             try:
@@ -832,6 +930,7 @@ class DeliveryWaitService:
             original_authority=original_authority,
             verification_retry=verification_retry,
             verifier_preparation=verifier_preparation,
+            observed_stop=observed_stop,
         )
 
     def _claimed_verifier_preparation(
@@ -1266,6 +1365,7 @@ class DeliveryWaitService:
         original_authority: OriginalInvocationAuthority | None = None,
         verification_retry: VerificationRetryEvidence | None = None,
         verifier_preparation: VerifierPreparationEvidence | None = None,
+        observed_stop: ExecutionCaptureStop | None = None,
     ) -> DeliveryWaitInvestigation:
         assert item.wait_disposition is not None
         preflight_detail_action = _preflight_detail_action(prerequisites)
@@ -1288,7 +1388,13 @@ class DeliveryWaitService:
             invocation_start_sha256=start.start_sha256 if start else None,
             invocation_outcome_sha256=outcome.outcome_sha256 if outcome else None,
             interruption_receipt_sha256=receipt.receipt_sha256 if receipt else None,
-            process_stop_sha256=receipt.process_stop_sha256 if receipt else None,
+            process_stop_sha256=(
+                receipt.process_stop_sha256
+                if receipt
+                else observed_stop.process_stop.stop_sha256
+                if observed_stop
+                else None
+            ),
             workspace_inventory_sha256=inventory.sha256 if inventory else None,
             prerequisite_receipt_sha256=prerequisites.receipt_sha256 if prerequisites else None,
             prerequisite_facts_sha256=digest(
@@ -1302,7 +1408,11 @@ class DeliveryWaitService:
             original_authority=original_authority,
             verification_retry=verification_retry,
             verifier_preparation=verifier_preparation,
-            retry_cause=receipt.cause if receipt else None,
+            retry_cause=receipt.cause
+            if receipt
+            else observed_stop.cause
+            if observed_stop
+            else None,
             permitted_resolutions=permitted,
             missing=missing,
             next_action=(
@@ -1324,6 +1434,10 @@ class DeliveryWaitService:
                 if DeliveryProofMissing.OUTCOME_REJECTED in missing
                 else preflight_detail_action
                 if preflight_detail_action is not None
+                else "原执行停止已核验, 但缺少可安全复用的完整进度封存; "
+                "ASE 平台需核对或修复封存流程, 完成后使用平台处理入口继续原需求。"
+                "原执行没有可接纳的完成结果, 原现场和历史保留。"
+                if observed_stop is not None
                 else "工程证明尚不完整, 等待和现场保留; 查看缺项, "
                 "由受控执行器补齐原调用停机、完整 checkpoint 或当前前提记录后重新调查"
             ),

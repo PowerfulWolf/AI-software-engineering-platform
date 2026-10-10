@@ -135,6 +135,31 @@ resolution_schema["$defs"]["DeliveryWaitHandling"]["allOf"] = [
         "then": {"required": ["resolution"], "properties": {"resolution": {"type": "object"}}},
         "else": {"properties": {"resolution": {"type": "null"}}},
     },
+    {
+        "if": {
+            "required": ["collection_failure"],
+            "properties": {"collection_failure": {"type": "string"}},
+        },
+        "then": {
+            "required": ["collection_failed"],
+            "properties": {
+                "collection_failed": {"const": True},
+                "status": {"const": "PLATFORM_ATTENTION"},
+                "resolution": {"type": "null"},
+                "investigation": {
+                    "required": ["process_stop_sha256", "missing"],
+                    "properties": {
+                        "process_stop_sha256": {"type": "string"},
+                        "missing": {
+                            "contains": {"const": "CHECKPOINT_UNAVAILABLE"},
+                            "not": {"contains": {"const": "STOP_UNRECORDED"}},
+                        },
+                        "permitted_resolutions": {"maxItems": 0},
+                    },
+                },
+            },
+        },
+    },
 ]
 resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] = [
     {
