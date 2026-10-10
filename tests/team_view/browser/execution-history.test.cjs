@@ -9,8 +9,9 @@ const entry = (taskId, index, kind = "state_event", details = {}) => ({
   occurred_at: `2026-09-21T00:${String(index).padStart(2, "0")}:00Z`,
   task_id: taskId,
   summary: kind === "artifact" ? "QA 报告 · FAIL" : `状态 · 第 ${index} 轮`,
-  source_uri: `${kind}://${taskId}/${index}`,
-  details,
+  source_uri: kind === "artifact" ? `artifact://entry_${taskId}_${index}` : `${kind}://${taskId}/${index}`,
+  ...(kind === "artifact" ? {source_sha256: details.artifact_sha256 || index.toString(16).repeat(64)} : {}),
+  details: kind === "artifact" ? {artifact_sha256: index.toString(16).repeat(64), ...details} : details,
 });
 
 test("one unchanged running operation follows design, planning and each native role during polling", async (t) => {
@@ -126,14 +127,15 @@ test("task detail renders every round with QA findings and Coder feedback lineag
     next_action: "等待评审",
     history_task_ids: ["task_current_round", "task_old_round"],
     execution_history: [
-      ...Array.from({length: 9}, (_, index) => entry("task_old_round", index + 1)),
+      entry("task_old_round", 1, "artifact", {kind: "plan"}),
+      ...Array.from({length: 8}, (_, index) => entry("task_old_round", index + 2)),
       entry("task_old_round", 10, "artifact", {
         kind: "qa-report", status: "FAIL", artifact_sha256: "a".repeat(64),
         findings: [{finding_id: "finding_qa", severity: "MAJOR", message: "缺少空输入回归测试。", file: "src/example.py", line: 42, evidence_ids: ["ev_qa"]}],
       }),
       entry("task_current_round", 11, "artifact", {
         kind: "implementation-report", candidate_revision: "b".repeat(40),
-        parent_artifact_ids: ["art_plan", "entry_task_old_round_10"], supersedes: "art_impl_old",
+        parent_artifact_ids: ["entry_task_old_round_1", "entry_task_old_round_10"], supersedes: "art_impl_old",
         changed_files: [{path: "src/example.py"}], tests_run: [{command: "pytest tests/example", status: "PASS", evidence_id: "ev_coder"}],
       }),
       entry("task_current_round", 12, "artifact", {
@@ -155,6 +157,7 @@ test("task detail renders every round with QA findings and Coder feedback lineag
   assert.match(await h.page.locator(".task-detail-dialog").innerText(), /task_old_round/);
   assert.match(await h.page.locator(".task-detail-dialog").innerText(), /task_current_round/);
   assert.doesNotMatch(text, /b{40}/, "technical candidate identity is collapsed by default");
-  await h.page.getByText("产物工程详情", {exact: true}).nth(1).click();
+  await h.page.locator(".execution-history-entry").filter({hasText: "修改文件 · src/example.py"})
+    .getByText("产物工程详情", {exact: true}).click();
   assert.match(await h.page.locator(".task-detail-dialog").innerText(), /b{40}/);
 });

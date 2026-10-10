@@ -173,7 +173,17 @@ timeline使用 sealed timestamp，并在每次合并中保留已验证的 artifa
 - `TimelineEntry.details` 对 typed `implementation-report`、`coder-progress`、`qa-report` 和 `review-report` 只投影有界摘要：Artifact SHA、source/candidate revision、parent IDs、supersedes、changed files、测试命令/状态/evidence ID，以及 QA/Review finding 的 code、message、文件/行、recommendation 和 evidence IDs。
 - `ProductionTeamReader` 使用已验证 native checkpoint history 为同一 delivery 读取每个历史 Task；当前 Task 仍是唯一状态/调度事实，历史 Task 的 timeline、runs、documents 只合并到 `TaskView.execution_history`，并以 `history_task_ids` 标识轮次。不得固定截断为八条或删除旧 Task。
 - `TaskView.timeline` 保持当前 Task 兼容语义；`execution_history` 按时间完整排序并包含 `task_id`，前端必须区分“当前轮”和“历史轮”。跨 successor 的历史不改变当前 `status`、`blocker`、`candidate_revision` 或任何 verdict。
-- Coder Artifact 的 `parent_artifact_ids`/`supersedes` 是“是否接收上轮反馈”的可验证 lineage；UI 可以显示已接收输入，但不得宣称 finding 已修复或替 QA/Review 作判断。
+- Coder Artifact 的 `parent_artifact_ids`/`supersedes` 是可验证 lineage，但非空父列表本身不能
+  证明接收了 QA/Review 反馈：首轮的合法父产物通常只有 plan。`appendExecutionArtifactDetails`
+  只在当前选中的同 Project TaskView 完整历史中解析父类型；该历史须唯一包含当前 entry，
+  当前及父条目的 exact artifact ID、`artifact://<id>` URI、`source_sha256` 与
+  `details.artifact_sha256` 必须绑定一致，且 task_id 属于该 TaskView 的 current/合法 successor
+  `history_task_ids`。重复/冲突 ID、缺失绑定和未知父保持未知，不搜索其他 Task、猜测 ID 名称
+  或解析脱敏的原始文档来补事实。
+- 只有父产物全部可核对且实际包含 typed `qa-report`/`review-report` 时，才能说明 Coder 接收
+  了验收反馈输入；仅 plan、进度或普通输入只能说明输入已记录。此说明用中性样式并明确仍须
+  后续独立 QA/Review 验收，不宣称 finding 已修复、已完成修改或替 QA/Review 作判断。
+  接收某种报告也不能自动称为“收到驳回”：否定结论必须另由 QA FAIL/Review REJECT 证明。
 - 读侧递归执行已有 redaction，URI、Run/Task/Artifact/Evidence ID 与 SHA 以文本展示。旧报告缺少 findings 或旧 Task 缺少 `execution_history` 时以空数组兼容。
 
 ### Good / Base / Bad
@@ -183,6 +193,11 @@ Good：QA FAIL 的 finding 和 evidence 出现在完整历史中，下一轮 Cod
 ### Validation
 
 增量契约覆盖 projection details、跨 successor Task 合并、空 finding 兼容、超过八条记录和浏览器详情；不要求全量测试。读侧故障 fail closed，不能为缺失历史猜测 verdict。
+`tests/team_view/artifact-feedback.test.cjs` 专门验证 QA/Review 正向输入、仅 plan/进度/普通输入、
+未知父、合法历史反馈、重复/冲突父、URI/SHA/Task lineage 反向门，渲染前后事实不变且没有
+提交。浏览器完整历史 fixture 必须有真实形状的 artifact ID/URI/SHA 和可解析 plan/反馈父；
+不要用名字像 QA 的任意 ID 代替已验证反馈。此展示修复无需改库或重写历史，旧需求/Task 加载
+新前端后重新计算说明；回滚展示分支不会改变 parent IDs、verdict、artifact/evidence 或审批。
 
 ## Blocker wording localization (2026-10-03)
 

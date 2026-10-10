@@ -1,0 +1,14 @@
+{
+  "name": "feedback-parent-facts",
+  "title": "Coder 反馈接收说明只来自可验证的 QA/Review 父产物",
+  "status": "in_progress",
+  "phase": "independently_verified",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/artifact-feedback.test.cjs",
+    "tests/team_view/browser/execution-history.test.cjs",
+    ".trellis/spec/core/live-team-view.md",
+    ".trellis/tasks/10-10-feedback-parent-facts"
+  ]
+}

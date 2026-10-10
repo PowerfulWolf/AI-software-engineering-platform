@@ -8437,9 +8437,32 @@ function appendExecutionArtifactDetails(target, entry) {
   const changed = Array.isArray(details.changed_files) ? details.changed_files : [];
   if (changed.length)
     target.append(el("p", "修改文件 · " + changed.map(item => item.path || "未提供").join("、"), "paths"));
-  if (lineage.some(value => value.startsWith("输入产物")) &&
-      (details.kind === "implementation-report" || details.kind === "coder-progress"))
-    target.append(el("p", "Coder 已接收上轮 QA/Review 反馈作为本轮输入。", "success"));
+  if (Array.isArray(details.parent_artifact_ids) && details.parent_artifact_ids.length &&
+      (details.kind === "implementation-report" || details.kind === "coder-progress")) {
+    // Only the selected Task's verified lineage can establish parent types.
+    const tasks = (snapshot?.tasks || []).filter(task => selected?.kind === "task" &&
+      task.id === selected.id && task.project_id === currentProjectId());
+    const task = tasks.length === 1 ? tasks[0] : null;
+    const history = task?.execution_history?.length ? task.execution_history : task?.timeline || [];
+    const taskIds = new Set([task?.task_id, ...(task?.history_task_ids || [])].filter(Boolean));
+    const verified = item => item?.kind === "artifact" && taskIds.has(item.task_id) &&
+      item.source_uri === "artifact://" + item.id && typeof item.source_sha256 === "string" &&
+      /^[a-f0-9]{64}$/.test(item.source_sha256) &&
+      item.details?.artifact_sha256 === item.source_sha256;
+    const current = history.filter(item => item.id === entry.id);
+    const parents = details.parent_artifact_ids.map(id => {
+      const matches = history.filter(item => item.id === id);
+      return matches.length === 1 && verified(matches[0]) ? matches[0] : null;
+    });
+    const complete = current.length === 1 && current[0] === entry && verified(entry) &&
+      new Set(details.parent_artifact_ids).size === details.parent_artifact_ids.length && parents.every(Boolean);
+    const feedback = complete && parents.some(parent =>
+      ["qa-report", "review-report"].includes(parent.details.kind));
+    target.append(el("p", feedback
+      ? "Coder 已接收上轮 QA/Review 反馈作为本轮输入。是否解决相关问题仍须后续独立 QA/Review 验收。"
+      : complete ? "Coder 的本轮输入产物已记录。"
+      : "Coder 的本轮输入产物已记录；当前历史不足以确认是否包含 QA/Review 反馈。", "muted"));
+  }
 }
 
 function appendExecutionEntry(target, entry, currentTaskId) {

@@ -57,3 +57,41 @@ data. One separate read during preparation timed out at 18 seconds, with no snap
 Browser authentication remains unavailable after a renewed CUA connection attempt. These are
 API and actual app.js/Node checks; they are not browser visual or focus acceptance. After deploying
 the badge follow-up, reprepare at the new target and use the same Requirement's public exact approval.
+
+## Latest target and public exact approval
+
+5d121a1 was committed, pushed and loaded by a completed controlled restart, replacement PID 63772.
+Console remains delivery_ready=true with operation contract 4. HTTP app.js SHA-256 is
+1022744fa4aedc5042d4ff150a0b6c4394f12f5c69968562e895c280eccb5340; style.css is
+8c6abcce2b5f5e326d127b78aa13218b7932dcd664a059ec9350762567197b7a. The registered clean main
+clone was fast-forwarded to 5d121a107fbbd7b5d1341ce4aff8bfc6ecb32874 without editing the retained
+historical Coder worktree or its environment.
+
+Public preparation operation operation_12db26d1b31059613884d4aa17cd49d0 succeeded between
+07:58:46.020397 and 08:06:40.181204 UTC (474.161 seconds). Exact recovery plan is
+edc70b3d943c52d85a079da433d43934f84e5c284f3c0dbbd74b09ae5a63a2c3 at target 5d121a1, with the
+same 27 retained business files, complete inventory/snapshot and environment isolation. Earlier
+plans were not approved. Fresh public Team/Operation/Console data fed into the actual app.js VM
+verified header `待工程确认`, status WAITING_ENGINEERING and the direct `批准并继续` next action;
+the old durable BLOCKED phase no longer prefixes this current decision.
+
+At 08:09:54.707699 UTC, the operator submitted the exact plan through public POST /api/v1/operations.
+HTTP 202 returned operation_bacb1b32b242923bc2d4dbad68818733 for the same original Requirement,
+with approved_plan_sha256=edc70b3d943c52d85a079da433d43934f84e5c284f3c0dbbd74b09ae5a63a2c3.
+The operation is processing; this accepted command is not proof that Coder has started or that K1
+is delivered. The last verified Team snapshot still retained the terminal original Task and had
+no new role claim. Continue monitoring public role/heartbeat facts and independent QA/Review.
+
+At 08:21:44 UTC, an independent read-only FileRecoveryStore check verified that this exact plan's
+authorization is APPROVED with SHA-256
+bcab9dad84ade63fc360b59f83a7293eca1532ce7074b4b70cfd2880b15e64e1, decision_at
+08:11:49.909397 UTC. Its immutable record is in the original repository sidecar's
+state/recovery-delivery_dc5cf0aee44e5ffe0cb600557204e0d0/authorization-edc70b3d943c52d85a079da433d43934f84e5c284f3c0dbbd74b09ae5a63a2c3.json.
+The typed task, seed and invocation getters still returned RecoveryRecordMissing. This locates
+the observed preparation interval after persisted authorization and before task/seed/provider
+admission; it does not infer a specific live function or execution stop from timestamps.
+
+No SQL/history migration or direct state changes were performed. Browser visual/focus acceptance
+remains unavailable; the above checks are actual app.js VM and public HTTP facts. Preparation is
+still measured in minutes; the offline pure-plan probe alone does not explain that latency and
+does not justify adding authority/model caches.
