@@ -197,6 +197,7 @@ and the existing idle Console dispatch loop. No Schema, SQL, stage or approval c
 
 ```python
 redaction.source_inspection_scope() -> Iterator[None]  # context manager
+redact_text(content: str) -> RedactedText
 source_secret_occurrences(content: str, *, source_path: str | None = None)
     -> tuple[RedactionOccurrence, ...]
 patch_secret_occurrences(content: str) -> tuple[RedactionOccurrence, ...]
@@ -213,12 +214,33 @@ FileConsoleOperationStore.claim_next(*, at: datetime) -> ConsoleOperation | None
   exact `(source|patch, source_path|None, complete_text)`. Text equality, not a digest alone,
   selects reuse. Source and patch are separate namespaces; language/path cannot borrow another
   entry's exception. Both safe and sensitive results retain the original conservative semantics.
-  Generic `redact_text`, AST/token rules and strong credential detection are unchanged.
+  AST/token rules and strong credential detection are unchanged.
+- Generic `redact_text(content: str) -> RedactedText` may reuse only its own zero-occurrence fact,
+  keyed by `(generic, actual_immutable_pattern_tuple, complete_text)`. The tuple includes kind,
+  compiled pattern definitions/flags and order; changing any of those requires a fresh scan.
+  Python's immutable compiled-pattern equality may reuse semantically identical replacement
+  objects; a mere change of object identity does not imply different rules.
+  Generic mode cannot borrow a source/patch language exception. A hit creates a fresh
+  `RedactedText(content, ())`; never cache `RedactedText`, explicit-secret processing or a generic
+  input that produced any occurrence. All matching input still follows the original replacements
+  and counts on every call. Existing source/patch sensitive facts retain their prior semantics.
 - At most 512 entries / 16 MiB of UTF-8 key text including paths are admitted. An over-bound or
   non-UTF-8 key is simply not memoized: always return the actual scanner result. Reject oversized
   keys by character lower bound before allocating their UTF-8 encoding. Complete original keys
   stay only in this bounded memory scope; never log, return or persist them. Entry count bounds
   object overhead; the byte limit is key content, not a claim about total Python heap size.
+  Generic, source and patch share these limits. The generic key references the immutable rules
+  tuple without copying its regex text; the payload byte limit counts complete input and source
+  paths. During a source/patch cache-miss scan, an internal nested depth guard disables generic
+  memo reads/writes: all original regex scans execute, and the parent source/patch fact retains
+  its existing admission priority. `finally` restores the depth on success or exception without
+  clearing the outer cache or creating another scope. Independently seeded generic entries are
+  opportunistic: a source/patch admission may evict only generic entries when necessary to retain
+  its original capacity. First reject an individually oversized/non-UTF-8 key; then require that
+  evicting generic entries can actually fit the target alongside all retained source/patch facts.
+  A per-entry UTF-8 payload-size ledger allows exact byte subtraction without reencoding removed
+  text. Never evict source/patch facts or expand either limit. An evicted or denied generic fact
+  simply rescans its complete input next time; a fact denied capacity is never assumed clean.
 - Team snapshot, direct engineering history and Operation list/current reads enter the scope.
   Nested synchronous reads share it; success and exception reset it in `finally`. Independent
   threads and subsequent polls get fresh scopes. Do not carry it across async work or a worker's
@@ -241,6 +263,13 @@ FileConsoleOperationStore.claim_next(*, at: datetime) -> ConsoleOperation | None
 | Scenario | Result and assertion |
 | --- | --- |
 | Same complete source/patch in nested read | Expensive parser runs once; next scope runs again |
+| Same clean generic body and rules in nested read | Six regex substitutions once; next scope scans again |
+| Generic rule definition/flags/kind/order or complete text changes | Full generic scan; no inherited clean result |
+| Source/patch exemption then generic scan | Generic still redacts its own supported secret shapes |
+| Generic match, overflow or non-UTF-8 body | Preserve original text/count semantics; do not memoize input |
+| Source/patch internal generic scan, including failure | No generic cache read/write; parent fact priority and depth finally restored |
+| Source/patch needs shared entry/byte capacity | Reclaim only necessary generic clean facts; exact bytes remain within both caps |
+| Target exceeds total cap, cannot encode or cannot fit retained source/patch | No eviction; original scanner result returned |
 | Changed text/path, unknown language or patch-lookalike source path | No borrowed exemption; secrets still detected |
 | Sensitive result already cached | Same immutable rejection facts, not an empty safe tuple |
 | Entry/byte limit or non-UTF-8 key | No new detector semantics or skipped validation |
@@ -252,7 +281,8 @@ FileConsoleOperationStore.claim_next(*, at: datetime) -> ConsoleOperation | None
 | Same-body symlink or path substitution | Original path/regular-file checks reject |
 | Public list after an idle hit | Full current model validation, not cached idle models |
 
-Tests: `tests/context/test_source_inspection_scope.py`, `test_source_secret_detection.py`,
+Tests: `tests/context/test_source_inspection_scope.py`, `test_generic_redaction_scope.py`,
+`test_source_secret_detection.py`,
 `tests/web_console/test_idle_replay.py`, operation core/budget/transport/shutdown cases,
 `tests/team_view/test_engineering_history.py` and the existing verification-memory/baseline cases.
 Good: unchanged captures reuse scans inside one read while the next poll rechecks all bytes.

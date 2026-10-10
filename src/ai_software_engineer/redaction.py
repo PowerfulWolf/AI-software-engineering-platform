@@ -98,34 +98,66 @@ class RedactedText:
 _MAX_INSPECTION_ENTRIES = 512
 _MAX_INSPECTION_BYTES = 16 * 1024 * 1024
 
+type _SourceInspectionKey = tuple[Literal["source", "patch"], str | None, str]
+type _GenericInspectionKey = tuple[Literal["generic"], tuple[tuple[str, re.Pattern[str]], ...], str]
+type _InspectionKey = _SourceInspectionKey | _GenericInspectionKey
+
 
 @dataclass(slots=True)
 class _SourceInspectionCache:
     # Full text equality is required; path controls the conservative language
-    # exception. Only immutable detection facts, never a domain approval, are reused.
-    facts: dict[
-        tuple[Literal["source", "patch"], str | None, str], tuple[RedactionOccurrence, ...]
-    ] = field(default_factory=dict)
+    # exception. Generic clean facts additionally bind the actual immutable rules.
+    # Only immutable detection facts, never a domain approval, are reused.
+    facts: dict[_InspectionKey, tuple[RedactionOccurrence, ...]] = field(default_factory=dict)
+    sizes: dict[_InspectionKey, int] = field(default_factory=dict)
     bytes: int = 0
+    source_scan_depth: int = 0
 
     def remember(
         self,
-        key: tuple[Literal["source", "patch"], str | None, str],
+        key: _InspectionKey,
         facts: tuple[RedactionOccurrence, ...],
     ) -> None:
-        if len(self.facts) >= _MAX_INSPECTION_ENTRIES:
+        if _MAX_INSPECTION_ENTRIES < 1:
             return
+        generic = key[0] == "generic"
+        if generic and len(self.facts) >= _MAX_INSPECTION_ENTRIES:
+            return
+        # Generic keys reference their rules; only body/path payload is byte-budgeted.
+        path = key[1] if isinstance(key[1], str) else ""
         # Avoid a large temporary encoding for keys already over the byte bound.
-        if len(key[2]) + len(key[1] or "") > _MAX_INSPECTION_BYTES - self.bytes:
+        available = _MAX_INSPECTION_BYTES - self.bytes if generic else _MAX_INSPECTION_BYTES
+        if len(key[2]) + len(path) > available:
             return
         try:
-            size = len(key[2].encode("utf-8")) + len((key[1] or "").encode("utf-8"))
+            size = len(key[2].encode("utf-8")) + len(path.encode("utf-8"))
         except UnicodeEncodeError:
             # Memoization cannot add a new rejection to the original detector.
             return
-        if self.bytes + size <= _MAX_INSPECTION_BYTES:
-            self.facts[key] = facts
-            self.bytes += size
+        if size > _MAX_INSPECTION_BYTES:
+            return
+        if len(self.facts) >= _MAX_INSPECTION_ENTRIES or self.bytes + size > _MAX_INSPECTION_BYTES:
+            if generic:
+                return
+            # Preserve source/patch capacity by evicting only opportunistic generic facts.
+            generic_keys = tuple(stored for stored in self.facts if stored[0] == "generic")
+            generic_bytes = sum(self.sizes[stored] for stored in generic_keys)
+            if (
+                len(self.facts) - len(generic_keys) >= _MAX_INSPECTION_ENTRIES
+                or self.bytes - generic_bytes + size > _MAX_INSPECTION_BYTES
+            ):
+                return
+            for stored in generic_keys:
+                del self.facts[stored]
+                self.bytes -= self.sizes.pop(stored)
+                if (
+                    len(self.facts) < _MAX_INSPECTION_ENTRIES
+                    and self.bytes + size <= _MAX_INSPECTION_BYTES
+                ):
+                    break
+        self.facts[key] = facts
+        self.sizes[key] = size
+        self.bytes += size
 
 
 _SOURCE_INSPECTION_CACHE: ContextVar[_SourceInspectionCache | None] = ContextVar(
@@ -134,8 +166,21 @@ _SOURCE_INSPECTION_CACHE: ContextVar[_SourceInspectionCache | None] = ContextVar
 
 
 @contextmanager
+def _source_scan(cache: _SourceInspectionCache | None) -> Iterator[None]:
+    """Keep source/patch admission priority without retaining internal generic text."""
+    if cache is None:
+        yield
+        return
+    cache.source_scan_depth += 1
+    try:
+        yield
+    finally:
+        cache.source_scan_depth -= 1
+
+
+@contextmanager
 def source_inspection_scope() -> Iterator[None]:
-    """Bound repeated pure source/patch scans to one synchronous read lifetime."""
+    """Bound repeated pure detection scans to one synchronous read lifetime."""
     if _SOURCE_INSPECTION_CACHE.get() is not None:
         yield
         return
@@ -148,15 +193,25 @@ def source_inspection_scope() -> Iterator[None]:
 
 def redact_text(content: str) -> RedactedText:
     """Replace supported secret shapes without retaining original values."""
+    cache = _SOURCE_INSPECTION_CACHE.get()
+    if cache is not None and cache.source_scan_depth:
+        # Internal scans keep their original cost and leave capacity for their parent fact.
+        cache = None
+    patterns = _SECRET_PATTERNS
+    key: _GenericInspectionKey = ("generic", patterns, content)
+    if cache is not None and cache.facts.get(key) == ():
+        return RedactedText(text=content, occurrences=())
     redacted = content
     occurrences: list[RedactionOccurrence] = []
-    for kind, pattern in _SECRET_PATTERNS:
+    for kind, pattern in patterns:
         replacement = (
             rf"\1[REDACTED:{kind}]\3" if kind == "secret_assignment" else f"[REDACTED:{kind}]"
         )
         redacted, count = pattern.subn(replacement, redacted)
         if count:
             occurrences.append(RedactionOccurrence(kind=kind, count=count))
+    if cache is not None and not occurrences:
+        cache.remember(key, ())
     return RedactedText(text=redacted, occurrences=tuple(occurrences))
 
 
@@ -165,10 +220,11 @@ def source_secret_occurrences(
 ) -> tuple[RedactionOccurrence, ...]:
     """Inspect complete source, reusing only pure facts within an explicit read scope."""
     cache = _SOURCE_INSPECTION_CACHE.get()
-    key: tuple[Literal["source", "patch"], str | None, str] = ("source", source_path, content)
+    key: _SourceInspectionKey = ("source", source_path, content)
     if cache is not None and (found := cache.facts.get(key)) is not None:
         return found
-    result = _inspect_source(content, source_path=source_path)
+    with _source_scan(cache):
+        result = _inspect_source(content, source_path=source_path)
     if cache is not None:
         cache.remember(key, result)
     return result
@@ -520,10 +576,11 @@ def _inspect_source(
 def patch_secret_occurrences(content: str) -> tuple[RedactionOccurrence, ...]:
     """Inspect complete hunks with a separate, read-scoped patch cache namespace."""
     cache = _SOURCE_INSPECTION_CACHE.get()
-    key: tuple[Literal["source", "patch"], str | None, str] = ("patch", None, content)
+    key: _SourceInspectionKey = ("patch", None, content)
     if cache is not None and (found := cache.facts.get(key)) is not None:
         return found
-    result = _inspect_patch(content)
+    with _source_scan(cache):
+        result = _inspect_patch(content)
     if cache is not None:
         cache.remember(key, result)
     return result

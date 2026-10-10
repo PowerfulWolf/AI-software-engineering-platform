@@ -1,0 +1,13 @@
+{
+  "name": "generic-clean-redaction-scope",
+  "title": "在有界同步检查中复用通用脱敏的零命中事实",
+  "status": "in_progress",
+  "phase": "independently_verified",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/redaction.py",
+    "tests/context/test_generic_redaction_scope.py",
+    ".trellis/spec/core/read-memory-lifecycle.md",
+    ".trellis/tasks/10-10-generic-clean-redaction-scope"
+  ]
+}
