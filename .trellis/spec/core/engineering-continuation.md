@@ -153,6 +153,15 @@ ignored/protected successful output rejection, real process stop, new real claim
 same-SHA QA/Review. Receipt/admission history is verified by
 `tests/team_view/test_continuation_history.py`.
 
+现代 continuation policy 下的终态恢复 E2E，原失败必须经 configured native composition
+和真实 owned subprocess runner 产生 capture-start/stop。普通 `InterruptedFactory` 直接
+写文件并返回 FAILED 不能替代停止证据；不得为夹具补造 stop 或跳过审计。纯文本项目没有
+可推断测试入口时，Designer fixture 明确冻结实际 source inspection。成功 Coder fixture
+只返回输入 revision 的 provisional report，由平台 CandidateCommitSkill 提交；QA/Reviewer
+核验同一候选。`tests/recovery/test_execution.py` 的三个精确原生恢复 case 验证真实进程组
+结束、原现场/失败历史、旧 source 权限与现代 target 权限、五项真实准备观察，以及最后
+claim 与 Coder Context 的 WorkItem/Lease/Assignment 对齐。fixture 通过不证明生产 K1 完成。
+
 Wrong: infer a stopped process from lease expiry, mark a dirty failure transient, accept a hash
 without its body, or skip final inventory validation because the model returned valid JSON.
 

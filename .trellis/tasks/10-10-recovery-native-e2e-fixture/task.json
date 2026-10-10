@@ -1,0 +1,12 @@
+{
+  "name": "recovery-native-e2e-fixture",
+  "title": "用真实离线执行停止事实修复终态恢复端到端测试夹具",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "tests/recovery/test_execution.py",
+    "tests/recovery/execution_fixture.py",
+    ".trellis/tasks/10-10-recovery-native-e2e-fixture"
+  ]
+}

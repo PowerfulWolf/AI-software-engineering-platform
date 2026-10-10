@@ -3,6 +3,7 @@
 import json
 import os
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 import ai_software_engineer.manager.production_backend as production_backend
 from ai_software_engineer.agents import (
     AgentAdapter,
+    AgentErrorCode,
     AgentRequest,
     AgentResult,
     CodexCliAgentAdapter,
@@ -25,9 +27,9 @@ from ai_software_engineer.config import (
     ProviderRouteReference,
 )
 from ai_software_engineer.context import FileContextBuilder, FileContextStore
-from ai_software_engineer.domain import AgentDefinition, AgentRole, TaskStatus, TeamRole
+from ai_software_engineer.domain import AgentDefinition, AgentRole, Artifact, TaskStatus, TeamRole
 from ai_software_engineer.evaluation import CaseStartedEvent, FileEvaluationEventStore
-from ai_software_engineer.git import WorktreeCaptureRejected, WorktreeSeedRejected
+from ai_software_engineer.git import WorkspacePolicy, WorktreeCaptureRejected, WorktreeSeedRejected
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ReplyToProduct,
@@ -38,25 +40,38 @@ from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchA
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.orchestration.retry import RetryDeliveryResult
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
-from ai_software_engineer.recovery import RecoveryRejected
+from ai_software_engineer.recovery import RecoveryRejected, RecoveryScope
 from ai_software_engineer.recovery.entry import _require_seed_recovery_route, read_recovery_task
 from ai_software_engineer.recovery.native import NativeRecoverySourceReader
+from ai_software_engineer.recovery.preparation_progress import (
+    PREPARATION_MILESTONES,
+    ExecutionClaimed,
+    observe_recovery_preparation,
+    preparation_scope,
+)
 from ai_software_engineer.recovery.seed import RecoverySeedService
 from ai_software_engineer.recovery.store import RecoveryRecordMissing
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from ai_software_engineer.runtime import _default_case_id
 from ai_software_engineer.store import MySqlTaskRepository
+from ai_software_engineer.web_console.models import ConsoleOperation, ContinueDeliveryIntent
+from ai_software_engineer.web_console.preparation_store import FilePreparationProgressStore
 from tests.e2e.test_joint_delivery import setup_host
 from tests.git.test_capture import git
 from tests.manager.test_production_backend import (
     _git,
-    _ScriptedClientFactory,
     _ScriptedDeliveryAdapter,
 )
 from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
+from tests.recovery.execution_fixture import (
+    OfflineRecoveryClients,
+    offline_coder_draft,
+    offline_failed_codex,
+)
 from tests.recovery.test_native import InterruptedFactory, _snapshot
 
 
@@ -111,10 +126,19 @@ class OfflineRunner:
                 assert (cwd / "hello.txt").read_text() == self.seed_text
             assert "recovery.origin" in stdin
         self.calls.append(self.request)
-        result = _ScriptedDeliveryAdapter(self.definition, cwd).run(self.request)
-        assert result.artifact is not None
+        artifact: Artifact
+        if self.request.role is AgentRole.CODER:
+            artifact = offline_coder_draft(self.definition, self.request, cwd)
+        else:
+            WorkspacePolicy(cwd, self.request.permissions).authorize_read("hello.txt")
+            assert git(cwd, "show", f"{self.request.source_revision}:hello.txt") == (
+                "hello from the team"
+            )
+            result = _ScriptedDeliveryAdapter(self.definition, cwd).run(self.request)
+            assert result.artifact is not None
+            artifact = result.artifact
         Path(argv[argv.index("--output-last-message") + 1]).write_text(
-            json.dumps(result.artifact.to_wire())
+            json.dumps(artifact.to_wire())
         )
         return CodexInvocationResult(returncode=0)
 
@@ -281,6 +305,7 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         platform_root=str(tmp_path / "platform"),
         default_project_id="project_test",
         default_project_name="Test Project",
+        codex_executable=offline_failed_codex(tmp_path),
         live_model_execution=True,
         model_routes=(
             ProviderRouteConfig(
@@ -289,6 +314,13 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         ),
     )
     environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
+    # The configured delivery composition owns knowledge preparation as well.
+    # Replace only its model-client port; retain real gates, Worker and stop recorder.
+    monkeypatch.setattr(
+        production_backend,
+        "ConfiguredStructuredClientFactory",
+        lambda *_: OfflineRecoveryClients(),
+    )
     current_task_commands = production_backend._task_commands
     if legacy_direct_commit:
         monkeypatch.setattr(
@@ -298,12 +330,10 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
                 sorted((*current_task_commands(profile), "git add", "git commit"))
             ),
         )
-    interrupted = InterruptedFactory()
     host = TeamHost(
         config=config,
         environment=environment,
-        structured_clients=_ScriptedClientFactory(),
-        delivery_route_adapters=interrupted,
+        structured_clients=OfflineRecoveryClients(),
     )
     entry = host.project_entry()
     started = entry.start(
@@ -316,7 +346,43 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
             approval_reference="offline-original-approval",
         )
     ).checkpoint
-    original_run = interrupted.requests[0]
+    assert failed.stage.value == "BLOCKED" and failed.candidate_revision is None, (
+        failed.task_status,
+        failed.next_action,
+    )
+    original = NativeRecoverySourceReader(config, environment).discover_failed_coder(
+        RecoveryScope(
+            team_id=config.team_id,
+            repository_id=failed.repository_id,
+            repository_root=str(project),
+            delivery_id=failed.delivery_id,
+        )
+    )
+    continuation = FileContinuationStore(
+        host.projects()[0].root
+        / "repositories"
+        / failed.repository_id
+        / "state/continuations"
+        / original.task.id,
+        task_id=original.task.id,
+    )
+    original_start = continuation.capture_start(original.source.failed_run_id)
+    original_run = original_start.request
+    original_stop = continuation.capture_stop(original_run.run_id)
+    assert original_run.context_manifest_id == original.source.failed_context_id
+    assert original_start.claim.work_item.task_id == original.task.id
+    assert original_stop.capture_start_sha256 == original_start.start_sha256
+    assert original_stop.process_stop.kind == "failed"
+    assert original_stop.process_stop.returncode == 1
+    assert original_stop.original_error_code is AgentErrorCode.AUTHENTICATION_ERROR
+    assert not original_stop.output_present
+    assert (
+        original_start.started_at
+        <= original_stop.process_stop.stopped_at
+        <= original.task.updated_at
+    )
+    with pytest.raises(ProcessLookupError):
+        os.killpg(original_stop.process_stop.group_id, 0)
     if legacy_direct_commit:
         monkeypatch.setattr(production_backend, "_task_commands", current_task_commands)
     recovery = host.recovery_entry()
@@ -335,6 +401,9 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
     )
     store, loaded = recovery.open_plan(path)
     assert loaded == plan
+    assert plan.workspace_snapshot is not None
+    assert plan.workspace_snapshot.capture_start_sha256 == original_start.start_sha256
+    assert plan.workspace_snapshot.capture_stop_sha256 == original_stop.observation_sha256
     assert plan.capture.branch_name is not None
     assert plan.capture.branch_name.startswith("ai/feature/")
     assert plan.target_branch_name == plan.capture.branch_name + "-recovery"
@@ -347,8 +416,27 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         recovery.execute(path)
     with pytest.raises(RecoveryRejected):
         recovery.approve(path, confirmed_plan="0" * 64, reference="offline-recovery")
-    recovery.approve(path, confirmed_plan=plan.plan_sha256, reference="offline-recovery")
-    recovery.approve(path, confirmed_plan=plan.plan_sha256, reference="offline-recovery")
+    operation = ConsoleOperation.queued(
+        team_id=config.team_id,
+        idempotency_key="offline-exact-recovery-preparation",
+        requested_at=datetime.now(UTC),
+        intent=ContinueDeliveryIntent(
+            project_id="project_test",
+            delivery_id=failed.delivery_id,
+            expected_checkpoint_sha256=failed.checkpoint_sha256,
+            approved_plan_sha256=plan.plan_sha256,
+        ),
+    )
+    observations = FilePreparationProgressStore(tmp_path / "preparation-observations")
+    observed_scope = preparation_scope(operation)
+    assert observed_scope is not None
+    with observe_recovery_preparation(operation, observations.append):
+        recovery.approve(path, confirmed_plan=plan.plan_sha256, reference="offline-recovery")
+        recovery.approve(path, confirmed_plan=plan.plan_sha256, reference="offline-recovery")
+    assert tuple(record.kind for record in observations.read(observed_scope).records) == (
+        "AUTHORIZATION_RECORDED",
+        "TASK_SEALED",
+    )
     original_tree = Path(plan.capture.worktree_path)
     old_bytes = _snapshot(original_tree)
     repository = MySqlTaskRepository(mysql_dsn)
@@ -360,6 +448,9 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
     factories: list[OfflineFactory] = []
 
     def factory(seed: RecoverySeedService) -> OfflineFactory:
+        assert tuple(record.kind for record in observations.read(observed_scope).records) == (
+            *PREPARATION_MILESTONES[:4],
+        )
         if reapply:
             # Prove this exact input really conflicts on the strict Git path. Preflight
             # must leave the already captured clean target unchanged for Coder reapplication.
@@ -394,7 +485,8 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         factories.append(result)
         return result
 
-    result = recovery.execute(path, route_factory=factory)
+    with observe_recovery_preparation(operation, observations.append):
+        result = recovery.execute(path, route_factory=factory)
     assert result.task.status is TaskStatus.DONE, result
     assert result.task.branch_name == plan.target_branch_name
     assert git(project, "rev-parse", plan.target_branch_name) == result.candidate_revision
@@ -407,6 +499,26 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         AgentRole.REVIEWER,
     ]
     assert factories[0].calls[1].source_revision == factories[0].calls[2].source_revision
+    prepared = FilePreparationProgressStore(observations.root, read_only=True).read(observed_scope)
+    assert tuple(record.kind for record in prepared.records) == PREPARATION_MILESTONES
+    claim_record = prepared.records[-1]
+    assert isinstance(claim_record, ExecutionClaimed)
+    coder_request = factories[0].calls[0]
+    assert claim_record.evidence.task_id == coder_request.task_id
+    assert claim_record.evidence.source_revision == coder_request.source_revision
+    coder_context = FileContextStore(path.parent.parent.parent / "contexts", read_only=True).get(
+        coder_request.context_manifest_id
+    )
+    claim_context = json.loads(
+        next(
+            section.content
+            for section in coder_context.sections
+            if section.name == "source:execution.claim"
+        )
+    )
+    assert claim_record.evidence.work_item_id == claim_context["work_item_id"]
+    assert claim_record.evidence.lease_id == claim_context["lease_id"]
+    assert claim_record.evidence.assignment_id == claim_context["assignment_id"]
     assert (project / "hello.txt").read_text() == ("new base greeting\n" if reapply else "hello\n")
     assert (
         git(project, "show", f"{result.candidate_revision}:platform-fix.txt") == "independent fix"
