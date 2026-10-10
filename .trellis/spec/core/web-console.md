@@ -766,6 +766,12 @@ CandidateVerificationEntry.open_plan(
   flow node and approval controls must agree on `待工程确认`; the current decision and its concrete
   facts/buttons are not folded. The original terminal Task and failure remain immutable and are
   available in a collapsed `原执行历史` disclosure, rather than presented as the current failure.
+- `requestNodeBadge` must use the current node label alone for `currentApproval` and
+  `platformProcessing`. With no current nonterminal child, `deliveryPhase` can legitimately fall
+  back to the durable BLOCKED stage; composing that historical prefix with the current decision
+  produces the contradictory `已阻塞 · 待工程确认` or `已阻塞 · 平台正在处理恢复`. Exact approval stays
+  blocked-styled and platform handling stays paused-styled. Current role dispatch keeps its real
+  phase plus queued/running label, and a newer actual blocker retains normal blocked presentation.
 - `requestRecoveryDecision` is the shared display/submission gate: validated readable Team/Console,
   exact selected Project and Requirement checkpoint, advertised `CONTINUE_DELIVERY` capability,
   successful unconsumed plan issuance, no active Operation and no current queued/running/retry role
@@ -869,6 +875,9 @@ while rendering, exact Project/checkpoint/consumption/freshness/capability negat
 rejection after queued/running work or explicit confirmation appears. The affected incremental set is
 `engineering-wait.test.cjs`, `product-execution.test.cjs`, and `historical-child.test.cjs`; whole-suite
 execution is not required for this presentation-only change.
+Assert the complete `requestNodeBadge(...).textContent`, not only `requestNodeExecution` or a label
+substring: approval must be exactly `待工程确认`, platform handling exactly `平台正在处理恢复`, and
+fresh READY/RUNNING roles must retain their real phase. A newer actual failure must still be blocked.
 
 `tests/web_console/test_manager.py` must pass a real `FileRecoveryStore` envelope path through a
 `DeliveryResumeResult` and assert that `ManagerConsoleAdapter` delegates plan opening to the scoped

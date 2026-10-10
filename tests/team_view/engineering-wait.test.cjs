@@ -1288,6 +1288,8 @@ test("a current exact recovery decision replaces stopped-work advice while retai
   assert.equal(node.label, "待工程确认");
   assert.equal(node.state, "blocked");
   assert.equal(node.status, "WAITING_ENGINEERING");
+  assert.equal(h.run("requestNodeBadge(data.request).textContent"), "待工程确认");
+  assert.match(h.run("requestNodeBadge(data.request).className"), /blocked/);
   assert.match(node.reason, /尚未.*执行/);
   assert.doesNotMatch(node.reason, /第 8 次|已完成|正在执行/);
   const presented = h.run("requestPresentation(data.request)");
@@ -1347,6 +1349,8 @@ test("a new platform recovery operation explains handling without claiming Coder
   const node = h.run("requestNodeExecution(data.request)");
   assert.equal(node.label, "平台正在处理恢复");
   assert.equal(node.state, "paused", "platform handling is not a live Coder claim");
+  assert.equal(h.run("requestNodeBadge(data.request).textContent"), "平台正在处理恢复");
+  assert.match(h.run("requestNodeBadge(data.request).className"), /paused/);
   assert.match(node.nextAction, /等待.*平台/);
   assert.doesNotMatch(node.reason + node.nextAction, /无需产品操作|已经启动 Coder|正在开发|已接纳/);
   assert.equal(h.run("requestPresentation(data.request).group"), "active");
@@ -1360,6 +1364,7 @@ test("a new platform recovery operation explains handling without claiming Coder
   h.task.blocker = "本次平台处理后发生新的执行失败。";
   assert.equal(h.run("requestNodeExecution(data.request).state"), "blocked");
   assert.match(h.run("requestPresentation(data.request).blocker"), /新的执行失败/);
+  assert.match(h.run("requestNodeBadge(data.request).textContent"), /已阻塞/);
   assert.equal(h.run("submitted.length"), 0);
 });
 
@@ -1424,6 +1429,9 @@ for (const status of ["READY", "RUNNING"]) {
     const node = h.run("requestNodeExecution(data.request)");
     assert.equal(node.label, status === "RUNNING" ? "执行中" : "已排队");
     assert.equal(node.state, status === "RUNNING" ? "running" : "paused");
+    assert.equal(h.run("requestNodeBadge(data.request).textContent"),
+      `实现 · ${status === "RUNNING" ? "执行中" : "已排队"}`,
+      "real role dispatch retains the actual delivery phase");
     const presentation = h.run("requestPresentation(data.request)");
     assert.equal(presentation.group, "active");
     assert.doesNotMatch(presentation.nextAction, /无需产品操作|核对停止原因|批准并继续/);

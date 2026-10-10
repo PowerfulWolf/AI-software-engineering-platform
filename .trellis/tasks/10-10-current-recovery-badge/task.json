@@ -1,0 +1,13 @@
+{
+  "name": "current-recovery-badge",
+  "title": "恢复当前状态徽标不沿用旧终态阶段前缀",
+  "status": "in_progress",
+  "phase": "independently_verified",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/engineering-wait.test.cjs",
+    ".trellis/spec/core/web-console.md",
+    ".trellis/tasks/10-10-current-recovery-badge"
+  ]
+}

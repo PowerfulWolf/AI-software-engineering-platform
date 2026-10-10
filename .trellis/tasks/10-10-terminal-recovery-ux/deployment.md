@@ -28,3 +28,32 @@ Browser and native CUA connections remain unavailable (authentication/native pip
 exact API facts and real HTTP resource deployment were checked; no real screenshot, visual layout
 or browser focus acceptance is claimed. Full tests were not run. Original external test-maintenance
 HumanActionEvent and all old failed executions remain auditable; this case is not wholly autonomous.
+
+## Follow-up deployment and public verification
+
+5023234 bounds repeated pure terminal source inspection; 862b87d unifies current recovery decisions,
+platform processing and fresh role facts. Both were independently reviewed, committed and pushed.
+With no QUEUED/RUNNING Operations, controlled restart verified drain/save/executor/index exit and
+started PID 27283. Console reports delivery_ready=true and contract 4; HTTP app.js SHA is
+9030ee45ab312cd2445faca773157e802a0f137ddaf9da9eeb79969bb89785e9 and style.css matches source.
+The clean registered main clone was fast-forwarded from 1133811 to 862b87d95d9ec8d85402a6218d20f908624aa615.
+
+Public Continue operation operation_0f82d20895958962e488a55350f1d026 succeeded in 351.933 seconds,
+producing plan 56d7703f31236b8ebba66acc8423ba380a029898ad6df507041e2d2693d1eee0 at that target.
+All 27 business files, snapshot e5184952c21a1d2745ee50fc33a5a8d73ef7c0b319676c9ea574500a21cdf298,
+2,283 inventory entries and 18 excluded environment entries remain unchanged. This differs from
+the earlier operation's target, so these timings are observations, not a same-input speedup claim.
+Preparation remains slow. A two-second bounded OS sample showed remaining Pydantic/hash work;
+no provider/private model text was inspected. The temporary sample file was removed afterward.
+
+Fresh public data fed to actual app.js confirmed current node `待工程确认` and presentation status
+WAITING_ENGINEERING. It also exposed a final header bug: requestNodeBadge still prefixed the old
+durable BLOCKED phase, rendering `已阻塞 · 待工程确认`. The subsequent narrow badge task fixes this
+actual call site and both approval/processing regressions. No approval POST was sent by the failed
+diagnostic checks; the plan remains unconsumed and the original Task remains terminal. Team read
+contention returned the declared TEAM_READ_IN_PROGRESS code; a bounded retry later obtained fresh
+data. One separate read during preparation timed out at 18 seconds, with no snapshot returned.
+
+Browser authentication remains unavailable after a renewed CUA connection attempt. These are
+API and actual app.js/Node checks; they are not browser visual or focus acceptance. After deploying
+the badge follow-up, reprepare at the new target and use the same Requirement's public exact approval.

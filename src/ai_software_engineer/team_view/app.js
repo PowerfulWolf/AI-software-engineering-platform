@@ -2117,7 +2117,9 @@ function upstreamContinuationGuidance(request) {
 }
 function requestNodeBadge(request) {
   const node = requestNodeExecution(request);
-  return el("span", `${deliveryPhase(request)} · ${node.label}`, `badge request-node-badge ${node.state}`);
+  const text = node.currentApproval || node.platformProcessing
+    ? node.label : `${deliveryPhase(request)} · ${node.label}`;
+  return el("span", text, `badge request-node-badge ${node.state}`);
 }
 function requestPresentation(request) {
   const currentNode = requestNodeExecution(request);
