@@ -1,14 +1,21 @@
 """Joint artifact coverage, authorization, and exported Schema regression tests."""
 
 import json
+import shutil
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
+from jsonschema import Draft202012Validator, ValidationError
 
 from ai_software_engineer.domain import TaskStatus
+from ai_software_engineer.domain.delivery_disposition import (
+    DeliveryNextAction as DispositionNextAction,
+)
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import ProjectPreparation
 from ai_software_engineer.execution import (
@@ -17,6 +24,7 @@ from ai_software_engineer.execution import (
     CommandTimedOut,
     SubprocessCommandExecutor,
 )
+from ai_software_engineer.knowledge.stages import StageWorkflowProof
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
     DeliveryNextAction,
@@ -289,25 +297,34 @@ def test_delivery_runtime_rebinds_legacy_worktree_profile_from_task_base(
         ),
     )
 
+    def source_revision(task_id: str, *, repository_root: str) -> str:
+        captured.append(f"task:{task_id}:{repository_root}")
+        return "a" * 40
+
+    def factory(*args: object, **kwargs: object) -> str:
+        captured.append(f"factory:{kwargs.get('frozen_source_revision', args[-1])}")
+        return "backend"
+
     backend = object.__new__(ProductionJointBackend)
-    backend.native = SimpleNamespace(
-        task_source_revision=lambda task_id, *, repository_root: (
-            captured.append(f"task:{task_id}:{repository_root}") or "a" * 40
-        )
+    monkeypatch.setattr(
+        backend, "native", SimpleNamespace(task_source_revision=source_revision), raising=False
     )
-    backend.factory = lambda *_args, **kwargs: captured.append(
-        f"factory:{kwargs.get('frozen_source_revision', _args[-1])}"
-    ) or "backend"
-    backend.clients = object()
-    backend.team = SimpleNamespace()
-    backend.project = SimpleNamespace(
-        root=tmp_path,
-        repository_registry=lambda: SimpleNamespace(
-            registry_root=tmp_path,
-            register=lambda repository_root, repository_id: SimpleNamespace(
-                root=Path(repository_root), repository_id=repository_id
+    monkeypatch.setattr(backend, "factory", factory, raising=False)
+    monkeypatch.setattr(backend, "clients", object(), raising=False)
+    monkeypatch.setattr(backend, "team", SimpleNamespace(), raising=False)
+    monkeypatch.setattr(
+        backend,
+        "project",
+        SimpleNamespace(
+            root=tmp_path,
+            repository_registry=lambda: SimpleNamespace(
+                registry_root=tmp_path,
+                register=lambda repository_root, repository_id: SimpleNamespace(
+                    root=Path(repository_root), repository_id=repository_id
+                ),
             ),
         ),
+        raising=False,
     )
     backend.environment = {}
     monkeypatch.setattr(
@@ -318,9 +335,11 @@ def test_delivery_runtime_rebinds_legacy_worktree_profile_from_task_base(
 
     _runtime_backend, entry = backend.delivery_runtime(current, unit.id)
 
-    assert entry == ("entry", "backend")
+    assert cast(object, entry) == ("entry", "backend")
     assert "task:task_successor:" + unit.root in captured
     assert "factory:" + "a" * 40 in captured
+
+
 def test_projection_is_deterministic_and_requires_exact_root(tmp_path: Path) -> None:
     cp = checkpoint(tmp_path)
     unit = cp.scope.units[0]
@@ -534,6 +553,166 @@ def test_joint_schemas_are_in_sync_with_models() -> None:
         schema.pop("$id")
         schema.pop("$schema")
         assert schema == model.model_json_schema()
+
+
+def _joint_checkpoint_with_native_child(
+    tmp_path: Path, action: DeliveryNextAction
+) -> JointCheckpoint:
+    parent = checkpoint(tmp_path)
+    stage, status = {
+        DeliveryNextAction.RUN_DELIVERY: (DeliveryStage.DELIVERING, TaskStatus.IMPLEMENTING),
+        DeliveryNextAction.REQUEST_HUMAN: (DeliveryStage.BLOCKED, TaskStatus.BLOCKED),
+        DeliveryNextAction.NONE: (DeliveryStage.DONE, TaskStatus.DONE),
+    }[action]
+    native = ProjectDeliveryCheckpoint.create(
+        delivery_id="delivery_schema_child",
+        sequence=1,
+        repository_id=parent.preparations[0].result.repository_id,
+        repository_root=parent.scope.units[0].root,
+        preparation_sha256="f" * 64,
+        product_spec_id="product_schema_child",
+        product_spec_sha256="1" * 64,
+        approval_id="approval_schema_child",
+        approval_sha256="2" * 64,
+        technical_design_id="design_schema_child",
+        technical_design_sha256="3" * 64,
+        execution_plan_id="plan_schema_child",
+        execution_plan_sha256="4" * 64,
+        planning_preview_id="preview_schema_child",
+        planning_preview_sha256="5" * 64,
+        dispatch_commit_id="dispatch_schema_child",
+        dispatch_commit_sha256="6" * 64,
+        task_id="task_schema_child",
+        task_revision=1,
+        task_status=status,
+        candidate_revision="a" * 40 if stage is DeliveryStage.DONE else None,
+        stage=stage,
+        stage_attempts=DeliveryStageAttempts(delivering=1),
+        next_action=action,
+        failure_code=(
+            DeliveryFailureCode.INVARIANT_VIOLATION if stage is DeliveryStage.BLOCKED else None
+        ),
+        failure_summary="execution needs investigation" if stage is DeliveryStage.BLOCKED else None,
+        failed_stage=DeliveryStage.DELIVERING if stage is DeliveryStage.BLOCKED else None,
+        checkpointed_at=datetime.now(UTC),
+    )
+    native.validate_integrity()
+    return JointCheckpoint.seal(
+        {
+            **parent.to_wire(),
+            "children": (ChildDelivery(unit_id=parent.scope.units[0].id, checkpoint=native),),
+        }
+    )
+
+
+@pytest.mark.parametrize("filename", ["requirement-checkpoint", "knowledge-stage-workflow"])
+def test_joint_checkpoint_next_action_uses_exact_native_manager_enum(filename: str) -> None:
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / f"{filename}.schema.json").read_text()
+    )
+    reference = schema["$defs"]["ProjectDeliveryCheckpoint"]["properties"]["next_action"]["$ref"]
+    definition = schema["$defs"][reference.removeprefix("#/$defs/")]
+    assert definition["enum"] == [action.value for action in DeliveryNextAction]
+    assert set(definition["enum"]).isdisjoint(action.value for action in DispositionNextAction)
+
+
+@pytest.mark.parametrize(
+    "action",
+    [DeliveryNextAction.RUN_DELIVERY, DeliveryNextAction.REQUEST_HUMAN, DeliveryNextAction.NONE],
+)
+@pytest.mark.parametrize("filename", ["requirement-checkpoint", "knowledge-stage-workflow"])
+def test_joint_checkpoint_schema_accepts_native_child_actions(
+    tmp_path: Path, action: DeliveryNextAction, filename: str
+) -> None:
+    cp = _joint_checkpoint_with_native_child(tmp_path, action)
+    wire = cp.to_wire()
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / f"{filename}.schema.json").read_text()
+    )
+    if filename == "knowledge-stage-workflow":
+        schema = {"$defs": schema["$defs"], "$ref": "#/$defs/JointCheckpoint"}
+    Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER).validate(wire)
+    restored = JointCheckpoint.model_validate(wire)
+    restored.validate_integrity()
+    assert restored == cp
+
+
+@pytest.mark.parametrize("action", [*(action.value for action in DispositionNextAction), "UNKNOWN"])
+@pytest.mark.parametrize("filename", ["requirement-checkpoint", "knowledge-stage-workflow"])
+def test_joint_checkpoint_rejects_disposition_or_unknown_child_actions(
+    tmp_path: Path, action: str, filename: str
+) -> None:
+    wire = _joint_checkpoint_with_native_child(tmp_path, DeliveryNextAction.REQUEST_HUMAN).to_wire()
+    children = wire["children"]
+    assert isinstance(children, list) and isinstance(children[0], dict)
+    native = children[0]["checkpoint"]
+    assert isinstance(native, dict)
+    native["next_action"] = action
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / f"{filename}.schema.json").read_text()
+    )
+    if filename == "knowledge-stage-workflow":
+        schema = {"$defs": schema["$defs"], "$ref": "#/$defs/JointCheckpoint"}
+    with pytest.raises(ValidationError, match=r"next_action|not one of"):
+        Draft202012Validator(schema).validate(wire)
+    with pytest.raises(ValueError, match="next_action"):
+        JointCheckpoint.model_validate(wire)
+
+
+def test_schema_sync_scripts_preserve_distinct_next_action_contracts(tmp_path: Path) -> None:
+    """Rescue additions cannot overwrite an unrelated model's same-named enum."""
+    repository = Path(__file__).parents[2]
+    scripts = tmp_path / "scripts"
+    schemas = tmp_path / "schemas"
+    scripts.mkdir()
+    schemas.mkdir()
+    for filename in (
+        "requirement-checkpoint.schema.json",
+        "knowledge-stage-workflow.schema.json",
+        "delivery-disposition.schema.json",
+        "production-config.schema.json",
+        "role-queue-execution.schema.json",
+    ):
+        shutil.copyfile(repository / "schemas" / filename, schemas / filename)
+    for filename in ("sync-manager-schemas.py", "sync-legacy-rescue-schemas.py"):
+        shutil.copyfile(repository / "scripts" / filename, scripts / filename)
+        subprocess.run(
+            [sys.executable, str(scripts / filename)],
+            cwd=tmp_path,
+            env={"PYTHONDONTWRITEBYTECODE": "1"},
+            check=True,
+            capture_output=True,
+            timeout=20,
+        )
+        schema = json.loads((schemas / "requirement-checkpoint.schema.json").read_text())
+        schema.pop("$id")
+        schema.pop("$schema")
+        assert schema == JointCheckpoint.model_json_schema(), filename
+    workflow = json.loads((schemas / "knowledge-stage-workflow.schema.json").read_text())
+    workflow.pop("$id")
+    workflow.pop("$schema")
+    assert workflow == StageWorkflowProof.model_json_schema()
+    disposition = json.loads((schemas / "delivery-disposition.schema.json").read_text())
+    reference = disposition["properties"]["action"]["$ref"]
+    assert disposition["$defs"][reference.removeprefix("#/$defs/")]["enum"] == [
+        action.value for action in DispositionNextAction
+    ]
+    before = {
+        filename: (schemas / filename).read_bytes()
+        for filename in (
+            "requirement-checkpoint.schema.json",
+            "knowledge-stage-workflow.schema.json",
+        )
+    }
+    subprocess.run(
+        [sys.executable, str(scripts / "sync-legacy-rescue-schemas.py")],
+        cwd=tmp_path,
+        env={"PYTHONDONTWRITEBYTECODE": "1"},
+        check=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert {filename: (schemas / filename).read_bytes() for filename in before} == before
 
 
 def test_product_dialogue_rejects_unknown_speaker() -> None:

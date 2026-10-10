@@ -10,10 +10,12 @@ from ai_software_engineer.domain.execution_native_rules import (
     NativeRuleChangeInspection,
     NativeRuleEpoch,
 )
+from ai_software_engineer.knowledge.stages import StageWorkflowProof
 from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
     ExecutionBaselinePlan,
 )
+from ai_software_engineer.multi_directory.models import JointCheckpoint
 from ai_software_engineer.team_view.models import TeamSnapshot
 from ai_software_engineer.web_console.models import (
     ConsoleOperation,
@@ -76,7 +78,12 @@ def main() -> None:
         ("execution-native-rule-change-inspection", NativeRuleChangeInspection),
         ("execution-baseline-queue-release", BaselineQueueRelease),
         ("team-snapshot", TeamSnapshot),
+        # This exact generated graph owns the Manager's DeliveryNextAction.
+        # Name-only rescue updates otherwise replace it with the disposition enum.
+        ("requirement-checkpoint", JointCheckpoint),
+        ("knowledge-stage-workflow", StageWorkflowProof),
     )
+    standalone_names = {f"{filename}.schema.json" for filename, _ in standalone}
     for filename, model in standalone:
         schema = model.model_json_schema()
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
@@ -85,6 +92,8 @@ def main() -> None:
             json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=model is TeamSnapshot) + "\n"
         )
     for path in ROOT.glob("*.schema.json"):
+        if path.name in standalone_names:
+            continue
         document = json.loads(path.read_text())
         before = json.dumps(document)
         definitions = document.get("$defs", {})
@@ -103,15 +112,17 @@ def main() -> None:
                 "ConsoleCommandResult"
             ]["properties"]["legacy_rescue_preparation"]
         if "ProposeExecutionBaselineIntent" in definitions:
-            for model, field in (
+            for intent_model, field in (
                 (ProposeExecutionBaselineIntent, "purpose"),
                 (ExecuteExecutionBaselineIntent, "confirm_legacy_containment"),
                 (ExecuteExecutionBaselineIntent, "confirm_local_execution_stopped"),
                 (ExecuteExecutionBaselineIntent, "continuation_mode"),
                 (ExecuteExecutionBaselineIntent, "approved_native_rule_change_sha256"),
             ):
-                source = model.model_json_schema()
-                definitions[model.__name__]["properties"][field] = source["properties"][field]
+                source = intent_model.model_json_schema()
+                definitions[intent_model.__name__]["properties"][field] = source["properties"][
+                    field
+                ]
         if document.get("title") == "ConsoleOperation":
             source = ConsoleOperation.model_json_schema()
             document["properties"]["intent"] = source["properties"]["intent"]
@@ -147,7 +158,7 @@ def main() -> None:
         queue_path.write_text(
             json.dumps(queue_document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         )
-    # These new standalone models have no handwritten legacy compatibility gates.
+    # These standalone models have no handwritten legacy compatibility gates.
     # Keep exact generated parity even when an embedded older model has such gates.
     for filename, model in standalone:
         schema = model.model_json_schema()

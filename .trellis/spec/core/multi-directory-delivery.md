@@ -236,6 +236,76 @@ ase request resume DELIVERY_ID
 
 ## 3. Contracts
 
+### 精确生成契约中的同名 next-action（2026-10-10）
+
+#### Scope / Trigger
+
+修改或同步 `requirement-checkpoint.schema.json`、`knowledge-stage-workflow.schema.json`、
+legacy rescue additions，或其他嵌入原生
+`ProjectDeliveryCheckpoint` 的生成契约时适用。Manager checkpoint 与 domain disposition
+分别定义 `DeliveryNextAction`；相同 Python 短名称不表示相同 wire 类型。
+
+#### Signatures
+
+```python
+JointCheckpoint.model_json_schema() -> dict[str, Any]
+StageWorkflowProof.model_json_schema() -> dict[str, Any]
+ProjectDeliveryCheckpoint.next_action: manager.delivery_checkpoint.DeliveryNextAction
+DeliveryDisposition.action: domain.delivery_disposition.DeliveryNextAction
+```
+
+开发同步入口为 `python scripts/sync-manager-schemas.py` 与
+`python scripts/sync-legacy-rescue-schemas.py`；测试在隔离临时目录运行，不写生产 facts。
+
+#### Contracts
+
+- 联合 checkpoint 的 `$defs.ProjectDeliveryCheckpoint.properties.next_action.$ref` 必须解析到
+  Manager 的全部 11 值，包括 `RUN_DELIVERY`、`REQUEST_HUMAN`、`NONE`。
+- disposition 的 `action` 保持自己的 8 值，包括 `RETRY`、`RESUME_EXECUTION_BASELINE`。
+  不合并两个枚举，不扩张 checkpoint 可接受范围。
+- 完整生成的联合与 knowledge stage 契约无 handwritten legacy guard。legacy 同步器将两者
+  列入 standalone 完整模型生成；generic additive pass 跳过这些文件，防止中途发布错误
+  引用图，并在 additive guard 更新后重新生成完整图，与 TeamSnapshot 的
+  exact schema 同步方式一致。不得把跨模型 `$defs` 的短名归并结果作为这个契约的类型来源。
+- 保留 `$id`/`$schema` 后，静态契约必须与 `JointCheckpoint.model_json_schema()` 精确相等。
+  不删除合法字段，不忽略差异，不改写存量 checkpoint、审批或哈希。
+- `StageWorkflowProof` 的完整静态图亦与自身模型精确相等；2026-10-10 对全部静态 Schema
+  只读枚举确认只有上述两个图嵌入 `ProjectDeliveryCheckpoint`，两处污染均纠正。
+
+#### Validation & Error Matrix
+
+| 输入/操作 | 要求 |
+|---|---|
+| 子 checkpoint 的合法 Manager action | 静态 Schema 和 Pydantic 均接受 |
+| 子 checkpoint 使用 disposition-only 或未知 action | 静态 Schema 和 Pydantic 均拒绝 |
+| Manager sync 后再运行 legacy sync | 两个 Schema 仍与各自完整模型精确一致 |
+| 重复 legacy sync | 两个 Schema bytes 不变；disposition 枚举仍为自身 8 值 |
+
+#### Good / Base / Bad Cases
+
+- Good：合法 DELIVERING、BLOCKED 和 DONE child 经两个同步脚本后仍可验证。
+- Base：只同步 legacy rescue additions，联合生成契约保持原有全部字段/引用。
+- Bad：用 TeamSnapshot 的 `$defs.DeliveryNextAction` 覆盖联合 checkpoint，导致合法动作被
+  拒绝而 disposition 动作被误接受；精确 parity 与正反 fixture 必须同时失败。
+
+#### Tests Required
+
+`tests/manager/test_joint_contracts.py` 保留完整静态 parity，并覆盖全部枚举的引用解析、
+两份静态图的三类真实 child round-trip、8 个跨域动作与未知值拒绝、两个实际脚本的顺序执行和重放。
+`tests/knowledge/test_schema_parity.py` 保留 `StageWorkflowProof` 的完整精确 parity。
+`tests/contracts/test_local_legacy_rescue_schema.py` 继续验证原有 stop/authorization wire guards。
+无需改库；部署纠正的验证契约后，原合法事实可重新验证并走原公开继续入口，历史保留。
+
+#### Wrong vs Correct
+
+```python
+# Wrong: unrelated types can share the same short definition name.
+joint_schema["$defs"]["DeliveryNextAction"] = team_nodes["DeliveryNextAction"]
+
+# Correct: this contract owns its complete model-generated reference graph.
+joint_schema = JointCheckpoint.model_json_schema()
+```
+
 ### 重复读取联合历史的验证复用（2026-10-04）
 
 `JointJournal.history(delivery_id) -> tuple[JointCheckpoint, ...]` 与 `current` 保持完整历史

@@ -1,0 +1,16 @@
+{
+  "name": "joint-schema-alignment",
+  "title": "修复联合需求与知识阶段的同名 next-action Schema 覆盖",
+  "status": "in_progress",
+  "phase": "deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "schemas/requirement-checkpoint.schema.json",
+    "schemas/knowledge-stage-workflow.schema.json",
+    "scripts/sync-legacy-rescue-schemas.py",
+    "tests/manager/test_joint_contracts.py",
+    ".trellis/spec/core/multi-directory-delivery.md",
+    "docs/architecture/contracts.md",
+    ".trellis/tasks/10-10-joint-schema-alignment"
+  ]
+}

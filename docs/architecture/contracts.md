@@ -209,6 +209,12 @@ Python 入口在 `multi_directory/models.py`、`service.py`，生产桥接在 `p
 `controlled_capability_kind` 可选字段。静态 Schema 与 `model_json_schema()` 精确一致；
 因 `additionalProperties=false`，缺少嵌入字段会拒绝合法输入，不能靠删除验证信息或放宽
 Schema 一致性测试修复。静态同步不重写已封存产物或审批。
+`ProjectDeliveryCheckpoint.next_action` 引用 Manager 的 11 值 `DeliveryNextAction`；它与
+`DeliveryDisposition.action` 的 8 值同名枚举是两个独立契约。Schema 同步器必须保留完整模型
+的引用图，不得用其他模型同名 `$defs` 覆盖联合 checkpoint。legacy rescue 同步后仍须通过
+完整模型精确比对与合法原生 child / 非法 disposition action 的正反校验。
+`knowledge-stage-workflow.schema.json` 嵌入的同一 checkpoint 图遵守相同约束，并与完整
+`StageWorkflowProof` 生成结果精确一致；generic additive pass 跳过这些完整生成的图。
 完整签名、授权投影、路径/命令校验和恢复矩阵见
 [`多目录交付 code-spec`](../../.trellis/spec/core/multi-directory-delivery.md)。
 
