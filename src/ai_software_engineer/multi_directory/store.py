@@ -57,13 +57,18 @@ class JointJournal:
             os.close(fd)
 
     def current(self, delivery_id: str) -> JointCheckpoint | None:
-        history = self.history(delivery_id)
-        return history[-1] if history else None
+        latest: JointCheckpoint | None = None
+        for checkpoint in self._validated_history(delivery_id):
+            latest = checkpoint
+        return latest.model_copy(deep=True) if latest is not None else None
 
     def history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]:
+        return tuple(item.model_copy(deep=True) for item in self._validated_history(delivery_id))
+
+    def _validated_history(self, delivery_id: str) -> Iterator[JointCheckpoint]:
+        """Yield private facts; public readers exhaust the chain and copy their returns."""
         previous: JointCheckpoint | None = None
         previous_bytes_sha256: str | None = None
-        history: list[JointCheckpoint] = []
         for path in sorted(self.directory(delivery_id).glob("*.json")):
             _no_symlinks(path)
             payload = path.read_bytes()
@@ -84,8 +89,7 @@ class JointJournal:
             self._verified[path] = (bytes_sha256, previous_bytes_sha256, item)
             previous = item
             previous_bytes_sha256 = bytes_sha256
-            history.append(item.model_copy(deep=True))
-        return tuple(history)
+            yield item
 
     def append(self, checkpoint: JointCheckpoint, *, expected: str | None) -> JointCheckpoint:
         if self._read_only:

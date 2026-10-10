@@ -510,3 +510,51 @@ Deployment uses the existing idle controlled restart. Continue the same Requirem
 existing exact authorization and fresh-fact gates; do not recreate it or rewrite old failures.
 Rollback removes these imports/decorators while idle, restoring previous cost without altering
 durable records. Any actual production wait still needs separate public-path verification.
+
+## Copy only the current joint checkpoint (2026-10-10)
+
+### Scope, signatures and contracts
+
+`src/ai_software_engineer/multi_directory/store.py` exposes
+`JointJournal.current(delivery_id: str) -> JointCheckpoint | None` and
+`JointJournal.history(delivery_id: str) -> tuple[JointCheckpoint, ...]`.
+Both consume the private complete `_validated_history` iterator. `current` must exhaust it before
+returning one deep copy of the final model; `history` returns an independent deep copy of each item.
+Empty reads return `None` / `()`. No caller receives the private validated model or iterator.
+
+The iterator retains the existing complete fresh reads, no-symlink checks, byte SHA, model/integrity,
+filename, identity and predecessor validation and 512-entry cache policy. Matching bytes and exact
+predecessor may reuse the original validation; mtime/size alone never qualify. Do not take only the
+last file, stop on the first match, truncate history, or add a cached latest-state decision.
+Returning only one copy reduces discarded allocations, not the bytes inspected or verdict gates.
+The count limit of the existing model cache is unchanged; this is not a new total Python heap bound.
+
+### Validation matrix and tests
+
+| Case | Required result |
+| --- | --- |
+| Four valid records, cold or warm current | Read every record; deep-copy exactly one return |
+| Same four records, history | Deep-copy all four and isolate nested mutable data |
+| Valid append after warm read | Immediately observe the new head, decode the new bytes |
+| Same-length/mtime historical corruption | Reject actual digest change |
+| Missing prefix/middle, resealed ancestor, wrong filename or symlink | Reject path/chain/identity failure |
+| Caller mutates returned attempts dict | Private cache and all later current/history results remain unchanged |
+| Empty history | No model reads or copies; return the existing empty value |
+
+`tests/multi_directory/test_current_journal_copy.py`,
+`tests/manager/test_joint_journal_read_reuse.py` and
+`tests/team_view/test_joint_history_snapshot.py` cover these contracts and the existing 512-entry
+limit. Good: verify the complete prefix and return an isolated head. Base: full history keeps all
+independent copies. Bad: return a cached head without rereading its ancestors.
+
+### Existing data, observations and rollback
+
+There is no Schema or persisted-data change. Existing requirements, approvals and checkpoints keep
+their exact bytes/digests; the same public recovery operation remains authoritative. Controlled
+deployment loads the getter implementation without restarting a Requirement or changing its target.
+Rollback restores the old `current -> history` path and its allocation cost.
+
+The current K1 parent has 41 sealed JSON files /58,218,393 bytes; its Project parent-lookup range
+contains 229 files /261,344,996 bytes. These are bounded read-only size observations, not an end-to-end
+profile. The four-record regression's copy reduction does not establish production speed or prove
+the absence of a memory leak. Measure the actual public operation separately.

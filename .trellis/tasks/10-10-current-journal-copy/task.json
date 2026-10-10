@@ -1,0 +1,12 @@
+{
+  "name": "current-journal-copy",
+  "title": "仅复制联合交付日志的最终 current 返回值",
+  "status": "in_review",
+  "phase": "incremental_verified",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/multi_directory/store.py",
+    "tests/multi_directory/test_current_journal_copy.py",
+    ".trellis/tasks/10-10-current-journal-copy"
+  ]
+}
