@@ -651,6 +651,101 @@ test("Team busy is a read-in-progress message, not a database failure", async ()
   assert.doesNotMatch(text(ui.get("connection")), /MySQL|刷新失败/);
 });
 
+for (const failure of ["busy", "unavailable", "timeout"]) {
+  test(`stale Team ${failure} pauses controls, retains the draft and recovers with unchanged facts`, async () => {
+    let fail = false;
+    const ui = await browser({ready: true, restart: false, project: true,
+      requests: [{id: "request_fixture", project_id: "project_fixture", title: "Retained Requirement",
+        stage: "READY_FOR_DISCUSSION", next_action: "Start discussion", checkpoint_sha256: "a".repeat(64),
+        scopes: [], documents: []}],
+      teamRead: (_url, request, team, response) => {
+        if (!fail) return response(team);
+        if (failure === "timeout") return new Promise((_resolve, reject) => {
+          request.signal.addEventListener("abort", () => reject(new Error("fixture timeout")), {once: true});
+        });
+        return response({error: {code: failure === "busy" ? "TEAM_READ_IN_PROGRESS" : "TEAM_UNAVAILABLE"}}, false);
+      },
+    });
+    await ui.navigate("requests");
+    assert.ok(descendants(ui.get("detail")).find(node => node.tag === "button" && node.textContent === "删除需求"));
+    await ui.click("新建需求");
+    const form = descendants(ui.get("composer")).find(node => node.tag === "form");
+    const name = descendants(form).find(node => node.tag === "input");
+    const submit = descendants(form).find(node => node.tag === "button" && node.type === "submit");
+    name.value = "Do not lose this Requirement draft";
+    const original = vm.runInContext("snapshot", ui.context);
+    fail = true;
+    const polling = ui.tick();
+    if (failure === "timeout") {
+      await settled();
+      await ui.runTimer(40000);
+    }
+    await polling;
+    assert.equal(vm.runInContext("snapshot", ui.context), original);
+    assert.equal(vm.runInContext("operationsAvailable && consoleDeliveryReady", ui.context), true);
+    assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), false,
+      "successful independent Operations/Console reads cannot authorize an old Team snapshot");
+    assert.equal(submit.disabled, true);
+    assert.equal(descendants(ui.get("composer")).find(node => node.tag === "form"), form);
+    assert.equal(name.value, "Do not lose this Requirement draft");
+    assert.equal(descendants(ui.get("detail")).some(node => node.tag === "button" && node.textContent === "删除需求"), false,
+      "the actual detail must rerender even when only Team freshness changed");
+    assert.match(text(ui.get("connection")), /旧数据/);
+    const result = await vm.runInContext('submitOperation({action: "CONTINUE_DELIVERY", project_id: "project_fixture", delivery_id: "request_fixture"})', ui.context);
+    assert.equal(result, null);
+    assert.equal(ui.requests.filter(request => request.method === "POST").length, 0);
+    fail = false;
+    await ui.tick();
+    assert.equal(vm.runInContext("teamReadIssue", ui.context), null);
+    assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), true);
+    assert.equal(submit.disabled, false);
+    assert.ok(descendants(ui.get("detail")).find(node => node.tag === "button" && node.textContent === "删除需求"),
+      "unchanged recovered Team facts refresh detail controls even with a composer open");
+    assert.equal(descendants(ui.get("composer")).find(node => node.tag === "form"), form);
+    assert.equal(name.value, "Do not lose this Requirement draft");
+    assert.doesNotMatch(text(ui.get("connection")), /旧数据/);
+  });
+}
+
+test("a failed Team branch revokes old controls before an independent Operations read settles", async () => {
+  const options = {ready: true, restart: false, project: true};
+  const ui = await browser(options);
+  await ui.navigate("requests");
+  await ui.click("新建需求");
+  const form = descendants(ui.get("composer")).find(node => node.tag === "form");
+  const submit = descendants(form).find(node => node.tag === "button" && node.type === "submit");
+  const held = deferred();
+  options.operationsRead = async (_request, response) => {await held.promise; return response([]);};
+  options.teamRead = (_url, _request, _team, response) =>
+    response({error: {code: "TEAM_READ_IN_PROGRESS"}}, false);
+  const polling = ui.tick();
+  await settled();
+  const controlWhileHeld = vm.runInContext("canControlCurrentTeam()", ui.context);
+  const issueWhileHeld = vm.runInContext("teamReadIssue", ui.context);
+  const disabledWhileHeld = submit.disabled;
+  if (!controlWhileHeld) {
+    await vm.runInContext('submitOperation({action: "CONTINUE_DELIVERY", project_id: "project_fixture", delivery_id: "request_fixture"})', ui.context);
+  }
+  held.resolve();
+  await polling;
+  assert.equal(issueWhileHeld, "busy");
+  assert.equal(controlWhileHeld, false, "Team failure must not wait for an unrelated read to revoke authority");
+  assert.equal(disabledWhileHeld, true);
+  assert.equal(ui.requests.filter(request => request.method === "POST").length, 0);
+  assert.equal(descendants(ui.get("composer")).find(node => node.tag === "form"), form);
+});
+
+test("a published Team remains current when a later Knowledge auxiliary branch fails", async () => {
+  const ui = await browser({ready: true, restart: false, project: true});
+  await ui.navigate("knowledge");
+  vm.runInContext('loadKnowledge = async () => {throw new Error("fixture auxiliary failure");}', ui.context);
+  await ui.tick();
+  assert.equal(vm.runInContext("teamReadIssue", ui.context), null);
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), true);
+  assert.match(text(ui.get("connection")), /团队数据已更新.*辅助记录刷新失败/);
+  assert.doesNotMatch(text(ui.get("connection")), /旧数据|团队数据读取失败/);
+});
+
 test("Team read timeout is distinct and cannot claim the backend execution stopped", async () => {
   const ui = await browser({ready: true, restart: false,
     teamRead: (_url, request) => new Promise((_resolve, reject) => {

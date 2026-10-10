@@ -33,14 +33,16 @@ function harness(fetcher) {
     return nodes.get(id);
   };
   const context = vm.createContext({
-    document: { getElementById: get, createElement: tag => new Element(tag), createTextNode: s => s, querySelectorAll: () => [] },
+    document: { getElementById: get, createElement: tag => new Element(tag), createTextNode: s => s,
+      querySelectorAll: selector => selector === '[data-delivery-control="true"]'
+        ? [...new Set([...nodes.values()].flatMap(all))].filter(node => node.attributes["data-delivery-control"] === "true") : [] },
     fetch: fetcher, crypto: webcrypto, TextEncoder, setTimeout: () => 0, clearTimeout() {},
     AbortController, structuredClone, supportedActions,
   });
   const source = fs.readFileSync(path.join(__dirname, "../../src/ai_software_engineer/team_view/app.js"), "utf8");
   vm.runInContext(source.replace(/\nrefresh\(\);\nsetInterval\(refresh, 5000\);\s*$/, "\n"), context);
   vm.runInContext(`
-    snapshot = {team_id: "team_test", requests: [{id: "r1", project_id: "project_test", title: "Requirement", stage: "WAITING_HUMAN", checkpoint_sha256: "checkpoint-a", scopes: [], documents: [], dialogue: []}], tasks: [], agents: [], projects: []};
+    snapshot = {team_id: "team_test", selected_project_id: "project_test", requests: [{id: "r1", project_id: "project_test", title: "Requirement", stage: "WAITING_HUMAN", checkpoint_sha256: "checkpoint-a", scopes: [], documents: [], dialogue: []}], tasks: [], agents: [], projects: []};
     selected = {kind: "request", id: "r1"}; page = "requests";
     consoleAvailable = true; consoleDeliveryReady = true; operationsAvailable = true; consoleTeamId = "team_test";
     consoleOperationContractVersion = 1; consoleSupportedActions = [...supportedActions];
@@ -280,6 +282,95 @@ test("knowledge resolution submits once and preserves form/error state on retry"
   await findButton(h, "查看已确认的知识").events.click();
   assert.equal(all(h.detail()).filter(n => n.tag === "form").length, 0);
   assert.match(text(h.detail()), /产品确认/);
+});
+
+test("stale Team pauses knowledge approval while keeping the readable question and editable draft", async () => {
+  for (const issue of ["busy", "unavailable", "timeout"]) {
+    const writes = [];
+    const h = harness(async (_url, options = {}) => {
+      if (options.method === "POST") {writes.push(JSON.parse(options.body)); return {ok: true, json: async () => resolution};}
+      return {ok: true, json: async () => [pending]};
+    });
+    await findButton(h, "查看待确认的知识").events.click();
+    const form = all(h.detail()).find(node => node.tag === "form");
+    const answer = all(form).find(node => node.tag === "textarea");
+    const source = all(form).find(node => node.tag === "input");
+    const submit = all(form).find(node => node.tag === "button" && node.type === "submit");
+    answer.value = "保留的产品决定"; source.value = "产品负责人确认";
+    h.context.failure = issue;
+    vm.runInContext("teamReadIssue = failure; renderDetail(); syncDeliveryControls();", h.context);
+    await form.events.submit({preventDefault() {}});
+    assert.equal(writes.length, 0, issue + " retained knowledge form must not POST");
+    assert.equal(submit.disabled, true);
+    assert.equal(all(h.detail()).find(node => node.tag === "form"), form);
+    assert.equal(answer.value, "保留的产品决定");
+    assert.equal(source.value, "产品负责人确认");
+    assert.match(text(h.detail()), /请确认范围/);
+    assert.match(text(form), /当前操作已暂停|最新的团队数据/);
+    assert.equal(findButton(h, "收起知识详情").disabled, false, "reading remains available");
+    vm.runInContext("teamReadIssue = null; renderDetail(); syncDeliveryControls();", h.context);
+    assert.equal(submit.disabled, false);
+    assert.equal(all(h.detail()).find(node => node.tag === "form"), form);
+    await form.events.submit({preventDefault() {}});
+    assert.equal(writes.length, 1, "fresh current facts restore explicit approval without a new draft");
+    assert.equal(writes[0].answer, "保留的产品决定");
+  }
+});
+
+test("retained knowledge approval checks the frozen Project, checkpoint and exact unresolved gap", async () => {
+  for (const mutation of [
+    'snapshot.selected_project_id = "other_project"',
+    'snapshot.requests[0].checkpoint_sha256 = "checkpoint-new"',
+    'snapshot.requests[0].stage = "PLANNING"',
+    'snapshot.requests[0].knowledge_gap.gap.gap_id = "new-gap"',
+    'snapshot.requests[0].knowledge_gap.gap.question = "changed question with the same claimed digest"',
+    'snapshot.requests[0].knowledge_gap.is_current = false',
+    'snapshot.requests[0].knowledge_gap.resolution = {resolution_id: "already-approved"}',
+    'snapshot.requests = []',
+    'operationsAvailable = false',
+  ]) {
+    let writes = 0;
+    const h = harness(async (_url, options = {}) => {
+      if (options.method === "POST") {writes++; return {ok: true, json: async () => resolution};}
+      return {ok: true, json: async () => structuredClone([pending])};
+    });
+    await findButton(h, "查看待确认的知识").events.click();
+    const form = all(h.detail()).find(node => node.tag === "form");
+    all(form).find(node => node.tag === "textarea").value = "已确认";
+    all(form).find(node => node.tag === "input").value = "产品决定";
+    assert.equal(vm.runInContext("snapshot.requests[0].knowledge_gap.gap.gap_id", h.context), gap.gap_id,
+      "the verified pending detail supplies the exact current binding");
+    vm.runInContext(mutation, h.context);
+    await form.events.submit({preventDefault() {}});
+    assert.equal(writes, 0, mutation + " cannot authorize the retained form");
+  }
+});
+
+test("knowledge approval rechecks Team authority after asynchronous answer hashing", async () => {
+  for (const mutation of [
+    'teamReadIssue = "busy"',
+    'snapshot.requests[0].checkpoint_sha256 = "checkpoint-new"',
+    'snapshot.requests[0].knowledge_gap.resolution = {resolution_id: "already-approved"}',
+  ]) {
+    let writes = 0, release;
+    const h = harness(async (_url, options = {}) => {
+      if (options.method === "POST") {writes++; return {ok: true, json: async () => resolution};}
+      return {ok: true, json: async () => structuredClone([pending])};
+    });
+    await findButton(h, "查看待确认的知识").events.click();
+    const form = all(h.detail()).find(node => node.tag === "form");
+    all(form).find(node => node.tag === "textarea").value = "决定在异步边界期间保留";
+    all(form).find(node => node.tag === "input").value = "产品决定";
+    const hashPending = new Promise(resolve => {release = resolve;});
+    h.context.crypto = {subtle: {digest: () => hashPending}};
+    const submitting = form.events.submit({preventDefault() {}});
+    vm.runInContext(mutation + '; syncDeliveryControls()', h.context);
+    release(new Uint8Array(32).buffer);
+    await submitting;
+    assert.equal(writes, 0, mutation + " during hashing must revoke the already-started callback");
+    assert.equal(all(form).find(node => node.tag === "button" && node.type === "submit").disabled, true);
+    assert.equal(all(form).find(node => node.tag === "textarea").value, "决定在异步边界期间保留");
+  }
 });
 
 test("checkpoint changes isolate forms and old asynchronous loads", async () => {

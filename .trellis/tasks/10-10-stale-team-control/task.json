@@ -1,0 +1,17 @@
+{
+  "id": "stale-team-control-20261010",
+  "title": "团队数据读取失败时暂停旧页面操作并保留阅读与草稿",
+  "status": "completed",
+  "phase": "verified",
+  "owner": "codex",
+  "created_at": "2026-10-10",
+  "allowed_paths": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/readiness.test.cjs",
+    "tests/team_view/engineering-wait.test.cjs",
+    "tests/team_view/knowledge-gap.test.cjs",
+    ".trellis/spec/core/incremental-polling.md",
+    ".trellis/tasks/10-10-stale-team-control/"
+  ],
+  "verification": "verification.md"
+}

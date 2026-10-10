@@ -1,5 +1,78 @@
 # Console incremental polling
 
+## Retained Team data cannot authorize current decisions (2026-10-10)
+
+```javascript
+deliveryControlUnavailableReason()      // Team freshness is independent from Console/Operations
+pollingControlFacts()                   // includes teamReadIssue for page and detail signatures
+refreshSnapshot(target, includeRuntimeStatus)
+knowledgeApprovalUnavailableReason(bound)
+knowledgeGapKey(item)                   // includes immutable current gap_id
+knowledgeGapCard(view, index, base, item)
+syncDeliveryControls()                  // also validates registered exact knowledge decisions
+```
+
+- `teamReadIssue=busy/unavailable/timeout` with a saved snapshot pauses current delivery and
+  Requirement knowledge-approval commands. Successful independent Console/Operations reads
+  cannot restore Team authority. Keep the snapshot, full history, open saved documents and
+  composer/knowledge answer drafts. Chinese guidance distinguishes reading from executing,
+  says current commands are paused, and explains automatic reread/revalidation. Do not ask
+  users to rebuild a Requirement or infer an Agent stop from a browser read failure.
+- Publish a current Team branch failure immediately, independently of slower auxiliary reads.
+  Ignore superseded Project responses. After Team has published successfully, a later Knowledge
+  or other auxiliary failure cannot temporarily revoke Team freshness. The serial owner still
+  waits for all branches; this does not introduce concurrent polling or cancel live operations.
+- Include freshness in nested page/detail source signatures, rerender failure and recovery
+  incrementally, and retain open composer nodes. Successful current Team reread clears the issue
+  and restores the current controls even when the content bytes are otherwise unchanged or a
+  composer is open. Existing Project-switch, runtime, identity, capability, exact approval and
+  active-operation gates remain independent. Callbacks and direct Operation submission recheck
+  the same gate; disabling a button alone is insufficient.
+- Current unresolved knowledge details adopt the verified GET view only for the frozen
+  Project/Requirement/checkpoint, current Project and matching section/gap. Use the exact gap ID
+  in the cached section key so a new gap cannot reuse an old actionable form; approved and
+  historical cards remain read-only. Freeze the card's Project, Requirement, checkpoint and
+  full gap signature when rendering. Before hashing the answer and again immediately before
+  POST, verify current Team control, exact selected Project, WAITING_HUMAN Requirement and
+  the same unresolved current gap. An in-place checkpoint/question edit or an approval arriving
+  during `crypto.subtle.digest` cannot authorize the old callback.
+- Register only Requirement knowledge submit buttons in the delivery-control WeakMap; show
+  inline Chinese unavailability, preserve editable answer/source drafts, and restore the same
+  form when its exact facts are current again. Preserve an in-flight submit's busy state across
+  connectivity changes, and keep the gate effective after a failed POST. Independent Team/Project
+  knowledge uploads, selections and settings retain their own administration contracts.
+
+| Facts / ordering | Required result and regression |
+| --- | --- |
+| Busy/unavailable/timeout Team with valid old snapshot and successful auxiliary reads | Same snapshot/draft, current commands paused, zero old-callback/direct POST |
+| Team fails while independent Operations is held | Immediate freshness gate and disabled existing submit before auxiliary settles |
+| Same Team content reread succeeds with open composer | Clear issue and restore detail/form controls without losing draft |
+| Team published, later Knowledge auxiliary rejects | No Team stale issue; explicit auxiliary-failure message |
+| Engineering detail freshness changes | Old continue removed, saved source/open artifact nodes identical; no implicit approval |
+| Pending knowledge answer during Team outage/recovery | Same form/answer/source; submit paused then explicitly usable, reading toggle remains usable |
+| Changed Project/checkpoint/gap/current flag or already resolved | Old knowledge form cannot POST, including unchanged checkpoint with a newly approved gap |
+| Team/checkpoint/resolution changes during answer hashing | Second exact guard yields zero POST and preserved draft |
+
+Good: a user keeps reading the saved plan while ASE retries a busy Team projection; current
+actions resume only after the same Project and Requirement are read again. Base: Settings and
+independent knowledge administration remain accessible. Bad: a green Console readiness flag or
+retained DOM is treated as authority for a stale Requirement, or a disabled knowledge button
+is the only protection against a saved submit callback.
+
+Root cause: `teamReadIssue` was only a banner fact and absent from the central control gate and
+render signatures. Publication also waited for unrelated reads. Knowledge approval bypassed
+that gate via an administration POST and captured mutable Requirement facts across an await.
+Executable contracts must test branch completion order, unchanged-content recovery, retained
+callbacks and knowledge-hash races rather than only the presence of an old-data banner.
+
+Coverage: focused `readiness.test.cjs`, `engineering-wait.test.cjs` and `knowledge-gap.test.cjs`,
+plus syntax/diff checks. Actual browser visual acceptance remains separate from Node DOM tests.
+存量数据处置：read-side only, no SQL/Requirement/Task/Operation/approval-history migration.
+Load the repaired compatible frontend assets and refresh the original Requirement. Existing
+blocked waits and saved approvals/progress remain subject to their exact current facts; the UI
+does not itself approve or restart them. Roll back assets/spec/tests and refresh without
+rewriting history or stopping a role.
+
 ## Team busy, deadline and unavailable messages (2026-10-09)
 
 Scope: `app.js::refreshSnapshot`, `TeamReadFailure(kind)`, `teamReadIssue`,
@@ -14,7 +87,8 @@ serial five-second polling and server worker-owned admission remain unchanged.
   stop, quota reset or lost evidence. Release the UI lane/timer and allow the next serial read.
 - Keep the last snapshot and mark it as old data with its successful read time. Initial busy has
   a reading placeholder, while Settings/Status can still load independently. A later success clears
-  the issue. Include the initial issue in content signatures so recovery changes the placeholder.
+  the issue. Include the issue in control/content/detail signatures so failure revokes current
+  command authority and recovery changes the placeholder and restores exact controls.
 - If Team already published before an auxiliary branch failed, say Team updated but auxiliary
   records failed; do not label the successful Team read as a database outage. Existing system-fact
   rendering must still revoke unavailable command controls without erasing editor drafts.

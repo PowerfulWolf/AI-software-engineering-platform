@@ -711,6 +711,91 @@ test("unready runtime and unavailable team data do not invent an unavailable con
   assert.equal(h.run("canControlCurrentTeam()"), false);
 });
 
+test("stale Team facts invalidate retained engineering callbacks and show the read-only next step", async () => {
+  for (const issue of ["busy", "unavailable", "timeout"]) {
+    for (const kind of ["handling", "proposal", "preservation", "continuation", "approval"]) {
+      const h = harness();
+      let name = "让平台处理中断";
+      if (kind === "proposal" || kind === "preservation") {
+        legacyRescueFixture(h);
+        if (kind === "preservation") legacyRescuePlan(h);
+        name = kind === "proposal" ? "准备保留进度的恢复方案" : "批准保留进度，保持暂停";
+      } else if (kind === "continuation") {
+        baselineFixture(h);
+        Object.assign(h.step.wait_disposition.facts, {classification: "EXECUTION_BASELINE_PAUSED", execution_baseline_sha256: digest("8")});
+        h.step.wait_disposition.action = "RESUME_EXECUTION_BASELINE";
+        name = "继续原需求";
+      } else if (kind === "approval") {
+        currentApprovalFixture(h);
+        h.task.status = "QUEUED";
+        h.step.status = "READY";
+        h.step.wait_disposition = null;
+        h.request.execution = {state: "QUEUED", responsibility: "engineering"};
+        name = "批准并继续";
+      }
+      const build = kind === "approval" ? "(() => {const panel = el('section'); requestOperation(panel, data.request); return panel;})()"
+        : "engineeringWaitBox(data.request, data.task, data.step)";
+      const box = h.run(build);
+      const old = control(box, name);
+      assert.ok(old, kind);
+      const checkbox = descend(box).find(node => node.tagName === "INPUT" && node.type === "checkbox");
+      if (checkbox) {checkbox.checked = true; checkbox.events.change?.();}
+      const originalFacts = JSON.stringify(h.step.wait_disposition);
+      h.context.readFailure = issue;
+      h.run("teamReadIssue = readFailure");
+      await old.events.click();
+      assert.equal(h.run("submitted.length"), 0, issue + ": old " + name + " must not submit");
+      const reason = h.run("deliveryControlUnavailableReason()");
+      assert.match(reason.reason, /最新.*团队数据|团队数据.*最新|当前团队数据/);
+      assert.match(reason.next_action, /自动.*重试|恢复.*重新核对|重新读取/);
+      assert.doesNotMatch(reason.next_action, /重启|重建需求|批准|停止旧执行/);
+      const current = h.run(build);
+      assert.equal(control(current, name), undefined, issue + ": fresh render must not promise an unavailable action");
+      assert.equal(JSON.stringify(h.step.wait_disposition), originalFacts);
+      h.run("teamReadIssue = null");
+      const recovered = h.run(build);
+      assert.ok(control(recovered, name), "reading the same current facts restores " + kind);
+      assert.equal(h.run("submitted.length"), 0, "read recovery itself does not approve or resume");
+    }
+  }
+});
+
+test("Team freshness reconciliation retains open saved documents and removes obsolete controls", async () => {
+  const h = harness();
+  baselineFixture(h);
+  Object.assign(h.step.wait_disposition.facts, {classification: "EXECUTION_BASELINE_PAUSED", execution_baseline_sha256: digest("8")});
+  h.step.wait_disposition.action = "RESUME_EXECUTION_BASELINE";
+  h.run(`function fixtureDetail() {
+    const root = viewGroup(el('section'), 'fixture-current-detail');
+    root.append(engineeringWaitBox(data.request, data.task, data.step));
+    documentList(root, [{name: '已保存的计划', content: '保留当前阅读的完整内容',
+      source_uri: 'artifact://saved-plan', sha256: 'f'.repeat(64)}]);
+    return root;
+  }
+  globalThis.retainedDetail = fixtureDetail();`);
+  const root = h.context.retainedDetail;
+  const document = descend(root).find(node => node.className === "artifact-document");
+  const source = descend(root).find(node => node.className === "engineering-paused-source");
+  document.open = true;
+  const old = control(root, "继续原需求");
+  const signature = h.run("JSON.stringify(pollingDetailFacts())");
+  h.run("teamReadIssue = 'busy'; reconcileViewChildren(retainedDetail, fixtureDetail())");
+  assert.notEqual(h.run("JSON.stringify(pollingDetailFacts())"), signature, "Team freshness invalidates actual scoped detail facts");
+  assert.equal(descend(root).find(node => node.className === "artifact-document"), document);
+  assert.equal(document.open, true);
+  assert.equal(descend(root).find(node => node.className === "engineering-paused-source"), source);
+  assert.equal(control(root, "继续原需求"), undefined);
+  assert.match(text(root), /最新的团队数据，当前操作已暂停/);
+  await old.events.click();
+  assert.equal(h.run("submitted.length"), 0);
+  h.run("teamReadIssue = null; reconcileViewChildren(retainedDetail, fixtureDetail())");
+  assert.equal(descend(root).find(node => node.className === "artifact-document"), document);
+  assert.equal(document.open, true);
+  assert.ok(control(root, "继续原需求"));
+  assert.doesNotMatch(text(root), /最新的团队数据，当前操作已暂停/);
+  assert.equal(h.run("submitted.length"), 0);
+});
+
 test("operation read failure stays explicit when cached proofs are absent and never changes the original wait", () => {
   const h = harness();
   const original = JSON.stringify(h.step.wait_disposition);

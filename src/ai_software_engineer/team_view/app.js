@@ -160,7 +160,7 @@ function renderView(container, key, facts, build, incremental) {
 }
 function pollingControlFacts() {
   return [consoleAvailable, consoleTeamId, consoleDeliveryReady, consoleOperationContractVersion,
-    consoleSupportedActions, operationsAvailable,
+    consoleSupportedActions, operationsAvailable, teamReadIssue,
     snapshot?.team_id, currentProjectId(), projectSwitchPending()];
 }
 function pollingContentFacts() {
@@ -423,8 +423,9 @@ const deliveryButton = (text, action, className = "link") => {
   return control;
 };
 const suspendedDeliveryControls = new WeakMap();
+const knowledgeApprovalControls = new WeakMap();
 function setDeliveryControlDisabled(control, disabled) {
-  const ready = canControlCurrentTeam();
+  const ready = canControlCurrentTeam() && !knowledgeApprovalControls.get(control)?.unavailable();
   if (ready) suspendedDeliveryControls.delete(control);
   else suspendedDeliveryControls.set(control, Boolean(disabled));
   control.disabled = Boolean(disabled) || !ready;
@@ -433,7 +434,14 @@ function syncDeliveryControls() {
   const ready = canControlCurrentTeam();
   document.getElementById("project-creator").hidden = page !== "requests" || !ready;
   for (const control of document.querySelectorAll('[data-delivery-control="true"]')) {
-    if (!ready) {
+    const knowledge = knowledgeApprovalControls.get(control);
+    const unavailable = knowledge?.unavailable();
+    if (knowledge) {
+      const message = unavailable ? unavailable.reason + " " + unavailable.next_action : "";
+      if (knowledge.status.textContent !== message) knowledge.status.textContent = message;
+      knowledge.status.hidden = !unavailable;
+    }
+    if (!ready || unavailable) {
       if (!suspendedDeliveryControls.has(control))
         suspendedDeliveryControls.set(control, Boolean(control.disabled));
       control.disabled = true;
@@ -547,6 +555,14 @@ function deliveryControlUnavailableReason() {
     title: "团队数据暂不可读取",
     reason: "团队数据暂不可读取，尚不能核对当前页面与后台服务的绑定。",
     next_action: "请待团队数据恢复后刷新页面，再核对当前 Team、项目和需求后操作。",
+  };
+  if (teamReadIssue) return {
+    title: teamReadIssue === "busy" ? "团队数据正在读取"
+      : teamReadIssue === "timeout" ? "团队数据读取超时" : "团队数据读取失败",
+    reason: (teamReadIssue === "busy" ? "上一轮团队数据读取尚未完成。"
+      : teamReadIssue === "timeout" ? "本次团队数据读取超时，后台读取可能仍在进行。" : "本次团队数据暂时无法读取。") +
+      "暂时无法核对最新的团队数据，当前操作已暂停；仍可阅读上次保存的需求和历史。",
+    next_action: "页面会自动重试；成功读取后将重新核对当前项目、需求和审批，再恢复可用操作。原需求与已保存进度保留。",
   };
   if (snapshot.team_id !== consoleTeamId) return {
     title: "Team 绑定不一致",
@@ -7992,7 +8008,7 @@ function approvedKnowledge(item) {
 }
 
 function knowledgeGapKey(item) {
-  return `${item.project_id}/${item.id}/${item.checkpoint_sha256}/${item.stage}/${item.knowledge_gap?.resolution?.resolution_id || "pending"}/${item.execution?.responsibility || "legacy"}`;
+  return `${item.project_id}/${item.id}/${item.checkpoint_sha256}/${item.stage}/${item.knowledge_gap?.gap?.gap_id || "unread"}/${item.knowledge_gap?.resolution?.resolution_id || "pending"}/${item.execution?.responsibility || "legacy"}`;
 }
 
 function knowledgeGapSection(item) {
@@ -8014,6 +8030,8 @@ function knowledgeGapSection(item) {
   let loading = false, loaded = false;
   const base = "/api/v1/admin/projects/" + encodeURIComponent(item.project_id) +
     "/requirements/" + encodeURIComponent(item.id);
+  const boundItem = {id: item.id, project_id: item.project_id, checkpoint_sha256: item.checkpoint_sha256,
+    knowledge_rechecked_gap_ids: [...(item.knowledge_rechecked_gap_ids || [])]};
   const showLabel = () => historyOnly ? "查看知识核对记录" : approved ? "查看已确认的知识" : "查看待确认的知识";
   const toggle = button(showLabel(), async () => {
     if (loading) return;
@@ -8028,25 +8046,26 @@ function knowledgeGapSection(item) {
       try {
         const records = await adminFetch(base + "/knowledge-gaps");
         const unique = [...new Map(records.map(view => [view.gap.gap_id, view])).values()];
-        content.replaceChildren(...unique.map((view, index) => knowledgeGapCard(view, index, base, item)));
+        content.replaceChildren(...unique.map((view, index) => knowledgeGapCard(view, index, base, boundItem)));
         if (!unique.length) content.append(el("p", "当前没有已记录的知识缺口。", "muted"));
         loaded = true;
         const current = unique.find(view => view.is_current);
-        if (current?.resolution) {
-          approved = true;
-          renderIntro();
-          const request = snapshot?.requests.find(request => request.id === item.id && request.project_id === item.project_id);
-          if (request?.stage === "WAITING_HUMAN" && knowledgeGapKey(request) === key &&
+        if (current) {
+          if (current.resolution) {approved = true; renderIntro();}
+          const request = snapshot?.requests.find(request => request.id === boundItem.id && request.project_id === boundItem.project_id);
+          if (request?.stage === "WAITING_HUMAN" && request.checkpoint_sha256 === boundItem.checkpoint_sha256 &&
+              currentProjectId() === boundItem.project_id && knowledgeGapKey(request) === key &&
               knowledgeGapSections.get(key) === section &&
               (!request.knowledge_gap || request.knowledge_gap.gap.gap_id === current.gap.gap_id)) {
-            // Detail reads may observe approval before polling. Keep the open answer
-            // under its confirmed cache key instead of recreating a collapsed section.
+            // Bind the verified current question as well as a possible saved approval.
+            // Keep its open body and draft under the exact gap cache key.
             knowledgeGapSections.delete(key);
             request.knowledge_gap = current;
             key = knowledgeGapKey(request);
             knowledgeGapSections.set(key, section);
             renderOperationStatus();
             renderDetail();
+            syncDeliveryControls();
           }
         }
       } catch (error) {
@@ -8070,6 +8089,17 @@ function knowledgeGapSection(item) {
   return section;
 }
 
+function knowledgeApprovalUnavailableReason(bound) {
+  const unavailable = deliveryControlUnavailableReason();
+  if (unavailable) return unavailable;
+  const request = snapshot?.requests.find(item => item.id === bound.id && item.project_id === bound.project_id);
+  if (currentProjectId() !== bound.project_id || request?.stage !== "WAITING_HUMAN" ||
+      request.checkpoint_sha256 !== bound.checkpoint_sha256 || !request.knowledge_gap?.is_current ||
+      request.knowledge_gap.resolution || JSON.stringify(request.knowledge_gap.gap) !== bound.gap_signature)
+    return {title: "知识事项已变化", reason: "当前项目、需求或待确认的知识事项已变化，旧解答不能用于批准。",
+      next_action: "请重新查看当前需求的知识事项，再核对问题和解答；现有草稿保留供参考。"};
+  return null;
+}
 function knowledgeGapCard(view, index, base, item) {
   const {gap, resolution, is_current: current} = view;
   const rechecked = item.knowledge_rechecked_gap_ids?.includes(gap.gap_id);
@@ -8104,11 +8134,20 @@ function knowledgeGapCard(view, index, base, item) {
   feedback.setAttribute("aria-live", "polite");
   const submit = el("button", "批准解答", "primary");
   submit.type = "submit";
+  submit.setAttribute("data-delivery-control", "true");
+  const bound = {id: item.id, project_id: item.project_id, checkpoint_sha256: item.checkpoint_sha256,
+    gap_signature: JSON.stringify(gap)};
+  const controlStatus = el("p", "", "form-feedback");
+  controlStatus.setAttribute("role", "status");
+  controlStatus.setAttribute("aria-live", "polite");
+  const unavailable = () => knowledgeApprovalUnavailableReason(bound);
+  knowledgeApprovalControls.set(submit, {unavailable, status: controlStatus});
+  setDeliveryControlDisabled(submit, false);
   const actions = el("div", undefined, "knowledge-gap-actions");
   actions.append(el("span", "批准仅保存解答，不会自动开始交付。", "muted"), submit);
   card.append(header, el("p", gap.question, "knowledge-gap-question"));
   if (decision) card.append(el("p", decision, "knowledge-gap-hint"));
-  card.append(field("你的解答", answer), field("事实来源 / 决策依据", source), feedback, actions);
+  card.append(field("你的解答", answer), field("事实来源 / 决策依据", source), controlStatus, feedback, actions);
   let submitting = false;
   card.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -8119,18 +8158,24 @@ function knowledgeGapCard(view, index, base, item) {
       return;
     }
     submitting = true;
-    submit.disabled = true;
+    setDeliveryControlDisabled(submit, true);
     feedback.replaceChildren();
     try {
+      const beforeHash = unavailable();
+      if (beforeHash) throw new Error(beforeHash.reason + " " + beforeHash.next_action);
       const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
       const sha256 = Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, "0")).join("");
+      const beforePost = unavailable();
+      if (beforePost) throw new Error(beforePost.reason + " " + beforePost.next_action);
       const resolution = await adminFetch(base + "/knowledge-resolutions", {
         method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({gap_id: gap.gap_id, answer: content,
           sources: [{uri, content, sha256}], approval_reference: "local-console:" + gap.gap_id}),
       });
-      const request = snapshot?.requests.find(request => request.id === item.id && request.project_id === item.project_id);
-      if (request?.checkpoint_sha256 === item.checkpoint_sha256) {
+      const request = snapshot?.requests.find(request => request.id === bound.id && request.project_id === bound.project_id);
+      if (request?.stage === "WAITING_HUMAN" && request.checkpoint_sha256 === bound.checkpoint_sha256 &&
+          request.knowledge_gap?.is_current && !request.knowledge_gap.resolution &&
+          JSON.stringify(request.knowledge_gap.gap) === bound.gap_signature) {
         request.knowledge_gap = {...view, resolution};
         // Approval changes knowledge facts without advancing the immutable checkpoint.
         renderOperationStatus();
@@ -8139,7 +8184,7 @@ function knowledgeGapCard(view, index, base, item) {
     } catch (error) {
       feedback.replaceChildren(el("p", error.message || "解答未被接受。", "error"));
       submitting = false;
-      submit.disabled = false;
+      setDeliveryControlDisabled(submit, false);
     }
   });
   return card;
@@ -9189,6 +9234,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
   const priorOperations = JSON.stringify(operations);
   const priorOperationsAvailable = operationsAvailable;
   const priorKnowledge = JSON.stringify(pollingKnowledgeFacts());
+  const priorTeamReadIssue = teamReadIssue;
   const selectedAtStart = selected, pageAtStart = page, selectionRevisionAtStart = selectionIntentRevision;
   const selectEditedReplacement = (sourceSelection) => {
     if (selectionIntentRevision !== selectionRevisionAtStart || page !== pageAtStart ||
@@ -9225,8 +9271,9 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
     priorRuntimeStatus !== JSON.stringify(runtimeStatusSnapshot);
   const renderCurrentFacts = (teamChanged = false) => {
     const modalActive = hasOpenComposer();
-    if ((!modalActive || (["settings", "status"].includes(page) && systemViewsChanged())) &&
-        (teamChanged || priorOperations !== JSON.stringify(operations) ||
+    const teamReadChanged = priorTeamReadIssue !== teamReadIssue;
+    if ((teamReadChanged || !modalActive || (["settings", "status"].includes(page) && systemViewsChanged())) &&
+        (teamChanged || teamReadChanged || priorOperations !== JSON.stringify(operations) ||
           priorKnowledge !== JSON.stringify(pollingKnowledgeFacts()) || systemViewsChanged()))
       render({preserveComposer: Boolean(modalActive && !settingsSaveResult), incremental: true});
   };
@@ -9288,7 +9335,16 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
         status.className = "";
         status.textContent = "团队记录已更新 · 正在读取交付操作记录…";
       }
-    })();
+    })().catch(error => {
+      if (!superseded() && !teamPublished) {
+        teamReadIssue = controller.signal.aborted ? "timeout"
+          : error instanceof TeamReadFailure ? error.kind : "unavailable";
+        // Revoke old Team authority without waiting for independent auxiliary reads.
+        renderCurrentFacts();
+        syncDeliveryControls();
+      }
+      throw error;
+    });
     const systemRead = (async () => {
       try {
         await refreshOperations(controller.signal);
@@ -9323,9 +9379,10 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
   } catch (error) {
     if (superseded()) return;
     const issue = controller.signal.aborted ? "timeout"
-      : error instanceof TeamReadFailure ? error.kind : "unavailable";
+      : teamReadIssue || (error instanceof TeamReadFailure ? error.kind : "unavailable");
     teamReadIssue = teamPublished ? null : issue;
-    if (!snapshot || systemViewsChanged()) render({preserveComposer: hasOpenComposer(), incremental: true});
+    if (!snapshot || priorTeamReadIssue !== teamReadIssue || systemViewsChanged())
+      render({preserveComposer: hasOpenComposer(), incremental: true});
     status.className = !teamPublished && issue === "busy" ? "" : "error";
     const destination = snapshot?.projects.find(item => item.id === requestedProjectId)?.name
       || requestedProjectId;
