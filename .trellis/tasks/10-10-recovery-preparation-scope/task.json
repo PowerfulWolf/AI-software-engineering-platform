@@ -1,0 +1,16 @@
+{
+  "name": "recovery-preparation-scope",
+  "title": "补齐恢复执行前同步准备的纯文本检查作用域",
+  "status": "in_progress",
+  "phase": "ready_for_independent_review",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/recovery/task.py",
+    "src/ai_software_engineer/recovery/sealing.py",
+    "src/ai_software_engineer/recovery/allocation.py",
+    "src/ai_software_engineer/recovery/seed.py",
+    "tests/recovery/test_preparation_inspection_scope.py",
+    ".trellis/spec/core/read-memory-lifecycle.md",
+    ".trellis/tasks/10-10-recovery-preparation-scope"
+  ]
+}

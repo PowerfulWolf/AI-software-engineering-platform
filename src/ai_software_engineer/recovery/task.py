@@ -7,6 +7,7 @@ from ai_software_engineer.domain.project_delivery import derive_delivery_task
 from ai_software_engineer.recovery.current import NativeRecoveryFacts, NativeRecoveryFactsVerifier
 from ai_software_engineer.recovery.models import RecoveryRejected
 from ai_software_engineer.recovery.service import RecoveryAuthorizationService
+from ai_software_engineer.redaction import source_inspection_scope
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class AuthorizedRecoveryTaskBuilder:
     ) -> None:
         self._authorization, self._facts = authorization, facts
 
+    @source_inspection_scope()
     def build(self, plan_sha256: str) -> RecoveryTaskDraft:
         plan = self._authorization.require_current_authorization(plan_sha256)
         facts = self._facts.inspect(plan)

@@ -439,3 +439,74 @@ and retained workspaces remain unchanged. An idle code restart loads the optimiz
 approval and fresh facts remain required. Roll back the envelope/imports to restore previous cost.
 Scanner-count reductions do not prove that every second of production preparation was scanner
 work; measure the public operation separately and record differing baselines/inputs.
+
+## Synchronous recovery execution preparation scopes (2026-10-10)
+
+### 1. Scope / trigger
+
+An exact authorized recovery Task can be sealed while execution preparation still repeats
+complete source/patch validation before any seed or provider invocation is published. On the
+new-dispatch path, seven Builder calls perform seventy fresh current-fact observations. Leaf
+inspection scopes alone cannot reuse scans across those adjacent synchronous checks.
+
+### 2. Signatures
+
+```python
+AuthorizedRecoveryTaskBuilder.build(plan_sha256) -> RecoveryTaskDraft
+RecoveryTaskSealingService.seal(plan_sha256) -> RecoveryTaskRecord
+RecoveryTaskSealingService.require_current(plan_sha256) -> RecoveryTaskRecord
+RecoveryAllocator.allocate(plan_sha256) -> RecoveryDispatchRecord
+RecoverySeedService.seed(target: WorktreeRef) -> RecoverySeedRecord
+RecoverySeedService.authorize(request: AgentRequest, workspace_root: Path) -> None
+```
+
+### 3. Contracts
+
+- These six synchronous preparation methods own `source_inspection_scope`; nested calls reuse
+  only existing pure complete-text detection facts. Limits remain 512 entries / 16 MiB and
+  zero-occurrence generic facts keep their existing detector-definition key and admission policy.
+- Preserve every original method body, file getter, model/hash validation, authorization check,
+  before/after fact observation, capture/stop/inventory check and MySQL commit fence. Neither a
+  successful Builder nor an approved plan is cached. Capacity exhaustion still scans fully.
+- The preparation scope resets in `finally` on success and failure. The next independent call
+  rereads and rescans. `authorize` returns to the adapter before it starts the provider; its cache
+  is already absent. Never decorate `_execute`, `execute`, resume/run, async work or the model
+  lifetime, and do not add an outer preparation scope around a provider callback.
+
+### 4. Validation / error matrix
+
+| Scenario | Required result |
+| --- | --- |
+| Builder repeats full source, nonempty patch and clean generic text | One full source/patch scanner and six generic substitutions per call; 10 facts / 2 capture checks remain |
+| Seal or require-current includes store and Builder validation | Getters still repeat; next independent call repeats the same getter counts and fresh scans |
+| New allocation includes both fenced validations | 40 facts / 8 capture checks and both fences remain; scans share only within allocate |
+| Existing allocation replay | 30 facts / 6 capture checks remain; no previous call's cache survives |
+| Second fence changes complete source body | Original rejection; no dispatch published and cache released |
+| Safe or sensitive source changes after success or exception | Fresh read rejects; repeated failure cannot borrow an old clean fact |
+| Stored plan bytes change after its patch was scanned | Fresh envelope/hash validation rejects; next call still rejects |
+| Cache budget is zero | Complete scanners and all fresh checks execute; no new rejection |
+| Seed replay or one-use provider admission | Fresh sealing/capture checks remain; invocation replay rejected and cache absent before provider |
+
+### 5. Good / base / bad
+
+Good: reuse complete text scans across allocation's synchronous fenced preparation while every
+current fact is actually reobserved. Base: a separate seed or authorization starts a fresh cache.
+Bad: cache an approved RecoveryTaskDraft/authorization or wrap the whole execution/model call.
+
+### 6. Required tests and measurement limits
+
+`tests/recovery/test_preparation_inspection_scope.py` runs real authorization, Builder, sealing,
+allocation and seed/admission service bodies and private immutable file stores, with explicit
+offline native-fact/Git/MySQL authority seams. Full source and nonempty patch scanner counters
+measure real detector misses; a 179,583-byte clean body measures actual regex substitutions.
+Existing terminal/capture/authorization and adapter admission tests remain required. Fixture
+scanner reductions do not prove current production latency, SQL stop facts or runtime completion.
+
+### 7. Existing data and rollback
+
+No Schema, SQL, Task, approval, plan, seed, invocation or history migration is required. All
+existing bytes and hashes remain unchanged; scopes hold only temporary pure detection facts.
+Deployment uses the existing idle controlled restart. Continue the same Requirement through its
+existing exact authorization and fresh-fact gates; do not recreate it or rewrite old failures.
+Rollback removes these imports/decorators while idle, restoring previous cost without altering
+durable records. Any actual production wait still needs separate public-path verification.

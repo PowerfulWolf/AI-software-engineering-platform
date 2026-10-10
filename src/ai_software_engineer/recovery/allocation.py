@@ -15,6 +15,7 @@ from ai_software_engineer.planning import PlanningPreviewService
 from ai_software_engineer.recovery.models import RecoveryRejected
 from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
 from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
+from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 
 
@@ -31,6 +32,7 @@ class RecoveryAllocator:
         self._sealing, self._builder, self._authority = sealing, builder, authority
         self._agents, self._policies = agents, policies
 
+    @source_inspection_scope()
     def allocate(self, plan_sha256: str) -> RecoveryDispatchRecord:
         sealed = self._sealing.require_current(plan_sha256)
         draft = self._builder.build(plan_sha256)

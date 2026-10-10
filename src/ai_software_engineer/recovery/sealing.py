@@ -4,15 +4,18 @@ from ai_software_engineer.recovery.models import RecoveryRejected
 from ai_software_engineer.recovery.records import RecoveryTaskRecord
 from ai_software_engineer.recovery.store import FileRecoveryStore
 from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
+from ai_software_engineer.redaction import source_inspection_scope
 
 
 class RecoveryTaskSealingService:
     def __init__(self, store: FileRecoveryStore, builder: AuthorizedRecoveryTaskBuilder) -> None:
         self._store, self._builder = store, builder
 
+    @source_inspection_scope()
     def seal(self, plan_sha256: str) -> RecoveryTaskRecord:
         return self._store.put_task_record(self._current_record(plan_sha256))
 
+    @source_inspection_scope()
     def require_current(self, plan_sha256: str) -> RecoveryTaskRecord:
         stored = self._store.get_task_record(plan_sha256)
         if stored != self._current_record(plan_sha256):

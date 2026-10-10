@@ -12,6 +12,7 @@ from ai_software_engineer.recovery.models import CapturedChanges, RecoveryReject
 from ai_software_engineer.recovery.records import RecoveryInvocationRecord, RecoverySeedRecord
 from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
+from ai_software_engineer.redaction import source_inspection_scope
 
 
 class RecoverySeedService:
@@ -28,6 +29,7 @@ class RecoverySeedService:
         self.store, self.sealing, self.manager = store, sealing, manager
         self.dispatch, self.permissions, self.contexts = dispatch, permissions, contexts
 
+    @source_inspection_scope()
     def seed(self, target: WorktreeRef) -> RecoverySeedRecord:
         plan = self.store.get_plan(self.dispatch.recovery_plan_sha256)
         sealed = self.sealing.require_current(plan.plan_sha256)
@@ -76,6 +78,7 @@ class RecoverySeedService:
             receipt.capture.to_capture(), self.permissions, denied_paths=plan.denied_paths
         )
 
+    @source_inspection_scope()
     def authorize(self, request: AgentRequest, workspace_root: Path) -> None:
         """Called immediately before the provider, under the recovery execution lock."""
         plan = self.store.get_plan(self.dispatch.recovery_plan_sha256)
