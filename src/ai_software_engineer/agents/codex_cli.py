@@ -6,12 +6,13 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -133,6 +134,16 @@ class CodexInvocationResult:
     stderr: str = ""
     timed_out: bool = False
     process_stop: NativeProcessStop | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _NativePythonTooling:
+    """Already provisioned read-only tools and the current Coder's import roots."""
+
+    pytest: Path | None
+    python: Path | None
+    source_paths: tuple[Path, ...]
+    dependency_paths: tuple[Path, ...] = ()
 
 
 class CodexCommandRunner(Protocol):
@@ -539,23 +550,54 @@ class CodexCliAgentAdapter:
 
         prompt = self._prompt_builder.build(request)
         qa_runner = _manager_provisioned_qa_runner(request, self._workspace_root)
-        compiled_prompt = _compile_prompt(
-            request,
-            prompt.to_messages(include_images=False),
-            manager_qa_runner=qa_runner,
-        )
-        if continuation_prompt is not None:
-            compiled_prompt += continuation_prompt
+        coder_tooling = _manager_provisioned_coder_tooling(request, self._workspace_root)
         verifier = request.role in {AgentRole.QA, AgentRole.REVIEWER}
-        if verifier and self._candidate_source is None:
-            compiled_prompt += candidate_read_snapshot(
-                self._workspace_root, source_revision, request.permissions
-            )
         invocation_environment = dict(self._environment)
         if qa_runner is not None:
             invocation_environment["ASE_PROJECT_PYTEST"] = str(qa_runner)
-        with tempfile.TemporaryDirectory(prefix="ase-codex-") as temporary:
-            temporary_root = Path(temporary)
+        with (
+            tempfile.TemporaryDirectory(prefix="ase-codex-") as temporary,
+            ExitStack() as tooling_scope,
+        ):
+            temporary_root = Path(temporary).resolve(strict=True)
+            sandbox_arguments: tuple[str, ...] = ("--sandbox", _sandbox_mode(request.role))
+            if coder_tooling is not None and coder_tooling.python is not None:
+                tooling_root = Path(
+                    tooling_scope.enter_context(
+                        tempfile.TemporaryDirectory(prefix="ase-codex-tools-")
+                    )
+                ).resolve(strict=True)
+                sandbox_arguments = _coder_tooling_sandbox_arguments(
+                    self._workspace_root, temporary_root, tooling_root, coder_tooling
+                )
+                coder_tooling = _prepare_coder_python_launchers(coder_tooling, tooling_root)
+                scratch = temporary_root / "scratch"
+                cache = temporary_root / "uv-cache"
+                scratch.mkdir(mode=0o700)
+                cache.mkdir(mode=0o700)
+                invocation_environment["TMPDIR"] = str(scratch)
+                invocation_environment["UV_CACHE_DIR"] = str(cache)
+            if coder_tooling is not None:
+                if coder_tooling.pytest is not None:
+                    invocation_environment["ASE_PROJECT_PYTEST"] = str(coder_tooling.pytest)
+                if coder_tooling.python is not None:
+                    invocation_environment["ASE_PROJECT_PYTHON"] = str(coder_tooling.python)
+                invocation_environment["PYTHONPATH"] = os.pathsep.join(
+                    str(path) for path in coder_tooling.source_paths
+                )
+                invocation_environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            compiled_prompt = _compile_prompt(
+                request,
+                prompt.to_messages(include_images=False),
+                manager_qa_runner=qa_runner,
+                manager_coder_tooling=coder_tooling,
+            )
+            if continuation_prompt is not None:
+                compiled_prompt += continuation_prompt
+            if verifier and self._candidate_source is None:
+                compiled_prompt += candidate_read_snapshot(
+                    self._workspace_root, source_revision, request.permissions
+                )
             schema_path = temporary_root / "output-schema.json"
             output_path = temporary_root / "last-message.json"
             schema_path.write_text(
@@ -646,8 +688,7 @@ class CodexCliAgentAdapter:
                     "exec",
                     "--ephemeral",
                     "--ignore-user-config",
-                    "--sandbox",
-                    _sandbox_mode(request.role),
+                    *sandbox_arguments,
                     *(no_command_arguments() if verifier else ()),
                     *image_arguments,
                     "--output-schema",
@@ -948,6 +989,7 @@ def _compile_prompt(
     messages: Sequence[object],
     *,
     manager_qa_runner: Path | None = None,
+    manager_coder_tooling: _NativePythonTooling | None = None,
 ) -> str:
     completion_reserve = (
         request.work_slice.window.finalization_reserve_seconds
@@ -1007,7 +1049,9 @@ def _compile_prompt(
     role_instruction = {
         AgentRole.ORCHESTRATOR: "Produce only the plan Artifact; do not modify the repository.",
         AgentRole.CODER: (
-            "Implement the approved plan in this isolated worktree and run allowed tests. Do not "
+            "Implement the approved plan in this isolated worktree and run allowed tests. "
+            + _coder_python_tooling_instruction(manager_coder_tooling)
+            + "Do not "
             "run git add or git commit because linked-worktree Git metadata is outside your "
             "sandbox. If the implementation is complete, leave only the intended repository "
             "changes and return a provisional implementation-report whose source_revision and "
@@ -1087,6 +1131,14 @@ def _manager_provisioned_qa_runner(request: AgentRequest, workspace_root: Path) 
     """Resolve trusted project test tooling without mutating the detached QA worktree."""
     if request.role is not AgentRole.QA:
         return None
+    project_root = _registered_project_root(workspace_root)
+    return (
+        _registered_python_executable(project_root, "pytest") if project_root is not None else None
+    )
+
+
+def _registered_project_root(workspace_root: Path) -> Path | None:
+    """Locate the registered Git checkout without trusting a linked directory."""
     try:
         common_dir = Path(
             _git(
@@ -1098,23 +1150,272 @@ def _manager_provisioned_qa_runner(request: AgentRequest, workspace_root: Path) 
         )
         if not common_dir.is_absolute():
             common_dir = workspace_root / common_dir
-        common_dir = common_dir.resolve(strict=True)
+        if common_dir.resolve(strict=True) != common_dir:
+            return None
     except (CodexCliError, OSError):
         return None
-    if common_dir.name != ".git" or common_dir.is_symlink():
+    if common_dir.name != ".git" or common_dir.is_symlink() or not common_dir.is_dir():
         return None
-    project_root = common_dir.parent
+    return common_dir.parent
+
+
+def _registered_python_executable(project_root: Path, name: str) -> Path | None:
+    """Accept direct existing tool entries; interpreter aliases require a separate capability."""
     virtual_environment = project_root / ".venv"
-    runner = virtual_environment / "bin" / "pytest"
+    binaries = virtual_environment / "bin"
+    runner = binaries / name
     if (
         virtual_environment.is_symlink()
         or not virtual_environment.is_dir()
+        or binaries.is_symlink()
+        or not binaries.is_dir()
         or runner.is_symlink()
         or not runner.is_file()
         or not os.access(runner, os.X_OK)
     ):
         return None
     return runner
+
+
+def _manager_provisioned_coder_tooling(
+    request: AgentRequest, workspace_root: Path
+) -> _NativePythonTooling | None:
+    if request.role is not AgentRole.CODER:
+        return None
+    project_root = _registered_project_root(workspace_root)
+    pytest = (
+        _registered_python_executable(project_root, "pytest") if project_root is not None else None
+    )
+    markers = ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile")
+    if pytest is None and not any(
+        (workspace_root / marker).is_file() and not (workspace_root / marker).is_symlink()
+        for marker in markers
+    ):
+        return None
+    python = (
+        _registered_python_executable(project_root, "python") if project_root is not None else None
+    )
+    dependencies = _registered_python_dependencies(project_root) if project_root is not None else ()
+    if python is None or not dependencies:
+        pytest, python = None, None
+    source = workspace_root / "src"
+    if source.is_symlink():
+        raise CodexCliError("Coder Python source root is not a real worktree directory")
+    source_paths = (source, workspace_root) if source.is_dir() else (workspace_root,)
+    return _NativePythonTooling(
+        pytest=pytest, python=python, source_paths=source_paths, dependency_paths=dependencies
+    )
+
+
+def _registered_python_dependencies(project_root: Path) -> tuple[Path, ...]:
+    """Read only the single direct venv dependency root; never process .pth path entries."""
+    library = project_root / ".venv" / "lib"
+    if library.is_symlink() or not library.is_dir():
+        return ()
+    try:
+        versions: list[Path] = []
+        with os.scandir(library) as entries:
+            for entry in entries:
+                if len(versions) >= 32:
+                    return ()
+                versions.append(library / entry.name)
+    except OSError:
+        return ()
+    roots: list[Path] = []
+    for version in versions:
+        if re.fullmatch(r"python3\.[0-9]+", version.name) is None:
+            continue
+        dependencies = version / "site-packages"
+        if (
+            version.is_symlink()
+            or not version.is_dir()
+            or dependencies.is_symlink()
+            or not dependencies.is_dir()
+        ):
+            return ()
+        roots.append(dependencies)
+    return tuple(roots) if len(roots) == 1 else ()
+
+
+def _coder_tooling_sandbox_arguments(
+    workspace_root: Path,
+    run_root: Path,
+    tooling_root: Path,
+    tooling: _NativePythonTooling,
+) -> tuple[str, ...]:
+    """Keep immutable launchers outside every native Coder writable root."""
+    roots = (workspace_root, run_root, tooling_root)
+    for path in roots:
+        if not path.is_absolute() or path.resolve(strict=True) != path or not path.is_dir():
+            raise CodexCliConfigurationError("Coder tooling sandbox roots must be real directories")
+    for index, left in enumerate(roots):
+        for right in roots[index + 1 :]:
+            if left.is_relative_to(right) or right.is_relative_to(left):
+                raise CodexCliConfigurationError("Coder tooling sandbox roots must not overlap")
+    # The launchers, original interpreter and dependencies remain read-only even
+    # when an adapter is bound to the registered checkout instead of a linked tree.
+    readonly = (
+        tooling_root,
+        *tooling.dependency_paths,
+        *(path.parent.parent for path in (tooling.python, tooling.pytest) if path is not None),
+        *(workspace_root / name for name in (".git", ".codex", ".agents", ".trellis")),
+    )
+    for path in readonly:
+        if run_root.is_relative_to(path) or path.is_relative_to(run_root):
+            raise CodexCliConfigurationError("Coder scratch must not overlap trusted tooling")
+    filesystem = {
+        str(workspace_root): "write",
+        str(run_root): "write",
+        **{str(path): "read" for path in readonly},
+    }
+    profile = (
+        'permissions.ase_coder_tooling={extends=":read-only",filesystem={'
+        + ",".join(json.dumps(path) + "=" + json.dumps(mode) for path, mode in filesystem.items())
+        + "},network={enabled=false}}"
+    )
+    # Codex forbids mixing new permission profiles with legacy --sandbox config.
+    return ("-c", 'default_permissions="ase_coder_tooling"', "-c", profile)
+
+
+def _prepare_coder_python_launchers(
+    tooling: _NativePythonTooling | None, temporary_root: Path
+) -> _NativePythonTooling | None:
+    """Fixed isolated startup bypasses executable .pth and site customization entirely."""
+    if tooling is None or tooling.python is None:
+        return tooling
+    bootstrap = temporary_root / "python-bootstrap.py"
+    bootstrap.write_text(
+        "import runpy, sys\nfrom pathlib import Path\n"
+        "from importlib.machinery import PathFinder\n"
+        f"source_paths = {tuple(str(path) for path in tooling.source_paths)!r}\n"
+        f"dependency_paths = {tuple(str(path) for path in tooling.dependency_paths)!r}\n"
+        "stdlib_paths = tuple(sys.path)\n"
+        "mode, arguments = sys.argv[1], sys.argv[2:]\n"
+        "if Path.cwd().resolve() != Path(source_paths[-1]):\n"
+        "    raise SystemExit('Python 验证必须从当前隔离工作区根目录执行')\n"
+        "if mode == 'python' and arguments[:2] == ['-m', 'pytest']:\n"
+        "    mode, arguments = 'pytest', arguments[2:]\n"
+        "sys.path[:] = [*dependency_paths, *stdlib_paths]\n"
+        "class CurrentSourceNamespaceGuard:\n"
+        "    @staticmethod\n"
+        "    def check(fullname, actual):\n"
+        "        parts = fullname.split('.')\n"
+        "        if not all(part.isidentifier() for part in parts):\n"
+        "            return\n"
+        "        if actual is None:\n"
+        "            return\n"
+        "        if actual.origin in ('built-in', 'frozen'):\n"
+        "            return\n"
+        "        parents = [str(Path(root).joinpath(*parts[:-1])) for root in source_paths]\n"
+        "        current = PathFinder.find_spec(fullname, parents)\n"
+        "        if current is None:\n"
+        "            return\n"
+        "        if current.loader is None and (actual.loader is None or (\n"
+        "            actual.origin is None and actual.submodule_search_locations is not None\n"
+        "        )):\n"
+        "            return\n"
+        "        if actual.origin is not None and any(\n"
+        "            Path(actual.origin).resolve().is_relative_to(Path(root))\n"
+        "            for root in source_paths\n"
+        "        ):\n"
+        "            return\n"
+        "        raise ImportError('current-source namespace/package/module 被外部包或模块遮蔽, '\n"
+        "                          '无法保证当前源码归属: ' + fullname)\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        self.check(fullname, PathFinder.find_spec(fullname, path))\n"
+        "        return None\n"
+        "namespace_guard = CurrentSourceNamespaceGuard()\n"
+        "for name, module in tuple(sys.modules.items()):\n"
+        "    namespace_guard.check(name, getattr(module, '__spec__', None))\n"
+        "sys.meta_path.insert(0, namespace_guard)\n"
+        "if mode == 'pytest':\n"
+        "    from pytest import console_main\n"
+        "sys.path[:] = [*source_paths, *dependency_paths, *stdlib_paths]\n"
+        "if mode == 'pytest':\n"
+        "    sys.argv = ['pytest', *arguments]\n"
+        "    raise SystemExit(console_main())\n"
+        "if not arguments:\n"
+        "    raise SystemExit('Python 工具需要 -c、-m 或当前工作区内的脚本')\n"
+        "if arguments[0] in ('-c', '-m') and len(arguments) >= 2:\n"
+        "    operation, target = arguments[:2]\n"
+        "    sys.argv = [target if operation == '-m' else '-c', *arguments[2:]]\n"
+        "    if operation == '-m':\n"
+        "        runpy.run_module(target, run_name='__main__', alter_sys=True)\n"
+        "    else:\n"
+        "        exec(compile(target, '<string>', 'exec'), {'__name__': '__main__'})\n"
+        "elif arguments[0].startswith('-'):\n"
+        "    raise SystemExit('Python 启动选项已固定, 请使用 -c 或 -m')\n"
+        "else:\n"
+        "    script = Path(arguments[0]).resolve(strict=True)\n"
+        "    if not script.is_relative_to(Path(source_paths[-1])) or not script.is_file():\n"
+        "        raise SystemExit('Python 脚本必须位于当前隔离工作区内')\n"
+        "    sys.path.insert(len(source_paths), str(script.parent))\n"
+        "    sys.argv = [str(script), *arguments[1:]]\n"
+        "    runpy.run_path(str(script), run_name='__main__')\n",
+        encoding="utf-8",
+    )
+    bootstrap.chmod(0o600)
+
+    def launcher(name: str) -> Path:
+        path = temporary_root / name
+        # This fixed launcher only execs a fully quoted manager-owned argv. Model
+        # arguments follow "$@" and are data for bootstrap, never shell program text.
+        argv = (str(tooling.python), "-I", "-S", "-B", str(bootstrap), name)
+        path.write_text(
+            "#!/bin/sh\nexec " + " ".join(shlex.quote(token) for token in argv) + ' "$@"\n',
+            encoding="utf-8",
+        )
+        path.chmod(0o700)
+        return path
+
+    return _NativePythonTooling(
+        pytest=launcher("pytest") if tooling.pytest is not None else None,
+        python=launcher("python"),
+        source_paths=tooling.source_paths,
+        dependency_paths=tooling.dependency_paths,
+    )
+
+
+def _coder_python_tooling_instruction(tooling: _NativePythonTooling | None) -> str:
+    if tooling is None:
+        return ""
+    available = (
+        "Manager provisioned read-only Python test tooling: "
+        f"`{tooling.pytest}` in ASE_PROJECT_PYTEST. Run that exact absolute pytest launcher "
+        "with explicit focused tests/ file or node selectors from the current isolated worktree. "
+        if tooling.pytest is not None
+        else "The registered Python test tooling is unavailable: no safe pytest entrypoint was "
+        "found. Report this engineering prerequisite when required verification cannot run. "
+    )
+    interpreter = (
+        f"The dedicated Python launcher is `{tooling.python}` in ASE_PROJECT_PYTHON. It supports "
+        "-c, -m or a script inside the current worktree; other startup flags are not supported. "
+        if tooling.python is not None
+        else "No safe dedicated Python executable was found. Do not substitute an unverified "
+        "interpreter or install one. "
+    )
+    return (
+        available
+        + interpreter
+        + "Both launchers use fixed isolated Python startup (-I -S -B), load only the registered "
+        "direct site-packages and current source roots, and never process .pth or sitecustomize. "
+        "If an external or preloaded package/module shadows current source, including a namespace, "
+        "the launcher refuses that import before old dependency code executes; cached support "
+        "modules are checked before user code starts too. "
+        "Report this source-binding prerequisite as NOT_RUN; do not repair dependencies or "
+        "claim candidate verification passed. "
+        "PYTHONPATH is bound only to the current worktree's source directories. Check imported "
+        "project modules' __file__ against this worktree; never test the registered checkout's "
+        "editable source. Keep the registered tooling read-only. Do not create, copy, install, "
+        "or synchronize a virtual environment in the worktree or registered repository; do not "
+        "run uv sync, uv run, pip install, or dependency resolution to repair missing tooling. "
+        "Keep language-specific allowed commands and focused tests within the approved plan. "
+        "Record unexecuted verification honestly as NOT_RUN, never PASS. If this prerequisite "
+        "prevents completion, preserve only legal changes and return coder-progress with the "
+        "complete changed-file inventory, remaining plan steps and concrete next actions asking "
+        "the platform to prepare the missing tools. Do not add unsupported blocked_reason fields "
+        "to coder-progress. "
+    )
 
 
 def _validation_rule(error: ValidationError) -> str:

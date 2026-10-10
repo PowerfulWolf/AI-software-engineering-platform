@@ -1,0 +1,16 @@
+{
+  "id": "coder-python-tooling-20261010",
+  "title": "Native Coder 复用注册仓库的只读 Python 测试工具",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "owner": "codex",
+  "created_at": "2026-10-10",
+  "allowed_paths": [
+    "src/ai_software_engineer/agents/codex_cli.py",
+    "tests/agents/test_codex_cli.py",
+    "tests/agents/test_native_python_tooling.py",
+    ".trellis/spec/core/production-team-host.md",
+    ".trellis/tasks/10-10-coder-python-tooling/"
+  ],
+  "verification": "verification.md"
+}

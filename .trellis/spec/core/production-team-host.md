@@ -445,6 +445,107 @@ locks the Agent-visible runner instruction; live candidate verification proves t
 If project-local tooling is still insufficient, the next architectural step is a typed Manager
 environment-preparation step, not network access for QA or a silently accepted `NOT_TESTED` verdict.
 
+#### Native Coder reuses read-only Python tooling (2026-10-10)
+
+Scope: Python Coder runs in an isolated linked worktree without copying the registered repository's
+ignored environment. This is discovery of already provisioned tools, not environment preparation,
+a verifier capability, installation authority or permission to modify the registered checkout.
+
+Signatures: `_manager_provisioned_coder_tooling(request, workspace_root) ->
+_NativePythonTooling | None` returns an internal frozen value containing optional `pytest`/`python`
+executables, exact worktree source paths and a direct registered dependency root.
+`_prepare_coder_python_launchers(tooling, temporary_root)` creates private per-invocation launchers;
+`_coder_tooling_sandbox_arguments(workspace_root, run_root, tooling_root, tooling)` constructs the
+exact Native permission profile and rejects overlapping/canonical-root violations;
+`_compile_prompt(..., manager_coder_tooling=...)` states those exact invocation paths. The Git
+common-directory lookup is shared with the existing QA runner seam.
+
+Contracts:
+
+- Only a real canonical `.git` common directory identifies the registered checkout. `.venv`,
+  `bin`, pytest and the optional Python executable must be direct, non-symlink entries; tools
+  must be regular executable files. Standard interpreter symlinks do not gain implicit trust.
+  Both launchers require a trusted direct Python executable and exactly one direct, non-symlink
+  `lib/python3.N/site-packages` root. Discovery bounds lib entries to 32, never loads dependency
+  code, never parses `.pth` path contents and does not guess between multiple Python runtimes.
+- Launchers use the fixed argv `registered_python -I -S -B private_bootstrap.py MODE ...args`.
+  Startup ignores Python environment, site, `.pth`, `_virtualenv` and `sitecustomize`. The
+  bootstrap explicitly adds only registered site-packages and the current src/root, with source
+  first. Pytest is imported from dependencies before source insertion; both pytest entrypoint and
+  Python `-m pytest` use this same trusted bootstrap. A `.pth` startup line can otherwise insert
+  registered old source ahead of `PYTHONPATH`, so environment strings alone cannot prove binding.
+- Python's PEP 420 namespace resolution can still choose a later installed regular package/module
+  over the current namespace portion. The fixed bootstrap installs a metadata-only PathFinder
+  guard before importing pytest: if external or preloaded package/module code would replace a
+  current source package/module/namespace, refuse before that dependency executes. Cached support
+  modules are checked before user code starts. Ordinary dependencies without a current-source
+  collision and compatible namespace portions remain usable. This is a source-binding prerequisite
+  failure (`NOT_RUN`), not a business-test verdict or permission to repair/install dependencies.
+- The manager writes a fixed shell launcher using fully quoted fixed argv and literal `"$@"`;
+  no eval, user shell text, `shell=True` or environment expansion enters it. The mode selects
+  pytest or bounded Python `-c`, `-m`, or a script inside the current worktree. Unknown startup
+  flags, scripts outside the worktree and cwd other than the exact worktree root fail closed.
+  Private 0700 launchers/0600 bootstrap live in a separate manager-owned TemporaryDirectory
+  through the runner's entire invocation, then are removed on success or error. File modes
+  alone do not prevent the same-UID model process from changing tools.
+- When safe Python tools are supplied, Native uses a complete `ase_coder_tooling` profile
+  extending `:read-only`. Only the exact worktree and separate output/run directory are writable;
+  tool launchers, registered `.venv`, and worktree `.git`/`.codex`/`.agents`/`.trellis` are
+  explicitly read-only. All three roots must be canonical, real and non-overlapping. The new
+  `default_permissions` setting must never be mixed with legacy `--sandbox` configuration.
+  Network remains disabled. Missing-tool, non-Python and verifier paths keep their original
+  sandbox configuration; there is no unsandboxed fallback.
+- Coder receives only derived `ASE_PROJECT_PYTEST`/`ASE_PROJECT_PYTHON` launcher paths. Its `PYTHONPATH` contains
+  the current worktree's real `src/` (when present), then its root; `PYTHONDONTWRITEBYTECODE=1`
+  avoids writes into support tooling (also fixed by `-B`). Host `PYTHONPATH`, `VIRTUAL_ENV`,
+  `UV_PROJECT_ENVIRONMENT` and tool variables are not inherited. PATH is not redirected to the
+  shared environment; isolated startup does not rely on PYTHONPATH to enforce binding.
+  Host TMPDIR/UV_CACHE_DIR are replaced by manager-created private run subdirectories for this
+  profile; allowing all of `/tmp` or Host TMPDIR would expose the otherwise immutable launchers.
+- All focused test selectors, cwd, imports and evidence still belong to the current worktree.
+  Reuse absolute tools without `uv sync`, `uv run` dependency resolution, environment creation,
+  copying or installation. The prompt requires source `__file__` checks when verifying imports.
+- If required Python tools are unavailable, report that engineering prerequisite and `NOT_RUN`;
+  preserve legal changes in a coder-progress checkpoint with remaining plan steps and concrete
+  next actions when it prevents completion. Do not fabricate PASS or add `blocked_reason` to
+  the existing progress schema. Projects without Python metadata or provisioned pytest retain
+  their existing language-specific execution path.
+- Existing QA/Reviewer command restrictions, Coder write policy, complete ignored-file inventory,
+  source revision, candidate finalization and independent verdicts remain authoritative.
+
+| Case | Required result |
+|---|---|
+| registered safe tooling + linked Coder | exact absolute tools; imports current src/root |
+| registered path/executable `.pth`, `_virtualenv`, sitecustomize target old source | bypass startup hooks; real Python/pytest import worktree `__file__` |
+| missing/non-executable/symlink pytest or tooling parent | no pytest binding, no installation |
+| safe pytest, symlink Python or unsafe/ambiguous dependency root | neither launcher; no unsafe fallback |
+| quoted paths or literal shell syntax in command arguments | fixed argv; no shell evaluation |
+| wrong cwd, unknown Python startup flags or outside script | refuse before test/script execution |
+| current namespace vs installed regular package/module (including nested portions), or tooling-preloaded current regular package | reject before conflicting dependency initialization; no fabricated PASS |
+| compatible source/dependency namespace portions | current module `__file__`, normal Python and pytest execution |
+| real Native OS sandbox write/unlink/replace/symlink/rename against tools | all denied; current source and private scratch remain writable |
+| non-Python repository without tooling | no Python prerequisite gate |
+| Coder writes ignored `.venv/.gitignore` | existing complete inventory refuses completion |
+
+Good: the native runner supplies an existing pytest while retaining current source and focused
+selectors. Base: missing tools leave honest unverified work and a legal checkpoint. Bad: create a
+new environment inside the worktree, silently use registered editable source, or add `.venv` to
+the disposable-cache allowlist to accept the resulting ignored mutations.
+
+Tests: `tests/agents/test_native_python_tooling.py` exercises real linked Git worktrees, Python
+subprocess `__file__`, real pytest and Python `-m pytest` for src/flat layouts, executable `.pth`
+and sitecustomize bypass, quoting/lifetime, unsafe/missing tool refusal and ignored venv completion
+rejection. An opt-in no-model real `codex sandbox` test proves the legacy workspace TMPDIR writes
+and the new profile's actual denials: use `ASE_RUN_SANDBOX_TESTS=1` and an explicit
+`ASE_TEST_CODEX_EXECUTABLE` on a supported local Codex installation.
+`tests/agents/test_codex_cli.py` retains QA semantics and role policy.
+Wrong: inherit Host `VIRTUAL_ENV` and run `uv run pytest`. Correct: keep cwd/source on the
+isolated worktree and explicitly invoke the discovered read-only absolute runner.
+
+存量数据处置与回滚：不改 wire/SQL/历史。此前创建的非法环境文件仍需原受控现场处理，不能因
+新发现入口获得批准或被忽略。本补丁不清理文件、不生成恢复批准；未来调用重新发现工具。
+回滚仅撤销发现和 prompt/env 绑定，保留既有草稿、停止证明、失败记录和恢复历史。
+
 ## Scenario: per-Agent model routes and Product image input
 
 ### 1. Scope / Trigger
