@@ -85,6 +85,7 @@ from ai_software_engineer.recovery.service import RecoveryAuthorizationService
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
 from ai_software_engineer.recovery.workspace_snapshot import read_terminal_workspace_snapshot
+from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.role_workspace import DispatchRoleWorktreeCoordinator, RoleWorktreeSession
 from ai_software_engineer.runtime_workspace import FileTeamWorkforceStore
 from ai_software_engineer.store import MySqlTaskRepository, TaskNotFound
@@ -244,6 +245,7 @@ class NativeRecoveryEntry:
         self.operator_principal = operator_principal
         self._facts = NativeRecoveryFactsVerifier(config, self.environment)
 
+    @source_inspection_scope()
     def propose(
         self,
         *,
@@ -408,6 +410,7 @@ class NativeRecoveryEntry:
             return None
         return inspect_recovery_scope_supplement(manager, old, original, request=request)
 
+    @source_inspection_scope()
     def propose_delivery(
         self,
         checkpoint: ProjectDeliveryCheckpoint,
@@ -470,6 +473,7 @@ class NativeRecoveryEntry:
         self._facts.validate(plan)
         return plan
 
+    @source_inspection_scope()
     def approve(self, path: Path, *, confirmed_plan: str, reference: str) -> None:
         if self.operator_principal is not None:
             self.operator_principal.require_duty(OperatorDuty.ENGINEERING)

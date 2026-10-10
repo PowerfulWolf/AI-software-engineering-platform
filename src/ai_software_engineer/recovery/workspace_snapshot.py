@@ -68,6 +68,7 @@ from ai_software_engineer.recovery.workspace_records import (
     RecoveryWorkspaceScope,
     RecoveryWorkspaceSnapshot,
 )
+from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.store.mysql_repository import (
     _decode_event,
     _decode_task,
@@ -758,6 +759,7 @@ def _existing_task_scope(root: Path, task_id: str, guard: WorkerExecutionGuard) 
         os.close(directory)
 
 
+@source_inspection_scope()
 def read_terminal_workspace_snapshot(
     config: ProductionConfig,
     environment: Mapping[str, str],

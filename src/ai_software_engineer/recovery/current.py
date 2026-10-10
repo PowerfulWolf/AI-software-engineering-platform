@@ -31,6 +31,7 @@ from ai_software_engineer.recovery.scope import (
     inspect_recovery_scope_supplement,
 )
 from ai_software_engineer.recovery.workspace_snapshot import read_terminal_workspace_snapshot
+from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.runtime_workspace import (
     REPOSITORY_PROFILE_NAME,
@@ -65,6 +66,7 @@ class NativeRecoveryFactsVerifier:
     def validate(self, plan: RecoveryPlan) -> None:
         self.inspect(plan)
 
+    @source_inspection_scope()
     def inspect(self, plan: RecoveryPlan) -> NativeRecoveryFacts:
         try:
             plan.validate_integrity()

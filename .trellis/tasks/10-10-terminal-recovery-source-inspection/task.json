@@ -1,0 +1,11 @@
+{
+  "id": "10-10-terminal-recovery-source-inspection",
+  "name": "Bound synchronous terminal recovery source inspection",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "priority": "P1",
+  "assignee": "codex",
+  "created_at": "2026-10-10",
+  "branch": "main",
+  "description": "Share bounded pure source and patch detection inside synchronous proposal, current-facts, workspace-audit and approval calls without caching current facts or authority."
+}

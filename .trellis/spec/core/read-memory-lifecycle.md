@@ -351,3 +351,61 @@ No Schema, SQL or durable record migration is needed. Existing K1 plans, complet
 bindings and approvals keep their original hashes and validity. An idle code restart loads the
 optimization; continuation still requires its original exact authorization. Roll back only code
 while idle to restore previous cost; never erase history, reset the workspace or recreate a Requirement.
+
+## Synchronous terminal recovery inspection scopes (2026-10-10)
+
+### Scope, signatures and contracts
+
+Terminal recovery proposals and exact approval repeat complete-source validation through the
+native source reader, current-facts double reads, capture verification and immutable publication.
+Leaf scopes alone end before the next stage repeats the same pure scanner work.
+
+```python
+NativeRecoveryEntry.propose(...) -> tuple[RecoveryPlan, Path]
+NativeRecoveryEntry.propose_delivery(checkpoint, ...) -> tuple[RecoveryPlan, Path]
+NativeRecoveryEntry.approve(path, *, confirmed_plan, reference) -> None
+NativeRecoveryFactsVerifier.inspect(plan) -> NativeRecoveryFacts
+read_terminal_workspace_snapshot(config, environment, original, capture, ...) -> RecoveryWorkspaceSnapshot | None
+```
+
+Each listed synchronous call owns `source_inspection_scope`. Nested readers share only immutable
+detection tuples for exact scanner mode, path and complete text. Existing 512-entry/16 MiB limits,
+overflow fallback and exception cleanup apply. No file/SQL/Git/inventory/capture/process/claim,
+plan integrity or exact authorization observation is cached or removed. In particular, both
+native-current and terminal-workspace observations remain independent. Existing wire/audit bytes
+and scope/stop/authority gates remain unchanged.
+
+The envelope ends when the synchronous call returns or raises. Do not decorate
+`NativeRecoveryEntry.execute`, `resume_execution`, async work, the Host or a worker/model lifetime.
+Approval publishes and seals deterministic authorized data; actual model execution is a later
+separate operation and cannot borrow this inspection cache.
+
+### Validation matrix and examples
+
+| Scenario | Required result |
+| --- | --- |
+| Proposal/discovery/approval repeat the same complete source | One AST parse per exact body/path inside that outer call |
+| Current facts or terminal workspace are checked twice | Both fresh reads occur; both captures/inventories/stop checks still execute |
+| Second observation changes safe source text or another fact | Changed bytes scan independently; original drift rejection remains |
+| Source+path exactly fills admission limit; larger patch is encountered | Cache stays bounded; larger patch still scans completely |
+| Success, drift exception, independent call or approval replay | Scope resets; later call scans afresh and preserves exact approval semantics |
+
+Good: share pure scans while repeating all fresh observations. Base: the next proposal/approval
+starts a fresh bounded cache. Bad: memoize `NativeRecoveryFacts`, reuse a prior approval as current
+authority, drop the second audit, or enclose the later Agent execution.
+
+`tests/recovery/test_terminal_source_inspection_scope.py` uses real temporary Git captures and
+immutable recovery publication with explicit offline native-source/current-facts seams. Its
+terminal helper keeps two source/facts/capture/inventory observations. Its approval case uses real
+authorization/receipt publication and an explicit offline fresh-facts sealing seam; it does not
+replace full Task derivation tests. Keep `tests/context/test_source_inspection_scope.py` for
+mode/path/full-text, capacity, exceptions and thread isolation, and existing terminal workspace
+negative tests for actual gates.
+
+### Existing data, limits and rollback
+
+No Schema or persisted fact migration is needed. Existing plans, hashes, approvals, failure history
+and retained workspaces remain unchanged. An idle code restart loads the optimization; exact
+approval and fresh facts remain required. Roll back the envelope/imports to restore previous cost.
+Scanner-count reductions do not prove that every second of production preparation was scanner
+work; measure the public operation separately and record differing baselines/inputs.
