@@ -1114,6 +1114,75 @@ authorized action. Roll back code while idle and preserve all old/current immuta
 5. **Knowledge capture:** this contract and the new Trellis task document the historical/current
    boundary. No generated specification/template mirror exists for this read-side module.
 
+## Historical Task detail preserves its parent context (2026-10-10)
+
+### Scope / signatures
+
+Applies to `app.js::buildDetail()` when a user opens a historical child from Requirement history or
+the member queue. `taskParentRequest(task)` matches exact `request_id` and `project_id`;
+`isHistoricalRequestTask(task)` continues to compare that parent's current source-scope identities.
+`historicalTaskContext(task, parent)` and `historicalTaskExecutionSummary(task)` are read-only
+presentation helpers. `pollingDetailFacts()` includes the exact parent, its owned Task observations
+and its Operations when a Task detail consumes those current facts.
+
+### Presentation and navigation contract
+
+- Opening an old child cannot erase its historical identity. Dialog/header, masthead badge and the
+  first chapter explicitly identify history or the recorded attempt. A visible context states that
+  old results do not describe the current Requirement; it shows the exact parent's current phase
+  and node status and a read-only `查看当前需求` navigation button.
+- Historical overview uses original Task/typed execution values with `当次交付阶段`, `当次执行`,
+  `当次原因`, `当次处理方`, `当次处理建议` and `当次计划重试时间` labels. It does not derive live
+  role activity from an old RUNNING queue, request current business confirmation, promise an old
+  recovery action or reinterpret the old result as the parent status. Current parent UNKNOWN
+  follows the existing engineering-verification presentation; no missing state is guessed.
+- The parent navigation freezes Team/page/Project/Task and exact parent identity, then rechecks the
+  selected Task, parent binding and historical membership at click time. A replaced, removed,
+  cross-Project or newly current record cannot use the old callback. Project switches pause that
+  navigation. It never submits a Console command and remains read-only during a Team read outage.
+- Parent-only stage/scope/Operation changes and current sibling status/lease changes invalidate the
+  detail signature and historical-context block. Historical-to-current transitions replace the
+  heading/overview/activity but retain unchanged complete records, reports, source URI/hash and
+  disclosure DOM. Explicit Task reading pause still freezes displayed facts until the user resumes;
+  fresh snapshot changes surface as the existing pending-progress notice.
+- The current Task detail keeps its live overview and existing control/approval gates. Missing or
+  unmatched exact parents cannot synthesize a history label, parent status or parent navigation.
+  No Task, Operation, queue, artifact, approval or durable history is changed to fix the display.
+
+### Validation matrix / examples
+
+| Facts | Required presentation |
+| --- | --- |
+| Old BLOCKED child, same-title current Coder RUNNING/valid claim | Historical identity and recorded blocker; parent `实现 · 执行中` visible |
+| Old nonterminal child with retained RUNNING queue | Historical checkpoint only; no live activity or current recovery promise |
+| Current scopes cleared, native phase facts absent | Historical child remains; current parent follows UNKNOWN/engineering contract |
+| Parent stage/scope/Operation or current sibling changes alone | Actual incremental detail updates; unchanged 13+ history/report nodes remain |
+| Old parent callback after Project/selection/membership replacement | No navigation, no POST; exact same-scope read navigation remains usable |
+| Current Task or absent/cross-Project parent | Existing current presentation; no guessed historical parent |
+
+Good: a user reads why an old K1 attempt stopped and can see that the same Requirement is now
+implementing. Base: the current parent's facts are incomplete, so the UI says engineering checking
+is required. Bad: an old modal says `当前执行 · 已阻塞` and `下一步 · 恢复` while its parent is running.
+
+### Incremental validation, existing data and rollback
+
+`tests/team_view/historical-child.test.cjs` must execute actual `buildDetail`, visibility and
+`renderDetail` reconciliation: old/new same-title work, legacy payload, retained nonterminal queue,
+parent/current-sibling/Operation-only updates, complete history/source identity, exact navigation and
+unchanged snapshot bytes. `browser/historical-child.test.cjs` exercises the real history link,
+current parent navigation and native layout/read preservation using isolated intercepted fixtures.
+Keep affected UI, product-execution and delivery-status regressions; no full suite is required.
+
+存量数据处置：no SQL/journal or historical-record migration. Load the compatible frontend assets and
+refresh the original Requirement; open its preserved old record and use `查看当前需求` for the current
+state and lawful actions. Refreshing or navigating does not approve, recover or restart delivery.
+Rollback these assets/spec/tests and refresh; immutable old results and all current progress remain.
+
+Root cause: historical identity was implemented in queue/history rows but omitted from the shared
+Task modal; existing navigation tests only asserted that old reasons were readable. The regression
+must assert the destination's current-versus-historical meaning and every fact consumed by its
+incremental signature, not just the presence of the old reason or selected ID.
+
 ## Scenario: actionable known-stop capture failure (2026-10-10)
 
 ### 1. Scope / Trigger

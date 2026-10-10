@@ -182,9 +182,12 @@ function pollingKnowledgeFacts() {
 function pollingDetailFacts() {
   const item = selected?.kind === "task" ? taskById(selected.id)
     : selected ? requestById(selected.id) : null;
-  const tasks = selected?.kind === "request" && item ? requestTasks(item) : [];
-  return [page, selected, item, tasks, snapshot?.agents, pollingControlFacts(),
-    item ? operations.filter(operation => operationTarget(operation) === item.id) : [],
+  const parent = selected?.kind === "task" && item ? taskParentRequest(item) : null;
+  const request = selected?.kind === "request" ? item : parent;
+  const tasks = request ? requestTasks(request) : [];
+  return [page, selected, item, parent, tasks, snapshot?.agents, pollingControlFacts(),
+    item ? operations.filter(operation => operationTarget(operation) === item.id ||
+      (parent && operationTarget(operation) === parent.id && operation.intent.project_id === parent.project_id)) : [],
     page === "requests" && Boolean(snapshot?.requests.length), nativeRuleReviewsRevision];
 }
 const acknowledgedOperationNoticeKeys = new Set(
@@ -1903,9 +1906,11 @@ function currentRequestTasks(request) {
   }
   return [...currentByDelivery.values()];
 }
+function taskParentRequest(task) {
+  return snapshot.requests.find(item => item.id === task.request_id && item.project_id === task.project_id) || null;
+}
 function isHistoricalRequestTask(task) {
-  const request = snapshot.requests.find(item => item.id === task.request_id &&
-    item.project_id === task.project_id);
+  const request = taskParentRequest(task);
   return Boolean(request && !currentRequestTasks(request).some(current => current.id === task.id));
 }
 function failedDeliveryRoleStages(request) {
@@ -8534,8 +8539,50 @@ function detailChapter(chapters, prefix, key) {
 function requestChapter(key) {
   return detailChapter(requestChapters, "request", key);
 }
-function taskChapter(key) {
-  return detailChapter(taskChapters, "task", key);
+function taskChapter(key, {historical = false} = {}) {
+  const chapters = historical ? taskChapters.map(chapter => chapter[0] === "current"
+    ? ["current", "当次执行结果", "查看当次保存的状态、处理建议和独立验收反馈；这些记录不代表当前需求。"]
+    : chapter) : taskChapters;
+  return detailChapter(chapters, "task", key);
+}
+function historicalTaskContext(task, parent) {
+  const scopeKey = taskDetailScopeKey();
+  const bound = {taskId: task.id, parentId: parent.id, projectId: parent.project_id};
+  const phase = deliveryPhase(parent), node = requestNodeExecution(parent);
+  const context = viewBlock(el("section", undefined, "product-execution-summary task-historical-context"),
+    "task-historical-context", [scopeKey, bound, parent.title, phase, node, projectSwitchPending()]);
+  context.setAttribute("aria-label", "历史执行与当前需求");
+  context.append(el("strong", "历史执行记录"),
+    el("p", "此处保留当次执行结果和处理建议，不代表当前需求的状态或可用操作。", "muted"));
+  const current = el("div", undefined, "row");
+  current.append(el("p", "当前需求 · " + parent.title), requestNodeBadge(parent));
+  const open = button("查看当前需求", () => {
+    const task = taskById(bound.taskId);
+    const parent = task && taskParentRequest(task);
+    if (open.isConnected === false || taskDetailScopeKey() !== scopeKey || projectSwitchPending() ||
+        currentProjectId() !== bound.projectId || !parent || parent.id !== bound.parentId ||
+        parent.project_id !== bound.projectId || !isHistoricalRequestTask(task)) return;
+    showDetail("request", parent.id);
+  }, "secondary");
+  open.disabled = projectSwitchPending() || currentProjectId() !== bound.projectId;
+  context.append(current, open);
+  return context;
+}
+function historicalTaskExecutionSummary(task) {
+  const execution = task.execution;
+  const section = el("div", undefined, "product-execution-summary");
+  section.append(el("p", "当次交付阶段 · " + deliveryPhase(task), "execution-phase"),
+    el("p", "当次执行 · " + label(task.terminal || !execution ? task.status : executionPresentationStatus(execution)), "execution-state"));
+  if (execution?.responsibility)
+    section.append(el("p", "当次处理方 · " + {product: "产品负责人", team: "ASE 团队", engineering: "工程团队"}[execution.responsibility], "muted"));
+  const reason = execution?.reason || task.blocker;
+  const advice = execution?.next_action || task.next_action;
+  if (reason) section.append(el("p", "当次原因 · " + humanizeBlockingText(reason)));
+  if (advice) section.append(el("p", "当次处理建议 · " + humanizeBlockingText(advice), "muted"),
+    el("p", "以上建议仅保留当次记录；当前可用操作请查看当前需求。", "muted"));
+  if (execution?.available_at)
+    section.append(el("p", "当次计划重试时间 · " + time(execution.available_at), "muted"));
+  return section;
 }
 function requestChapterNavigation(request) {
   const nav = viewBlock(el("nav", undefined, "request-chapter-nav"), "request-chapter-nav", [request.project_id, request.id]);
@@ -8651,6 +8698,7 @@ function buildDetail(panel = document.getElementById("detail")) {
     panel.append(el("p", "当前快照中找不到这条记录。"));
     return;
   }
+  const historicalTask = selected.kind === "task" && isHistoricalRequestTask(item);
   const top = el("div", undefined, "row");
   const topActions = el("div", undefined, "detail-heading-actions");
   if (
@@ -8753,14 +8801,10 @@ function buildDetail(panel = document.getElementById("detail")) {
       "detail-close-control",
     ),
   );
-  top.append(
-    el(
-      "p",
-      selected.kind === "task" ? "任务详情" : "需求详情",
-      "detail-panel-heading",
-    ),
-    topActions,
-  );
+  const detailName = selected.kind === "task" ? historicalTask ? "历史任务详情" : "任务详情" : "需求详情";
+  const detailHeading = el("p", detailName, "detail-panel-heading");
+  if (selected.kind === "task") detailHeading.id = "task-detail-dialog-heading";
+  top.append(detailHeading, topActions);
   if (selected.kind === "request") {
     const presentation = requestPresentation(item);
     const blocking = requestBlockerSection(item);
@@ -8874,37 +8918,41 @@ function buildDetail(panel = document.getElementById("detail")) {
   viewGroup(dialog, `task-dialog:${item.id}`);
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
-  dialog.setAttribute("aria-label", "任务详情");
+  // The heading changes with current/historical identity; groups retain DOM attributes.
+  dialog.setAttribute("aria-labelledby", "task-detail-dialog-heading");
   const header = viewGroup(el("header", undefined, "task-detail-header"), "task-detail-header");
-  viewBlock(top, "task-heading", item.id);
+  viewBlock(top, "task-heading", [item.id, historicalTask]);
   header.append(top, taskReadingToolbar());
   dialog.append(header);
   const masthead = viewGroup(el("div", undefined, "task-detail-masthead"), "task-detail-masthead");
   const taskTitleRow = viewGroup(el("div", undefined, "task-title-row"), "task-title-row");
+  const status = historicalTask ? el("span", "当次 · " + label(item.status), "badge") : badge(taskPresentationStatus(item));
   taskTitleRow.append(viewBlock(el("p", item.title, "task-detail-title"), "task-title", item.title),
-    viewBlock(badge(taskPresentationStatus(item)), "task-heading-status", taskPresentationStatus(item)));
+    viewBlock(status, "task-heading-status", [historicalTask, historicalTask ? item.status : taskPresentationStatus(item)]));
   masthead.append(taskTitleRow);
+  if (historicalTask) masthead.append(historicalTaskContext(item, taskParentRequest(item)));
   dialog.append(masthead);
-  const current = taskChapter("current");
+  const current = taskChapter("current", {historical: historicalTask});
   const overview = viewBlock(el("section", undefined, "task-detail-overview"), "task-overview",
     [item.status, taskPresentationStatus(item), item.execution, item.blocker, item.next_action, item.last_activity,
-      interruptedExecution(item), waitingExecutionStep(item), item.scope]);
-  if (item.execution) overview.append(productExecutionSummary(item));
+      interruptedExecution(item), waitingExecutionStep(item), item.scope, historicalTask]);
+  if (historicalTask) overview.append(historicalTaskExecutionSummary(item));
+  else if (item.execution) overview.append(productExecutionSummary(item));
   else {
     overview.append(el("p", "当前阶段 · " + deliveryPhase(item)));
     if (item.blocker) overview.append(el("p", "当前原因 · " + humanizeBlockingText(item.blocker), "blocker"));
     if (item.next_action) overview.append(el("p", "下一步 · " + humanizeBlockingText(item.next_action)));
   }
-  overview.append(el("p", paths(item.scope), "paths"), el("p", "最近活动 · " + time(item.last_activity), "muted"));
-  const activity = roleExecutionActivity(item);
+  overview.append(el("p", paths(item.scope), "paths"), el("p", (historicalTask ? "当次记录更新 · " : "最近活动 · ") + time(item.last_activity), "muted"));
+  const activity = historicalTask ? el("div", undefined, "role-execution-activity") : roleExecutionActivity(item);
   activity.classList.add("task-activity-block");
-  viewBlock(activity, "task-activity", [item.status, item.terminal, item.role_queue]);
+  viewBlock(activity, "task-activity", [item.status, item.terminal, item.role_queue, historicalTask]);
   current.append(overview, activity);
   const engineering = engineeringDetails("任务工程详情", item.id);
   viewGroup(engineering, "task-engineering");
   const engineeringBody = viewBlock(el("div"), "task-engineering-facts",
     [item.id, item.execution, item.blocker, item.next_action, item.candidate_revision, item.candidate_branch,
-      item.role_queue, item.task_id, item.history_task_ids, taskGroup(item), item.assignments, snapshot.agents]);
+      item.role_queue, item.task_id, item.history_task_ids, taskGroup(item), item.assignments, snapshot.agents, historicalTask]);
   const engineeringTarget = engineeringBody;
   engineeringTarget.append(el("p", item.id, "paths"));
   if (item.execution?.policy_id) engineeringTarget.append(el("p", "工程授权 · " + item.execution.policy_id, "paths"));
@@ -8912,17 +8960,17 @@ function buildDetail(panel = document.getElementById("detail")) {
   if (item.blocker)
     engineeringTarget.append(el("p", "原始阻塞原因 · " + humanizeBlockingText(item.blocker), "blocker"));
   if (taskGroup(item) === "blocked" && item.next_action)
-    engineeringTarget.append(el("p", "原始下一步 · " + humanizeBlockingText(item.next_action), "muted"));
-  if (interruptedExecution(item) && !item.execution)
+    engineeringTarget.append(el("p", (historicalTask ? "当次原始处理建议 · " : "原始下一步 · ") + humanizeBlockingText(item.next_action), "muted"));
+  if (!historicalTask && interruptedExecution(item) && !item.execution)
     overview.append(el("p", `${interruptedExecutionReason} 当前交付检查点：${label(item.status)}。`));
-  if (waitingExecutionStep(item))
+  if (!historicalTask && waitingExecutionStep(item))
     overview.append(el("p", `当前角色已暂停，交付检查点保留在${label(item.status)}。`));
   if (item.candidate_revision)
     engineeringTarget.append(el("p", "候选版本 · " + item.candidate_revision, "paths"));
   if (item.candidate_branch)
     engineeringTarget.append(el("p", "候选分支 · " + item.candidate_branch, "paths"));
   if (item.role_queue?.length) {
-    engineeringTarget.append(el("h3", "角色执行队列"));
+    engineeringTarget.append(el("h3", historicalTask ? "当次角色执行队列" : "角色执行队列"));
     for (const step of item.role_queue) {
       const lease = {
         LEASE_VALID: "租约有效",
@@ -8939,16 +8987,17 @@ function buildDetail(panel = document.getElementById("detail")) {
         engineeringTarget.append(el("p", "等待补充知识，详情见需求的阻塞信息。", "muted"));
     }
   }
-  engineeringTarget.append(el("h3", "成员与分配模型"));
+  engineeringTarget.append(el("h3", historicalTask ? "当次成员与分配模型" : "成员与分配模型"));
   for (const a of item.assignments)
     engineeringTarget.append(
       el(
         "p",
-        `${snapshot.agents.find((x) => x.id === a.agent_id)?.name || a.agent_id} · ${label(a.role)} · ${a.planned_provider} / ${a.planned_model}${a.current_stage ? " · 当前阶段" : ""}`,
+        `${snapshot.agents.find((x) => x.id === a.agent_id)?.name || a.agent_id} · ${label(a.role)} · ${a.planned_provider} / ${a.planned_model}${a.current_stage ? historicalTask ? " · 当次岗位" : " · 当前阶段" : ""}`,
       ),
     );
   const history = item.execution_history?.length ? item.execution_history : item.timeline;
-  const feedback = taskFeedbackSection(history, item.task_id || item.id);
+  const currentTaskId = historicalTask ? null : item.task_id || item.id;
+  const feedback = taskFeedbackSection(history, currentTaskId);
   if (feedback) current.append(feedback);
   dialog.append(current);
   const outputs = taskChapter("outputs");
@@ -8960,11 +9009,11 @@ function buildDetail(panel = document.getElementById("detail")) {
   const executionRecords = taskChapter("history");
   const records = taskReadingFold(`执行记录（完整历史） · ${history.length} 条`, "task-history", true);
   records.append(viewBlock(el("p", `共 ${history.length} 条记录。历史轮次完整保留，不代表当前状态。`, "muted"), "task-history-count", history.length));
-  engineeringTarget.append(el("p", "当前 Task · " + (item.task_id || item.id), "paths"));
+  engineeringTarget.append(el("p", (historicalTask ? "当次 Task · " : "当前 Task · ") + (item.task_id || item.id), "paths"));
   if (item.history_task_ids?.length > 1)
     engineeringTarget.append(el("p", "关联 Task · " + item.history_task_ids.join(" → "), "paths"));
   const list = viewGroup(el("ol", undefined, "execution-history"), "task-history-list");
-  for (const entry of history) appendExecutionEntry(list, entry, item.task_id || item.id);
+  for (const entry of history) appendExecutionEntry(list, entry, currentTaskId);
   if (!history.length) list.append(el("li", "暂无已保存的执行记录。", "muted"));
   records.append(list);
   executionRecords.append(records);
@@ -8972,7 +9021,7 @@ function buildDetail(panel = document.getElementById("detail")) {
   const callList = viewGroup(el("div", undefined, "task-model-call-list"), "task-model-call-list");
   if (!item.runs.length)
     callList.append(
-      el("p", "暂无已提交调用记录；进行中的调用完成后才会出现。", "muted"),
+      el("p", historicalTask ? "暂无已保存的完成调用记录；此处只展示当次记录。" : "暂无已提交调用记录；进行中的调用完成后才会出现。", "muted"),
     );
   for (const run of item.runs) {
     const card = viewBlock(el("article", undefined, "task-model-call-card"),

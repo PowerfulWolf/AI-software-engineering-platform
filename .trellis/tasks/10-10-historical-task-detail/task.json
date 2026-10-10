@@ -1,0 +1,16 @@
+{
+  "id": "historical-task-detail-20261010",
+  "title": "历史任务详情保留历史身份并指向当前需求",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "owner": "codex",
+  "created_at": "2026-10-10",
+  "allowed_paths": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/historical-child.test.cjs",
+    "tests/team_view/browser/historical-child.test.cjs",
+    ".trellis/spec/core/live-team-view.md",
+    ".trellis/tasks/10-10-historical-task-detail/"
+  ],
+  "verification": "verification.md"
+}
