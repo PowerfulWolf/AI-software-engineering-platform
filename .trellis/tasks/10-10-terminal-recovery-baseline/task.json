@@ -1,0 +1,11 @@
+{
+  "id": "10-10-terminal-recovery-baseline",
+  "name": "Terminal recovery validates execution baseline epochs",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "priority": "P1",
+  "assignee": "codex",
+  "created_at": "2026-10-10",
+  "branch": "main",
+  "description": "Read-only source epoch compatibility and exact effective capture base for terminal recovery; no production operation."
+}

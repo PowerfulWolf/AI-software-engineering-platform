@@ -644,6 +644,17 @@
           ],
           "default": null,
           "title": "Quarantined Paths"
+        },
+        "workspace_snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecoveryWorkspaceSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -795,6 +806,32 @@
           "title": "Base Revision",
           "type": "string"
         },
+        "execution_baseline_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Baseline Sha256"
+        },
+        "execution_base_revision": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Base Revision"
+        },
         "parent_delivery_id": {
           "anyOf": [
             {
@@ -839,7 +876,37 @@
         "base_revision"
       ],
       "title": "RecoverySource",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "properties": {
+                "execution_baseline_sha256": {
+                  "type": "null"
+                },
+                "execution_base_revision": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "required": [
+                "execution_baseline_sha256",
+                "execution_base_revision"
+              ],
+              "properties": {
+                "execution_baseline_sha256": {
+                  "type": "string"
+                },
+                "execution_base_revision": {
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        }
+      ]
     },
     "VerifiedRecoveryDecision": {
       "additionalProperties": false,
@@ -960,6 +1027,335 @@
         "blob_id"
       ],
       "title": "RecoveryRequestedFile",
+      "type": "object"
+    },
+    "MutationFile": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "symlink",
+            "git_directory"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "mode": {
+          "title": "Mode",
+          "type": "integer"
+        },
+        "size": {
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "sha256",
+        "mode",
+        "size"
+      ],
+      "title": "MutationFile",
+      "type": "object"
+    },
+    "RecoveryExcludedPath": {
+      "additionalProperties": false,
+      "description": "No-follow metadata only; an excluded environment entry is never replayed.",
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "symlink"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "mode": {
+          "maximum": 4095,
+          "minimum": 0,
+          "title": "Mode",
+          "type": "integer"
+        },
+        "size": {
+          "maximum": 16000000,
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "sha256",
+        "mode",
+        "size"
+      ],
+      "title": "RecoveryExcludedPath",
+      "type": "object"
+    },
+    "RecoveryWorkspaceScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "requirement_id",
+        "dispatch_sha256"
+      ],
+      "title": "RecoveryWorkspaceScope",
+      "type": "object"
+    },
+    "RecoveryWorkspaceSnapshot": {
+      "additionalProperties": false,
+      "description": "A stopped terminal workspace audit, not progress, a verdict, or retry authority.",
+      "properties": {
+        "kind": {
+          "const": "recovery_workspace_snapshot",
+          "default": "recovery_workspace_snapshot",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/RecoveryWorkspaceScope"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
+        "task_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "worktree_path": {
+          "pattern": "^/[^\\x00-\\x1f]*$",
+          "title": "Worktree Path",
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "effective_capture_base": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Effective Capture Base",
+          "type": "string"
+        },
+        "execution_baseline_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Baseline Sha256"
+        },
+        "capture_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capture Sha256",
+          "type": "string"
+        },
+        "capture_start_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capture Start Sha256",
+          "type": "string"
+        },
+        "capture_stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capture Stop Sha256",
+          "type": "string"
+        },
+        "invocation_start_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Start Sha256",
+          "type": "string"
+        },
+        "invocation_outcome_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Outcome Sha256",
+          "type": "string"
+        },
+        "claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Claim Sha256",
+          "type": "string"
+        },
+        "step_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Step Sha256",
+          "type": "string"
+        },
+        "routes_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Routes Sha256",
+          "type": "string"
+        },
+        "inventory_before_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Inventory Before Sha256",
+          "type": "string"
+        },
+        "inventory_after": {
+          "$ref": "#/$defs/WorkspaceMutationInventory"
+        },
+        "inventory_after_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Inventory After Sha256",
+          "type": "string"
+        },
+        "excluded_paths": {
+          "items": {
+            "$ref": "#/$defs/RecoveryExcludedPath"
+          },
+          "maxItems": 20000,
+          "title": "Excluded Paths",
+          "type": "array"
+        },
+        "stopped_at": {
+          "format": "date-time",
+          "title": "Stopped At",
+          "type": "string"
+        },
+        "blocked_at": {
+          "format": "date-time",
+          "title": "Blocked At",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "task_id",
+        "task_revision",
+        "task_sha256",
+        "task_intent_sha256",
+        "run_id",
+        "context_manifest_id",
+        "worktree_path",
+        "source_revision",
+        "effective_capture_base",
+        "capture_sha256",
+        "capture_start_sha256",
+        "capture_stop_sha256",
+        "invocation_start_sha256",
+        "invocation_outcome_sha256",
+        "claim_sha256",
+        "step_sha256",
+        "routes_sha256",
+        "inventory_before_sha256",
+        "inventory_after",
+        "inventory_after_sha256",
+        "excluded_paths",
+        "stopped_at",
+        "blocked_at",
+        "created_at",
+        "snapshot_sha256"
+      ],
+      "title": "RecoveryWorkspaceSnapshot",
+      "type": "object"
+    },
+    "WorkspaceMutationInventory": {
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/$defs/MutationFile"
+          },
+          "title": "Files",
+          "type": "array"
+        }
+      },
+      "required": [
+        "files"
+      ],
+      "title": "WorkspaceMutationInventory",
       "type": "object"
     }
   },

@@ -32,7 +32,8 @@ from ai_software_engineer.git.capture import (
 from ai_software_engineer.git.policy import is_protected_rule_path
 from ai_software_engineer.git.ports import AttemptNumber, WorktreeRef
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
-from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.recovery.workspace_records import RecoveryWorkspaceSnapshot
+from ai_software_engineer.redaction import patch_secret_occurrences, redact_text
 
 
 class RecoveryRejected(RuntimeError):
@@ -196,7 +197,8 @@ class CapturedChanges(DomainModel):
             or "GIT binary patch" in self.patch
         ):
             raise ValueError("recovery patch must be bounded UTF-8 text")
-        _safe_text(self.patch)
+        if patch_secret_occurrences(self.patch):
+            raise ValueError("recovery patch contains sensitive content")
         if self.to_capture().capture_sha256 != self.capture_sha256:
             raise ValueError("capture digest does not match content")
         return self
@@ -227,6 +229,15 @@ class RecoverySource(DomainModel):
     failed_run_id: RunId
     failed_context_id: ContextId
     base_revision: FullCommit
+    # The approved Task base is immutable.  A same-Task engineering baseline may
+    # rebind the execution source; keep both identities so recovery never treats
+    # platform/source maintenance as part of the original requirement patch.
+    execution_baseline_sha256: StageSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    execution_base_revision: FullCommit | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     parent_delivery_id: DeliveryId | None = None
     parent_checkpoint_sha256: StageSha256 | None = None
 
@@ -234,7 +245,14 @@ class RecoverySource(DomainModel):
     def parent_pair(self) -> Self:
         if (self.parent_delivery_id is None) != (self.parent_checkpoint_sha256 is None):
             raise ValueError("parent identity and digest must appear together")
+        if (self.execution_baseline_sha256 is None) != (self.execution_base_revision is None):
+            raise ValueError("execution baseline digest and base must appear together")
         return self
+
+    @property
+    def effective_base_revision(self) -> FullCommit:
+        """Base used for the preserved execution patch, never the Task approval base."""
+        return self.execution_base_revision or self.base_revision
 
 
 class RecoveryScopeRequest(DomainModel):
@@ -338,6 +356,9 @@ class RecoveryPlan(DomainModel):
     )
     source: RecoverySource
     capture: CapturedChanges
+    workspace_snapshot: RecoveryWorkspaceSnapshot | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     target_base_revision: FullCommit
     target_preparation_sha256: StageSha256
     target_branch_name: BranchName | None = Field(
@@ -359,6 +380,33 @@ class RecoveryPlan(DomainModel):
     plan_sha256: StageSha256
 
     @model_validator(mode="after")
+    def validate_workspace_snapshot(self) -> Self:
+        snapshot = self.workspace_snapshot
+        if snapshot is None:
+            return self
+        snapshot.validate_integrity()
+        source, capture = self.source, self.capture
+        if (
+            snapshot.scope.team_id != source.scope.team_id
+            or snapshot.scope.repository_id != source.scope.repository_id
+            or snapshot.scope.requirement_id != source.scope.delivery_id
+            or snapshot.scope.dispatch_sha256 != source.dispatch_sha256
+            or snapshot.task_id != source.task_id
+            or snapshot.task_revision != source.task_revision
+            or snapshot.task_sha256 != source.task_sha256
+            or snapshot.run_id != source.failed_run_id
+            or snapshot.context_manifest_id != source.failed_context_id
+            or snapshot.worktree_path != capture.worktree_path
+            or snapshot.source_revision != capture.source_revision
+            or snapshot.effective_capture_base != source.effective_base_revision
+            or snapshot.execution_baseline_sha256 != source.execution_baseline_sha256
+            or snapshot.capture_sha256 != capture.capture_sha256
+            or snapshot.created_at > self.created_at
+        ):
+            raise ValueError("workspace snapshot does not bind this exact recovery plan")
+        return self
+
+    @model_validator(mode="after")
     def validate_scope_approval(self) -> Self:
         if (self.scope_supplement is None) != (self.scope_approval_reference is None):
             raise ValueError("recovery scope supplement and approval must appear together")
@@ -373,7 +421,7 @@ class RecoveryPlan(DomainModel):
             or supplement.task_id != source.task_id
             or supplement.task_revision != source.task_revision
             or supplement.checkpoint_sha256 != source.checkpoint_sha256
-            or supplement.base_revision != source.base_revision
+            or supplement.base_revision != source.effective_base_revision
             or supplement.denied_paths_sha256 != digest(self.denied_paths)
             or any(path not in self.permissions.read_paths for path in supplement.paths)
             or any(path not in self.permissions.write_paths for path in supplement.paths)
@@ -472,7 +520,8 @@ class RecoveryPlan(DomainModel):
             raise ValueError("recovery must preserve requirement type and use a distinct branch")
         if (
             self.capture.task_id != self.source.task_id
-            or self.capture.to_capture().effective_base_revision != self.source.base_revision
+            or self.capture.to_capture().effective_base_revision
+            != self.source.effective_base_revision
         ):
             raise ValueError("capture must belong to the failed Task and base")
         target = self.effective_target_permissions

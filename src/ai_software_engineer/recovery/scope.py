@@ -34,7 +34,23 @@ def inspect_recovery_scope_supplement(
         denied_paths=original.denied_paths,
     )
     missing: set[str] = set()
-    changed_paths = manager.inspect(worktree).changed_paths
+    changed_paths = set(manager.inspect(worktree).changed_paths)
+    # Include retained committed work, against the exact approved execution base.
+    full_diff = manager._run_git_bytes(
+        (
+            "--no-optional-locks",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            original.source.effective_base_revision,
+            "--",
+        ),
+        cwd=worktree.path,
+    )
+    changed_paths.update(path.decode("utf-8") for path in full_diff.split(b"\0") if path)
     requested_files = None
     if request is not None:
         request = RecoveryScopeRequest.model_validate(request.to_wire())
@@ -77,7 +93,7 @@ def inspect_recovery_scope_supplement(
             task_id=source.task_id,
             task_revision=source.task_revision,
             checkpoint_sha256=source.checkpoint_sha256,
-            base_revision=source.base_revision,
+            base_revision=source.effective_base_revision,
             permissions_sha256=digest(original.permissions.to_wire()),
             denied_paths_sha256=digest(original.denied_paths),
             paths=tuple(sorted(missing)),
@@ -93,7 +109,7 @@ def _requested_files(
     worktree: WorktreeRef,
     original: NativeRecoverySource,
     request: RecoveryScopeRequest,
-    changed_paths: tuple[str, ...],
+    changed_paths: set[str],
 ) -> tuple[RecoveryRequestedFile, ...]:
     files = []
     for path in request.paths:
@@ -102,7 +118,8 @@ def _requested_files(
             raise RecoveryRejected("requested scope requires an unchanged regular tracked file")
         # ls-tree reads object metadata only; no file content is exposed before approval.
         entries = manager._run_git(
-            ("ls-tree", "-z", original.source.base_revision, "--", path), cwd=worktree.path
+            ("ls-tree", "-z", original.source.effective_base_revision, "--", path),
+            cwd=worktree.path,
         ).split("\0")
         if len(entries) != 2 or entries[1] or "\t" not in entries[0]:
             raise RecoveryRejected("requested scope file is not in the approved base")

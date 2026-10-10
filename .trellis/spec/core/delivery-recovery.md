@@ -1,5 +1,110 @@
 # Explicit delivery recovery — T044
 
+## Terminal recovery after an approved execution baseline update (2026-10-10)
+
+### 1. Scope / Trigger
+
+A pre-candidate Task becomes terminal after an approved same-Task execution source update.
+Its frozen `Task.base_ref` and original dispatch remain unchanged, while later StateEvents use
+the approved execution source. Rejecting every source that differs from the frozen base strands
+valid retained work; accepting any source found in history admits stale or premature execution.
+This source check establishes lineage only. It does not establish stopped processes, ignored
+workspace contents, recovery approval or permission to resume a terminal Task.
+
+### 2. Signatures
+
+```python
+read_recovery_baseline_epochs(sidecar, task, scope, *, project_id) -> tuple[RecoveryBaselineEpoch, ...]
+validate_pre_candidate_sources(task, events, epochs) -> None
+require_terminal_baseline_context(sidecar, task, context, epochs, *,
+    run_id, request_sha256, attempt, source_revision) -> ExecutionBaselineBinding | None
+RecoverySource.effective_base_revision -> FullCommit
+```
+
+`NativeRecoverySourceReader.inspect` / `discover_failed_coder` use a read-only consistent SQL
+snapshot and the verified Project registry's actual `project_id`. Repeated pure source scans
+share only a synchronous `source_inspection_scope`; no mutable state or result approval is cached.
+
+### 3. Contracts
+
+- Read the complete append-only binding chain through
+  `FileExecutionBaselineStore(..., read_only=True).bindings_for_task`. That verifies the sealed
+  plan, start, engineering authority, full retained Context and predecessor. Recheck immutable
+  Task intent and exact Team/Project/Repository/root; do not infer Project from the request text.
+- StateEvent revision is its contiguous SQL position. The latest binding whose
+  `prior_task_revision < event_revision` selects the event's exact execution source. The event
+  must be at or after binding completion and at least its sealed continuation reservation's
+  `next_execution_attempt`; legacy plans without a reservation use their recorded Task attempt.
+  Earlier events retain the prior epoch. Every binding boundary must belong to terminal history.
+- A terminal bound source requires exactly one immutable `DeliveryInvocationStart` for the Run.
+  Validate its digest and original request digest against the route, Coder/task/attempt/context,
+  source, latest baseline digest/base, start time and checkpoint boundary. The required complete,
+  untruncated `execution.baseline` Context must equal the store-verified latest binding and contain
+  the full retained patch. A Context cannot invent a baseline absent from verified history.
+- `RecoverySource.base_revision` remains the frozen approval base. Paired optional
+  `execution_baseline_sha256` and `execution_base_revision` bind the authorized execution base.
+  Both non-null fields are required together in Python and JSON Schema. Absent/null pairs remain
+  omitted from wire content, preserving legacy digests. Present fields change the exact plan.
+- Capture, scope supplement, tracked requested-file metadata and target ancestry use
+  `effective_base_revision`, which selects the execution base when bound. Scope discovery includes
+  dirty/untracked files and complete committed changes against that base. Upstream stage validation
+  continues to use the original frozen Task. Already-approved platform source changes must not
+  become requirement edits or new scope requests.
+- Recheck SQL, checkpoint, stages, parent and complete binding chain before returning. Missing,
+  mismatched, stale or changed source facts fail closed with `RecoveryRejected`; source inspection
+  never creates stores, changes Task/events or approves execution.
+
+### 4. Validation & Error Matrix
+
+| Facts | Result |
+| --- | --- |
+| Original events plus terminal event after exact verified current binding | Accept source lineage; bind digest and effective base |
+| No binding, ordinary history at frozen source | Historical wire/hash and source behavior |
+| Source exists elsewhere in history but event belongs to another epoch | Reject |
+| Event before completion/reservation or binding beyond terminal revision | Reject |
+| Foreign Project, changed intent/predecessor/plan/authority/full Context | Reject |
+| Missing/duplicate original invocation or wrong request/Context/route digest | Reject |
+| One non-null execution source field, or non-null plus null companion | Python and Schema reject |
+| Approved platform rule changes before effective base | Exclude from requirement scope/capture |
+| Committed requirement edit after effective base outside granted paths | Exact scope supplement; no silent omission |
+| Valid source with unknown process stop or ignored mutation inventory | No execution authorization; separate workspace gate required |
+
+### 5. Good / Base / Bad Cases
+
+Good: original source events remain unchanged; a legitimate approved binding governs the later
+interruption, and recovery captures only requirement edits against its effective base. Base:
+ordinary unbound terminal records retain the same serialized payload and SHA-256. Bad: use the
+latest source for every historical event, accept membership in a set of historical SHAs, or
+capture platform fixes from the original frozen base as requirement changes.
+
+### 6. Tests Required
+
+`test_terminal_baseline.py` covers exact epoch/source/revision/attempt/time, historical wrong-epoch
+membership, predecessor/Task corruption, real verified baseline-store scope and unchanged bytes.
+`test_terminal_baseline_context.py` covers original request and complete required Context,
+duplicate/missing invocation and read-only bytes. `test_terminal_baseline_sql.py` exercises real
+typed wire decoding through the native SQL gate with a read-only connection seam and verifies
+rollback/close plus stale-source rejection. `test_baseline_wire.py` covers legacy digest stability,
+effective capture base and Python/Schema paired-field negatives. `test_scope.py` asserts exclusion
+of already-approved native-rule changes and inclusion of retained committed edits.
+
+### 7. Wrong vs Correct
+
+Wrong: `all(event.source_revision == task.base_ref)` or `source in historical_sources`.
+Correct: validate complete store-authorized epochs at the exact historical revision boundary,
+then bind the terminal original request/Context to the latest epoch and preserve the frozen base.
+
+### Existing data and rollback
+
+No SQL migration or history rewrite. Existing terminal Task/attempts/events, original grants,
+worktree and ignored files remain preserved. Deploy the compatible reader, then Continue the same
+Requirement to request a fresh exact recovery plan. A bound source must additionally satisfy
+current stop/full-workspace gates before any plan can execute. Approval authorizes a distinct
+successor under the same Requirement, followed by ordinary Coder/QA/Reviewer; it never reopens the
+old terminal Task. An old plan lacking newly required references must be freshly proposed and
+approved. Roll back source changes only before consuming new plans; otherwise retain a compatible
+reader and prefer a forward fix without deleting immutable records.
+
 ## First Coder knowledge timeout before code execution (2026-10-04)
 
 ### Scope and signatures
@@ -2810,3 +2915,96 @@ asserts a successor with `delivering=28` still resumes while retaining the NEW/0
 
 Wrong: require `stage_attempts.delivering == 0` or read native rules from the current checkout.
 Correct: validate current Task execution facts and read only the exact Task base revision.
+
+## Terminal failure workspace audit (2026-10-10)
+
+### 1. Scope / Trigger
+
+Modern terminal Coder failure with a frozen interruption policy, real owned process stop and
+retained workspace, including an interruption whose mutation receipt was rejected. This is
+observation of the complete preserved scene, not acceptance of illegal writes or a role verdict.
+
+### 2. Signatures
+
+```python
+RecoveryPlan.workspace_snapshot: RecoveryWorkspaceSnapshot | None
+read_terminal_workspace_snapshot(
+    config: ProductionConfig, environment: Mapping[str, str],
+    original: NativeRecoverySource, capture: CapturedChanges, *,
+    approved_permissions: AgentPermissions | None = None,
+    scope_supplement: RecoveryScopeSupplement | None = None,
+) -> RecoveryWorkspaceSnapshot | None
+```
+
+The optional field is omitted when None, preserving historical wire bytes and plan digests.
+Nonempty records include explicit Team/Project/Repository/native Requirement/dispatch identity,
+Task revision/SHA, run/context, source and effective capture base, complete start/stop/invocation/
+claim/step/route references, full bounded no-follow inventory and exact excluded metadata.
+
+### 3. Contracts
+
+- Native source epoch verification retains the frozen approval base and actual execution base.
+  Snapshot source binds the actual run/capture HEAD; it need not equal the effective capture base.
+- Exact source, capture and snapshot are verified before plan publication and again by current
+  facts before approval/dispatch. Modern failed sources with missing proof cannot execute a
+  historical snapshot-free plan. Source files, ignored classification or durable facts changing
+  invalidate that plan.
+- Read existing Task process lock and consistent SELECT-only SQL snapshots. Do not initialize
+  queue/schema or reacquire the global authority lock inside a recovery commit fence.
+- Task, queue and claim raw index columns must agree with validated payloads. Claim ownership,
+  state and event facts participate in the snapshot digest and are reread; CLOSED payload alone
+  cannot override a RUNNING raw row.
+- TIMEOUT in the real stop and POLICY_VIOLATION in the final route/outcome are distinct facts.
+  Bind both, require final route result equality with the invocation outcome, and keep the old
+  failure. Never rewrite TIMEOUT to disguise mutation rejection.
+- Only newly introduced, fully ignored regular files/symlink entries under `.venv/` may be
+  retained separately. No prior `.venv` file entries, tracked entries or unknown hidden mutations
+  qualify. Symlink metadata does not authorize or establish the safety of its target: never
+  traverse, execute, seed/reapply these entries or grant environment writes. Preserve their
+  complete metadata in the original workspace. Inventory does not prove past empty directories.
+- Formally accepted terminal SUCCEEDED coder-progress is classified by its exact final route
+  and sealed progress provenance; it retains its existing recovery contract rather than being
+  forced through a failed-invocation stop format. Prior progress does not exempt a later FAILED
+  run from full audit. Legacy Tasks without the policy keep read compatibility.
+- Source patches use the existing conservative `patch_secret_occurrences`, as mutation/progress
+  capture does. Do not run generic log redaction on legitimate Python token generation source.
+  Unknown/partial hunks, metadata, literal secrets and unverified references still fail closed;
+  no redacted or truncated patch is accepted.
+
+### 4. Validation & Error Matrix
+
+| Input | Result |
+|---|---|
+| Exact stopped failed run, legal patch, first ignored local environment | full plan-bound audit; environment remains only in source |
+| Verified accepted final progress | existing accepted-progress contract |
+| Prior progress followed by actual failed run | full failed-run audit required |
+| Missing stop, live owner, raw/payload disagreement, inventory drift | reject; preserve original Task/workspace/history |
+| Snapshot Task/run/context/base/capture/scope mismatch | reject before plan approval |
+| Source credential literal or malformed patch | reject, do not persist raw content |
+
+### 5. Good / Base / Bad
+
+Good: K1's real TIMEOUT stop and final policy rejection remain separate, all 2,283 entries are
+observed, and the 18 first-created ignored environment entries remain in the old workspace.
+Base: old absent optional fields preserve the exact canonical plan/authorization identity.
+Bad: reset BLOCKED Task, use lease expiry/restart as stop proof, ignore arbitrary hidden changes,
+copy the unintended environment, fabricate a receipt, or broaden role permissions.
+
+### 6. Required tests
+
+`test_workspace_snapshot.py` checks real source classification, full inventory/exclusion, owned
+stop, raw SQL/payload drift, existing lock identity, SELECT-only composition and no global lock
+reentry. `test_workspace_plan.py` checks exact plan binding, Schema and legacy bytes.
+`test_recovery_source_content.py` checks real Git capture of runtime token generation and actual
+credential rejection. Current authorization and Console tests verify stale facts reject and only
+proved stop/inventory claims reach visible human approval facts.
+
+### 7. Stored data and rollback
+
+No direct database edits or historical receipt changes. Stop idle service through the controlled
+script, load the committed fix and fast-forward the clean registered clone. In the same Requirement
+use Continue to prepare a fresh exact plan, review preservation/exclusion/current base and approve
+that plan. The historical terminal Task and workspace remain; an internal recovery Task uses a
+clean authorized target, then still requires independent QA and Review. If anything changes,
+prepare a new plan rather than reusing an old approval. Rollback while idle must retain readers
+for the new optional snapshot/baseline fields once such records have been published.

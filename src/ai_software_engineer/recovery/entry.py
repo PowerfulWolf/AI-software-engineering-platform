@@ -84,6 +84,7 @@ from ai_software_engineer.recovery.seed import RecoverySeedService
 from ai_software_engineer.recovery.service import RecoveryAuthorizationService
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
+from ai_software_engineer.recovery.workspace_snapshot import read_terminal_workspace_snapshot
 from ai_software_engineer.role_workspace import DispatchRoleWorktreeCoordinator, RoleWorktreeSession
 from ai_software_engineer.runtime_workspace import FileTeamWorkforceStore
 from ai_software_engineer.store import MySqlTaskRepository, TaskNotFound
@@ -310,7 +311,16 @@ class NativeRecoveryEntry:
             old,
             source_permissions,
             denied_paths=original.denied_paths,
-            base_revision=original.source.base_revision,
+            base_revision=original.source.effective_base_revision,
+        )
+        captured = CapturedChanges.from_capture(capture)
+        workspace_snapshot = read_terminal_workspace_snapshot(
+            self.config,
+            self.environment,
+            original,
+            captured,
+            approved_permissions=source_permissions,
+            scope_supplement=supplement,
         )
         constraints = original.task.constraints
         allowed_paths = constraints.allowed_paths if constraints is not None else ()
@@ -342,7 +352,8 @@ class NativeRecoveryEntry:
         plan = RecoveryPlan.create(
             input_mode=input_mode,
             source=original.source,
-            capture=CapturedChanges.from_capture(capture),
+            capture=captured,
+            workspace_snapshot=workspace_snapshot,
             target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(repository_root)),
             target_preparation_sha256=prepared.preparation_sha256,
             target_branch_name=target_branch_name,

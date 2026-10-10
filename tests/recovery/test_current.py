@@ -46,8 +46,19 @@ class OfflineHuman:
 
 @pytest.mark.mysql
 def test_native_current_gate_and_authorization_preserve_history(
-    tmp_path: Path, mysql_dsn: str
+    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
+
+    # This legacy fake adapter has no owned native process/capture recorder.
+    # Generate the historical Task contract at creation; do not fake stop records
+    # or relax the modern failure audit to make this old fixture usable.
+    def legacy_policy(*, max_work_attempts: int, max_coder_transient_failures: int) -> None:
+        del max_work_attempts, max_coder_transient_failures
+
+    monkeypatch.setattr(
+        InterruptionContinuationPolicy, "for_retry_budget", staticmethod(legacy_policy)
+    )
     project = tmp_path / "project"
     project.mkdir()
     (project / "hello.txt").write_text("hello\n")
@@ -94,8 +105,12 @@ def test_native_current_gate_and_authorization_preserve_history(
     original = NativeRecoverySourceReader(config, environment).inspect(
         scope, failed_run_id=run.run_id, failed_context_id=run.context_manifest_id
     )
+    assert original.task.interruption_continuation_policy is None
+    assert original.task.branch_name is not None
     manager = GitWorktreeManager(
-        project, Path(config.platform_root) / "worktrees" / cp.repository_id
+        project,
+        Path(config.platform_root) / "worktrees" / cp.repository_id,
+        branch_names={original.task.id: original.task.branch_name},
     )
     worktree = manager.recover(
         WorktreeSpec(
@@ -113,6 +128,7 @@ def test_native_current_gate_and_authorization_preserve_history(
         capture=CapturedChanges.from_capture(capture),
         target_base_revision=run.source_revision,
         target_preparation_sha256=original.preparation.preparation_sha256,
+        target_branch_name=original.task.branch_name + "-recovery",
         permissions=original.permissions,
         denied_paths=original.denied_paths,
         created_at=datetime.now(UTC),

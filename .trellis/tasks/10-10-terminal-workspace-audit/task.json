@@ -1,0 +1,15 @@
+{
+  "id": "terminal-workspace-audit-20261010",
+  "title": "终态 Coder 恢复绑定真实停止与完整保留库存",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "owner": "codex",
+  "created_at": "2026-10-10",
+  "allowed_paths": [
+    "src/ai_software_engineer/recovery/workspace_records.py",
+    "src/ai_software_engineer/recovery/workspace_snapshot.py",
+    "tests/recovery/test_workspace_snapshot.py",
+    ".trellis/tasks/10-10-terminal-workspace-audit/"
+  ],
+  "verification": "verification.md"
+}

@@ -110,6 +110,40 @@ def test_explicitly_denied_path_cannot_be_scope_approved(tmp_path: Path) -> None
         inspect_recovery_scope_supplement(manager, worktree, denied)
 
 
+def test_scope_uses_effective_base_and_includes_retained_committed_work(tmp_path: Path) -> None:
+    manager, worktree, original = _retained_worktree(tmp_path)
+    repository = Path(original.source.scope.repository_root)
+    native_rule = repository / ".trellis/spec/core/rule.md"
+    native_rule.parent.mkdir(parents=True)
+    native_rule.write_text("Current platform convention\n")
+    git(repository, "add", ".trellis")
+    git(repository, "commit", "-m", "platform fix")
+    execution_base = git(repository, "rev-parse", "HEAD")
+    git(worktree.path, "merge", "--ff-only", execution_base)
+    original = cast(
+        NativeRecoverySource,
+        SimpleNamespace(
+            source=original.source.model_copy(
+                update={
+                    "execution_baseline_sha256": "e" * 64,
+                    "execution_base_revision": execution_base,
+                }
+            ),
+            permissions=original.permissions,
+            denied_paths=(),
+        ),
+    )
+    assert inspect_recovery_scope_supplement(manager, worktree, original) is None
+    (worktree.path / "omitted.txt").write_text("retained committed implementation\n")
+    git(worktree.path, "add", "omitted.txt")
+    git(worktree.path, "commit", "-m", "retained implementation")
+    assert manager.inspect(worktree).changed_paths == ()
+    supplement = inspect_recovery_scope_supplement(manager, worktree, original)
+    assert supplement is not None
+    assert supplement.paths == ("omitted.txt",)
+    assert supplement.base_revision == execution_base
+
+
 def _scope_request(original: NativeRecoverySource) -> tuple[NativeRecoverySource, object]:
     from ai_software_engineer.recovery.models import RecoveryScopeRequest
 

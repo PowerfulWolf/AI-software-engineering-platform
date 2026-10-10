@@ -34,7 +34,7 @@ from ai_software_engineer.git.mutation_capture import (
 )
 from ai_software_engineer.git.policy import PathPolicyViolation, WorkspacePolicy
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSnapshot, WorktreeSpec
-from ai_software_engineer.redaction import patch_secret_occurrences, redact_text
+from ai_software_engineer.redaction import patch_secret_occurrences
 
 _GIT_ENV: Final[dict[str, str]] = {
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -766,7 +766,7 @@ class GitWorktreeManager:
                 text = payload.decode("utf-8")
             except UnicodeError as error:
                 raise WorktreeCaptureRejected("capture diff is not UTF-8") from error
-            if b"GIT binary patch" in payload or redact_text(text).occurrences:
+            if b"GIT binary patch" in payload or patch_secret_occurrences(text):
                 # Redacting a reusable patch would silently change code. Refuse it;
                 # never print/persist the original content or a transformed patch.
                 raise WorktreeCaptureRejected("capture contains binary or sensitive content")

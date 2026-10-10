@@ -1,0 +1,14 @@
+{
+  "name": "recovery-source-content",
+  "title": "终态恢复源码敏感信息校验一致性",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "created_at": "2026-10-10",
+  "allowed_paths": [
+    "src/ai_software_engineer/git/worktree.py",
+    "src/ai_software_engineer/recovery/models.py",
+    "tests/git/test_recovery_source_content.py",
+    ".trellis/spec/core/delivery-recovery.md",
+    ".trellis/tasks/10-10-recovery-source-content"
+  ]
+}

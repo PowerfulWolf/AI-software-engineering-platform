@@ -63,6 +63,11 @@ from ai_software_engineer.recovery.allocation_lineage import (
     allocation_preparation_sha256,
     resolve_planner_dispatch,
 )
+from ai_software_engineer.recovery.baseline_source import (
+    read_recovery_baseline_epochs,
+    require_terminal_baseline_context,
+    validate_pre_candidate_sources,
+)
 from ai_software_engineer.recovery.models import (
     RecoveryRejected,
     RecoveryScope,
@@ -80,6 +85,7 @@ from ai_software_engineer.recovery.verification_snapshot import (
     terminal_candidate_requires_coder_recovery,
     validate_candidate_snapshot,
 )
+from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.repository_workspace import RepositoryWorkspaceManifest
 from ai_software_engineer.store.mysql_repository import (
     _decode_event,
@@ -139,6 +145,7 @@ class NativeRecoverySourceReader:
         self._environment = dict(environment)
         self._parent_journals: dict[Path, JointJournal] = {}
 
+    @source_inspection_scope()
     def inspect(
         self, scope: RecoveryScope, *, failed_run_id: str, failed_context_id: str
     ) -> NativeRecoverySource:
@@ -155,6 +162,7 @@ class NativeRecoverySourceReader:
                 "original delivery facts are missing, unsafe or inconsistent"
             ) from error
 
+    @source_inspection_scope()
     def discover_failed_coder(self, scope: RecoveryScope) -> NativeRecoverySource:
         """Locate the one recoverable terminal Coder run for a pre-candidate Delivery."""
         try:
@@ -173,7 +181,9 @@ class NativeRecoverySourceReader:
             )
             history = journal.list(scope.delivery_id)
             checkpoint = history[-1]
-            task, _, _, _, events = self._sql(checkpoint, history)
+            task, _, _, _, events = self._sql(
+                checkpoint, history, sidecar=root, project_id=project.manifest.project_id
+            )
             routes_root = model_route_root(root)
             _reject_symlinks(routes_root)
             store = FileModelRouteAttemptStore(routes_root, read_only=True)
@@ -249,7 +259,12 @@ class NativeRecoverySourceReader:
             or cp.candidate_revision is not None
         ):
             raise ValueError("not a failed pre-candidate delivery")
-        task, revision, dispatch, planner_dispatch, events = self._sql(cp, history)
+        task, revision, dispatch, planner_dispatch, events = self._sql(
+            cp, history, sidecar=root, project_id=project.manifest.project_id
+        )
+        baseline_epochs = read_recovery_baseline_epochs(
+            root, task, scope, project_id=project.manifest.project_id
+        )
         stages = read_approved_stages(
             self._config,
             root,
@@ -293,6 +308,8 @@ class NativeRecoverySourceReader:
                 raise ValueError("route does not belong to terminal Coder")
         if not _is_recoverable_terminal_coder_route(final_route, task, cp, events):
             raise ValueError("terminal Coder route is not recoverable")
+        if worktree_revision != events[-1].source_revision:
+            raise ValueError("terminal Coder source differs from its StateEvent")
         if (
             context.task_id != task.id
             or context.role is not AgentRole.CODER
@@ -341,6 +358,16 @@ class NativeRecoverySourceReader:
             or permissions.write_paths != task.constraints.allowed_paths
         ):
             raise ValueError("Coder permissions differ from dispatch")
+        baseline = require_terminal_baseline_context(
+            root,
+            task,
+            context,
+            baseline_epochs,
+            run_id=run_id,
+            request_sha256=final_route.request_sha256,
+            attempt=final_route.result.attempt,
+            source_revision=worktree_revision,
+        )
         source = RecoverySource(
             scope=scope,
             task_id=task.id,
@@ -356,10 +383,14 @@ class NativeRecoverySourceReader:
             failed_run_id=run_id,
             failed_context_id=context_id,
             base_revision=task.base_ref,
+            execution_baseline_sha256=baseline.binding_sha256 if baseline else None,
+            execution_base_revision=baseline.execution_base_ref if baseline else None,
             parent_delivery_id=parent_id,
             parent_checkpoint_sha256=parent_sha,
         )
-        if journal.list(scope.delivery_id) != history or self._sql(cp, history) != (
+        if journal.list(scope.delivery_id) != history or self._sql(
+            cp, history, sidecar=root, project_id=project.manifest.project_id
+        ) != (
             task,
             revision,
             dispatch,
@@ -367,6 +398,11 @@ class NativeRecoverySourceReader:
             events,
         ):
             raise ValueError("source changed during inspection")
+        if (
+            read_recovery_baseline_epochs(root, task, scope, project_id=project.manifest.project_id)
+            != baseline_epochs
+        ):
+            raise ValueError("execution baseline history changed during inspection")
         if (
             read_approved_stages(
                 self._config,
@@ -402,6 +438,9 @@ class NativeRecoverySourceReader:
         self,
         cp: ProjectDeliveryCheckpoint,
         history: tuple[ProjectDeliveryCheckpoint, ...],
+        *,
+        sidecar: Path | None = None,
+        project_id: str | None = None,
     ) -> tuple[Task, int, DeliveryAllocation, DispatchCommitRecord, tuple[StateEvent, ...]]:
         if cp.task_id is None or cp.dispatch_commit_id is None:
             raise ValueError("missing materialized Task")
@@ -488,8 +527,28 @@ class NativeRecoverySourceReader:
                 try:
                     candidate_event(event_tuple)
                 except RecoveryRejected:
-                    if any(item.source_revision != task.base_ref for item in event_tuple):
-                        raise ValueError("pre-candidate event source revision mismatch") from None
+                    if sidecar is None or project_id is None:
+                        team = TeamWorkspace.initialize(
+                            self._config.platform_root,
+                            team_id=self._config.team_id,
+                            name=self._config.team_name,
+                            read_only=True,
+                        )
+                        project, repository = team.project_registry().locate_repository(
+                            cp.repository_id
+                        )
+                        sidecar = repository.root
+                        project_id = project.manifest.project_id
+                    scope = RecoveryScope(
+                        team_id=self._config.team_id,
+                        repository_id=cp.repository_id,
+                        repository_root=cp.repository_root,
+                        delivery_id=cp.delivery_id,
+                    )
+                    epochs = read_recovery_baseline_epochs(
+                        sidecar, task, scope, project_id=project_id
+                    )
+                    validate_pre_candidate_sources(task, event_tuple, epochs)
                 else:
                     snapshot = CandidateRuntimeSnapshot(
                         task=task,

@@ -30,6 +30,7 @@ from ai_software_engineer.recovery.scope import (
     expanded_recovery_permissions,
     inspect_recovery_scope_supplement,
 )
+from ai_software_engineer.recovery.workspace_snapshot import read_terminal_workspace_snapshot
 from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.runtime_workspace import (
     REPOSITORY_PROFILE_NAME,
@@ -58,6 +59,7 @@ class NativeRecoveryFactsVerifier:
 
     def __init__(self, config: ProductionConfig, environment: Mapping[str, str]) -> None:
         self._config = config
+        self._environment = dict(environment)
         self._source = NativeRecoverySourceReader(config, environment)
 
     def validate(self, plan: RecoveryPlan) -> None:
@@ -137,6 +139,16 @@ class NativeRecoveryFactsVerifier:
             or expanded_recovery_permissions(original.permissions, supplement) != plan.permissions
         ):
             raise ValueError("approved source Coder permissions are no longer current")
+        workspace_snapshot = read_terminal_workspace_snapshot(
+            config,
+            self._environment,
+            original,
+            plan.capture,
+            approved_permissions=plan.permissions,
+            scope_supplement=supplement,
+        )
+        if workspace_snapshot != plan.workspace_snapshot:
+            raise ValueError("terminal workspace snapshot is missing or no longer current")
         if supplement is not None:
             allowed_paths = (*allowed_paths, *supplement.paths)
         allowed_paths = plan.rebound_write_paths(allowed_paths)
@@ -201,7 +213,12 @@ class NativeRecoveryFactsVerifier:
         ):
             raise ValueError("logical target checkout must be clean")
         manager._run_git(
-            ("merge-base", "--is-ancestor", source.base_revision, plan.target_base_revision),
+            (
+                "merge-base",
+                "--is-ancestor",
+                source.effective_base_revision,
+                plan.target_base_revision,
+            ),
             cwd=root,
         )
         verify_capture = (
