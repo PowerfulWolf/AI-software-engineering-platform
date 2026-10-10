@@ -1,0 +1,14 @@
+{
+  "id": "console-fixture-contract-20261010",
+  "title": "对齐执行展示测试的操作读取与直接可见审批契约",
+  "status": "completed",
+  "phase": "verified",
+  "owner": "codex",
+  "created_at": "2026-10-10",
+  "allowed_paths": [
+    "tests/team_view/product-execution.test.cjs",
+    "tests/team_view/delivery-status.test.cjs",
+    ".trellis/tasks/10-10-console-fixture-contract/"
+  ],
+  "verification": "verification.md"
+}

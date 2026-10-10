@@ -16,6 +16,8 @@ function state() {
   vm.runInContext(fs.readFileSync(path.join(__dirname,
     "../../src/ai_software_engineer/team_view/app.js"), "utf8"), context);
   vm.runInContext(`
+    // This harness represents a successfully read current Operations list.
+    operationsAvailable = true;
     snapshot = {selected_project_id: "p", requests: [], tasks: []};
     const request = {id: "r", project_id: "p", stage: "DELIVERING",
       checkpoint_sha256: "current", next_action: "Continue", failed_stages: [], scopes: [{delivery_id: "t"}],
@@ -89,6 +91,27 @@ test("only current unconsumed exact approval is shown as awaiting approval", () 
     operations.push({status: "FAILED", updated_at: "2026-10-01T00:02:00Z",
       intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", approved_scope_sha256: "exact"}});`);
   assert.doesNotMatch(run("managerFlowStatus(request).textContent"), /等待审批/);
+});
+
+test("retained exact approval stays historical until Operations are successfully read again", () => {
+  const run = state();
+  run(`snapshot.tasks = []; request.stage = "BLOCKED";
+    operations = [{status: "SUCCEEDED", updated_at: "2026-10-01T00:01:00Z",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"},
+      result: {delivery_id: "r", checkpoint_sha256: "current",
+        approval: {kind: "coder_scope", title: "新增文件范围", plan_sha256: "exact"}}}];`);
+  const saved = run("JSON.stringify(operations)");
+  assert.equal(run('latestApproval("r", "current").plan_sha256'), "exact");
+  assert.match(run("managerFlowStatus(request).textContent"), /等待审批.*新增文件范围/);
+  run("operationsAvailable = false");
+  assert.equal(run('latestApproval("r", "current")'), null);
+  assert.doesNotMatch(run("managerFlowStatus(request).textContent"), /等待审批|新增文件范围/);
+  assert.equal(run("JSON.stringify(operations)"), saved, "the sealed approval remains readable history");
+  assert.equal(run("request.checkpoint_sha256"), "current");
+  run("operationsAvailable = true");
+  assert.equal(run('latestApproval("r", "current").plan_sha256'), "exact");
+  assert.match(run("managerFlowStatus(request).textContent"), /等待审批.*新增文件范围/);
+  assert.equal(run("JSON.stringify(operations)"), saved);
 });
 
 test("current knowledge wait is not replaced by historical execution interruption", () => {

@@ -17,6 +17,8 @@ function setup() {
   vm.runInContext(fs.readFileSync(path.join(__dirname,
     "../../src/ai_software_engineer/team_view/app.js"), "utf8"), context);
   vm.runInContext(`
+    // This harness represents a successfully read current Operations list.
+    operationsAvailable = true;
     snapshot = {selected_project_id: "p", requests: [], tasks: []};
     const execution = {state: "WAITING", responsibility: "engineering",
       reason_code: "WAITING_HUMAN", reason: "开发等待工程前提处理。",
@@ -118,15 +120,20 @@ test("new stopped-work diagnostic remains Chinese engineering treatment", () => 
   assert.doesNotMatch(reason, /等待精确恢复审批|WORK_INTERRUPTED/);
 });
 
-test("exact technical approval remains in explicit engineering management disclosure", () => {
+test("exact technical approval and its facts are directly visible to the engineering authorizer", () => {
   const run = setup();
   run(`consoleAvailable = true; operationsAvailable = true; consoleDeliveryReady = true;
     consoleTeamId = "team"; snapshot.team_id = "team";`);
   const approval = run('recoveryApprovalBox(request, {kind: "coder_recovery", title: "恢复计划", facts: ["SHA exact"], plan_sha256: "exact"})');
-  assert.equal(approval.tag, "details");
-  assert.equal(approval.children[0].tag, "summary");
-  assert.match(approval.children[0].textContent, /工程管理/);
-  assert.match(text(approval), /产品负责人无需决定技术恢复方式/);
+  assert.equal(approval.tag, "section");
+  assert.equal(approval.children[0].tag, "p");
+  assert.match(approval.children[0].textContent, /当前需要工程授权者确认.*具体方案.*记录实际批准者/);
+  const box = approval.children[1];
+  assert.equal(box.tag, "div");
+  assert.equal(box.children[0].tag, "h3");
+  assert.equal(box.children[0].textContent, "恢复计划");
+  assert.equal(box.children.at(-1).tag, "button");
+  assert.equal(box.children.at(-1).textContent, "批准并继续");
   assert.match(text(approval), /SHA exact/);
 });
 
@@ -143,6 +150,29 @@ test("an active upstream operation shows node processing while executor facts st
     assert.doesNotMatch(text(run("managerFlowStatus(request)")), /待确认|阻塞/);
     assert.equal(run("execution.state"), "UNKNOWN");
     assert.match(run("requestNodeBadge(request).textContent"), /执行中/);
+  }
+});
+
+test("retained upstream Operations cannot authorize running or queued nodes during a read failure", () => {
+  const run = setup();
+  run(`snapshot.tasks = []; request.stage = "DESIGNING"; request.scopes = [];
+    execution.state = "UNKNOWN"; execution.responsibility = "team";
+    execution.reason_code = "EXECUTION_UNCONFIRMED";
+    operations = [{status: "RUNNING", updated_at: "2026-10-04T00:00:00Z",
+      intent: {action: "PRODUCT_APPROVAL", delivery_id: "r", project_id: "p"}}];`);
+  for (const [status, label] of [["RUNNING", "执行中"], ["QUEUED", "已排队"]]) {
+    run(`operations[0].status = ${JSON.stringify(status)}; operationsAvailable = true`);
+    const saved = run("JSON.stringify(operations)");
+    assert.equal(run("requestNodeExecution(request).label"), label);
+    run("operationsAvailable = false");
+    assert.equal(run('activeOperation("r", "p")'), undefined);
+    assert.notEqual(run("requestNodeExecution(request).state"), "running");
+    assert.doesNotMatch(run("requestNodeExecution(request).label"), /执行中|已排队/);
+    assert.equal(run('deliveryFlow(request).children.some(step => step.className === "current")'), false);
+    assert.equal(run("JSON.stringify(operations)"), saved, "complete retained history remains unchanged");
+    assert.equal(run("execution.state"), "UNKNOWN");
+    run("operationsAvailable = true");
+    assert.equal(run("requestNodeExecution(request).label"), label, "a fresh successful read restores current authority");
   }
 });
 
@@ -286,6 +316,27 @@ test("only live matching delivery work makes native bootstrap gray preparation",
   run('task.status = "NEW"; operations = []');
   assert.equal(run("taskPresentationStatus(task)"), "WAITING_ENGINEERING");
   assert.equal(run("canContinueDelivery(request)"), false);
+});
+
+test("retained delivery Operations cannot establish native preparation during a read failure", () => {
+  const run = setup();
+  run(`execution.state = "UNKNOWN"; execution.responsibility = "engineering";
+    task.role_queue = []; task.blocker = null;
+    operations = [{status: "RUNNING", updated_at: "2026-10-05T12:34:00Z",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"}}];`);
+  for (const status of ["NEW", "PLANNING"]) {
+    run(`task.status = ${JSON.stringify(status)}; operationsAvailable = true`);
+    const saved = run("JSON.stringify(operations)");
+    assert.equal(run("taskPresentationStatus(task)"), "PREPARING_EXECUTION");
+    run("operationsAvailable = false");
+    assert.equal(run("requestNodeExecution(request).label"), "等待工程处理");
+    assert.equal(run("taskPresentationStatus(task)"), "WAITING_ENGINEERING");
+    assert.equal(run("taskGroup(task)"), "blocked");
+    assert.equal(run("canContinueDelivery(request)"), false);
+    assert.equal(run("JSON.stringify(operations)"), saved);
+    run("operationsAvailable = true");
+    assert.equal(run("taskPresentationStatus(task)"), "PREPARING_EXECUTION");
+  }
 });
 
 test("host interruption blocks the retained upstream stage and member queue without altering original facts", () => {
