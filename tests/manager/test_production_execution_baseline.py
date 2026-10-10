@@ -71,12 +71,21 @@ from ai_software_engineer.manager.baseline_production import (
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
+    ReplyToProduct,
     ResumeProjectDelivery,
     StartProjectDelivery,
 )
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
+from ai_software_engineer.manager.production_agents import ExecutionPlanDraft, TechnicalDesignDraft
 from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.multi_directory.models import JointDeliveryResult
+from ai_software_engineer.multi_directory.scope import DirectoryScope
+from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
+from ai_software_engineer.orchestration.continuation_models import (
+    ContinuationRejected,
+    ExecutionInterruptionReceipt,
+)
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.work_queue.baseline import consumptions
@@ -101,12 +110,15 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _ReportTempla
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    ("mode", "reject_after_baseline", "native_pause"),
+    ("mode", "reject_after_baseline", "native_pause", "capture_pending"),
     [
-        (BaselineInputMode.PRESERVE_DRAFT, False, False),
-        (BaselineInputMode.CODER_REAPPLY, False, False),
-        (BaselineInputMode.PRESERVE_DRAFT, True, False),
-        pytest.param(BaselineInputMode.PRESERVE_DRAFT, False, True, id="pause_native_epoch"),
+        (BaselineInputMode.PRESERVE_DRAFT, False, False, False),
+        (BaselineInputMode.CODER_REAPPLY, False, False, False),
+        (BaselineInputMode.PRESERVE_DRAFT, True, False, False),
+        pytest.param(BaselineInputMode.PRESERVE_DRAFT, False, True, False, id="pause_native_epoch"),
+        pytest.param(
+            BaselineInputMode.PRESERVE_DRAFT, False, True, True, id="pause_missing_receipt"
+        ),
     ],
 )
 def test_public_baseline_updates_original_workspace_then_completes_independent_delivery(
@@ -116,6 +128,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     mode: BaselineInputMode,
     reject_after_baseline: bool,
     native_pause: bool,
+    capture_pending: bool,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -146,6 +159,41 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         timeout_seconds: int,
         input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
+        title = output_schema.get("title")
+        if title in {"JointTechnicalDesign", "JointExecutionPlan"}:
+            scope = DirectoryScope.model_validate(input_payload["scope"])
+            (unit,) = scope.units
+            draft = source_inspection(
+                self,
+                instructions="",
+                input_payload={},
+                output_schema=(
+                    TechnicalDesignDraft.model_json_schema()
+                    if title == "JointTechnicalDesign"
+                    else ExecutionPlanDraft.model_json_schema()
+                ),
+                timeout_seconds=timeout_seconds,
+            ).payload
+            if title == "JointTechnicalDesign":
+                return StructuredModelResult(
+                    payload={
+                        "product_spec_sha256": input_payload["product_spec_sha256"],
+                        "summary": "Inspect the greeting in the original repository.",
+                        "blocking_issues": [],
+                        "units": [
+                            {"unit_id": unit.id, "requirement_ids": ["req_001"], "design": draft}
+                        ],
+                    },
+                    duration_ms=0,
+                )
+            return StructuredModelResult(
+                payload={
+                    "design_sha256": input_payload["design_sha256"],
+                    "units": [{"unit_id": unit.id, "plan": draft}],
+                    "integration_checks": [],
+                },
+                duration_ms=0,
+            )
         result = original_complete(
             self,
             instructions=instructions,
@@ -233,6 +281,17 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                 outcome.process_stop.validate_integrity()
                 with pytest.raises(ProcessLookupError):
                     os.killpg(outcome.process_stop.group_id, 0)
+                if capture_pending:
+                    # This fixture wraps the real owned runner; seal its actual
+                    # stop as the native adapter does before full receipt capture.
+                    adapter._interruption_control.record_native_stop(
+                        request,
+                        cwd,
+                        process_stop=outcome.process_stop,
+                        output_present=False,
+                        cause="local_execution_limit",
+                        original_error_code=AgentErrorCode.TIMEOUT,
+                    )
                 return outcome
 
             assert request.execution_baseline_sha256 == expected_binding
@@ -417,6 +476,18 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             return result
 
     monkeypatch.setattr(production_delivery, "CodexCliAgentAdapter", ObservedCodex)
+    original_put_receipt = FileContinuationStore.put_receipt
+    capture_refusals: list[str] = []
+
+    def refuse_first_receipt(
+        store: FileContinuationStore, receipt: ExecutionInterruptionReceipt
+    ) -> ExecutionInterruptionReceipt:
+        if capture_pending and not capture_refusals:
+            capture_refusals.append(receipt.request.run_id)
+            raise ContinuationRejected("fixture stopped capture publication unavailable")
+        return original_put_receipt(store, receipt)
+
+    monkeypatch.setattr(FileContinuationStore, "put_receipt", refuse_first_receipt)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
         default_project_id="project_test",
@@ -457,21 +528,49 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         return original_tick(dispatcher, now=now, work_item_id=work_item_id)
 
     monkeypatch.setattr(DispatcherLoop, "tick", pause_successor)
-    service = host.project_entry()
-    product = service.start(
-        StartProjectDelivery(
-            repository_root=str(repository),
-            requirement="Update the greeting.",
-            title=f"Execution baseline {mode.value}",
+    service = host.requirement_entry() if capture_pending else host.project_entry()
+    if capture_pending:
+        initial = (
+            host.requirement_entry()
+            .create(
+                CreateRequirement(
+                    name="Execution baseline missing receipt", repository_roots=(str(repository),)
+                )
+            )
+            .checkpoint
         )
-    ).checkpoint
-    pending = service.approve(
+        product = service.reply(
+            ReplyToProduct(
+                delivery_id=initial.delivery_id,
+                expected_checkpoint_sha256=initial.checkpoint_sha256,
+                message="Update the greeting.",
+            )
+        ).checkpoint
+    else:
+        product = (
+            host.project_entry()
+            .start(
+                StartProjectDelivery(
+                    repository_root=str(repository),
+                    requirement="Update the greeting.",
+                    title=f"Execution baseline {mode.value}",
+                )
+            )
+            .checkpoint
+        )
+    approved = service.approve(
         ApproveProductSpec(
             delivery_id=product.delivery_id,
             expected_checkpoint_sha256=product.checkpoint_sha256,
             approval_reference="exact-original-product-approval",
         )
-    ).checkpoint
+    )
+    public_delivery_id = product.delivery_id
+    pending = (
+        approved.checkpoint.children[0].checkpoint
+        if isinstance(approved, JointDeliveryResult)
+        else approved.checkpoint
+    )
     assert pending.stage is DeliveryStage.DELIVERING, (
         pending.failure_code,
         pending.failure_summary,
@@ -489,7 +588,11 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         sidecar / "state/continuations" / pending.task_id,
         task_id=pending.task_id,
     )
-    (original_receipt,) = receipt_store.receipts_for_task(pending.task_id)
+    if capture_pending:
+        assert receipt_store.receipts_for_task(pending.task_id) == ()
+        assert capture_refusals == [calls[0].request.run_id]
+        receipt_store.capture_start(calls[0].request.run_id).validate_integrity()
+        receipt_store.capture_stop(calls[0].request.run_id).validate_integrity()
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         frozen_task = tasks.get(pending.task_id)
         frozen_revision = tasks.current_revision(pending.task_id)
@@ -498,8 +601,12 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         for item in host.work_queue.items_for_task(pending.task_id)
         if item.status is not WorkItemStatus.CLOSED
     )
-    assert current_item.attempt == frozen_task.attempts == 2
-    assert not host.work_queue.claims_for_work_item(current_item.id)
+    assert current_item.attempt == frozen_task.attempts == (1 if capture_pending else 2)
+    if capture_pending:
+        assert current_item.wait_disposition is not None
+        assert current_item.wait_disposition.facts.classification == "EXECUTION_UNCERTAIN"
+    else:
+        assert not host.work_queue.claims_for_work_item(current_item.id)
     assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
 
     # A main checkout upgrade cannot rewrite the original preparation/product approval.
@@ -510,7 +617,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     _git("commit", "-m", "upgrade source baseline", cwd=repository)
     execution_base = _git_output("rev-parse", "HEAD", cwd=repository)
     command = BaselineProposeCommand(
-        delivery_id=pending.delivery_id,
+        delivery_id=public_delivery_id,
         task_id=frozen_task.id,
         expected_task_intent_sha256=task_intent_sha256(frozen_task),
         expected_task_revision=frozen_revision,
@@ -518,6 +625,22 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         expected_source_revision=approved_source,
         target_base_ref=execution_base,
     )
+    if capture_pending:
+        unrelated = (
+            host.requirement_entry()
+            .create(
+                CreateRequirement(
+                    name="Unrelated source proposal", repository_roots=(str(repository),)
+                )
+            )
+            .checkpoint
+        )
+        with pytest.raises(ValueError, match="唯一原交付任务"):
+            host.propose_execution_baseline(
+                command.model_copy(update={"delivery_id": unrelated.delivery_id}),
+                project_id="project_test",
+            )
+        assert receipt_store.receipts_for_task(pending.task_id) == ()
     product_only = TeamHost(
         config=config,
         environment=environment,
@@ -539,6 +662,10 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             ),
             project_id="project_test",
         )
+    if capture_pending:
+        assert receipt_store.receipts_for_task(pending.task_id) == ()
+        assert host.work_queue.get(current_item.id) == current_item
+        assert len(calls) == 1
 
     # A complete immutable rule delta is inspectable but cannot be silently adopted.
     (repository / "AGENTS.md").write_text("Approved greeting conventions for every role.\n")
@@ -551,10 +678,19 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     native_plan = host.propose_execution_baseline(
         command.model_copy(update={"target_base_ref": unsafe_target}), project_id="project_test"
     )
+    (original_receipt,) = receipt_store.receipts_for_task(pending.task_id)
+    if capture_pending:
+        assert original_receipt.request == calls[0].request
+        assert original_receipt.scope.requirement_id == pending.delivery_id != public_delivery_id
+        assert host.work_queue.get(current_item.id) == current_item
+        with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+            assert tasks.get(frozen_task.id) == frozen_task
+            assert tasks.current_revision(frozen_task.id) == frozen_revision
+        assert len(calls) == 1
     assert native_plan.facts.native_rule_change is not None
     native_digest = native_plan.facts.native_rule_change.change_sha256
     native_execute = BaselineExecuteCommand(
-        delivery_id=pending.delivery_id,
+        delivery_id=public_delivery_id,
         task_id=frozen_task.id,
         expected_plan_sha256=native_plan.plan_sha256,
         reference="missing-native-rule-decision",
@@ -591,7 +727,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         with pytest.raises(BaselineGitConflict, match="new exact coder_reapply"):
             host.execute_execution_baseline(
                 BaselineExecuteCommand(
-                    delivery_id=pending.delivery_id,
+                    delivery_id=public_delivery_id,
                     task_id=frozen_task.id,
                     expected_plan_sha256=preserve.plan_sha256,
                     reference="refused-conflicted-plan",
@@ -614,7 +750,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     assert plan.dirty_capture.worktree_path == str(original_worktree)
     assert plan.complete_capture.base_revision == approved_source
     execute = BaselineExecuteCommand(
-        delivery_id=pending.delivery_id,
+        delivery_id=public_delivery_id,
         task_id=frozen_task.id,
         expected_plan_sha256=plan.plan_sha256,
         reference="exact-engineering-baseline-decision",
@@ -653,16 +789,27 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     assert (
         _git_output("rev-parse", "HEAD", cwd=original_worktree) == binding.execution_source_revision
     )
-    rebound_item = host.work_queue.get(current_item.id)
+    (rebound_item,) = tuple(
+        item
+        for item in host.work_queue.items_for_task(frozen_task.id)
+        if item.status is not WorkItemStatus.CLOSED
+    )
     assert rebound_item.status is (
         WorkItemStatus.WAITING_HUMAN if native_pause else WorkItemStatus.READY
     )
-    assert rebound_item.dispatch_sequence == current_item.dispatch_sequence + 1
+    if capture_pending:
+        assert host.work_queue.get(current_item.id).status is WorkItemStatus.CLOSED
+        assert rebound_item.parent_work_item_id == current_item.id
+        assert rebound_item.attempt == current_item.attempt + 1
+        assert rebound_item.dispatch_sequence == 0
+    else:
+        assert rebound_item.id == current_item.id
+        assert rebound_item.dispatch_sequence == current_item.dispatch_sequence + 1
     assert (
         host.work_queue.original_step(current_item.id).boundary.source_revision == approved_source
     )
     assert (
-        host.work_queue.step(current_item.id).boundary.source_revision
+        host.work_queue.step(rebound_item.id).boundary.source_revision
         == binding.execution_source_revision
     )
     assert len(calls) == 1
@@ -670,7 +817,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     if native_pause:
         assert rebound_item.wait_disposition is not None
         assert host.execute_execution_baseline(execute, project_id="project_test") == binding
-        service.resume(ResumeProjectDelivery(delivery_id=pending.delivery_id))
+        service.resume(ResumeProjectDelivery(delivery_id=public_delivery_id))
         assert len(calls) == 1
         assert host.work_queue.get(rebound_item.id) == rebound_item
         assert (
@@ -689,7 +836,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                 expected_disposition_sha256=rebound_item.wait_disposition.disposition_sha256,
             )
         continue_command = BaselineContinueCommand(
-            delivery_id=pending.delivery_id,
+            delivery_id=public_delivery_id,
             task_id=frozen_task.id,
             expected_task_intent_sha256=task_intent_sha256(frozen_task),
             expected_task_revision=frozen_revision,
@@ -742,7 +889,12 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     else:
         # Historical resume mode keeps its existing public invocation behavior.
         assert host.execute_execution_baseline(execute, project_id="project_test") == binding
-    delivered = service.status(pending.delivery_id).checkpoint
+    final_result = service.status(public_delivery_id)
+    delivered = (
+        final_result.checkpoint.children[0].checkpoint
+        if isinstance(final_result, JointDeliveryResult)
+        else final_result.checkpoint
+    )
     if reject_after_baseline:
         from ai_software_engineer.domain.delivery_resolution import (
             DeliveryProofMissing,
@@ -766,7 +918,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                 expected_checkpoint_sequence=facts.checkpoint_sequence,
             ),
             project_id="project_test",
-            delivery_id=pending.delivery_id,
+            delivery_id=public_delivery_id,
         )
         assert proof.source_revision == binding.execution_source_revision
         assert DeliveryProofMissing.OUTCOME_REJECTED in proof.missing

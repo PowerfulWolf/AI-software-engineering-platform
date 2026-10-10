@@ -1,0 +1,17 @@
+{
+  "id": "baseline-capture-preparation-20261010",
+  "title": "更新原需求基线时封存真实中断进度并保持暂停",
+  "status": "completed",
+  "phase": "done",
+  "owner": "codex",
+  "created_at": "2026-10-10",
+  "allowed_paths": [
+    "src/ai_software_engineer/manager/baseline_production.py",
+    "src/ai_software_engineer/manager/production_host.py",
+    "tests/manager/test_baseline_wait_fact_collection.py",
+    "tests/manager/test_production_execution_baseline.py",
+    ".trellis/spec/core/execution-baseline.md",
+    ".trellis/tasks/10-10-baseline-capture-preparation/"
+  ],
+  "verification": "verification.md"
+}

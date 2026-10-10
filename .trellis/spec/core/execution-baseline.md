@@ -391,6 +391,58 @@ all exact old decisions after they have legitimately progressed. Correct: publis
 fenced queue, review exact immutable rule differences, release the latest authorized hold, and
 only kick a new or exact verified still-unstarted release.
 
+## Proposal-only collection of original stopped execution facts (2026-10-10)
+
+`ProductionBaselineFactCollector.bind_proposal(command: BaselineProposeCommand) -> None`
+binds the explicit command to one production proposal. `BaselineProposeCommand.require_current`
+checks the exact Task intent/revision, WorkItem and current execution source while the existing
+Task process lock and SQL idle fence are held, before any missing receipt/outcome is published.
+Its signature is `require_current(task: Task, revision: int, work_item_id: str,
+source_revision: str) -> None`. Host first validates the public Requirement/Task association
+with `_baseline_native_checkpoint`: a joint parent must contain exactly one matching native
+Task. It binds a typed internal command copy using that native child's delivery ID before
+`ExecutionBaselineService.propose`; the original public command still validates the returned
+plan. ContinuationScope retains its original native Requirement/dispatch identity, never the
+parent ID. An unrelated parent is rejected before receipt/outcome publication. Request data
+cannot assert execution stopped or grant mutation authority.
+
+For `source_rebind` with an unresolved `EXECUTION_UNCERTAIN`/`PLATFORM_BUG` Coder wait, the
+collector reuses `DeliveryWaitFactCollector.collect(task, step, guard)` before loading receipts.
+It supplies the exact native Team/Project/Repository/Requirement/dispatch scope and reuses the
+held guard/fence without entering a second SQL idle scope. It can only append original durable
+route outcomes or complete legal interruption receipts. It does not call HANDLE, resolve a
+wait, change Task/queue/retry budget, publish READY, mutate the Coder branch or call a model.
+Normal proof/reservation/capture/preview validation then builds the proposal.
+
+| Proposal input | Required result |
+| --- | --- |
+| Exact v2 start/stop, legal full source, missing receipt | Seal one receipt and proposal; unchanged Task/events/queue/budget/worktree |
+| Repeat exact preparation | Reuse receipt; no new execution, debit or receipt |
+| Stale intent/revision/WorkItem/source | Reject before missing facts are written |
+| Live/unknown process, absent cause/code, changed scope/claim/source, sensitive or drifting source | Existing receipt refusal; original wait and files remain |
+| Original successful result | Preserve/recover result; reject baseline overwrite and require ordinary result acceptance |
+| PAUSE hold, ordinary preflight, execute/continue recollection or legacy rescue | No proposal reconciliation or reinterpretation of historical invocation start |
+
+Good: prepare an exact new source while sealing a genuinely stopped draft, execute the approved
+plan with PAUSE, inspect native-rule changes and explicitly RESUME. Base: existing complete
+receipts and clean preflight keep their prior behavior. Bad: call HANDLE merely to seal facts
+and unintentionally resume on the old source, infer a stop from queue expiry, or reclassify a
+successful output as a failure.
+
+Incremental tests: `tests/manager/test_baseline_wait_fact_collection.py` and the public missing
+receipt PAUSE flow in `tests/manager/test_production_execution_baseline.py`. Assert command
+rejection before publication, complete capture, idempotency, no nested queue lock, zero calls
+before explicit continuation and independent final same-candidate QA/Review.
+
+Existing waits need no SQL migration, in-place receipt/report rewrite or Requirement recreation.
+After loading the compatible runtime while idle, prepare a source-update proposal for the same
+Requirement and exact current WorkItem using an immutable target SHA available in its registered
+repository, review/approve exact source and native-rule changes with PAUSE, then explicitly
+continue the latest preserved binding. Old failures and original stop records remain immutable.
+Before source execution, code rollback leaves sealed original receipts usable by the existing
+handling/baseline paths. Once PAUSE/binding/continuation records exist, retain their readers and
+prefer a forward fix; do not erase facts or reset the worktree to enable rollback.
+
 Read-side pending kickoff: `RoleQueueView.pending_baseline_continuation` contains only a saved,
 validated `BaselineContinueAuthorization` whose exact latest binding/file record and SQL release
 still match the current READY snapshot and Task revision, with no ACTIVE claim. The read helper

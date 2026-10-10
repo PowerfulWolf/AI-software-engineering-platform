@@ -79,8 +79,12 @@ from ai_software_engineer.manager.legacy_local_execution import (
     TrustedLegacyLocalExecutionObserver,
 )
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
+from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCollector
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
-from ai_software_engineer.orchestration.continuation_models import ExecutionInterruptionReceipt
+from ai_software_engineer.orchestration.continuation_models import (
+    ContinuationScope,
+    ExecutionInterruptionReceipt,
+)
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.orchestration.retry import _active_progress, _latest
 from ai_software_engineer.recovery.models import digest
@@ -109,6 +113,25 @@ class BaselineProposeCommand(DomainModel):
     expected_source_revision: FullGitRevision
     target_base_ref: FullGitRevision
     input_mode: BaselineInputMode = BaselineInputMode.PRESERVE_DRAFT
+
+    def require_current(
+        self, task: Task, revision: int, work_item_id: str, source_revision: str
+    ) -> None:
+        """Reject stale inputs before the collector publishes original facts."""
+        if (
+            task.id,
+            task_intent_sha256(task),
+            revision,
+            work_item_id,
+            source_revision,
+        ) != (
+            self.task_id,
+            self.expected_task_intent_sha256,
+            self.expected_task_revision,
+            self.expected_work_item_id,
+            self.expected_source_revision,
+        ):
+            raise ValueError("工程执行基线事实已变化, 请刷新后重新调查")
 
     def require_plan(self, plan: ExecutionBaselinePlan) -> None:
         plan.validate_integrity()
@@ -345,6 +368,63 @@ class ProductionBaselineFactCollector:
         )
         self._sealed_legacy_observation: LegacyExecutionContainment | None = None
         self.route_root = route_root
+        self._proposal_command: BaselineProposeCommand | None = None
+
+    def bind_proposal(self, command: BaselineProposeCommand) -> None:
+        """Bind one explicit preparation, never an execute/continue recollection."""
+        if self._scope_held:
+            raise ValueError("执行基线方案不能在调查期间替换当前命令")
+        self._proposal_command = command
+
+    def _collect_proposal_facts(
+        self,
+        task: Task,
+        revision: int,
+        step: QueuedRoleStep,
+        source_revision: str,
+        target_base_ref: str,
+    ) -> None:
+        if not self._scope_held or self._idle_cursor is None:
+            raise ValueError("执行基线事实封存缺少真实任务锁和队列屏障")
+        command = self._proposal_command
+        if command is None:
+            return
+        command.require_current(task, revision, step.work_item.id, source_revision)
+        if (
+            command.delivery_id != self.requirement_id
+            or command.purpose is not self.purpose
+            or command.target_base_ref != target_base_ref
+        ):
+            raise ValueError("工程执行基线事实已变化, 请刷新后重新调查")
+        item = self.queue.get(step.work_item.id)
+        disposition = item.wait_disposition
+        if (
+            self.purpose is not BaselinePurpose.SOURCE_REBIND
+            or item.status
+            not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+            or disposition is None
+            or disposition.facts.classification not in {"EXECUTION_UNCERTAIN", "PLATFORM_BUG"}
+        ):
+            return
+        if self.route_root is None:
+            raise ValueError("执行基线事实封存缺少原调用路由记录位置")
+        collector = DeliveryWaitFactCollector(
+            sidecar_state=self.state,
+            route_root=self.route_root,
+            scope=self.scope,
+            expected_continuation_scope=ContinuationScope(
+                team_id=self.scope.team_id,
+                project_id=self.scope.project_id,
+                repository_id=self.scope.repository_id,
+                requirement_id=self.requirement_id,
+                dispatch_sha256=self.allocation.dispatch_sha256,
+            ),
+            git=self.git,
+            queue=self.queue,
+        )
+        # execution_scope already owns both boundaries. Collection only appends
+        # original outcome/receipt facts; HANDLE would also resolve and resume.
+        collector.collect(task, step, self.guard)
 
     def bind_legacy_observation(self, containment: LegacyExecutionContainment) -> None:
         """Pin the approved evidence while collect independently checks it again."""
@@ -599,6 +679,7 @@ class ProductionBaselineFactCollector:
         source = self.inputs.current(task, implementation=implementation, progress=progress)
         if step.boundary.source_revision != source.source_revision:
             raise ValueError("Coder 队列源版本与当前已接纳输入不一致")
+        self._collect_proposal_facts(task, revision, step, source.source_revision, target_base_ref)
         if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE and (
             target_base_ref != source.execution_base_ref or implementation is not None
         ):

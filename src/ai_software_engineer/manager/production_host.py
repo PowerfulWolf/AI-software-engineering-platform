@@ -51,6 +51,7 @@ from ai_software_engineer.manager.baseline_production import (
     BaselineContinueCommand,
     BaselineExecuteCommand,
     BaselineProposeCommand,
+    ProductionBaselineFactCollector,
 )
 from ai_software_engineer.manager.delivery import (
     DeliveryCheckpointStale,
@@ -552,6 +553,13 @@ class TeamHost:
                 repository=repository,
                 project_id=project_id,
                 purpose=command.purpose,
+            )
+            if not isinstance(service.facts, ProductionBaselineFactCollector):
+                raise ValueError("执行基线方案缺少受控生产事实收集器")
+            # Public multi-repository addressing is validated above; original
+            # invocation/continuation records keep the exact native child ID.
+            service.facts.bind_proposal(
+                command.model_copy(update={"delivery_id": native.delivery_id})
             )
             plan = service.propose(
                 command.target_base_ref, input_mode=command.input_mode, purpose=command.purpose
