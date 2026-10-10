@@ -31,7 +31,7 @@ function harness(records) {
       project_id: "project_current", stage: "BLOCKED", checkpoint_sha256: "${"a".repeat(64)}",
       scopes: [], documents: []}]};
     page = "requests"; operations = records; operationsAvailable = true;
-    consoleAvailable = true; consoleDeliveryReady = true;
+    consoleAvailable = true; consoleTeamId = "team_current"; consoleDeliveryReady = true;
     renderNotification = () => {};`);
   return { records, run, render: () => { run("renderOperationStatus()"); return run("operationNotice"); },
     close: () => run("acknowledgeOperationNotice(operationNotice); renderOperationStatus()") };
@@ -96,14 +96,130 @@ test("another Project with the same target cannot suppress current human attenti
   assert.equal(h.render()?.operationId, "new_continue");
 });
 
+test("another Team with the same Project and target cannot suppress a current failure", () => {
+  const foreign = nextContinue({operation_id: "foreign_team", team_id: "other_team"});
+  const h = harness([oldFailure(), foreign]);
+  assert.equal(h.render()?.operationId, "old_product_approval");
+});
+
 test("independent administration actions without a target retain separate failure notices", () => {
   const old = operation("FAILED", "CREATE_PROJECT", {intent: {action: "CREATE_PROJECT", project_id: "project_current"}});
-  const newer = nextContinue({intent: {action: "UPDATE_SETTINGS", project_id: "project_current"}, result: null});
-  const h = harness([old, newer]);
+  const newer = nextContinue({status: "FAILED", intent: {action: "UPDATE_SETTINGS", project_id: "project_current"}, result: null});
+  const h = harness([]);
+  assert.equal(h.render(), null);
+  h.records.push(old, newer);
+  assert.equal(h.render().operationId, "new_continue");
+  h.close();
   assert.equal(h.render().operationId, "old_product_approval");
 });
 
 test("same-action retry still consumes the prior failure notification", () => {
   const h = harness([operation("FAILED", "CONTINUE_DELIVERY"), nextContinue()]);
   assert.equal(h.render(), null);
+});
+
+test("a fresh session archives old project creation failures while current delivery remains visible", () => {
+  const archived = operation("FAILED", "CREATE_REQUIREMENT", {
+    intent: {action: "CREATE_REQUIREMENT", project_id: "project_current", name: "旧创建"},
+  });
+  const active = nextContinue({status: "RUNNING", result: null});
+  const h = harness([archived, active]);
+  const saved = JSON.stringify(h.records);
+  assert.equal(h.render()?.operationId, "new_continue");
+  assert.equal(h.render()?.state, "ACTIVE");
+  h.close();
+  assert.equal(h.render(), null);
+  assert.equal(JSON.stringify(h.records), saved);
+});
+
+test("a missing retired Requirement target is historical but a reachable current decision stays visible", () => {
+  const archived = operation("SUCCEEDED", "CONTINUE_DELIVERY", {
+    intent: {action: "CONTINUE_DELIVERY", project_id: "project_current", delivery_id: "deleted_request"},
+    result: {delivery_id: "deleted_request", stage: "BLOCKED", diagnostic: "历史目标已退休。"},
+  });
+  const current = nextContinue({result: {delivery_id: "request_current", stage: "BLOCKED", diagnostic: "当前需要确认。"}});
+  const h = harness([archived, current]);
+  assert.equal(h.render()?.operationId, "new_continue");
+  h.close();
+  assert.equal(h.render(), null);
+});
+
+test("a targetless operation observed active still notifies its new failure", () => {
+  const current = operation("RUNNING", "CREATE_REQUIREMENT", {
+    intent: {action: "CREATE_REQUIREMENT", project_id: "project_current", name: "本轮创建"},
+  });
+  const h = harness([current]);
+  assert.equal(h.render()?.state, "ACTIVE");
+  h.close();
+  current.status = "FAILED";
+  assert.equal(h.render()?.state, "FAILED");
+  h.close();
+  assert.equal(h.render(), null);
+});
+
+test("a new targetless terminal record after the first successful read remains actionable", () => {
+  const h = harness([]);
+  assert.equal(h.render(), null);
+  h.records.push(operation("FAILED", "CREATE_REQUIREMENT", {
+    intent: {action: "CREATE_REQUIREMENT", project_id: "project_current", name: "本轮新失败"},
+  }));
+  assert.equal(h.render()?.state, "FAILED");
+});
+
+test("an accepted immediate terminal submit is observed even before the first catalog baseline", async () => {
+  const accepted = operation("FAILED", "CREATE_REQUIREMENT", {
+    intent: {action: "CREATE_REQUIREMENT", project_id: "project_current", name: "本次受理"},
+  });
+  const h = harness([]);
+  h.run(`consoleOperationContractVersion = 1; consoleSupportedActions = ["CREATE_REQUIREMENT"];
+    renderDetail = () => {};
+    fetch = async () => ({ok: true, json: async () => (${JSON.stringify(accepted)})});`);
+  await h.run('submitOperation({action: "CREATE_REQUIREMENT", project_id: "project_current"})');
+  assert.equal(h.render()?.state, "FAILED");
+  assert.equal(h.render()?.operationId, accepted.operation_id);
+});
+
+test("a failed initial Operations read does not establish a false session baseline", () => {
+  const archived = operation("FAILED", "CREATE_REQUIREMENT", {
+    intent: {action: "CREATE_REQUIREMENT", project_id: "project_current"},
+  });
+  const h = harness([archived]);
+  h.run("operationsAvailable = false");
+  assert.equal(h.render()?.key, "system:operations-unavailable");
+  assert.equal(h.run("operationNoticeObservation"), null);
+  h.close();
+  h.run("operationsAvailable = true");
+  assert.equal(h.render(), null);
+});
+
+test("session observation cannot cross Team identity even when operation IDs match", () => {
+  const current = operation("RUNNING", "CREATE_REQUIREMENT", {
+    intent: {action: "CREATE_REQUIREMENT", project_id: "project_current"},
+  });
+  const h = harness([current]);
+  assert.equal(h.render()?.state, "ACTIVE");
+  h.close();
+  current.status = "FAILED";
+  h.run('snapshot.team_id = "another_team"; consoleTeamId = "another_team"');
+  assert.equal(h.render(), null);
+});
+
+test("a newly discovered foreign Project or Team failure cannot displace current execution", () => {
+  const h = harness([nextContinue({status: "RUNNING", result: null})]);
+  assert.equal(h.render()?.state, "ACTIVE");
+  h.records.push(operation("FAILED", "CREATE_REQUIREMENT", {
+    operation_id: "foreign_project", intent: {action: "CREATE_REQUIREMENT", project_id: "other_project"},
+  }), operation("FAILED", "CREATE_REQUIREMENT", {
+    operation_id: "foreign_team", team_id: "other_team", intent: {action: "CREATE_REQUIREMENT", project_id: "project_current"},
+  }));
+  assert.equal(h.render()?.operationId, "new_continue");
+  assert.equal(h.render()?.state, "ACTIVE");
+});
+
+test("team-wide administration failures retain their existing notification qualification", () => {
+  const record = operation("FAILED", "CREATE_PROJECT", {
+    intent: {action: "CREATE_PROJECT"},
+  });
+  const h = harness([record]);
+  assert.equal(h.render()?.operationId, record.operation_id);
 });

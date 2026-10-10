@@ -55,6 +55,7 @@ let runtimeStatusError = null;
 let runtimeStatusLoading = false;
 let administrationNotice = null;
 let operationNotice = null;
+let operationNoticeObservation = null;
 let renderedNotificationSignature = null;
 let notificationReturnFocus = null;
 const discussionFormCaches = new Map();
@@ -638,6 +639,11 @@ const badge = (status) =>
   );
 const operationTarget = (operation) =>
   operation.intent.delivery_id || operation.result?.delivery_id || null;
+const operationRequest = (operation) => {
+  const target = operationTarget(operation);
+  return target && snapshot?.requests.find(request => request.id === target &&
+    request.project_id === operation.intent.project_id) || null;
+};
 const currentProjectId = () => snapshot?.selected_project_id || null;
 const projectSwitchPending = () =>
   requestedProjectId !== null && requestedProjectId !== currentProjectId();
@@ -3939,6 +3945,35 @@ function operationNoticeKey(operation) {
       : operation.status;
   return `${operation.operation_id}:${state}`;
 }
+function currentOperationNoticeObservation() {
+  const teamId = snapshot?.team_id;
+  if (!teamId || consoleTeamId !== teamId) return null;
+  if (operationNoticeObservation?.teamId !== teamId)
+    operationNoticeObservation = {teamId, initialized: false, knownIds: new Set(), observedIds: new Set()};
+  return operationNoticeObservation;
+}
+function observeOperationNotices() {
+  if (!operationsAvailable) return;
+  const observation = currentOperationNoticeObservation();
+  if (!observation) return;
+  const currentIds = new Set();
+  for (const operation of operations) {
+    if (operation.team_id && operation.team_id !== observation.teamId) continue;
+    currentIds.add(operation.operation_id);
+    if (["QUEUED", "RUNNING"].includes(operation.status) ||
+        (observation.initialized && !observation.knownIds.has(operation.operation_id)))
+      observation.observedIds.add(operation.operation_id);
+  }
+  // Bound this ephemeral catalog to the records still supplied by this Team.
+  observation.observedIds = new Set([...observation.observedIds].filter(id => currentIds.has(id)));
+  observation.knownIds = currentIds;
+  observation.initialized = true;
+}
+function observeSubmittedOperation(operation, teamId) {
+  const observation = currentOperationNoticeObservation();
+  if (observation?.teamId === teamId && (!operation.team_id || operation.team_id === teamId))
+    observation.observedIds.add(operation.operation_id);
+}
 function persistAcknowledgedOperationNotices() {
   try {
     globalThis.localStorage?.setItem(
@@ -3976,9 +4011,8 @@ function operationNoticeFor(operation) {
   const context = operation.intent.project_id
     ? projectName() : "团队";
   const targetId = operationTarget(operation);
-  const request = snapshot && targetId ? requestById(targetId) : null;
-  const target = request && request.project_id === operation.intent.project_id
-    ? targetId : null;
+  const request = operationRequest(operation);
+  const target = request ? targetId : null;
   const progress = currentOperationProgress(operation, request);
   const needsHumanAttention = operationNeedsHumanAttention(operation);
   const knowledgeApproved =
@@ -4180,6 +4214,7 @@ function buildNotification() {
 }
 async function submitOperation(intent) {
   const ownerProjectId = intent.project_id || null;
+  const ownerTeamId = snapshot?.team_id;
   try {
     if (!canControlCurrentTeam())
       throw new Error("交付控制状态暂不可用，请刷新后重试。");
@@ -4213,6 +4248,7 @@ async function submitOperation(intent) {
       ),
       payload,
     ];
+    observeSubmittedOperation(payload, ownerTeamId);
     // A newly accepted delivery action supersedes any older page-level
     // administration feedback. Do not reveal that stale dialog after the
     // operation notice is acknowledged.
@@ -4236,8 +4272,10 @@ function renderOperationStatus() {
   const panel = document.getElementById("operations");
   panel.replaceChildren();
   panel.hidden = true;
+  observeOperationNotices();
   const visible = [...operations]
     .filter((operation) => {
+      if (operation.team_id && operation.team_id !== snapshot?.team_id) return false;
       if (operation.intent.project_id && operation.intent.project_id !== currentProjectId()) return false;
       if (
         operation.status === "SUCCEEDED" &&
@@ -4246,9 +4284,13 @@ function renderOperationStatus() {
         return false;
       if (!operationNeedsHumanAttention(operation) &&
           !["FAILED", "INTERRUPTED"].includes(operation.status)) return true;
+      if (operation.intent.project_id && !operationRequest(operation) &&
+          !(operationNoticeObservation?.teamId === snapshot?.team_id &&
+            operationNoticeObservation.observedIds.has(operation.operation_id))) return false;
       const target = operationTarget(operation);
       return !operations.some(
         (candidate) =>
+          (!candidate.team_id || candidate.team_id === snapshot?.team_id) &&
           (target !== null || candidate.intent.action === operation.intent.action) &&
           candidate.intent.project_id === operation.intent.project_id &&
           operationTarget(candidate) === target &&
@@ -5111,6 +5153,62 @@ function deliveryResult(panel, request) {
   section.append(result);
   panel.append(section);
 }
+function projectOperationHistory(content) {
+  const projectId = currentProjectId();
+  if (!projectId) return;
+  const records = operations.filter(operation => operation.intent.project_id === projectId &&
+    (!operation.team_id || operation.team_id === snapshot?.team_id) && !operationRequest(operation))
+    .sort((a, b) => Date.parse(a.updated_at) - Date.parse(b.updated_at) || a.operation_id.localeCompare(b.operation_id));
+  if (!records.length) return;
+  const fold = viewGroup(el("details", undefined, "request-history-fold project-operation-history"),
+    "project-operation-history:" + snapshot.team_id + "/" + projectId);
+  fold.dataset.key = "project-operation-history:" + snapshot.team_id + "/" + projectId;
+  fold.append(
+    viewBlock(el("summary", `项目操作记录 · ${records.length} 条`), "project-operation-history-summary", records.length),
+    viewBlock(el("p", "以下操作未关联当前可访问的需求，包含需求创建和已删除需求的记录。全部记录保留；这里描述当次操作，当前需求的进度和下一步请查看需求详情。", "muted"),
+      "project-operation-history-explanation", null),
+  );
+  if (!operationsAvailable)
+    fold.append(el("p", "操作记录暂时无法读取。以下保留上次读取的记录，不能代表当前执行状态。", "error"));
+  const list = viewGroup(el("ol", undefined, "execution-history"), "project-operation-history-list");
+  for (const record of records) {
+    const item = viewBlock(el("li", undefined, "execution-history-entry"), "project-operation:" + record.operation_id, record);
+    item.append(el("strong", operationActionLabel(record)));
+    if (record.intent.name) item.append(el("p", record.intent.name));
+    const status = el("p", "操作状态 · ", "muted");
+    const commandStatus = badge(record.status);
+    if (record.status === "SUCCEEDED") {
+      commandStatus.textContent = "命令已完成";
+      commandStatus.className = "badge";
+    }
+    status.append(commandStatus);
+    item.append(status, el("p", "操作更新 · " + time(record.updated_at), "muted"));
+    if (record.result?.stage) item.append(el("p", "当次需求阶段 · " + label(record.result.stage), "muted"));
+    if (record.error_summary) item.append(el("p", humanizeBlockingText(record.error_summary), "error"));
+    if (record.result?.diagnostic) item.append(el("p", "当次原因 · " + humanizeBlockingText(record.result.diagnostic)));
+    if (record.result?.next_action) item.append(el("p", "当次下一步 · " + humanizeBlockingText(record.result.next_action)));
+    const handling = record.result?.engineering_wait_handling;
+    if (handling?.summary) item.append(el("p", "当次平台处理 · " + humanizeBlockingText(handling.summary)));
+    if (handling?.user_action) item.append(el("p", "当次用户操作 · " + humanizeBlockingText(handling.user_action), "muted"));
+    if (handling?.recheck_when) item.append(el("p", "当次复查时机 · " + humanizeBlockingText(handling.recheck_when), "muted"));
+    const technical = engineeringDetails("排障信息（供工程人员使用）", record.operation_id);
+    technical.append(el("p", "Team · " + snapshot.team_id, "paths"),
+      el("p", "Project · " + projectId, "paths"), el("p", "操作 · " + record.operation_id, "paths"));
+    if (record.error_code) technical.append(el("p", "平台错误编号 · " + record.error_code, "paths"));
+    const target = operationTarget(record);
+    if (target) technical.append(el("p", "原需求 · " + target, "paths"));
+    const proof = record.result?.engineering_wait_investigation || handling?.investigation;
+    if (proof) appendEngineeringInvestigation(item, proof, {historical: true});
+    const decision = record.result?.engineering_wait_resolution || handling?.resolution;
+    if (decision) appendEngineeringExecutionDetails(item, technical, {
+      ...decision, operator_id: decision.operator_principal?.operator_id,
+    });
+    item.append(technical);
+    list.append(item);
+  }
+  fold.append(list);
+  content.append(fold);
+}
 function renderRequests(content) {
   content.className = "request-master-panel";
   const top = el("div", undefined, "row request-heading");
@@ -5172,6 +5270,7 @@ function renderRequests(content) {
         ),
       );
     content.append(n);
+    projectOperationHistory(content);
     return;
   }
   const groups = [
@@ -5224,6 +5323,7 @@ function renderRequests(content) {
     group.append(el("p", `暂无${currentTitle}需求。`, "muted"));
   for (const request of requests) group.append(requestCard(request));
   content.append(group);
+  projectOperationHistory(content);
 }
 async function adminFetch(url, options = {}) {
   const response = await fetch(url, { cache: "no-store", ...options });

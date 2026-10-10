@@ -485,3 +485,56 @@ Base：只有最新失败，仍显示失败原因和详情入口。Bad：关闭�
 增量browser notifications用例断言QUEUED/RUNNING info无success/✓，普通success保留绿✓，
 warning/error不变，关闭和轮询不复活。无需改库；兼容资产在安全维护边界加载后刷新生效。
 回滚两行映射与info样式仅恢复旧图标问题，不改变任何后台事实。
+
+## 项目历史操作不能在新会话冒充当前待办（2026-10-10）
+
+### Scope 与 signatures
+
+真实新浏览器进入正常执行的K1时，几天前无target的CREATE_REQUIREMENT失败仍自动弹窗；
+原需求历史只收录精确target记录，项目级失败又没有可访问的历史入口。
+`team_view/app.js` 使用既有GET `/api/v1/operations`，不增加请求或写端点：
+
+```text
+operationRequest(operation) -> 当前snapshot中同Project/target的Requirement | null
+observeOperationNotices() -> 仅更新当前Team的会话内已观察操作ID
+observeSubmittedOperation(operation, teamId) -> 标记本会话真实受理操作
+projectOperationHistory(content) -> 当前Project未关联可访问Requirement的只读完整列表
+```
+
+### Contracts
+
+- 首次成功读取时已终结、且没有当前可访问Requirement target的项目操作属于历史，不自动
+  弹模态窗口；不能以固定日期/时间阈值定义历史，也不能清除Operation或持久化ack来处理。
+- 本会话观察到QUEUED/RUNNING、本会话提交已受理、或首次成功读取后新出现的操作，其后续
+  失败/中断/待处理仍可提醒。读取失败不能初始化或重置观察基线；Team变化隔离该临时状态。
+- 精确匹配当前Project/Requirement的真实待审批与失败继续使用既有资格和supersede规则；
+  不因项目历史过滤而批准、隐藏或解除当前阻塞。另一Team/Project不能借同target混入。
+- 需求列表末尾及空需求状态提供默认折叠、键盘可访问的“项目操作记录”；展示全部当前
+  Project无可访问Requirement记录，包括创建失败与已删除需求历史。使用安全textContent，
+  显示当次原因、操作结果与时间，明确不代表当前需求状态，排障ID默认折叠。
+- 通知筛选与历史展示使用同一operationRequest作用域判断，历史按真实aware时间排序，
+  相同时间使用操作ID稳定排序。读取失败保留已读历史并标明旧数据；刷新保留展开和阅读。
+  历史不可提交操作、放宽policy或复用旧审批，SUCCEEDED命令也不能冒充交付成功。
+
+### Validation matrix 与 required tests
+
+| 场景 | 必须行为 |
+| --- | --- |
+| 新会话首读旧无target创建失败 | 无模态遮挡；完整原因在项目操作记录可读 |
+| 当前会话ACTIVE后失败或受理即失败 | 正常失败提示；关闭后轮询不复活 |
+| 首次成功读取后新增失败 | 提醒该新失败；不复活首读历史 |
+| Operations读取失败/恢复、Team或Project切换 | 不用失败初始化基线；隔离作用域与旧回调 |
+| 当前精确Requirement审批与外Project同target | 当前审批保留；外域记录不压制它 |
+| 无需求或原需求删除 | 项目历史仍可达；包含全部匹配操作，不固定8条 |
+| aware时间带不同offset | 按实际先后排列，不按日期字符串字典序 |
+| 轮询、390px布局与键盘展开 | 相同历史DOM/阅读位置保持、无横向溢出、零写请求 |
+
+`tests/team_view/stale-operation-notice.test.cjs` 覆盖资格与作用域；真实隔离Chrome的
+`tests/team_view/browser/notifications.test.cjs` 覆盖入口、完整原因、空态、键盘和保留DOM。
+Good：当前K1继续执行，用户主动展开项目历史查看旧创建失败。Base：本会话新创建失败仍
+及时提示。Bad：首读所有历史失败轮番弹窗，或隐藏弹窗后让失败记录在UI无处查看。
+
+### 存量与回滚
+
+无需改库或重写历史。兼容资产在安全空闲维护边界加载后生效，不为本改动重启活动Coder。
+回滚通知资格/项目历史入口与样式仅改变展示；保留全部Operation、审批、Task与证据。

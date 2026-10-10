@@ -58,6 +58,91 @@ test("notification semantic colors preserve success warning error and ordinary i
   await assertNoOverlay(h.page);
 });
 
+test("project operation history archives unreachable old failures without blocking the current Requirement", async (t) => {
+  const old = operation("FAILED", {operation_id: "old_project_creation", updated_at: "2026-10-04T10:51:00+08:00",
+    intent: {action: "CREATE_REQUIREMENT", project_id: "project_fixture", name: "<img src=x onerror=alert(1)>"},
+    error_summary: "prepared joint context exceeds budget"});
+  const retired = operation("INTERRUPTED", {operation_id: "retired_request_operation", updated_at: "2026-10-04T03:00:00Z",
+    intent: {action: "CONTINUE_DELIVERY", project_id: "project_fixture", delivery_id: "retired_request"},
+    error_summary: "已退休需求的历史中断"});
+  const foreign = operation("FAILED", {operation_id: "foreign_project_creation",
+    intent: {action: "CREATE_REQUIREMENT", project_id: "other_project"}, error_summary: "外Project历史"});
+  const foreignTeam = operation("FAILED", {operation_id: "foreign_team_creation", team_id: "another_team",
+    intent: {action: "CREATE_REQUIREMENT", project_id: "project_fixture"}, error_summary: "外Team历史"});
+  const h = await ui(t, {operations: [old, retired, foreign, foreignTeam]});
+  const saved = JSON.stringify(h.state.operations);
+  await h.requests();
+  await assertNoOverlay(h.page);
+  const history = h.page.locator(".project-operation-history");
+  assert.equal(await history.getAttribute("open"), null);
+  const summary = history.locator(":scope > summary");
+  assert.match(await summary.innerText(), /项目操作记录.*2 条/);
+  await summary.focus();
+  await h.page.keyboard.press("Enter");
+  assert.match(await history.innerText(), /未关联.*需求/);
+  assert.match(await history.innerText(), /需求的必需上下文超过配置上限/);
+  assert.match(await history.innerText(), /已退休需求的历史中断/);
+  assert.doesNotMatch(await history.innerText(), /外Project历史/);
+  assert.doesNotMatch(await history.innerText(), /外Team历史/);
+  assert.equal(await history.locator("img").count(), 0);
+  assert.match(await history.innerText(), /<img src=x onerror=alert\(1\)>/);
+  const rows = await history.locator(":scope > ol > li").allTextContents();
+  assert.match(rows[0], /<img src=x onerror=alert\(1\)>/);
+  assert.match(rows[1], /已退休需求的历史中断/, "history orders actual instants across timezone offsets");
+  await summary.evaluate(node => {window.savedProjectHistory = node.parentElement;});
+  await h.tick();
+  assert.equal(await h.page.evaluate(() => savedProjectHistory.isConnected && savedProjectHistory.open), true);
+  const reads = h.state.reads.length;
+  h.team.requests = [];
+  await h.tick();
+  assert.match(await h.page.locator("#content").innerText(), /还没有需求/);
+  assert.equal(await h.page.evaluate(() => savedProjectHistory.isConnected && savedProjectHistory.open), true);
+  assert.match(await history.innerText(), /已退休需求的历史中断/);
+  assert.deepEqual(h.state.reads.slice(reads).filter(url => url.includes("operations")), ["/api/v1/operations"],
+    "history reuses the normal Operations read without extra requests");
+  for (const width of [1440, 390]) {
+    await h.page.setViewportSize({width, height: 844});
+    assert.equal(await h.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
+      `project history has no horizontal overflow at ${width}px`);
+  }
+  await h.page.route("http://ui.test/api/v1/operations", route => route.fulfill({status: 503, json: {error: {code: "READ_UNAVAILABLE"}}}));
+  await h.tick();
+  assert.equal(await h.page.evaluate(() => savedProjectHistory.isConnected && savedProjectHistory.open), true);
+  assert.match(await history.innerText(), /以下保留上次读取的记录，不能代表当前执行状态/);
+  assert.equal(await history.locator(":scope > ol > li").count(), 2);
+  await h.page.unroute("http://ui.test/api/v1/operations");
+  await h.tick();
+  assert.equal(await h.page.evaluate(() => savedProjectHistory.isConnected && savedProjectHistory.open), true);
+  assert.doesNotMatch(await history.innerText(), /以下保留上次读取的记录，不能代表当前执行状态/);
+  assert.equal(JSON.stringify(h.state.operations), saved);
+});
+
+test("project history keeps every record and its sealed outcome beyond eight entries", async (t) => {
+  const records = Array.from({length: 12}, (_, index) => operation("SUCCEEDED", {
+    operation_id: `archived_creation_${index}`, updated_at: "2026-10-04T10:51:00Z",
+    intent: {action: "CREATE_REQUIREMENT", project_id: "project_fixture", name: `历史操作 ${index}`},
+    result: {stage: "BLOCKED", diagnostic: `完整原因 ${index}`, next_action: `当次建议 ${index}`},
+  }));
+  const h = await ui(t, {operations: records});
+  await h.requests();
+  await assertNoOverlay(h.page);
+  const history = h.page.locator(".project-operation-history");
+  await history.locator(":scope > summary").click();
+  assert.match(await history.innerText(), /12 条/);
+  assert.equal(await history.locator(":scope > ol > li").count(), 12);
+  for (let index = 0; index < records.length; index++) {
+    const row = history.locator(":scope > ol > li").filter({
+      has: h.page.getByText(`当次原因 · 完整原因 ${index}`, {exact: true}),
+    });
+    assert.equal(await row.count(), 1);
+    assert.match(await row.innerText(), new RegExp(`当次建议 ${index}`));
+    assert.match(await row.innerText(), /当次需求阶段 · 已阻塞/);
+  }
+  const ids = await history.locator(":scope > ol > li .engineering-details").allTextContents();
+  assert.equal(ids.length, 12);
+  assert.match(ids[2], /archived_creation_10/, "equal timestamps have stable operation identity order");
+});
+
 test("acknowledging a notification releases the real CSS backdrop and page clicks", async (t) => {
   const h = await ui(t, { operations: [operation()] });
   await h.requests();

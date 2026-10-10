@@ -644,6 +644,12 @@ main[data-page="requests"] #detail {
 .request-master-panel {
   padding: 16px;
 }
+.project-operation-history {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
 .request-detail-panel {
   --detail-section-space: 18px;
   --detail-panel-padding: 20px;

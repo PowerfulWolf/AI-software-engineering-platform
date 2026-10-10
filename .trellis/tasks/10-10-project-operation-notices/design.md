@@ -1,0 +1,16 @@
+# 设计
+
+在现有通知资格前增加会话观察，不增加后台状态。唯一已核对Team的首次成功Operations读取
+建立身份基线；ACTIVE、后续首次出现、或真实受理提交的操作身份加入会话观察集合。集合
+只保存当前Operations目录中的ID，Team变化重新隔离。失败读取不能初始化或清空基线。
+
+`operationRequest`集中校验当前snapshot内精确Project/Requirement目标。无可访问目标的
+Project终结记录，仅本会话实际观察到时才具备弹窗资格；精确当前目标与Team级管理通知
+沿用既有规则。不同Team/Project记录不能压制当前决定，不以标题或固定时间判断关联。
+
+当前Project无可访问目标的全部Operations在需求列表及空态末尾提供原生details入口，
+按Date.parse真实时刻和ID稳定排序。结构化展示当次阶段、状态、完整原因和建议；工程ID
+默认折叠，不复制大体积原始Operation JSON。只使用已有GET数据，所有内容安全textContent。
+使用viewGroup/viewBlock维持轮询和读失败/恢复中的折叠、行DOM与阅读位置。
+
+无Schema/API/权限或数据库变化。当前运行的K1不加载这些资产；仅在安全空闲维护边界部署。
