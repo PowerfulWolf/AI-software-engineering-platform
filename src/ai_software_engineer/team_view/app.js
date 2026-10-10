@@ -1708,7 +1708,9 @@ function appendEngineeringBaseline(target, request, task, step) {
   }
   target.append(fold);
 }
-function deliveryPhase(item) {
+function deliveryPhase(item, node = null) {
+  if (node?.currentApproval) return "恢复待确认";
+  if (node?.platformProcessing) return "恢复准备";
   const task = item.request_id ? item : currentRequestTasks(item)
     .filter(task => !task.terminal).sort((a, b) => b.last_activity.localeCompare(a.last_activity))[0];
   const status = task?.status || item.knowledge_wait_stage || item.stage || item.status;
@@ -1784,7 +1786,7 @@ function currentOperationProgress(operation, request) {
   const responsibility = node.responsibility || (node.requiresEngineeringCheck ? "engineering"
     : ["WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL"].includes(request.stage) ? "product" : execution?.responsibility);
   return {
-    title: `当前阶段 · ${deliveryPhase(request)} · ${node.label}`,
+    title: `当前阶段 · ${deliveryPhase(request, node)} · ${node.label}`,
     reason: node.upstreamProcessing ? "当前节点正在执行，请等待本阶段处理完成。"
       : humanizeBlockingText(node.reason || execution?.reason || request.blocker),
     responsibility: {product: "产品负责人", team: "ASE 团队", engineering: "工程团队"}[responsibility] || null,
@@ -1798,7 +1800,7 @@ function productExecutionSummary(item, {guidance = true} = {}) {
   const node = item.stage ? requestNodeExecution(item) : taskExecutionPresentation(item);
   const section = el("div", undefined, "product-execution-summary");
   section.append(
-    el("p", "交付阶段 · " + deliveryPhase(item), "execution-phase"),
+    el("p", "交付阶段 · " + deliveryPhase(item, node), "execution-phase"),
     el("p", "当前执行 · " + (node?.label || label(executionPresentationStatus(execution))), "execution-state"),
     el("p", "处理方 · " + {product: "产品负责人", team: "ASE 团队", engineering: "工程团队"}[node?.responsibility || (node?.requiresEngineeringCheck ? "engineering" : execution.responsibility)], "muted"),
   );

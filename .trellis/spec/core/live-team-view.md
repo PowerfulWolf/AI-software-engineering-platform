@@ -116,6 +116,47 @@ scope/intent/policy 变化拒绝。MySQL fixture 必须串行，避免共享测�
 空闲加载前端后刷新可见；回滚此读侧提交并刷新不删除 receipt、Task 或历史批准。
 本节替代历史章节中把 lease 过期直接称为“执行已中断”、把通用工程等待要求用户继续审批的文案。
 
+### 恢复摘要的当前阶段与节点一致（2026-10-10）
+
+Scope：修改 `productExecutionSummary` 或 `currentOperationProgress` 的阶段/执行摘要时适用。旧 durable `BLOCKED/FAILED`
+是被恢复的历史输入，不能在当前精确恢复方案或处理请求旁重复标为当前“交付阶段 · 已阻塞”。
+
+Signatures：`productExecutionSummary(item, {guidance = true}) -> HTMLElement | null`，
+`currentOperationProgress(operation, request) -> progress | null`，
+`requestNodeExecution(request) -> presentation`，`deliveryPhase(item, node = null) -> string`。
+
+Contracts：同一次摘要/当前执行记录使用已经计算的 `requestNodeExecution`，显式传入
+`deliveryPhase(item, node)`；不得让 deliveryPhase 再求 node 或产生互相递归。
+默认不传 node 时保留原 phase 行为。仅在 `currentApproval=true`
+显示“交付阶段 · 恢复待确认”，在 `platformProcessing=true` 显示“交付阶段 · 恢复准备”。
+审批与处理标志仍由原精确 Project/checkpoint/plan、Operations 新鲜度、能力和当前工作事实
+判断；摘要不能自建恢复准入或推断 Coder 已开始。其他节点继续用 `deliveryPhase` 显示真实
+实现、测试、评审或业务门。旧终态、停止结论、工作区和全部审批历史不改写。
+
+| 事实 | 摘要阶段及禁止行为 |
+| --- | --- |
+| 当前可操作的精确未消费方案 | 恢复待确认 + 待工程确认，不能称已启动执行 |
+| 已接收恢复处理中，尚无新角色事实 | 恢复准备 + 平台正在处理恢复，不能再展示旧当前阻塞 |
+| Team busy/unavailable/timeout且独立精确处理记录可核验 | 同一恢复准备摘要，新操作控制仍暂停 |
+| 旧/外项目/已消费/不可读方案，无当前合法处理记录 | 保留真实阻塞，不生成恢复阶段 |
+| 本轮新失败、新等待、失效claim、业务确认 | 保持原 `requestNodeExecution` 优先级，不覆盖当前卡点 |
+| 新有效 Coder/QA/Reviewer claim | 真实实现/测试/评审阶段 + 执行中，不继续称恢复准备 |
+
+Good：用户看到“恢复准备/平台正在处理恢复”，可理解当前处理尚未生成新角色执行。
+Base：普通实现与业务确认摘要保持原行为。Bad：左侧从旧 checkpoint 得到“已阻塞”，
+右侧从当前节点得到“正在处理恢复”；同一摘要输出两套当前事实。
+Wrong：无条件用 `deliveryPhase(item)` 作为恢复摘要的当前阶段。
+Correct：复用同一个 node 的已核验恢复标志，其余情况保留原 delivery phase。
+
+`tests/team_view/product-execution.test.cjs` 直接调用真实摘要入口，覆盖精确方案、正常/三类
+读取竞争中的处理、新失败、新三角色 claim、业务门和全部历史 bytes 不变。
+`operation-progress.test.cjs` 用真实 `requestOperationHistory` 入口覆盖同源当前行，Team 读取
+竞争使用实际字符串 `busy/unavailable/timeout`；旧 sealed BLOCKED outcome 继续显示当次阻塞。
+关联 engineering-wait/delivery-status/operation-progress Node 用例继续验证门禁与优先级；
+真实 Chrome 390/1440 的恢复正文、布局和旧 callback 验证由独立浏览器用例负责。
+存量无需改库；加载兼容前端资产并刷新原需求即可重算。回滚此显示/test/spec改动并刷新，
+不删除旧失败、进度或审批，不停止现有执行。
+
 ## 完整 QA/Review 返工执行记录（2026-10-03）
 
 ### 封存时间与可验证的轮次顺序（2026-10-05）

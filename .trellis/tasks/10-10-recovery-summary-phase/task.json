@@ -1,0 +1,15 @@
+{
+  "name": "recovery-summary-phase",
+  "title": "让恢复摘要的当前阶段与真实恢复处理事实一致",
+  "status": "in_progress",
+  "phase": "deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/product-execution.test.cjs",
+    "tests/team_view/operation-progress.test.cjs",
+    "tests/team_view/browser/recovery-read-contention.test.cjs",
+    ".trellis/spec/core/live-team-view.md",
+    ".trellis/tasks/10-10-recovery-summary-phase"
+  ]
+}

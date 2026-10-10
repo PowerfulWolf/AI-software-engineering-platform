@@ -37,6 +37,109 @@ function text(node) {
   return [node.textContent, ...node.children.map(text)].filter(Boolean).join(" ");
 }
 
+function stoppedRecovery() {
+  const run = setup();
+  run(`consoleAvailable = true; consoleDeliveryReady = true; consoleTeamId = "team";
+    consoleOperationContractVersion = 1; consoleSupportedActions = ["CONTINUE_DELIVERY"];
+    snapshot.team_id = "team"; request.stage = "BLOCKED";
+    request.blocker = "原开发执行已停止，完整进度保留。";
+    execution.state = "STOPPED"; execution.reason = request.blocker;
+    task.status = "BLOCKED"; task.terminal = true; task.blocker = request.blocker; task.role_queue = [];
+    operations = [{operation_id: "prepared", team_id: "team", status: "SUCCEEDED",
+      requested_at: "2026-10-04T00:00:30Z", updated_at: "2026-10-04T00:00:30Z",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p",
+        expected_checkpoint_sha256: "current"},
+      result: {delivery_id: "r", checkpoint_sha256: "current",
+        approval: {kind: "coder_recovery", title: "保留进度并继续原需求", plan_sha256: "e".repeat(64)}}}];`);
+  return run;
+}
+
+function approvedRecovery() {
+  const run = stoppedRecovery();
+  run(`operations.push({operation_id: "processing", team_id: "team", status: "RUNNING",
+    requested_at: "2026-10-04T00:01:00Z", updated_at: "2026-10-04T00:01:00Z",
+    intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p",
+      expected_checkpoint_sha256: "current", approved_plan_sha256: "e".repeat(64)}});`);
+  return run;
+}
+
+test("exact prepared recovery summary names its current confirmation instead of the historical blocked phase", () => {
+  const run = stoppedRecovery();
+  const saved = run("JSON.stringify({request, task, operations})");
+  assert.equal(run("requestNodeExecution(request).currentApproval"), true);
+  const summary = text(run("productExecutionSummary(request)"));
+  assert.match(summary, /交付阶段 · 恢复待确认/);
+  assert.match(summary, /当前执行 · 待工程确认/);
+  assert.doesNotMatch(summary, /交付阶段 · 已阻塞|当前执行 · 执行中/);
+  assert.equal(run("JSON.stringify({request, task, operations})"), saved);
+});
+
+for (const issue of [null, "busy", "unavailable", "timeout"]) {
+  test(`approved recovery summary names preparation during Team ${issue || "available"} without claiming Coder execution`, () => {
+    const run = approvedRecovery();
+    run(`teamReadIssue = ${JSON.stringify(issue)}`);
+    const saved = run("JSON.stringify({request, task, operations})");
+    assert.equal(run("requestNodeExecution(request).platformProcessing"), true);
+    const summary = text(run("productExecutionSummary(request)"));
+    assert.match(summary, /交付阶段 · 恢复准备/);
+    assert.match(summary, /当前执行 · 平台正在处理恢复/);
+    assert.doesNotMatch(summary, /交付阶段 · 已阻塞|当前执行 · 执行中|Coder.*(?:正在执行|开发中)/);
+    if (issue) assert.equal(run("canControlCurrentTeam()"), false);
+    assert.equal(run("JSON.stringify({request, task, operations})"), saved);
+  });
+}
+
+test("historical or unavailable recovery approval cannot rename the current blocked phase", () => {
+  for (const change of [
+    'operations[0].result.checkpoint_sha256 = "old"',
+    'operations[0].intent.project_id = "other"',
+    'operationsAvailable = false',
+    'consoleSupportedActions = []',
+    'teamReadIssue = "busy"',
+    'operations.push({operation_id: "consumed", status: "SUCCEEDED", updated_at: "2026-10-04T00:01:00Z", intent: {action: "CONTINUE_DELIVERY", project_id: "p", delivery_id: "r", approved_plan_sha256: "e".repeat(64)}})',
+  ]) {
+    const run = stoppedRecovery();
+    run(change);
+    const summary = text(run("productExecutionSummary(request)"));
+    assert.match(summary, /交付阶段 · 已阻塞/, change);
+    assert.doesNotMatch(summary, /交付阶段 · 恢复(?:准备|待确认)/, change);
+  }
+});
+
+test("a new durable recovery failure remains the current blocker in both summary columns", () => {
+  const run = approvedRecovery();
+  run('task.last_activity = "2026-10-04T00:02:00Z"; task.blocker = "本轮验证发现新的问题。"');
+  const summary = text(run("productExecutionSummary(request)"));
+  assert.match(summary, /交付阶段 · 已阻塞/);
+  assert.match(summary, /当前执行 · 已阻塞/);
+  assert.match(summary, /本轮验证发现新的问题/);
+  assert.doesNotMatch(summary, /恢复准备|平台正在处理恢复/);
+});
+
+test("new role claims replace recovery preparation with their actual delivery phase", () => {
+  for (const [status, role, phase] of [["IMPLEMENTING", "coder", "实现"], ["QA", "qa", "测试"], ["REVIEW", "reviewer", "评审"]]) {
+    const run = approvedRecovery();
+    run(`task.status = ${JSON.stringify(status)}; task.terminal = false; task.blocker = null;
+      task.last_activity = "2026-10-04T00:02:00Z";
+      task.execution = {state: "RUNNING", responsibility: "team", reason_code: "ROLE_RUNNING"};
+      task.role_queue = [{role: ${JSON.stringify(role)}, status: "RUNNING", lease_liveness: "LEASE_VALID"}];`);
+    const summary = text(run("productExecutionSummary(request)"));
+    assert.match(summary, new RegExp("交付阶段 · " + phase), status);
+    assert.match(summary, /当前执行 · 执行中/, status);
+    assert.doesNotMatch(summary, /交付阶段 · 已阻塞|恢复准备|恢复待确认/, status);
+  }
+});
+
+test("explicit product and delivery confirmation keep priority over a retained recovery operation", () => {
+  for (const stage of ["WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL", "WAITING_DELIVERY_FINALIZATION"]) {
+    const run = approvedRecovery();
+    run(`request.stage = ${JSON.stringify(stage)}`);
+    const summary = text(run("productExecutionSummary(request)"));
+    assert.doesNotMatch(summary, /交付阶段 · 恢复(?:准备|待确认)|平台正在处理恢复/, stage);
+    assert.equal(run("requestNodeExecution(request).state"), "blocked", stage);
+  }
+});
+
 test("product sees stage, actual wait, responsible team and next step without technical identities", () => {
   const run = setup();
   const summary = run("productExecutionSummary(request)");

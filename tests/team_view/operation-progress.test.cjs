@@ -36,6 +36,60 @@ function harness() {
 }
 const rows = panel => descend(panel).filter(node => node.tagName === "LI");
 
+function approvedRecoveryHarness() {
+  const h = harness();
+  h.run(`consoleAvailable = true; consoleDeliveryReady = true; consoleTeamId = "team_current";
+    consoleOperationContractVersion = 1; consoleSupportedActions = ["CONTINUE_DELIVERY"];
+    data.request.stage = "BLOCKED"; data.request.blocker = "原开发执行已停止，完整进度保留。";
+    data.request.execution = {state: "STOPPED", responsibility: "engineering", reason: data.request.blocker,
+      next_action: "查看保留进度的方案。", action_required: false};
+    snapshot.tasks = [{id: "task_current", request_id: data.request.id, status: "BLOCKED", terminal: true,
+      blocker: data.request.blocker, last_activity: "2026-10-05T12:00:00Z", role_queue: []}];
+    data.operation.team_id = "team_current"; data.operation.requested_at = "2026-10-05T12:44:00Z";
+    data.operation.intent.expected_checkpoint_sha256 = data.request.checkpoint_sha256;
+    data.operation.intent.approved_plan_sha256 = "e".repeat(64);
+    operations.push({operation_id: "prepared", team_id: "team_current", status: "SUCCEEDED",
+      requested_at: "2026-10-05T12:00:30Z", updated_at: "2026-10-05T12:00:30Z",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: data.request.id, project_id: data.request.project_id,
+        expected_checkpoint_sha256: data.request.checkpoint_sha256},
+      result: {delivery_id: data.request.id, checkpoint_sha256: data.request.checkpoint_sha256, stage: "BLOCKED",
+        approval: {kind: "coder_recovery", title: "保留进度并继续原需求", plan_sha256: "e".repeat(64)}}});`);
+  return h;
+}
+
+for (const issue of [null, "busy", "unavailable", "timeout"]) {
+  test(`current recovery operation uses preparation in its title during Team ${issue || "available"}`, () => {
+    const h = approvedRecoveryHarness();
+    h.run(`teamReadIssue = ${JSON.stringify(issue)}`);
+    const saved = h.run("JSON.stringify({request: data.request, tasks: snapshot.tasks, operations})");
+    const row = rows(h.render()).find(row => text(row).includes("operation_current"));
+    assert.equal(row.children[0].textContent, "当前阶段 · 恢复准备 · 平台正在处理恢复");
+    assert.doesNotMatch(row.children[0].textContent, /已阻塞|执行中/);
+    const previous = rows(h.render()).find(row => text(row).includes("prepared"));
+    assert.equal(previous.children[0].textContent, "操作已结束 · 当次交付已阻塞", "sealed history retains its real old outcome");
+    if (issue) assert.equal(h.run("canControlCurrentTeam()"), false);
+    assert.equal(h.run("JSON.stringify({request: data.request, tasks: snapshot.tasks, operations})"), saved);
+  });
+}
+
+test("current recovery progress shows a newer failure and actual successor role instead of retained preparation", () => {
+  const h = approvedRecoveryHarness();
+  h.run('snapshot.tasks[0].last_activity = "2026-10-05T13:00:00Z"; snapshot.tasks[0].blocker = "本轮验证发现新的问题。"');
+  let row = rows(h.render()).find(row => text(row).includes("operation_current"));
+  assert.equal(row.children[0].textContent, "当前阶段 · 已阻塞 · 已阻塞");
+  assert.match(text(row), /本轮验证发现新的问题/);
+  assert.doesNotMatch(row.children[0].textContent, /恢复准备/);
+  for (const [status, role, phase] of [["IMPLEMENTING", "coder", "实现"], ["QA", "qa", "测试"], ["REVIEW", "reviewer", "评审"]]) {
+    h.context.update = {status, role};
+    h.run(`snapshot.tasks[0].status = update.status; snapshot.tasks[0].terminal = false; snapshot.tasks[0].blocker = null;
+      snapshot.tasks[0].execution = {state: "RUNNING", responsibility: "team", reason_code: "ROLE_RUNNING"};
+      snapshot.tasks[0].role_queue = [{role: update.role, status: "RUNNING", lease_liveness: "LEASE_VALID"}];`);
+    row = rows(h.render()).find(row => text(row).includes("operation_current"));
+    assert.equal(row.children[0].textContent, `当前阶段 · ${phase} · 执行中`);
+    assert.doesNotMatch(row.children[0].textContent, /恢复准备|已阻塞/);
+  }
+});
+
 test("unchanged current operation row follows stage and native role facts", () => {
   const h = harness();
   const original = JSON.stringify(h.data.operation);
