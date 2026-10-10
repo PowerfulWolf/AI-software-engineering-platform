@@ -1,0 +1,14 @@
+{
+  "name": "current-recovery-decision",
+  "title": "精确恢复审批成为当前需求状态，原失败保留为执行历史",
+  "status": "in_progress",
+  "phase": "independently_verified",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/engineering-wait.test.cjs",
+    "tests/team_view/product-execution.test.cjs",
+    ".trellis/spec/core/web-console.md",
+    ".trellis/tasks/10-10-current-recovery-decision"
+  ]
+}

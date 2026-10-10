@@ -744,9 +744,12 @@ new delivery failure.
 ### 2. Signatures
 
 ```javascript
-latestApproval(deliveryId, checkpointSha256) -> ConsoleApprovalRequest | null
+latestApproval(deliveryId, checkpointSha256, projectId = null) -> ConsoleApprovalRequest | null
+requestRecoveryDecision(request) -> CurrentRecoveryDecision | null
+requestRoleDispatch(tasks) -> CurrentRolePresentation | null
 requestBlockingSummary(request) -> { reasons, operationReason, approval, suggestedAction } | null
 recoveryApprovalBox(request, approval) -> HTMLElement
+submitRecoveryApprovalOperation(intent, approvalSignature) -> Promise<ConsoleOperation | null>
 ```
 
 ```python
@@ -758,10 +761,28 @@ CandidateVerificationEntry.open_plan(
 
 ### 3. Contracts
 
-- The unconsumed approval must be rendered inside the Requirement's single `阻塞信息` module,
-  adjacent to the retained blocker and before unrelated discussion/artifact modules.
-- Once an approval exists, retained Task failure text is labelled `原始阻塞`; it must not be shown
-  as though the just-completed continue Operation failed again.
+- An actionable unconsumed approval must be rendered directly inside the Requirement's single
+  current decision module, before unrelated discussion/artifact modules. Header, status, next action,
+  flow node and approval controls must agree on `待工程确认`; the current decision and its concrete
+  facts/buttons are not folded. The original terminal Task and failure remain immutable and are
+  available in a collapsed `原执行历史` disclosure, rather than presented as the current failure.
+- `requestRecoveryDecision` is the shared display/submission gate: validated readable Team/Console,
+  exact selected Project and Requirement checkpoint, advertised `CONTINUE_DELIVERY` capability,
+  successful unconsumed plan issuance, no active Operation and no current queued/running/retry role
+  work. Explicit Product reply/approval, delivery finalization and approved knowledge confirmation
+  retain priority over a matching historical recovery plan. The main callers pass `project_id`
+  explicitly to `latestApproval`; an Operation from another Project cannot issue or consume the
+  current decision. This is read-side derivation, not a new durable stage or a grant of authority.
+- A RUNNING `CONTINUE_DELIVERY` Operation with only retained STOPPED/terminal failure facts is
+  labelled `平台正在处理恢复`, with `PREPARING_EXECUTION`/paused styling and a wait instruction.
+  It must not claim Coder execution. A newer durable child failure, current wait or expired claim
+  keeps priority. Once current role queue facts exist, the role's actual queued/running state is
+  displayed instead: native-stage READY/LEASED means queued; RUNNING requires LEASE_VALID. These
+  facts may replace a retained Requirement STOPPED summary, but never override a current Task
+  stop/wait/expired claim. Historical failed stages do not turn these current flow nodes red.
+- Every rendered recovery action and its retained callback use the same current decision gate.
+  If a role has since been queued or started, the old approval button disappears and even a
+  detached old handler submits nothing. Render/read/poll never approves, restarts or writes facts.
 - `coder_scope` names every exact omitted path and renders `批准文件范围`; it must not use generic
   recovery-plan wording. The digest remains bound to the button and is never rendered.
 - An approval is consumed only relative to the Operation that issued it. A later
@@ -797,8 +818,13 @@ CandidateVerificationEntry.open_plan(
 
 | Snapshot / Operation | Required UI |
 |---|---|
-| BLOCKED + successful unconsumed `coder_scope` | Original blocker is humanized; exact paths, explanation and approval button appear in `阻塞信息` |
-| BLOCKED + successful unconsumed recovery/verification plan | Plan-specific suggestion and `批准并继续` appear in `阻塞信息` |
+| BLOCKED/STOPPED + current actionable `coder_scope` | `待工程确认`; exact paths and `批准文件范围` directly visible; approval prepares a plan and does not start Agent; original failure is collapsed history |
+| BLOCKED/STOPPED + current actionable recovery/verification plan | `待工程确认` across header/flow; clear authorized operator and `批准并继续`; original failure is collapsed history |
+| RUNNING continue Operation + only old terminal/STOPPED facts | `平台正在处理恢复`; wait for result; no Coder-running claim, duplicate preparation or old approval |
+| Current native READY or RUNNING/LEASE_VALID queue + retained Requirement STOPPED | Queued or executing state and wait instruction; no old approval control; old detached approval handler cannot submit |
+| New child failure/current wait/expired claim during recovery | Show the actual new blocker or interruption; do not hide it under processing or old approval |
+| Current explicit Product/final/knowledge confirmation + matching recovery plan | Preserve the explicit confirmation step; do not offer the historical recovery approval |
+| Unreadable/stale Team, wrong Project, unsupported capability or stale checkpoint | Revoke the actionable decision and its old callback; do not infer execution or fabricate approval |
 | Approval digest already submitted | Old approval disappears; normal continue/current result is shown |
 | Failed continue Operation | Failure remains the latest recovery result; no approval is fabricated |
 | Scope/plan approval fails safely, then a newer Operation reissues the same digest | Newer issuance is actionable and rendered; the older submission does not consume it |
@@ -815,9 +841,15 @@ CandidateVerificationEntry.open_plan(
 
 - Good: the first continue click discovers one omitted file; the page clearly asks for that exact
   scope approval without implying Coder ran twice.
+- Good: a retained STOPPED result is followed by a successful exact recovery plan. The title and
+  flow say `待工程确认`, the open current card names the button/authorized operator and what it will
+  do, and the old failure remains only in `原执行历史`. A pending recovery Operation says platform
+  handling; a later valid role queue says queued/executing and removes the old approval action.
 - Base: no approval exists; the durable current blocker and normal continue action remain visible.
 - Bad: leave the old raw Coder failure under `当前阻塞` and place the actual approval below the
   discussion, making a successful continuation look like the same error repeated.
+- Bad: let STOPPED summary win over current queue facts, or hide the old button visually while
+  allowing its detached callback to submit against an already active role.
 - Bad: call `RecoveryPlan.model_validate_json(plan_path.read_text())` on the persisted envelope.
   A valid plan then fails at the console boundary even though recovery already produced it.
 - Bad: declare the bug fixed because new code is correct while the reporter's existing Requirement
@@ -829,6 +861,14 @@ CandidateVerificationEntry.open_plan(
 policy failure with a successful, same-checkpoint `coder_scope` Operation. Assert the approval button
 is a descendant of `request-blocking-section`, exact paths are visible, digests/raw failure text are
 hidden, and the button submits only `approved_scope_sha256`.
+
+`tests/team_view/engineering-wait.test.cjs` covers the STOPPED + exact approval + pending recovery
+Operation + fresh queue windows. Check current header/next-action/flow agreement, directly visible
+facts/buttons, collapsed original failure, byte-identical durable facts after rendering, no submit
+while rendering, exact Project/checkpoint/consumption/freshness/capability negatives and old handler
+rejection after queued/running work or explicit confirmation appears. The affected incremental set is
+`engineering-wait.test.cjs`, `product-execution.test.cjs`, and `historical-child.test.cjs`; whole-suite
+execution is not required for this presentation-only change.
 
 `tests/web_console/test_manager.py` must pass a real `FileRecoveryStore` envelope path through a
 `DeliveryResumeResult` and assert that `ManagerConsoleAdapter` delegates plan opening to the scoped
@@ -843,8 +883,8 @@ showCurrentError(request.blocker)
 appendApprovalAfterDiscussion(operation.result.approval)
 
 // Correct: preserve history while presenting the successful next operator gate in one place.
-const approval = latestApproval(request.id, request.checkpoint_sha256)
-showOriginalBlockerAndApproval(request.blocker, recoveryApprovalBox(request, approval))
+const decision = requestRecoveryDecision(request)
+if (decision) showCurrentDecisionAndCollapsedHistory(decision, request.blocker)
 ```
 
 ```python
@@ -854,6 +894,21 @@ plan = RecoveryPlan.model_validate_json(Path(plan_file).read_text())
 # Correct: resolve and validate the envelope through the Project-scoped boundary.
 _, plan = host.recovery_entry(project_id).open_plan(Path(plan_file))
 ```
+
+### 8. Existing-data disposition and rollback (2026-10-10)
+
+The observed K1 parent and original terminal Task are valid historical facts. A successful public
+continue Operation prepared an exact plan at the same parent checkpoint; the obsolete display was
+caused by STOPPED/terminal branches running before the plan decision. No database, journal, Task,
+Operation or plan rewrite is required. After deploying this read-side fix, select the same Project
+and Requirement, wait for fresh reads, inspect the currently prepared exact plan, and approve only
+that plan through the existing public control. If the implementation baseline changes, prepare the
+new exact plan before approval; do not reuse an old digest or create a duplicate Requirement.
+Approval schedules the permitted recovery and still requires native independent QA/Review.
+
+Rollback restores the prior `app.js` and redeploys/restarts through controlled service maintenance;
+it affects presentation only. Original failure, audit history, checkpoint and all approval gates
+remain intact. Actual deployment and browser verification are required separately from VM tests.
 
 ## Console operation contract (2026-10-08)
 

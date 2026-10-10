@@ -497,7 +497,7 @@ const isSourceRevisionDrift = (operation) =>
     /source revision (?:drift|changed after Requirement preparation)/i.test(
       operation.error_summary || "",
     ));
-const latestApproval = (deliveryId, checkpoint) => {
+const latestApproval = (deliveryId, checkpoint, projectId = null) => {
   if (!operationsAvailable) return null;
   return (
     [...operations]
@@ -507,6 +507,7 @@ const latestApproval = (deliveryId, checkpoint) => {
           const approval = operation.result?.approval;
           if (
             operationTarget(operation) !== deliveryId ||
+            (projectId !== null && operation.intent.project_id !== projectId) ||
             operation.status !== "SUCCEEDED" ||
             !approval ||
             (operation.result.delivery_id === deliveryId
@@ -521,6 +522,7 @@ const latestApproval = (deliveryId, checkpoint) => {
               candidate.intent.approved_repair_sha256;
             return (
               operationTarget(candidate) === deliveryId &&
+              (projectId === null || candidate.intent.project_id === projectId) &&
               candidate.intent.action === "CONTINUE_DELIVERY" &&
               submittedApproval === approval.plan_sha256 &&
               candidate.updated_at.localeCompare(operation.updated_at) > 0
@@ -1963,6 +1965,52 @@ function operationChildBlocker(request, operation) {
   return task && operation?.status === "RUNNING" &&
     Date.parse(task.last_activity) > Date.parse(operation.requested_at) ? task : null;
 }
+function recoveryApprovalNextAction(approval) {
+  return {
+    coder_scope: "请工程授权者核对下方精确文件范围，点击“批准文件范围”。批准只准备恢复计划，不会启动 Agent；准备后还需审批恢复计划。",
+    coder_recovery: "请工程授权者核对下方恢复方案，点击“批准并继续”。平台将保留开发进度并安排 Coder 继续开发；实现完成后仍须独立 QA 和 Reviewer 验收。",
+    coder_interruption: "请工程授权者核对下方保留进度的继续方案，点击“批准并继续”。平台按精确方案继续原需求，不表示实现已经完成。",
+    pre_execution_restart: "请工程授权者核对下方执行重启方案，点击“批准并继续”。平台按精确方案安排新执行，原记录保留。",
+    candidate_verification: "请工程授权者核对下方独立验证方案，点击“批准并继续”。平台仅按方案继续 QA 或 Reviewer，不表示验收已经通过。",
+    joint_integration: "请工程授权者核对下方联合验收方案，点击“批准并继续”。平台按批准范围开展联合验收，不表示需求已经交付。",
+    prerequisite_repair: "请工程授权者核对下方工程前提修复方案，点击“批准并继续”。平台按精确范围安排修复和独立验收，不表示需求已经完成。",
+  }[approval.kind] || "请工程授权者核对下方具体方案，点击“批准并继续”。批准只授权本次精确方案，当前尚未继续执行。";
+}
+function requestRecoveryDecision(request) {
+  if (["DONE", "CLOSED", "WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL",
+      "WAITING_DELIVERY_FINALIZATION"].includes(request.stage) || approvedKnowledge(request) || !canControlCurrentTeam() ||
+      currentProjectId() !== request.project_id || !consoleSupportsOperation("CONTINUE_DELIVERY") ||
+      activeOperation(request.id, request.project_id)) return null;
+  // A prepared decision cannot replace actual current dispatch or role execution.
+  if (currentRequestTasks(request).some(task => !task.terminal &&
+      (["QUEUED", "CONTINUE_REQUIRED"].includes(task.status) || task.role_queue?.some(step =>
+        ["READY", "LEASED", "RUNNING", "RETRY_SCHEDULED"].includes(step.status))))) return null;
+  const approval = latestApproval(request.id, request.checkpoint_sha256, request.project_id);
+  const reason = approval?.kind === "coder_scope"
+    ? approval.coder_scope_request
+      ? "Coder 申请补充文件范围，尚未修改所申请的文件；本次方案尚未批准执行。"
+      : "Coder 的文件改动超出原任务授权范围，原执行现场保留；本次方案尚未批准执行。"
+    : approval?.title + "；本次方案尚未批准执行。";
+  return approval ? {state: "blocked", label: "待工程确认", status: "WAITING_ENGINEERING",
+    currentApproval: true, approval, responsibility: "engineering",
+    reason,
+    nextAction: recoveryApprovalNextAction(approval)} : null;
+}
+function requestRoleDispatch(tasks) {
+  const steps = tasks.filter(task => !task.terminal && !task.blocker &&
+    !waitingExecutionStep(task) && !interruptedExecution(task) &&
+    !["WAITING", "STOPPED", "INTERRUPTED"].includes(task.execution?.state)).flatMap(task =>
+    (task.role_queue || []).filter(step => step.role === roleForTaskStatus[task.status] && !interruptedStep(step)));
+  if (steps.some(step => step.status === "RUNNING" && step.lease_liveness === "LEASE_VALID"))
+    return {...runningRolePresentation(), currentRoleDispatch: true};
+  if (steps.some(step => ["READY", "LEASED"].includes(step.status)))
+    return {...queuedRolePresentation(), label: "已排队", currentRoleDispatch: true};
+  if (steps.some(step => step.status === "RETRY_SCHEDULED"))
+    return {state: "paused", label: "待重试", status: "RETRY_SCHEDULED", responsibility: "team",
+      reason: "模型执行重试已排队。", nextAction: "请等待计划重试，平台将按记录的时间继续。",
+      currentRoleDispatch: true};
+  return null;
+}
 function requestNodeExecution(request) {
   if (request.stage === "DONE") return {state: "done", label: "已完成", status: "DONE"};
   if (request.stage === "CLOSED") return {state: "closed", label: "已关闭", status: "CLOSED"};
@@ -1976,12 +2024,28 @@ function requestNodeExecution(request) {
     (interruptedExecution(task) || task.role_queue?.some(interruptedStep)));
   const childBlocker = operationChildBlocker(request, operation) ||
     (!operation ? terminalBlockedRequestTask(request) : null);
+  const roleDispatch = requestRoleDispatch(tasks);
   if (["WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL"].includes(request.stage))
     return {state: "blocked", label: request.stage === "WAITING_PRODUCT_REPLY" ? "需确认" : "待审批", status: request.stage};
   if (request.stage === "WAITING_DELIVERY_FINALIZATION")
     return {state: "blocked", label: "待确认", status: request.stage, reason: request.blocker};
   if (approvedKnowledge(request))
     return {state: "blocked", label: "已确认的知识 · 待继续", status: "KNOWLEDGE_APPROVED"};
+  const decision = requestRecoveryDecision(request);
+  if (decision) return decision;
+  if (operation?.status === "RUNNING" && operation.intent.action === "CONTINUE_DELIVERY" &&
+      canControlCurrentTeam() && currentProjectId() === request.project_id &&
+      !childBlocker && !waiting && !expired && !tasks.some(task => !task.terminal) &&
+      (execution?.state === "STOPPED" || tasks.some(task => task.terminal && taskGroup(task) === "blocked")))
+    return {state: "paused", label: "平台正在处理恢复", status: "PREPARING_EXECUTION",
+      platformProcessing: true, responsibility: "team",
+      reason: "平台正在处理本次恢复请求；当前还没有新的角色执行事实。",
+      nextAction: "请等待平台检查并返回结果；不要重复准备或批准。"};
+  // A current bound role queue supersedes the retained original STOPPED summary.
+  // New waits, failures and expired claims still require their own handling.
+  if (execution?.state === "STOPPED" && roleDispatch && !waiting && !expired && !childBlocker &&
+      !["WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(request.stage) &&
+      execution.reason_code !== "EXECUTION_CLAIM_EXPIRED") return roleDispatch;
   if (waiting || ["WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(request.stage) ||
       ["WAITING", "STOPPED", "INTERRUPTED"].includes(execution?.state) ||
       execution?.reason_code === "EXECUTION_CLAIM_EXPIRED" || expired || childBlocker)
@@ -1995,14 +2059,14 @@ function requestNodeExecution(request) {
     return {state: "paused", label: tasks.some(task => task.status === "CONTINUE_REQUIRED") ? "待继续" : "已排队", status: "READY"};
   if (execution?.state === "RETRY_SCHEDULED" || tasks.some(task => !task.terminal &&
       task.role_queue?.some(step => step.status === "RETRY_SCHEDULED")))
-    return {state: "paused", label: "待重试", status: "RETRY_SCHEDULED", responsibility: "team",
+    return roleDispatch?.status === "RETRY_SCHEDULED" ? roleDispatch : {state: "paused", label: "待重试", status: "RETRY_SCHEDULED", responsibility: "team",
       reason: "模型执行重试已排队。", nextAction: "请等待计划重试，平台将按记录的时间继续。"};
   const roleSteps = tasks.filter(task => !task.terminal).flatMap(task =>
     (task.role_queue || []).filter(step => step.role === roleForTaskStatus[task.status]));
   const hasNativeStage = tasks.some(task => !task.terminal && roleForTaskStatus[task.status]);
   if (operation?.status === "QUEUED" || execution?.state === "QUEUED" ||
       roleSteps.some(step => ["READY", "LEASED"].includes(step.status)))
-    return {...queuedRolePresentation(), label: "已排队"};
+    return roleDispatch?.status === "READY" ? roleDispatch : {...queuedRolePresentation(), label: "已排队"};
   const currentTasks = tasks.filter(task => !task.terminal);
   if (currentTasks.length && currentTasks.every(preparingTaskExecution))
     return {state: "paused", label: "准备执行", status: "PREPARING_EXECUTION", responsibility: "team",
@@ -2013,11 +2077,9 @@ function requestNodeExecution(request) {
     return {state: "running", label: "执行中", status: "RUNNING", upstreamProcessing: true, responsibility: "team"};
   if (roleSteps.some(step =>
       step.status === "RUNNING" && step.lease_liveness === "LEASE_VALID"))
-    return runningRolePresentation();
+    return roleDispatch || runningRolePresentation();
   if (!operation && request.design_recovery_available && request.stage_budget?.exhausted !== "capacity")
     return {state: "blocked", label: "设计待恢复", status: "DESIGN_RECOVERY_REQUIRED", reason: request.blocker};
-  const approval = !operation && latestApproval(request.id, request.checkpoint_sha256);
-  if (approval) return {state: "blocked", label: "待工程确认", status: "WAITING_ENGINEERING", reason: approval.title};
   if (!operation && designBudgetExhausted(request))
     return {state: "blocked", label: request.stage === "DESIGNING" ? "设计预算已用尽" : "执行预算已用尽",
       status: request.stage === "DESIGNING" ? "DESIGN_BUDGET_EXHAUSTED" : "RETRY_BUDGET_EXHAUSTED", reason: designBudgetSummary(request)};
@@ -2058,6 +2120,11 @@ function requestNodeBadge(request) {
   return el("span", `${deliveryPhase(request)} · ${node.label}`, `badge request-node-badge ${node.state}`);
 }
 function requestPresentation(request) {
+  const currentNode = requestNodeExecution(request);
+  if (currentNode.currentApproval) return {group: "blocked", status: currentNode.status,
+    blocker: currentNode.reason, nextAction: currentNode.nextAction};
+  if (currentNode.platformProcessing) return {group: "active", status: currentNode.status,
+    blocker: null, nextAction: currentNode.nextAction};
   if (request.execution && !productDiscussionStages.has(request.stage)) {
     const execution = request.execution;
     const node = requestNodeExecution(request);
@@ -2319,15 +2386,22 @@ function stageFailureGuidance(operation) {
 function requestBlockingSummary(request) {
   if (requestPresentation(request).group !== "blocked") return null;
   const node = requestNodeExecution(request);
+  const approval = node.currentApproval ? node.approval : null;
+  if (node.currentApproval) {
+    const historyReason = terminalBlockedRequestTask(request)?.blocker || request.blocker || request.execution?.reason;
+    return {reasons: historyReason ? [{reason: historyReason, scopes: []}] : [], operationReason: null,
+      approval, currentApproval: true, currentReason: node.reason, suggestedAction: node.nextAction,
+      approvedKnowledge: false, responsibility: "engineering"};
+  }
   if (node.requiresEngineeringCheck)
     return {reasons: [{reason: node.reason, scopes: []}], operationReason: null,
-      approval: latestApproval(request.id, request.checkpoint_sha256), suggestedAction: node.nextAction,
+      approval, suggestedAction: node.nextAction,
       approvedKnowledge: false, responsibility: "engineering"};
   if (request.execution && request.execution.responsibility !== "product") {
     return {
       reasons: [{reason: node.reason || request.execution.reason, scopes: []}],
       operationReason: null,
-      approval: latestApproval(request.id, request.checkpoint_sha256),
+      approval,
       suggestedAction: node.nextAction || request.execution.next_action,
       approvedKnowledge: false,
       responsibility: node.requiresEngineeringCheck ? "engineering" : request.execution.responsibility,
@@ -2398,7 +2472,6 @@ function requestBlockingSummary(request) {
   }
   if (!reasons.size && request.blocker) reasons.set(request.blocker, []);
   const operation = latestOperation(request.id);
-  const approval = latestApproval(request.id, request.checkpoint_sha256);
   const operationReason =
     operation?.status === "FAILED"
       ? operation.error_summary
@@ -2413,15 +2486,8 @@ function requestBlockingSummary(request) {
       values.indexOf(value) === index,
   );
   let suggestedAction = "处理上述原因后，再点击“继续交付”。";
-  if (approval?.kind === "coder_scope")
-    suggestedAction =
-      "确认下方精确文件范围后点击“批准文件范围”；平台随后会生成恢复计划，并再次请求审批。";
-  else if (approval?.kind === "coder_recovery")
-    suggestedAction = "确认下方恢复任务信息后点击“批准并继续”。";
-  else if (approval?.kind === "pre_execution_restart")
-    suggestedAction = "Coder 尚未启动；确认下方新 Task 重启计划后点击“批准并继续”。";
-  else if (approval?.kind === "candidate_verification")
-    suggestedAction = "确认下方独立验证计划后点击“批准并继续”。";
+  if (approval)
+    suggestedAction = recoveryApprovalNextAction(approval);
   else if (
     blockedTasks.some((task) =>
       String(task.blocker || "").includes(
@@ -2652,6 +2718,19 @@ function requestBlockerSection(request) {
     undefined,
     "detail-section request-blocking-section",
   ), "request-blockers");
+  if (summary.currentApproval) {
+    section.append(el("h3", "待工程确认"), el("p", summary.currentReason),
+      el("p", "下一步 · " + summary.suggestedAction, "request-blocking-next"),
+      recoveryApprovalBox(request, summary.approval));
+    if (summary.reasons.length) {
+      const history = viewBlock(engineeringDetails("原执行历史", request.id + ":recovery-source-history"),
+        "recovery-original-execution", summary.reasons);
+      history.append(el("p", "以下为原执行停止时的记录。当前恢复方案已经准备，后续操作以本页待确认方案为准。", "muted"));
+      for (const item of summary.reasons) history.append(el("p", humanizeBlockingText(item.reason), "muted"));
+      section.append(history);
+    }
+    return section;
+  }
   section.append(
     el("h3", summary.approvedKnowledge ? "下一步" : "阻塞信息"),
     el(
@@ -2722,7 +2801,7 @@ function recoveryApprovalCapabilityIssue() {
 }
 async function submitRecoveryApprovalOperation(intent, approvalSignature) {
   const request = requestById(intent.delivery_id);
-  const current = request && latestApproval(request.id, request.checkpoint_sha256);
+  const current = request && latestApproval(request.id, request.checkpoint_sha256, request.project_id);
   if (!request || request.project_id !== intent.project_id || currentProjectId() !== intent.project_id ||
       ["DONE", "CLOSED"].includes(request.stage) ||
       request.checkpoint_sha256 !== intent.expected_checkpoint_sha256 ||
@@ -2735,6 +2814,12 @@ async function submitRecoveryApprovalOperation(intent, approvalSignature) {
   const capabilityIssue = recoveryApprovalCapabilityIssue();
   if (capabilityIssue) {
     operationNotice = capabilityIssue;
+    renderDetail(); renderNotification(); return null;
+  }
+  const decision = requestRecoveryDecision(request);
+  if (!decision || JSON.stringify(decision.approval) !== approvalSignature) {
+    operationNotice = {kind: "error", title: "当前审批方案已变化",
+      message: "当前工作已有新的执行或确认步骤。请查看当前需求，不能使用先前保留的恢复审批。"};
     renderDetail(); renderNotification(); return null;
   }
   return submitOperation(intent);
@@ -4413,7 +4498,7 @@ function requestOperation(panel, request, discussionSection) {
   // recovery action; the durable task projection alone must not strand the operator.
   if (running && !isProductDiscussion) return;
   if (!running && designBudgetExhausted(request) && !canRecoverDesign(request) &&
-      !latestApproval(request.id, request.checkpoint_sha256)) return;
+      !requestRecoveryDecision(request)) return;
   if (running) {
     appendDiscussionContent(
       el(
@@ -4457,7 +4542,7 @@ function requestOperation(panel, request, discussionSection) {
     appendDiscussionContent(box);
     return;
   }
-  const approval = latestApproval(request.id, request.checkpoint_sha256);
+  const approval = requestRecoveryDecision(request)?.approval;
   if (approval && !running) {
     if (requestPresentation(request).group !== "blocked")
       appendOperation(recoveryApprovalBox(request, approval), true);
@@ -7943,6 +8028,7 @@ function deliveryFlow(request) {
     .filter(interruptedStep)
     .map(step => deliveryRoleStage[step.role]));
   const node = requestNodeExecution(request);
+  if (node.currentApproval || node.platformProcessing || node.currentRoleDispatch) failedStageIndexes.clear();
   if (["DONE", "CLOSED"].includes(request.stage)) {
     failedStageIndexes.clear();
     waitingStages.clear();
@@ -7962,7 +8048,7 @@ function deliveryFlow(request) {
     if (index === current || (request.stage === "CLOSED" && index === 6)) step.setAttribute("aria-current", "step");
     step.append(el("span", String(index + 1)), el("strong", title));
     if (state === "blocked") step.append(el("small", interruptedStages.has(index) ? "执行中断"
-      : ["WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL"].includes(request.stage) ? node.label : "已阻塞", "flow-state"));
+      : node.currentApproval || ["WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL"].includes(request.stage) ? node.label : "已阻塞", "flow-state"));
     if (state === "current") step.append(el("small", "执行中", "flow-state"));
     if (state === "done") step.append(el("small", "已完成", "flow-state"));
     if (state === "paused") step.append(el("small", node.label, "flow-state"));
@@ -8001,7 +8087,7 @@ function managerFlowStatus(request) {
     return el("p", approvedKnowledge(request)
       ? "Manager 协调 · 知识解答已批准，等待继续"
       : "Manager 协调 · 等待知识确认", "flow-manager blocked");
-  const approval = latestApproval(request.id, request.checkpoint_sha256);
+  const approval = requestRecoveryDecision(request)?.approval;
   if (approval)
     return el("p", `Manager 协调 · 等待审批 · ${approval.title}`, "flow-manager blocked");
   if (interruptedRequestTask(request))

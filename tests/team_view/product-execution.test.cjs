@@ -246,6 +246,9 @@ test("typed unknown execution retains budget, recheck and exact-approval gates u
   run('request.design_recovery_available = false; request.stage_budget = null; request.design_recheck_pending = true');
   assert.equal(run("requestNodeExecution(request).state"), "blocked");
   run(`request.design_recheck_pending = false;
+    consoleAvailable = true; consoleDeliveryReady = true; consoleTeamId = "team";
+    snapshot.team_id = "team"; consoleOperationContractVersion = 1;
+    consoleSupportedActions = ["CONTINUE_DELIVERY"];
     operations = [{status: "SUCCEEDED", updated_at: "2026-10-04T00:00:00Z",
       intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"},
       result: {delivery_id: "r", checkpoint_sha256: "current", approval: {kind: "coder_scope", title: "新增文件范围", plan_sha256: "exact"}}}];`);

@@ -726,14 +726,10 @@ test("stale Team facts invalidate retained engineering callbacks and show the re
         h.step.wait_disposition.action = "RESUME_EXECUTION_BASELINE";
         name = "继续原需求";
       } else if (kind === "approval") {
-        currentApprovalFixture(h);
-        h.task.status = "QUEUED";
-        h.step.status = "READY";
-        h.step.wait_disposition = null;
-        h.request.execution = {state: "QUEUED", responsibility: "engineering"};
+        stoppedRecoveryFixture(h);
         name = "批准并继续";
       }
-      const build = kind === "approval" ? "(() => {const panel = el('section'); requestOperation(panel, data.request); return panel;})()"
+      const build = kind === "approval" ? "requestBlockerSection(data.request)"
         : "engineeringWaitBox(data.request, data.task, data.step)";
       const box = h.run(build);
       const old = control(box, name);
@@ -1270,6 +1266,188 @@ function currentApprovalFixture(h, kind = "coder_recovery") {
   return approval;
 }
 
+function stoppedRecoveryFixture(h, kind = "coder_recovery") {
+  currentApprovalFixture(h, kind);
+  h.request.stage = "BLOCKED";
+  h.request.failed_stages = ["DELIVERING"];
+  h.request.blocker = "Coder 第 8 次执行失败：原始诊断与现场保留。";
+  h.request.next_action = "需要人工处理后再继续交付。";
+  h.request.execution = {state: "STOPPED", responsibility: "engineering",
+    reason: "当前交付已停止，历史与工作现场保留。",
+    next_action: "由工程团队核对停止原因和安全恢复路径；当前无需产品操作。"};
+  Object.assign(h.task, {status: "BLOCKED", terminal: true, blocker: h.request.blocker});
+  h.step.status = "CLOSED";
+  h.step.wait_disposition = null;
+}
+
+test("a current exact recovery decision replaces stopped-work advice while retaining original execution history", () => {
+  const h = harness();
+  stoppedRecoveryFixture(h);
+  const durable = h.run("JSON.stringify([data.request, data.task, operations])");
+  const node = h.run("requestNodeExecution(data.request)");
+  assert.equal(node.label, "待工程确认");
+  assert.equal(node.state, "blocked");
+  assert.equal(node.status, "WAITING_ENGINEERING");
+  assert.match(node.reason, /尚未.*执行/);
+  assert.doesNotMatch(node.reason, /第 8 次|已完成|正在执行/);
+  const presented = h.run("requestPresentation(data.request)");
+  assert.match(presented.nextAction, /工程授权者.*批准并继续/);
+  assert.doesNotMatch(presented.nextAction, /无需产品操作|核对停止原因/);
+  const box = h.run("requestBlockerSection(data.request)");
+  const visible = visibleDescend(box).map(node => node.textContent).join(" ");
+  assert.match(visible, /待工程确认|尚未.*执行/);
+  assert.match(visible, /批准并继续/);
+  assert.match(visible, /原执行历史/);
+  assert.doesNotMatch(visible, /第 8 次|无需产品操作/);
+  assert.match(text(box), /第 8 次执行失败/);
+  const approve = control(box, "批准并继续");
+  assert.equal(approve.disabled, false);
+  const history = descend(box).find(node => node.tagName === "DETAILS" && text(node).includes("第 8 次"));
+  assert.ok(history);
+  assert.notEqual(history.open, true);
+  const flow = h.run("deliveryFlow(data.request)");
+  assert.match(text(flow.children[3]), /待工程确认/);
+  assert.doesNotMatch(text(flow.children[3]), /已阻塞/);
+  assert.equal(h.run("JSON.stringify([data.request, data.task, operations])"), durable,
+    "presentation must not reset the terminal Task or rewrite any approval/history");
+  assert.equal(h.run("submitted.length"), 0);
+});
+
+test("a stopped-work decision cannot use stale foreign unreadable consumed or busy approvals", () => {
+  for (const mutation of [
+    'operations[0].result.checkpoint_sha256 = "old"',
+    'operations[0].intent.project_id = "other_project"',
+    'snapshot.selected_project_id = "other_project"',
+    'teamReadIssue = "busy"',
+    'operationsAvailable = false',
+    'consoleSupportedActions = []',
+    'operations = []',
+    `operations.push({status: "SUCCEEDED", updated_at: "2026-10-05T02:00:00Z",
+      intent: {action: "CONTINUE_DELIVERY", project_id: data.request.project_id,
+        delivery_id: data.request.id, approved_plan_sha256: approval.plan_sha256}})`,
+  ]) {
+    const h = harness();
+    stoppedRecoveryFixture(h);
+    h.run(mutation);
+    const node = h.run("requestNodeExecution(data.request)");
+    assert.notEqual(node.label, "待工程确认", mutation);
+    assert.equal(node.state, "blocked", mutation);
+    assert.match(h.run("data.task.blocker"), /第 8 次/);
+    assert.equal(h.run("submitted.length"), 0);
+  }
+});
+
+test("a new platform recovery operation explains handling without claiming Coder execution or hiding a newer failure", () => {
+  const h = harness();
+  stoppedRecoveryFixture(h);
+  h.run(`operations.push({operation_id: "current_work", status: "RUNNING",
+    requested_at: "2026-10-05T02:00:00Z", updated_at: "2026-10-05T02:00:00Z",
+    intent: {action: "CONTINUE_DELIVERY", project_id: data.request.project_id, delivery_id: data.request.id}})`);
+  const durable = h.run("JSON.stringify([data.request, data.task, operations])");
+  const node = h.run("requestNodeExecution(data.request)");
+  assert.equal(node.label, "平台正在处理恢复");
+  assert.equal(node.state, "paused", "platform handling is not a live Coder claim");
+  assert.match(node.nextAction, /等待.*平台/);
+  assert.doesNotMatch(node.reason + node.nextAction, /无需产品操作|已经启动 Coder|正在开发|已接纳/);
+  assert.equal(h.run("requestPresentation(data.request).group"), "active");
+  assert.equal(h.run("requestBlockerSection(data.request)"), null);
+  const flow = h.run("deliveryFlow(data.request)");
+  assert.equal(flow.children[3].className, "paused");
+  assert.match(text(flow.children[3]), /平台正在处理恢复/);
+  assert.doesNotMatch(text(flow.children[3]), /已阻塞|执行中/);
+  assert.equal(h.run("JSON.stringify([data.request, data.task, operations])"), durable);
+  h.task.last_activity = "2026-10-05T03:00:00Z";
+  h.task.blocker = "本次平台处理后发生新的执行失败。";
+  assert.equal(h.run("requestNodeExecution(data.request).state"), "blocked");
+  assert.match(h.run("requestPresentation(data.request).blocker"), /新的执行失败/);
+  assert.equal(h.run("submitted.length"), 0);
+});
+
+test("matching recovery facts cannot replace the explicit product or delivery confirmation step", () => {
+  for (const stage of ["WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL", "WAITING_DELIVERY_FINALIZATION"]) {
+    const h = harness();
+    stoppedRecoveryFixture(h);
+    h.request.stage = stage;
+    assert.equal(h.run("requestNodeExecution(data.request).status"), stage);
+    assert.equal(h.run("requestPresentation(data.request).status"), stage);
+    const blockers = h.run("requestBlockerSection(data.request)");
+    if (blockers) assert.equal(control(blockers, "批准并继续"), undefined,
+      "an old recovery approval cannot compete with the explicit confirmation step");
+  }
+  const h = harness();
+  stoppedRecoveryFixture(h);
+  h.request.stage = "WAITING_HUMAN";
+  h.request.knowledge_gap = {is_current: true, resolution: {resolution_id: "approved_knowledge"}};
+  assert.equal(h.run("requestNodeExecution(data.request).status"), "KNOWLEDGE_APPROVED");
+  assert.equal(h.run("requestPresentation(data.request).status"), "KNOWLEDGE_APPROVED");
+});
+
+test("a current file-scope decision states that approval prepares a plan without starting an Agent", () => {
+  const h = harness();
+  stoppedRecoveryFixture(h, "coder_scope");
+  const node = h.run("requestNodeExecution(data.request)");
+  assert.equal(node.label, "待工程确认");
+  assert.match(h.run("requestPresentation(data.request).nextAction"), /批准文件范围.*不会启动 Agent.*审批恢复计划/);
+  const box = h.run("requestBlockerSection(data.request)");
+  assert.ok(visibleDescend(box).includes(control(box, "批准文件范围")));
+  assert.equal(h.run("submitted.length"), 0);
+});
+
+test("actual role dispatch cannot be replaced by a previously prepared recovery decision", () => {
+  for (const status of ["RUNNING", "READY", "RETRY_SCHEDULED"]) {
+    const h = harness();
+    stoppedRecoveryFixture(h);
+    h.task.status = "IMPLEMENTING";
+    h.task.terminal = false;
+    h.task.blocker = null;
+    h.step.status = status;
+    h.step.lease_liveness = "LEASE_VALID";
+    h.request.stage = "DELIVERING";
+    h.request.execution = {state: status === "READY" ? "QUEUED" : status,
+      responsibility: "team", reason: "本轮角色状态", next_action: "等待平台执行"};
+    const node = h.run("requestNodeExecution(data.request)");
+    assert.notEqual(node.label, "待工程确认", status);
+    assert.equal(node.state, status === "RUNNING" ? "running" : "paused", status);
+  }
+});
+
+for (const status of ["READY", "RUNNING"]) {
+  test(`current ${status} role facts replace retained STOPPED advice and invalidate old approval controls`, async () => {
+    const h = harness();
+    stoppedRecoveryFixture(h);
+    const old = control(h.run("requestBlockerSection(data.request)"), "批准并继续");
+    h.request.stage = "DELIVERING";
+    Object.assign(h.task, {status: "IMPLEMENTING", terminal: false, blocker: null,
+      last_activity: "2026-10-05T02:00:00Z"});
+    Object.assign(h.step, {status, lease_liveness: "LEASE_VALID"});
+    const durable = h.run("JSON.stringify([data.request, data.task, operations])");
+    const node = h.run("requestNodeExecution(data.request)");
+    assert.equal(node.label, status === "RUNNING" ? "执行中" : "已排队");
+    assert.equal(node.state, status === "RUNNING" ? "running" : "paused");
+    const presentation = h.run("requestPresentation(data.request)");
+    assert.equal(presentation.group, "active");
+    assert.doesNotMatch(presentation.nextAction, /无需产品操作|核对停止原因|批准并继续/);
+    const flow = h.run("deliveryFlow(data.request)");
+    assert.equal(flow.children[3].className, status === "RUNNING" ? "current" : "paused");
+    assert.doesNotMatch(text(flow.children[3]), /已阻塞|待工程确认/);
+    const panel = new Element("section");
+    h.context.operationPanel = panel;
+    h.run("requestOperation(operationPanel, data.request)");
+    assert.equal(control(panel, "批准并继续"), undefined);
+    assert.equal(h.run("requestBlockerSection(data.request)"), null);
+    await old.events.click();
+    assert.equal(h.run("submitted.length"), 0, "retained callbacks cannot approve an already active role");
+    assert.equal(h.run("JSON.stringify([data.request, data.task, operations])"), durable);
+    h.step.lease_liveness = "LEASE_EXPIRED";
+    if (status === "RUNNING") {
+      assert.equal(h.run("requestNodeExecution(data.request).state"), "blocked");
+      assert.equal(h.run("requestNodeExecution(data.request).status"), "EXECUTION_INTERRUPTED");
+    }
+    h.step.status = "WAITING_HUMAN";
+    assert.equal(h.run("requestNodeExecution(data.request).state"), "blocked");
+  });
+}
+
 test("current exact approvals and their facts are visible without opening engineering details", async () => {
   for (const kind of ["coder_scope", "coder_recovery", "prerequisite_repair", "candidate_verification"]) {
     const h = harness();
@@ -1291,7 +1469,7 @@ test("current exact approvals and their facts are visible without opening engine
   }
 });
 
-test("current exact approval remains visible through the nonblocked request operation container", () => {
+test("a previously prepared approval is hidden once a current role has been queued", () => {
   const h = harness();
   currentApprovalFixture(h);
   h.task.status = "QUEUED";
@@ -1302,8 +1480,8 @@ test("current exact approval remains visible through the nonblocked request oper
   h.context.operationPanel = panel;
   assert.notEqual(h.run("requestPresentation(data.request).group"), "blocked", "exercise the distinct current-action placement");
   h.run("requestOperation(operationPanel, data.request)");
-  assert.ok(visibleDescend(panel).some(node => node.tagName === "BUTTON" && node.textContent === "批准并继续"),
-    "a caller cannot put the visible decision inside another closed engineering disclosure");
+  assert.equal(control(panel, "批准并继续"), undefined,
+    "a prepared historical decision cannot compete with current role dispatch");
   assert.equal(h.run("submitted.length"), 0);
 });
 
@@ -1377,6 +1555,7 @@ test("detached exact approval callbacks cannot revive changed or historical deci
   for (const mutation of [
     'data.request.checkpoint_sha256 = "7".repeat(64)',
     'data.request.stage = "CLOSED"',
+    'data.request.stage = "WAITING_PRODUCT_APPROVAL"',
     'operations[0].result.approval.plan_sha256 = "8".repeat(64)',
     'operations[0].result.approval.facts = ["不同的继续范围"]',
     'operations[0].status = "FAILED"',
