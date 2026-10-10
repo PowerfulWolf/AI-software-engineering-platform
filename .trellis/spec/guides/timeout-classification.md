@@ -13,9 +13,11 @@ Before changing an Agent timeout or retry path, ask:
   stderr words such as authentication/401 cannot override it. Keep the original bytes' hashes.
 
 `agents/codex_cli.py::_failure_diagnostic` prioritizes the explicit watchdog `timed_out` flag,
-then a negative return code (`cause=INTERRUPTED`), then recognized provider errors. Clean signal
-exits are nontransient PROVIDER_ERROR; dirty exits retain nontransient POLICY_VIOLATION and no
-artifact. Never infer cancellation reason, health or a successful checkpoint. The console
+then a negative return code (`cause=INTERRUPTED`), then recognized provider errors. Unchanged signal
+exits are nontransient PROVIDER_ERROR; new unsealed effects retain nontransient POLICY_VIOLATION and
+no artifact. Compare complete input/output inventory, HEAD and semantic index; an exact accepted
+dirty checkpoint is not a new effect. Unknown stop handling still takes priority. See the failed
+Codex route contract in `../core/production-team-host.md`. Never infer cancellation reason, health or a successful checkpoint. The console
 projects retained dirty signal exits, including historical diagnostics with wrong auth cause,
 as interruption from the sealed returncode; it does not rewrite them. Incremental regression:
 `test_codex_cli.py::test_signalled_dirty_run_does_not_classify_stderr_authentication_words`

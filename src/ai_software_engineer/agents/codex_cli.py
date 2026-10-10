@@ -71,7 +71,12 @@ from ai_software_engineer.git import (
     WorkspacePolicy,
     WorkspacePolicyError,
 )
-from ai_software_engineer.git.mutation import MutationInventoryRejected, WorkspaceMutationInventory
+from ai_software_engineer.git.mutation import (
+    MAX_INVENTORY_FILES,
+    MutationInventoryRejected,
+    WorkspaceMutationInventory,
+    capture_mutation_inventory,
+)
 from ai_software_engineer.owned_processes import (
     OwnedProcessesUncertain,
     OwnedProcessKind,
@@ -622,6 +627,12 @@ class CodexCliAgentAdapter:
                     request, self._workspace_root, compiled_prompt
                 )
             try:
+                failed_invocation_before = _capture_failed_invocation_snapshot(self._workspace_root)
+                if failed_invocation_before.head_revision != initial_head:
+                    raise MutationInventoryRejected("workspace drifted before provider invocation")
+                # Do not publish a durable execution start until all independent
+                # pre-provider observations succeed. The trusted control still
+                # performs its own fresh claim/source/inventory checks here.
                 inventory_before = (
                     self._interruption_control.started(request, self._workspace_root)
                     if self._interruption_control is not None
@@ -723,7 +734,7 @@ class CodexCliAgentAdapter:
                 )
                 if interrupted is not None:
                     return interrupted
-                if not _workspace_unchanged(self._workspace_root, initial_head):
+                if not _workspace_unchanged(self._workspace_root, failed_invocation_before):
                     return _failure(
                         request,
                         AgentErrorCode.POLICY_VIOLATION,
@@ -756,7 +767,7 @@ class CodexCliAgentAdapter:
                 )
                 if interrupted is not None:
                     return interrupted
-                if not _workspace_unchanged(self._workspace_root, initial_head):
+                if not _workspace_unchanged(self._workspace_root, failed_invocation_before):
                     return _failure(
                         request,
                         AgentErrorCode.POLICY_VIOLATION,
@@ -1568,11 +1579,117 @@ def _git_lines(root: Path, *arguments: str) -> tuple[str, ...]:
     return tuple(line for line in output.splitlines() if line)
 
 
-def _workspace_unchanged(root: Path, initial_head: str) -> bool:
-    """Allow provider fallback only when the failed route left no Git effects."""
-    return _git(root, "rev-parse", "HEAD") == initial_head and not _git(
-        root, "status", "--porcelain"
+@dataclass(frozen=True, slots=True)
+class _IndexEntry:
+    path: str
+    mode: str
+    object_id: str
+    stage: int
+    flags: int
+
+
+@dataclass(frozen=True, slots=True)
+class _FailedInvocationSnapshot:
+    head_revision: str
+    inventory: WorkspaceMutationInventory
+    index_entries: tuple[_IndexEntry, ...]
+
+
+_MAX_INDEX_OBSERVATION_BYTES = 16 * 1024 * 1024
+
+
+def _index_listing(root: Path) -> str:
+    # Keep subprocess output out of memory until its size is known. The fixed
+    # read-only Git command has no hooks/fsmonitor, inherited secrets or shell.
+    environment = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as output:
+            result = subprocess.run(
+                (
+                    "git",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "core.fsmonitor=false",
+                    "ls-files",
+                    "--stage",
+                    "--debug",
+                    "-z",
+                ),
+                cwd=root,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+                shell=False,
+                timeout=30,
+                check=False,
+            )
+            if (
+                result.returncode
+                or os.fstat(output.fileno()).st_size > _MAX_INDEX_OBSERVATION_BYTES
+            ):
+                raise MutationInventoryRejected("index observation failed or exceeds byte limit")
+            output.seek(0)
+            body = output.read(_MAX_INDEX_OBSERVATION_BYTES + 1)
+            if len(body) > _MAX_INDEX_OBSERVATION_BYTES:
+                raise MutationInventoryRejected("index observation exceeds byte limit")
+            return body.decode("utf-8", errors="strict")
+    except (OSError, subprocess.SubprocessError, UnicodeError) as error:
+        raise MutationInventoryRejected("index observation could not be read") from error
+
+
+def _index_entries(root: Path) -> tuple[_IndexEntry, ...]:
+    # Git expands split indexes here. Compare authority-bearing flags, not
+    # cached stat data or internal split-index storage bits that reads refresh.
+    output = _index_listing(root)
+    pattern = re.compile(
+        r"([0-7]{6}) ([0-9a-f]{40}|[0-9a-f]{64}) ([0-3])\t([^\x00\n]+)\x00"
+        r"  ctime: [0-9]+:[0-9]+\n"
+        r"  mtime: [0-9]+:[0-9]+\n"
+        r"  dev: [0-9]+\tino: [0-9]+\n"
+        r"  uid: [0-9]+\tgid: [0-9]+\n"
+        r"  size: [0-9]+\tflags: ([0-9a-f]+)(?:\n|$)"
     )
+    entries: list[_IndexEntry] = []
+    offset = 0
+    # CE_VALID (assume-unchanged), CE_INTENT_TO_ADD and CE_SKIP_WORKTREE are
+    # semantic state; CE_UPDATE_IN_BASE and stat-cache flags are storage detail.
+    authority_flags = 0x8000 | 0x20000000 | 0x40000000
+    for match in pattern.finditer(output):
+        if match.start() != offset or len(entries) >= MAX_INVENTORY_FILES:
+            raise MutationInventoryRejected("index observation is incomplete")
+        mode, object_id, stage, path, flags = match.groups()
+        entries.append(
+            _IndexEntry(path, mode, object_id, int(stage), int(flags, 16) & authority_flags)
+        )
+        offset = match.end()
+    if offset != len(output):
+        raise MutationInventoryRejected("index observation is incomplete")
+    return tuple(entries)
+
+
+def _capture_failed_invocation_snapshot(root: Path) -> _FailedInvocationSnapshot:
+    head = _git(root, "rev-parse", "HEAD")
+    index = _index_entries(root)
+    inventory = capture_mutation_inventory(root)
+    if index != _index_entries(root) or head != _git(root, "rev-parse", "HEAD"):
+        raise MutationInventoryRejected("Git state changed during workspace observation")
+    return _FailedInvocationSnapshot(head, inventory, index)
+
+
+def _workspace_unchanged(root: Path, before: _FailedInvocationSnapshot) -> bool:
+    """Allow fallback only when this failed invocation left no final-state effects."""
+    try:
+        return _capture_failed_invocation_snapshot(root) == before
+    except (CodexCliError, MutationInventoryRejected, UnicodeError):
+        return False
 
 
 def _classify_cli_failure(

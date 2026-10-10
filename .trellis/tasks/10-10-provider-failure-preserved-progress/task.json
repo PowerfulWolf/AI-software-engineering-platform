@@ -1,0 +1,14 @@
+{
+  "name": "provider-failure-preserved-progress",
+  "title": "Codex供应方失败按本轮完整现场变化判定，不误拒已批准进度",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/agents/codex_cli.py",
+    "tests/agents/test_codex_failed_continuation.py",
+    ".trellis/tasks/10-10-provider-failure-preserved-progress",
+    ".trellis/spec/core/production-team-host.md",
+    ".trellis/spec/guides/timeout-classification.md"
+  ]
+}

@@ -1624,3 +1624,70 @@ Required incremental checks: `tests/agents/test_responses.py`, `tests/team_view/
 `tests/team_view/ui.test.cjs`, and the focused Web Console Manager tests covering diagnostic
 propagation. No production-data migration is needed; existing deliveries resume through a fresh
 exact recovery or candidate-verification plan bound to the current preparation.
+
+
+## Failed Codex route with preserved progress (2026-10-10)
+
+Scope: a provider route exits or times out after its input worktree was already admitted as an exact
+seed/checkpoint. Existing dirty input is not itself an effect of this invocation. A clean Git status
+is insufficient to prove unchanged state because ignored files and index flags can change.
+
+Signatures in `agents/codex_cli.py`:
+
+```python
+_FailedInvocationSnapshot(head_revision: str, inventory: WorkspaceMutationInventory,
+                          index_entries: tuple[_IndexEntry, ...])
+_IndexEntry(path: str, mode: str, object_id: str, stage: int, flags: int)
+_capture_failed_invocation_snapshot(root: Path) -> _FailedInvocationSnapshot
+_workspace_unchanged(root: Path, before: _FailedInvocationSnapshot) -> bool
+```
+
+Before the provider, capture a complete bounded no-follow `capture_mutation_inventory` including
+ignored files and links, plus exact HEAD and index entries. HEAD/index observations bracket the
+inventory read; inconsistent or failed capture prevents invocation. Reuse inventory limits
+(20,000 files /256,000,000 total bytes /16,000,000 per file); do not add another scanner or exempt
+arbitrary ignored paths. Index observations include stage, mode, blob and authority-relevant flags
+(assume-unchanged, intent-to-add, skip-worktree). Ignore stat-refresh timestamps and split-index
+storage bookkeeping; they are not new semantic changes. Git inspection disables hooks/fsmonitor,
+uses the fixed minimal Git environment and `GIT_OPTIONAL_LOCKS=0`, and keeps a 30-second command
+limit. Index stdout goes to an anonymous temporary file, stderr is discarded, `fstat` rejects output
+above 16 MiB before reading, and the read itself is bounded to that limit plus one byte. Do not use
+`capture_output=True` then enforce a byte budget after allocating the whole output.
+
+All new independent snapshot/HEAD checks complete before `CoderInterruptionControl.started` may
+publish a durable capture start. Pre-snapshot failure must yield zero provider and zero started
+calls. Once started succeeds, retain its own fresh claim/source/inventory validation and proceed to
+the runner without adding a new fallible observation that would leave a never-called UNKNOWN start.
+
+After a failure, trusted interruption/stop handling keeps priority. Only if that path allows normal
+failure classification, recapture complete state and compare to the admitted input snapshot. Exact
+equality preserves the provider error and its existing transient policy; an already dirty, unchanged
+input may retry/fallback under existing fresh claims and budgets. Any changed file/body/mode/link,
+ignored file, HEAD or semantic index entry/flag, or inability to inspect, forbids ordinary fallback.
+No failure produces a candidate/verdict or accepts a new progress checkpoint. Unknown execution stop
+cannot be converted into a safe provider retry merely because file state currently matches.
+
+| Input/failure case | Result |
+| --- | --- |
+| Exact accepted dirty progress, quota failure, no new effects | QUOTA_EXHAUSTED with existing transient classification; retain old progress |
+| Clean input, recognized provider failure, no effects | Existing typed provider result; no new artifact |
+| Same dirty paths but changed body / index-only staging / ignored new file | Preserve unsafe scene; no ordinary provider fallback |
+| Index stat refresh or equivalent split-index representation | Same semantic index; no false mutation |
+| Missing/unstable/beyond-budget input snapshot | Fail closed before provider |
+| Missing/failed final snapshot or unknown stop | Fail closed; never infer stopped/unchanged |
+
+Good: legitimate checkpoint retry does not become POLICY_VIOLATION solely because old files are dirty.
+Base: unchanged clean input retains the same provider result. Bad: compare only changed_paths or
+`git status`, treat staged flags or ignored output as unchanged, or waive a current claim.
+
+Tests: `tests/agents/test_codex_failed_continuation.py` must use real Git, exact admitted continuation,
+and an offline failed runner. Cover unchanged accepted dirty input, body/path/delete/mode/link/ignored
+changes, index-only staging/authority flags, HEAD drift, read failures and stat/split-index equivalence;
+retain interruption-control priority and current baseline/source/policy checks. Run affected Codex,
+admission and continuation tests only; full tests remain user-run.
+
+Existing data: do not relabel old failed Runs, reset terminal Tasks, refund old attempts or replay old
+approvals. Load through controlled restart at an idle boundary. Existing terminal K1 continues through
+the same Requirement's new exact recovery, preserving latest legitimate progress and all failure
+history. Roll back private snapshot/classifier wiring without deleting facts; the old version may
+again misclassify unchanged checkpoint inputs as policy violations.
