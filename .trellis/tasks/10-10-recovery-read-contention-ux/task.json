@@ -1,0 +1,15 @@
+{
+  "name": "recovery-read-contention-ux",
+  "title": "团队忙读时保留当前精确恢复请求的处理展示",
+  "status": "in_progress",
+  "phase": "deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/engineering-wait.test.cjs",
+    "tests/team_view/operation-progress.test.cjs",
+    "tests/team_view/delivery-status.test.cjs",
+    ".trellis/spec/core/live-team-view.md",
+    ".trellis/tasks/10-10-recovery-read-contention-ux"
+  ]
+}

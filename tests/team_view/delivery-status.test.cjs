@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { supportedActions } = require("./console-capabilities-fixture.cjs");
 
 function state() {
   const element = () => ({children: [], textContent: "", dataset: {},
@@ -11,14 +12,16 @@ function state() {
   const context = vm.createContext({
     document: {getElementById: element, createElement: element, querySelectorAll: () => []},
     fetch: () => new Promise(() => {}), AbortController,
-    setInterval() {}, setTimeout() {}, clearTimeout() {},
+    setInterval() {}, setTimeout() {}, clearTimeout() {}, supportedActions,
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname,
     "../../src/ai_software_engineer/team_view/app.js"), "utf8"), context);
   vm.runInContext(`
     // This harness represents a successfully read current Operations list.
     operationsAvailable = true;
-    snapshot = {selected_project_id: "p", requests: [], tasks: []};
+    consoleTeamId = "team_current"; consoleAvailable = true; consoleDeliveryReady = true;
+    consoleOperationContractVersion = 1; consoleSupportedActions = [...supportedActions];
+    snapshot = {team_id: "team_current", selected_project_id: "p", requests: [], tasks: []};
     const request = {id: "r", project_id: "p", stage: "DELIVERING",
       checkpoint_sha256: "current", next_action: "Continue", failed_stages: [], scopes: [{delivery_id: "t"}],
       coordination: {draft: {action: "PROPOSE_RECOVERY", summary: "old blocker"}}};
@@ -80,7 +83,7 @@ test("only current unconsumed exact approval is shown as awaiting approval", () 
   const run = state();
   run(`snapshot.tasks = []; request.stage = "BLOCKED";
     const proposal = {status: "SUCCEEDED", updated_at: "2026-10-01T00:01:00Z",
-      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r"},
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"},
       result: {delivery_id: "r", checkpoint_sha256: "current",
         approval: {kind: "coder_scope", title: "新增文件范围", plan_sha256: "exact"}}};
     operations = [proposal];`);
@@ -89,7 +92,7 @@ test("only current unconsumed exact approval is shown as awaiting approval", () 
   assert.doesNotMatch(run("managerFlowStatus(request).textContent"), /等待审批/);
   run(`proposal.result.checkpoint_sha256 = "current";
     operations.push({status: "FAILED", updated_at: "2026-10-01T00:02:00Z",
-      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", approved_scope_sha256: "exact"}});`);
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p", approved_scope_sha256: "exact"}});`);
   assert.doesNotMatch(run("managerFlowStatus(request).textContent"), /等待审批/);
 });
 
@@ -168,12 +171,12 @@ test("reaped lease keeps interruption and exact approval visible until a new cla
   assert.equal(run("requestPresentation(request).status"), "EXECUTION_INTERRUPTED");
   assert.match(run("managerFlowStatus(request).textContent"), /执行中断.*等待恢复/);
   run(`operations = [{status: "SUCCEEDED", updated_at: "2026-10-01T00:01:00Z",
-    intent: {action: "CONTINUE_DELIVERY", delivery_id: "r"},
+    intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"},
     result: {delivery_id: "r", checkpoint_sha256: "current",
       approval: {kind: "coder_interruption", title: "批准中断后的单次 Coder 续跑", plan_sha256: "exact"}}}];`);
   assert.match(run("managerFlowStatus(request).textContent"), /等待审批.*单次 Coder 续跑/);
   run(`operations.push({status: "RUNNING", updated_at: "2026-10-01T00:02:00Z",
-    intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", approved_plan_sha256: "exact"}});`);
+    intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p", approved_plan_sha256: "exact"}});`);
   assert.equal(run("requestPresentation(request).status"), "EXECUTION_INTERRUPTED");
   assert.match(run("managerFlowStatus(request).textContent"), /处理中.*执行已中断/);
   run('task.role_queue[0] = {role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID"}');
@@ -188,6 +191,45 @@ test("ordinary provider retry and closed expired claims are not interrupted exec
   assert.equal(run("interruptedExecution(task)"), false);
   run('task.role_queue[0].status = "CLOSED"; task.role_queue[0].wait_reason = "lease_expired:lease_old"');
   assert.equal(run("interruptedExecution(task)"), false);
+});
+
+test("exact recovery approval never replaces actual dispatch or ordinary provider retry", () => {
+  for (const [status, liveness, reason] of [
+    ["RETRY_SCHEDULED", "UNKNOWN", "provider_transient"],
+    ["RETRY_SCHEDULED", "LEASE_EXPIRED", "provider_transient"],
+    ["RETRY_SCHEDULED", "LEASE_EXPIRED", "provider:lease_expired:lease_old"],
+    ["RETRY_SCHEDULED", "LEASE_VALID", "lease_expired:lease_old"],
+    ["READY", "UNKNOWN", null],
+    ["LEASED", "LEASE_VALID", null],
+    ["RUNNING", "LEASE_VALID", "lease_expired:lease_old"],
+    ["LEASED", "LEASE_EXPIRED", null],
+    ["RUNNING", "LEASE_EXPIRED", "lease_expired:lease_old"],
+  ]) {
+    const run = state();
+    run(`task.role_queue[0] = {role: "coder", status: ${JSON.stringify(status)},
+      lease_liveness: ${JSON.stringify(liveness)}, wait_reason: ${JSON.stringify(reason)}};
+      operations = [{status: "SUCCEEDED", updated_at: "2026-10-01T00:01:00Z",
+        intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"},
+        result: {delivery_id: "r", checkpoint_sha256: "current",
+          approval: {kind: "coder_interruption", title: "批准中断后的单次 Coder 续跑", plan_sha256: "exact"}}}];`);
+    const facts = run("JSON.stringify([request, task, operations])");
+    if (liveness !== "LEASE_EXPIRED" || !["LEASED", "RUNNING"].includes(status))
+      assert.equal(run("interruptedStep(task.role_queue[0])"), false, `${status}/${liveness}/${reason}`);
+    assert.equal(run("requestRecoveryDecision(request)"), null);
+    assert.doesNotMatch(run("managerFlowStatus(request)?.textContent || ''"), /等待审批/);
+    assert.equal(run("JSON.stringify([request, task, operations])"), facts);
+  }
+  for (const checkpoint of ["QUEUED", "CONTINUE_REQUIRED"]) {
+    const run = state();
+    run(`task.status = ${JSON.stringify(checkpoint)};
+      task.role_queue[0] = {role: "coder", status: "RETRY_SCHEDULED",
+        lease_liveness: "LEASE_EXPIRED", wait_reason: "lease_expired:lease_old"};
+      operations = [{status: "SUCCEEDED", updated_at: "2026-10-01T00:01:00Z",
+        intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"},
+        result: {delivery_id: "r", checkpoint_sha256: "current",
+          approval: {kind: "coder_interruption", title: "批准中断后的单次 Coder 续跑", plan_sha256: "exact"}}}];`);
+    assert.equal(run("requestRecoveryDecision(request)"), null, checkpoint);
+  }
 });
 
 test("current terminal child blocker takes precedence over generic Manager advice", () => {

@@ -393,6 +393,13 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   顶部必须继续显示阻塞及实际原因，Manager 文本可显示“处理中 · 当前角色已阻塞”。QUEUED、
   时间缺失/无效或旧失败均不能据此压住正在准备的新恢复。Operation 是协调事实，不是角色 verdict。
   知识等待、租约中断、未消费的精确审批仍使用自己的事实边界，不因时间比较获批或重放。
+- Team busy/unavailable/timeout只撤销新操作的控制新鲜度，不能撤销独立成功读取的当前
+  Operations事实。若RUNNING CONTINUE精确绑定当前Team/Project/Requirement，且其批准plan
+  摘要与同作用域已封存审批来源一致，当前恢复请求仍显示“平台正在处理恢复”。这只表达已
+  接收请求的处理记录尚未结束，不证明角色调用、完整现场接入或恢复成功；旧STOPPED不能
+  再作为本轮阻塞。当前业务/知识确认、新失败、角色等待/失效租约仍保持原优先级。
+  团队读取问题在需求当前进展独立展示，新操作继续使用原canControlCurrentTeam和exact
+  approval gates，旧回调不得提交。保留历史、正文和所有durable bytes/hash，不重写状态。
 - `deliveryFlow` 在 Task 状态 fallback 之后定位当前有效失败 gate：durable role_queue 的
   Coder/QA/Reviewer 分别映射实现/测试/评审，前序已完成、失败节点阻塞、后序待处理；整个已阻塞
   流程不得留下 current 动画。缺少可验证角色事实时保留需求聚合阶段 fallback，不能从错误文本猜角色。
@@ -897,6 +904,12 @@ After native reaping, `RETRY_SCHEDULED` still represents this interruption when 
 `lease_expired:<that exact lease id>`. The read side retains `LEASE_EXPIRED` in this case. Both Python
 and browser keep the interruption and any exact approval visible until a new valid claim replaces it.
 Provider retries, CLOSED history and unrelated wait reasons do not satisfy this rule.
+`requestRecoveryDecision` excludes actual queued/claimed work from approval presentation, but must
+not treat a reaped RETRY_SCHEDULED reader-verified `interruptedStep` as live dispatch. It reuses the
+same exact-expiry read fact; no browser string alone authorizes a retry. Current Team freshness,
+Project identity, capability, checkpoint and unconsumed approval gates still apply. QUEUED/
+CONTINUE_REQUIRED and non-reaped RUNNING/LEASED remain authoritative so a replacement claim's later
+expiry cannot revive a previously prepared recovery approval.
 
 `managerFlowStatus` only shows a pending approval when `latestApproval(id, checkpoint)` returns an
 unconsumed exact approval. PROPOSE_RECOVERY is advice and means waiting for recovery, not proof that

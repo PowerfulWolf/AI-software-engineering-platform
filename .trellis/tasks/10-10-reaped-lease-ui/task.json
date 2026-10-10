@@ -1,0 +1,13 @@
+{
+  "name": "reaped-lease-ui",
+  "title": "恢复审批不再被已核验失效的回收调度遮挡",
+  "status": "in_progress",
+  "phase": "deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/delivery-status.test.cjs",
+    ".trellis/spec/core/live-team-view.md",
+    ".trellis/tasks/10-10-reaped-lease-ui"
+  ]
+}

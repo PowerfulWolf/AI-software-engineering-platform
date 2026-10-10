@@ -1984,7 +1984,8 @@ function requestRecoveryDecision(request) {
   // A prepared decision cannot replace actual current dispatch or role execution.
   if (currentRequestTasks(request).some(task => !task.terminal &&
       (["QUEUED", "CONTINUE_REQUIRED"].includes(task.status) || task.role_queue?.some(step =>
-        ["READY", "LEASED", "RUNNING", "RETRY_SCHEDULED"].includes(step.status))))) return null;
+        ["READY", "LEASED", "RUNNING", "RETRY_SCHEDULED"].includes(step.status) &&
+        !(step.status === "RETRY_SCHEDULED" && interruptedStep(step)))))) return null;
   const approval = latestApproval(request.id, request.checkpoint_sha256, request.project_id);
   const reason = approval?.kind === "coder_scope"
     ? approval.coder_scope_request
@@ -2011,6 +2012,21 @@ function requestRoleDispatch(tasks) {
       currentRoleDispatch: true};
   return null;
 }
+function observedApprovedRecoveryOperation(request, operation) {
+  if (!teamReadIssue || !operationsAvailable || projectSwitchPending() ||
+      currentProjectId() !== request.project_id || !snapshot?.team_id ||
+      consoleTeamId !== snapshot.team_id || operation?.team_id !== snapshot.team_id ||
+      operation.status !== "RUNNING" || operation.intent.action !== "CONTINUE_DELIVERY" ||
+      operation.intent.project_id !== request.project_id || operationTarget(operation) !== request.id ||
+      activeOperation(request.id, request.project_id)?.operation_id !== operation.operation_id ||
+      !/^[a-f0-9]{64}$/.test(operation.intent.approved_plan_sha256 || "")) return false;
+  // Observe only the currently accepted exact request; this never restores control authority.
+  return operations.some(source => source.team_id === operation.team_id && source.status === "SUCCEEDED" &&
+    source.intent.project_id === request.project_id && operationTarget(source) === request.id &&
+    source.result?.approval?.plan_sha256 === operation.intent.approved_plan_sha256 &&
+    (source.result.delivery_id === request.id ? source.result.checkpoint_sha256
+      : source.intent.expected_checkpoint_sha256) === operation.intent.expected_checkpoint_sha256);
+}
 function requestNodeExecution(request) {
   if (request.stage === "DONE") return {state: "done", label: "已完成", status: "DONE"};
   if (request.stage === "CLOSED") return {state: "closed", label: "已关闭", status: "CLOSED"};
@@ -2034,12 +2050,13 @@ function requestNodeExecution(request) {
   const decision = requestRecoveryDecision(request);
   if (decision) return decision;
   if (operation?.status === "RUNNING" && operation.intent.action === "CONTINUE_DELIVERY" &&
-      canControlCurrentTeam() && currentProjectId() === request.project_id &&
+      (canControlCurrentTeam() || observedApprovedRecoveryOperation(request, operation)) &&
+      currentProjectId() === request.project_id &&
       !childBlocker && !waiting && !expired && !tasks.some(task => !task.terminal) &&
       (execution?.state === "STOPPED" || tasks.some(task => task.terminal && taskGroup(task) === "blocked")))
     return {state: "paused", label: "平台正在处理恢复", status: "PREPARING_EXECUTION",
       platformProcessing: true, responsibility: "team",
-      reason: "平台正在处理本次恢复请求；当前还没有新的角色执行事实。",
+      reason: "本次恢复请求的处理记录尚未结束；当前尚未取得新的可核验角色执行记录。",
       nextAction: "请等待平台检查并返回结果；不要重复准备或批准。"};
   // A current bound role queue supersedes the retained original STOPPED summary.
   // New waits, failures and expired claims still require their own handling.
@@ -8949,9 +8966,13 @@ function buildDetail(panel = document.getElementById("detail")) {
     masthead.append(viewBlock(top, "request-heading-actions", [item, pollingControlFacts(), operations]), titleRow);
     panel.append(masthead, requestChapterNavigation(item));
     const current = requestChapter("current");
+    const processingControlIssue = requestNodeExecution(item).platformProcessing
+      ? deliveryControlUnavailableReason() : null;
     const overview = viewBlock(el("div", undefined, "request-detail-overview"), "request-detail-overview",
-      [item.execution, presentation, requestNodeExecution(item), deliveryPhase(item), Boolean(blocking)]);
+      [item.execution, presentation, requestNodeExecution(item), deliveryPhase(item), Boolean(blocking), processingControlIssue]);
     if (item.execution) overview.append(productExecutionSummary(item, {guidance: !blocking}));
+    if (processingControlIssue) overview.append(deliveryControlUnavailableNotice({...processingControlIssue,
+      reason: processingControlIssue.reason.replace("当前操作已暂停", "新操作暂不可提交")}));
     const identity = engineeringDetails("需求工程详情", item.id);
     identity.append(el("p", item.id, "paths request-detail-id"));
     if (item.execution) identity.append(el("p", "执行事实状态 · " + label(executionPresentationStatus(item.execution)), "muted"));

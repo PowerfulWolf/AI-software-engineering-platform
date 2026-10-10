@@ -27,7 +27,9 @@ function harness() {
   const source = fs.readFileSync(path.join(__dirname, "../../src/ai_software_engineer/team_view/app.js"), "utf8");
   vm.runInContext(source.slice(0, source.indexOf('for (const target of ["team"')), context);
   vm.runInContext(`snapshot = {team_id: "team_current", selected_project_id: "project_current", projects: [], agents: [],
-    tasks: [], requests: [data.request]}; operations = [data.operation];`, context);
+    tasks: [], requests: [data.request]}; operations = [data.operation];
+    // Current progress requires an independently successful Operations read.
+    operationsAvailable = true;`, context);
   const run = code => vm.runInContext(code, context);
   const render = () => run('(() => { const panel = el("section"); requestOperationHistory(panel, data.request); return panel; })()');
   return {data, context, run, render};

@@ -18,6 +18,11 @@ class Element {
     this.children.push(...nodes);
     for (const node of nodes) if (typeof node !== "string") node.parentNode = this;
   }
+  replaceChildren(...nodes) {
+    for (const node of this.children) if (typeof node !== "string") node.parentNode = null;
+    this.children = [];
+    this.append(...nodes);
+  }
   get childNodes() { return this.children; }
   get lastChild() { return this.children.at(-1); }
   insertBefore(node, reference) {
@@ -1366,6 +1371,120 @@ test("a new platform recovery operation explains handling without claiming Coder
   assert.match(h.run("requestPresentation(data.request).blocker"), /新的执行失败/);
   assert.match(h.run("requestNodeBadge(data.request).textContent"), /已阻塞/);
   assert.equal(h.run("submitted.length"), 0);
+});
+
+function approvedRecoveryInProgress(h) {
+  stoppedRecoveryFixture(h);
+  h.run(`operations[0].team_id = "team_current";
+    operations.push({operation_id: "approved_current_work", team_id: "team_current", status: "RUNNING",
+      requested_at: "2026-10-05T02:00:00Z", updated_at: "2026-10-05T02:00:00Z",
+      intent: {action: "CONTINUE_DELIVERY", project_id: data.request.project_id, delivery_id: data.request.id,
+        expected_checkpoint_sha256: data.request.checkpoint_sha256, approved_plan_sha256: approval.plan_sha256}});`);
+}
+
+for (const issue of ["busy", "unavailable", "timeout"]) {
+  test(`fresh exact recovery remains processing during Team ${issue} while all new controls stay paused`, async () => {
+    const h = harness();
+    stoppedRecoveryFixture(h);
+    const old = control(h.run("requestBlockerSection(data.request)"), "批准并继续");
+    approvedRecoveryInProgress(h);
+    h.context.readFailure = issue;
+    h.run("teamReadIssue = readFailure");
+    const durable = h.run("JSON.stringify([data.request, data.task, operations])");
+    const node = h.run("requestNodeExecution(data.request)");
+    assert.equal(node.label, "平台正在处理恢复");
+    assert.equal(node.state, "paused");
+    assert.equal(node.platformProcessing, true);
+    assert.equal(h.run("requestPresentation(data.request).group"), "active");
+    assert.equal(h.run("requestBlockerSection(data.request)"), null);
+    assert.equal(h.run("deliveryFlow(data.request).children[3].className"), "paused");
+    assert.match(h.run("requestNodeBadge(data.request).textContent"), /平台正在处理恢复/);
+    assert.doesNotMatch(node.reason + node.nextAction, /Coder.*正在|角色正在执行|已经启动|已完成|百分比|核对停止原因/);
+    const progress = h.run("currentOperationProgress(operations[1], data.request)");
+    assert.match(progress.title, /平台正在处理恢复/);
+    assert.equal(h.run("canControlCurrentTeam()"), false);
+    const unavailable = h.run("deliveryControlUnavailableReason()");
+    assert.match(unavailable.next_action, /自动重试.*重新核对/);
+    assert.doesNotMatch(unavailable.next_action, /重新批准|重启|重建需求/);
+    const panel = new Element("section");
+    h.context.pausedPanel = panel;
+    h.run("requestOperation(pausedPanel, data.request)");
+    assert.equal(control(panel, "批准并继续"), undefined);
+    await old.events.click();
+    assert.equal(h.run("submitted.length"), 0);
+    assert.equal(h.run("JSON.stringify([data.request, data.task, operations])"), durable);
+  });
+}
+
+test("read-contention recovery observation rejects unread operations, foreign bindings and unmatched exact approval", () => {
+  for (const mutation of [
+    'operationsAvailable = false',
+    'operations[1].team_id = "other_team"',
+    'consoleTeamId = "other_team"',
+    'operations[1].intent.project_id = "other_project"',
+    'operations[1].intent.delivery_id = "other_requirement"',
+    'snapshot.selected_project_id = "other_project"',
+    'requestedProjectId = "other_project"',
+    'operations[1].intent.approved_plan_sha256 = "f".repeat(64)',
+    'delete operations[1].intent.approved_plan_sha256',
+    'operations[0].result.checkpoint_sha256 = "f".repeat(64)',
+    'operations[0].intent.project_id = "other_project"',
+    'operations[1].status = "SUCCEEDED"',
+    'operations[1].status = "FAILED"',
+    'operations[1].status = "INTERRUPTED"',
+  ]) {
+    const h = harness();
+    approvedRecoveryInProgress(h);
+    h.run(`teamReadIssue = "busy"; ${mutation}`);
+    assert.notEqual(h.run("requestNodeExecution(data.request).platformProcessing"), true, mutation);
+    assert.equal(h.run("canControlCurrentTeam()"), false, mutation);
+    assert.equal(h.run("submitted.length"), 0, mutation);
+  }
+});
+
+test("recovery detail separates the Team refresh issue from accepted processing and retains saved reading", () => {
+  const h = harness();
+  approvedRecoveryInProgress(h);
+  h.request.scopes[0].root = "/repo";
+  h.request.scopes[0].selected_paths = ["."];
+  h.request.documents = [{name: "保留的开发计划", content: "完整的已保存正文", source_uri: "artifact://saved", sha256: digest("f")}];
+  h.run('page = "requests"; selected = {kind: "request", id: data.request.id}; teamReadIssue = "busy"');
+  const panel = new Element("section");
+  h.context.recoveryDetail = panel;
+  h.run("buildDetail(recoveryDetail)");
+  const overview = descend(panel).find(node => node.className === "request-detail-overview");
+  assert.match(text(overview), /平台正在处理恢复/);
+  assert.match(text(overview), /团队数据正在读取/);
+  assert.match(text(overview), /新操作暂不可提交.*自动重试/);
+  assert.doesNotMatch(text(overview), /当前操作已暂停|核对停止原因|Coder.*正在执行/);
+  assert.equal(descend(panel).some(node => node.className === "request-blocking-section"), false);
+  const document = descend(panel).find(node => node.className === "artifact-document");
+  document.open = true;
+  h.run(`teamReadIssue = null; const fresh = el("section"); buildDetail(fresh);
+    reconcileViewChildren(recoveryDetail, fresh)`);
+  const recoveredOverview = descend(panel).find(node => node.className === "request-detail-overview");
+  assert.match(text(recoveredOverview), /平台正在处理恢复/);
+  assert.doesNotMatch(text(recoveredOverview), /团队数据正在读取|新操作暂不可提交/);
+  assert.equal(descend(panel).find(node => node.className === "artifact-document"), document);
+  assert.equal(document.open, true);
+  assert.equal(h.run("submitted.length"), 0);
+});
+
+test("Team contention cannot hide a newly recorded recovery failure, current wait or expired role", () => {
+  for (const mutation of [
+    'data.task.last_activity = "2026-10-05T03:00:00Z"; data.task.blocker = "本轮新的失败"',
+    'data.task.terminal = false; data.task.status = "IMPLEMENTING"; data.step.status = "WAITING_HUMAN"',
+    'data.task.terminal = false; data.task.status = "IMPLEMENTING"; data.step.status = "RUNNING"; data.step.lease_liveness = "LEASE_EXPIRED"',
+    'data.request.stage = "WAITING_PRODUCT_APPROVAL"',
+    'data.request.stage = "WAITING_DELIVERY_FINALIZATION"',
+  ]) {
+    const h = harness();
+    approvedRecoveryInProgress(h);
+    h.run(`teamReadIssue = "busy"; ${mutation}`);
+    assert.notEqual(h.run("requestNodeExecution(data.request).platformProcessing"), true, mutation);
+    assert.equal(h.run("requestNodeExecution(data.request).state"), "blocked", mutation);
+    assert.equal(h.run("submitted.length"), 0, mutation);
+  }
 });
 
 test("matching recovery facts cannot replace the explicit product or delivery confirmation step", () => {
