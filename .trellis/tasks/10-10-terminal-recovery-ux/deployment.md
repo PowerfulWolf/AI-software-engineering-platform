@@ -95,3 +95,40 @@ No SQL/history migration or direct state changes were performed. Browser visual/
 remains unavailable; the above checks are actual app.js VM and public HTTP facts. Preparation is
 still measured in minutes; the offline pure-plan probe alone does not explain that latency and
 does not justify adding authority/model caches.
+
+## Approval preparation, fixes and latest actual claim
+
+The same accepted operation remains `operation_bacb1b32b242923bc2d4dbad68818733`;
+no approval, preparation or Requirement was duplicated. Task input was sealed after authorization.
+An independent read-only diagnosis subsequently verified the exact recovery dispatch, preserved
+terminal history and approved target checkout; timed facts and diagnostic limits are recorded in
+`diagnosis-20261010.md`. Dispatch SHA-256 is
+74a3f68dacf21cb06bf539695c7be1574f93fd2af972a871808bb3a8de9b89ce.
+
+At 09:34:29 UTC, typed `FileRecoveryStore.get_seed` verified seed SHA-256
+17d95bf8c9fc47e0b5caf948be9dad37529aa42b1a165789639cd7bbff81eb28, exact dispatch binding,
+approved 5d121a1 base, 27 retained files and a complete 343,129-byte patch. `get_invocation` still
+returned `RecoveryRecordMissing` at that observation. No historical environment files were seeded.
+
+At 09:36:09 UTC, a strict consistent READ ONLY MySQL transaction verified the actual new Task
+task_recovery_edc70b3d943c52d85a079da433d43934 at IMPLEMENTING / attempts 1 / revision 2,
+with base 5d121a1. Its work item work_89746e18790fb65e5c2791d1a95e21966308506ea4a949af6e64e7a32a30ec06
+was RUNNING; lease_4ee68d1040a5117acd2d4ff6 was ACTIVE, heartbeat 09:36:04.616401 and expiry
+09:37:04.616401 UTC. This is real scheduling/heartbeat evidence, not a claim that the provider
+was already invoked or that the requirement passed QA/Review. The transaction was rolled back
+and closed without writes or repository/queue initialization.
+
+Maintenance commits 58eae4b, 7b9da8c, 02a279c, 1124f4c, ec0be4b and bf0009a have been pushed.
+They verify feedback lineage, bound repeated pure redaction work, scope reuse to synchronous
+preparation, copy only the final fully verified journal record, preserve exact accepted recovery
+display during Team read contention and correct two generated Schema reference graphs.
+The running service still loaded 5d121a1; these backend/asset changes have not been applied to that
+process. The already-approved target clone and all retained worktrees have not been silently
+updated to the new maintenance HEAD. There is no SQL migration or historical approval rewrite.
+
+An isolated real Chrome with temporary Playwright dependencies successfully verified the current
+source assets' cross-stage execution-history behavior and desktop/mobile recovery reading, disabled
+old callbacks and no fixture writes. Real screenshots at 1440/1024/390px exposed another summary
+line still calling the old BLOCKED phase current; its separate focused task is in progress.
+These checks use fully intercepted fixture APIs; they do not claim live production browser or
+deployment acceptance. Only affected incremental tests are run.
