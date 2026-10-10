@@ -170,3 +170,39 @@ SUCCEEDED但result.stage=BLOCKED；命令处理成功不等于K1验收通过。�
 这些是隔离fixture验收，尚未冒充生产部署验收。10-10-baseline-read-snapshot真实顺序测量
 6.7796→5.2838秒，完整bindings3→2；精确root/task为2+1→1+1，wire与263项封存inventory
 SHA均不变。未宣称修复连续小时read gate或内存泄漏。当前新增修改待提交与受控加载。
+
+
+## 6129781部署与原Requirement重新准备
+
+6129781已提交推送。确认无QUEUED/RUNNING Operation与服务子进程后，受控restart记录实际
+收尾（操作/写入保存、执行器/索引结束、旧实例退出），替代PID12153。Console ready且contract4。
+HTTP app.js SHA为cc6cc52ebff87662623eb4c8b5557da13f7ded6145bb5add9ee05407d37797ce，
+style.css为dead05c2760d2042739d973e8d3ceba6817218d48326451b0648fb650275b3d8，均与commit一致。
+新明细GET对旧已结束Operation返回精确scope+空数组，没有倒填。clean注册main clone已快进
+5d121a1→6129781，保留旧已消费批准及所有工作区，没有修改原旧Coder现场。
+
+公开Continue operation_773c4d95566649d5af07c29fa99b8721于10:29:44.572611Z开始，
+10:30:29.510067Z成功（44.937秒）；同一Requirement、原最新checkpoint9a1a0289…不变，
+生成未消费plan5a88f30aa5c6121273cb17d68017bbc85af26a9566291625b57dcf5021890092。
+源是本次恢复Task task_recovery_edc70…的最新27文件进度，目标6129781，短分支
+ai/feature/k1-auto-knowledge-20261005-recovery-2。尚未批准，QA/Review尚未发生。
+这次真实准备比之前分钟级短，但target/source也变了，不能将其全部归因于某个单项优化。
+
+
+新方案只读独立核验：source Task BLOCKED/attempts2/revision6，Task SHA
+7e5ddc363b2a15cba20f467867770096c0a01386b4886fd719498eba0e212ce6；最新accepted progress
+SHA92851014…及route SHAf6a1380d…通过，当前bytes/digests与27文件完整352035B patch一致。
+patch SHA50f16ed5eb204b19f66966f4a2051434b0cb6b436e9e5bdf271b34d53dd40d65，没有venv/cache。
+新plan尚无authorization/task/seed/invocation且SQL新Taskcount0。此核验未改任何事实。
+
+实际Chrome只读打开生产页面时发现跨action过期通知：旧ProductApproval INTERRUPTED在后续
+Continue恢复方案已准备好时仍弹出，关闭多个旧通知后还挡住需求卡点击。已定义单独Trellis
+通知任务，当前提示服从同Project/Requirement最新workflow事实；全部历史继续保留。
+浏览器观察使用仅GET拦截，未审批或触发后台操作。Native CUA仍因auth token缺失不可用，
+故使用隔离Chrome真实HTTP阅读；前述未成功点击不冒充完整页面验收。
+
+
+额外只读Task预算检查：原Task BLOCKED/attempts8/revision18、新恢复Task BLOCKED/attempts2/
+revision6，均max_attempts40，冻结retry_policy工作额度10且Coder/QA/Reviewer临时故障各10。
+新terminal recovery builder继承原Task冻结policy，没有擅自扩额。剩余7工作包并非因工作额度
+小于7而必然失败；返工和后续实际消耗仍需按durable counters监管。

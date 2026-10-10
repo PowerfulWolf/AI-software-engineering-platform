@@ -442,3 +442,27 @@ Executable coverage: `tests/team_view/operation-progress.test.cjs` and
 regressions. No template mirror exists in this repository; the maintained spec and tests are
 the prevention boundary. Existing data needs no migration: update frontend assets and refresh;
 rollback assets without modifying history or restarting an active role.
+
+
+## 同一需求的通知必须服从当前流程（2026-10-10）
+
+Scope/trigger：`team_view/app.js::renderOperationStatus()` 的 FAILED/INTERRUPTED 弹窗筛选。
+旧 ProductApproval 中断不能在同一Project/Requirement后续Continue成功且待恢复审批时再次
+盖住当前页面。通知是当前交互提示，完整Operation历史仍不可丢弃。
+
+- 对同一 `intent.project_id + operationTarget(operation)`，较新的工作流操作无论action
+  是否相同，都使旧失败/中断失去自动弹窗资格。不能仅以相同action判断supersedes。
+- 保持当前最新精确approval、当前ACTIVE、当前新失败的原有展示与acknowledgement语义。
+  关闭当前提示后，轮询不能退回弹旧失败；恢复准备明细、需求详情和完整操作历史保持可读。
+- latest attention 与 supersede查询均限定同Project/target；外Project恰好同target文本不能
+  隐藏本Project当前待处理。不改变持久化Operation状态/hash/审批，不为了隐藏错误清历史。
+  本规则只影响过期弹窗，当前阻塞/处理方/下一步继续由当前已核验事实决定。
+
+Good：旧PRODUCT_APPROVAL中断→新CONTINUE_DELIVERY成功含恢复approval，只提示当前待确认。
+Base：只有最新失败，仍显示失败原因和详情入口。Bad：关闭当前提示后轮番冒出更早各action
+的失败/中断，用户要逐项关闭才能查看需求。
+
+增量：`tests/team_view/stale-operation-notice.test.cjs`、
+`tests/team_view/browser/notifications.test.cjs`。断言跨action旧失败失效、关闭不复活、当前
+精确审批仍可读、新失败能提示、跨Project/target隔离；真实浏览器点击页面与完整历史可读。
+存量无需改库，兼容资产加载后按原历史重算通知资格。回滚筛选会恢复旧弹窗问题，历史不变。

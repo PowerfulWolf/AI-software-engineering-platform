@@ -1,0 +1,14 @@
+{
+  "name": "stale-workflow-notices",
+  "title": "同一需求的新交付操作替代过期失败通知，保留完整审计历史",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/stale-operation-notice.test.cjs",
+    "tests/team_view/browser/notifications.test.cjs",
+    ".trellis/spec/core/incremental-polling.md",
+    ".trellis/tasks/10-10-stale-workflow-notices"
+  ]
+}

@@ -4244,18 +4244,14 @@ function renderOperationStatus() {
         !operationNeedsHumanAttention(operation)
       )
         return false;
-      if (
-        operationNeedsHumanAttention(operation) &&
-        latestOperation(operationTarget(operation))?.operation_id !==
-          operation.operation_id
-      )
-        return false;
-      if (!["FAILED", "INTERRUPTED"].includes(operation.status)) return true;
+      if (!operationNeedsHumanAttention(operation) &&
+          !["FAILED", "INTERRUPTED"].includes(operation.status)) return true;
+      const target = operationTarget(operation);
       return !operations.some(
         (candidate) =>
-          candidate.intent.action === operation.intent.action &&
+          (target !== null || candidate.intent.action === operation.intent.action) &&
           candidate.intent.project_id === operation.intent.project_id &&
-          operationTarget(candidate) === operationTarget(operation) &&
+          operationTarget(candidate) === target &&
           candidate.updated_at > operation.updated_at,
       );
     })

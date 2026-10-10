@@ -155,6 +155,62 @@ test("a newer retry replaces an old failure and acknowledging it cannot revive t
   await assertNoOverlay(h.page);
 });
 
+test("a current recovery approval clears historical cross-action failure dialogs without hiding the approval or history", async (t) => {
+  const old = operation("INTERRUPTED", {operation_id: "old_product_approval",
+    intent: {action: "PRODUCT_APPROVAL", project_id: "project_fixture", delivery_id: "request_fixture"},
+    error_summary: "历史产品批准后的交付操作中断。"});
+  const h = await ui(t, {operations: [old]});
+  await h.requests();
+  assert.match(await h.page.locator("#notification").innerText(), /历史产品批准后的交付操作中断/);
+  h.team.requests[0].stage = "BLOCKED";
+  h.team.requests[0].blocker = "保留开发进度，等待当前方案确认。";
+  h.state.operations.push(operation("SUCCEEDED", {operation_id: "current_recovery",
+    updated_at: "2026-10-10T12:00:00Z", result: {delivery_id: "request_fixture", stage: "BLOCKED",
+      checkpoint_sha256: "a".repeat(64), approval: {kind: "coder_recovery",
+        title: "保留进度并继续原需求", facts: ["原开发进度保持完整，批准后继续原需求。"],
+        plan_sha256: "b".repeat(64)}}}));
+  const saved = JSON.stringify(h.state.operations);
+  await h.tick();
+  await assertNoOverlay(h.page);
+  assert.match(await h.page.locator("#detail").innerText(), /保留进度并继续原需求/);
+  assert.match(await h.page.locator("#detail").textContent(), /历史产品批准后的交付操作中断/,
+    "sealed history remains readable after its instant notice is superseded");
+  for (let tick = 0; tick < 3; tick++) { await h.tick(); await assertNoOverlay(h.page); }
+  assert.equal(JSON.stringify(h.state.operations), saved);
+  await h.page.locator("#nav-team").click();
+  assert.equal(await h.page.locator("#heading").innerText(), "团队成员");
+});
+
+test("acknowledging the current cross-action wait never reveals an old interrupted Product approval", async (t) => {
+  const old = operation("INTERRUPTED", {operation_id: "old_product_approval",
+    intent: {action: "PRODUCT_APPROVAL", project_id: "project_fixture", delivery_id: "request_fixture"},
+    error_summary: "历史产品批准后的交付操作中断。"});
+  const current = operation("SUCCEEDED", {operation_id: "current_wait", updated_at: "2026-10-10T12:00:00Z",
+    result: {delivery_id: "request_fixture", stage: "BLOCKED", diagnostic: "请查看当前工程缺项。"}});
+  const h = await ui(t, {operations: [old, current]});
+  await h.requests();
+  assert.match(await h.page.locator("#notification").innerText(), /请查看当前工程缺项/);
+  await h.close();
+  for (let tick = 0; tick < 3; tick++) { await h.tick(); await assertNoOverlay(h.page); }
+  await h.page.locator("#nav-team").click();
+  assert.equal(await h.page.locator("#heading").innerText(), "团队成员");
+});
+
+test("a running Continue replaces an interrupted Product approval and does not revive it after dismissal", async (t) => {
+  const old = operation("INTERRUPTED", {operation_id: "old_product_approval",
+    intent: {action: "PRODUCT_APPROVAL", project_id: "project_fixture", delivery_id: "request_fixture"},
+    error_summary: "历史产品批准后的交付操作中断。"});
+  const h = await ui(t, {operations: [old]});
+  await h.requests();
+  h.state.operations.push(operation("RUNNING", {operation_id: "current_continue", updated_at: "2026-10-10T12:00:00Z"}));
+  await h.tick();
+  const notice = await h.page.locator("#notification").innerText();
+  assert.match(notice, /执行中/);
+  assert.doesNotMatch(notice, /历史产品批准后的交付操作中断/);
+  await h.close();
+  for (let tick = 0; tick < 3; tick++) { await h.tick(); await assertNoOverlay(h.page); }
+});
+
 test("a polled failure consumes an older Project success notice", async (t) => {
   const h = await ui(t);
   await h.requests();
