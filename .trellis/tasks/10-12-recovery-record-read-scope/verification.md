@@ -93,3 +93,25 @@ large overflow records fully decode, preserving behavior rather than promising u
 Rollback reverts this task's commit, restoring repeated read/decode cost. Keep every durable
 record, approval, queue/Task state and retained worktree; no data downgrade or database action
 is needed. Production activation remains the parent task's responsibility at an idle boundary.
+
+## Parent integration verification
+
+Integrated with idle-dispatch backoff, the versioned summary backend and summary-reading UI
+in `task/delivery-input-recovery-integration`. The parent reran the shared public-read and
+recovery-approval boundaries after integration:
+
+```sh
+PYTHONPATH=src /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/python -m pytest -q --tb=short tests/web_console/test_operation_summaries.py tests/recovery/test_record_read_scope.py::test_public_approval_real_builder_fresh_fences_and_clear_before_execution
+```
+
+**22 passed, 20.70 seconds.** This includes the complete summary wire/history/authority
+regressions and actual approval/builder/sealing gate with the integrated Knowledge/Context
+ports. These overlap already reported subtask cases and are not additional distinct coverage.
+The integrated UI's 18 new Node cases passed after its cherry-pick, and JavaScript syntax,
+spec navigation links and `git diff --check` passed. Existing 224 related Node/13 isolated
+Chrome checks remain the frontend's prior incremental evidence; no full suite was run.
+
+Production at `1769977` continues the previously approved K1 operation. Integration validation
+does not establish production activation or K1 delivery. The service and registered source
+checkout remain unchanged until a safe maintenance boundary and any required exact source
+baseline approval.
