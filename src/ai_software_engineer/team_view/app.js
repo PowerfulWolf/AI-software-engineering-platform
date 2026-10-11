@@ -3000,16 +3000,31 @@ function requestRoleDispatch(tasks) {
       currentRoleDispatch: true};
   return null;
 }
+function consistentCurrentOperationSummary(source, projectId) {
+  if (!operationSummaryMode()) return true;
+  const observations = [...operationSummaryPages.values()]
+    .filter(state => state.page.team_id === snapshot?.team_id)
+    .flatMap(state => [...state.page.items, ...state.page.active])
+    .filter(item => item.operation_id === source.operation_id);
+  // Independent scope polls may disagree temporarily. An older page cannot
+  // erase an already observed new result, independently of control readiness.
+  return observations.length > 0 && observations.every(item => item.team_id === source.team_id &&
+    item.project_id === projectId && operationProject(source) === projectId && item.status === source.status &&
+    item.sequence === source.sequence && item.operation_sha256 === source.operation_sha256);
+}
 function observedApprovedRecoveryOperation(request, operation) {
-  if (!teamReadIssue || !operationsAvailable || projectSwitchPending() ||
+  if (!operationsAvailable || projectSwitchPending() ||
       currentProjectId() !== request.project_id || !snapshot?.team_id ||
       consoleTeamId !== snapshot.team_id || operation?.team_id !== snapshot.team_id ||
       operation.status !== "RUNNING" || operationAction(operation) !== "CONTINUE_DELIVERY" ||
       operationProject(operation) !== request.project_id || operationTarget(operation) !== request.id ||
       activeOperation(request.id, request.project_id)?.operation_id !== operation.operation_id ||
+      operation.intent?.expected_checkpoint_sha256 !== request.checkpoint_sha256 ||
       !/^[a-f0-9]{64}$/.test(operation.intent?.approved_plan_sha256 || "")) return false;
+  if (!consistentCurrentOperationSummary(operation, request.project_id)) return false;
   // Observe only the currently accepted exact request; this never restores control authority.
-  return operations.some(source => source.team_id === operation.team_id && source.status === "SUCCEEDED" &&
+  return operationReadingRecords().some(source => source.team_id === operation.team_id && source.status === "SUCCEEDED" &&
+    consistentCurrentOperationSummary(source, request.project_id) &&
     operationProject(source) === request.project_id && operationTarget(source) === request.id &&
     source.result?.approval?.plan_sha256 === operation.intent?.approved_plan_sha256 &&
     (source.result.delivery_id === request.id ? source.result.checkpoint_sha256
@@ -3038,6 +3053,7 @@ function requestNodeExecution(request) {
   const decision = requestRecoveryDecision(request);
   if (decision) return decision;
   if (operation?.status === "RUNNING" && operationAction(operation) === "CONTINUE_DELIVERY" &&
+      consistentCurrentOperationSummary(operation, request.project_id) &&
       (canControlCurrentTeam() || observedApprovedRecoveryOperation(request, operation)) &&
       currentProjectId() === request.project_id &&
       !childBlocker && !waiting && !expired && !tasks.some(task => !task.terminal) &&
@@ -6126,6 +6142,8 @@ function projectOperationHistory(content) {
 function renderSummaryOperationHistory(panel, projectId, deliveryId) {
   if (!projectId) return;
   const state = operationHistoryPage(projectId, deliveryId);
+  const request = deliveryId ? requestById(deliveryId) : null;
+  const current = deliveryId ? activeOperation(deliveryId, projectId) : null;
   const fold = viewGroup(el("details", undefined, "request-history-fold"), "summary-operation-history");
   fold.dataset.key = "operation-history:" + projectId + "/" + (deliveryId || "project");
   fold.append(el("summary", `操作记录 · 共 ${state.total} 条`),
@@ -6135,9 +6153,30 @@ function renderSummaryOperationHistory(panel, projectId, deliveryId) {
     : "以下是上次读取的记录，当前操作暂不可用；页面正在重新读取。", "error"));
   const list = viewGroup(el("ol", undefined, "execution-history"), "summary-history-list");
   for (const source of state.items) {
+    const progress = !state.changed && current?.operation_id === source.operation_id &&
+      current.operation_sha256 === source.operation_sha256 && request?.project_id === projectId
+      ? currentOperationProgress(source, request) : null;
+    const outcome = recordedOperationOutcome(source);
     const item = viewBlock(el("li", undefined, "execution-history-entry"), "summary-history:" + source.operation_id,
-      operationRenderFact(source));
-    item.append(el("strong", operationActionLabel(source)), badge(source.status),
+      {record: operationRenderFact(source), progress});
+    if (progress) {
+      item.append(el("strong", progress.title), el("p", "发起操作 · " + operationActionLabel(source), "muted"));
+      if (progress.reason) item.append(el("p", "当前原因 · " + progress.reason));
+      if (progress.responsibility) item.append(el("p", "处理方 · " + progress.responsibility, "muted"));
+      if (progress.nextAction) item.append(el("p", "下一步 · " + progress.nextAction));
+      if (progress.preparation) item.append(el("p", progress.preparation, "muted"));
+    } else if (outcome) {
+      item.append(el("strong", outcome.title, outcome.className), el("p", "发起操作 · " + operationActionLabel(source), "muted"),
+        el("p", "记录的是当次操作结束时的交付状态；当前进度请查看上方交付流程。", "muted"));
+    } else item.append(el("strong", operationActionLabel(source)));
+    const status = el("p", "操作状态 · ", "muted");
+    const commandStatus = badge(source.status);
+    if (source.status === "SUCCEEDED") {
+      commandStatus.textContent = "命令已完成";
+      commandStatus.className = "badge";
+    }
+    status.append(commandStatus);
+    item.append(status,
       el("p", "操作更新 · " + time(source.updated_at), "muted"));
     if (source.error_summary || source.summary) item.append(el("p", humanizeBlockingText(source.error_summary || source.summary),
       source.error_summary ? "error" : ""));
