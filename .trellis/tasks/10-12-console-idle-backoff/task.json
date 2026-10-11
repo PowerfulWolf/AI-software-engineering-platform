@@ -1,0 +1,15 @@
+{
+  "name": "console-idle-backoff",
+  "title": "空闲 Console 派发退避并保留即时提交和停止唤醒",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "1769977",
+  "allowlist": [
+    "src/ai_software_engineer/web_console/core.py",
+    "tests/web_console/test_idle_backoff.py",
+    ".trellis/spec/core/console-idle-backoff.md",
+    ".trellis/tasks/10-12-console-idle-backoff/"
+  ],
+  "constraints": ["Incremental tests only", "Isolated worktree only; no production operations, SQL, model calls or service changes", "No weakening of complete byte/path/history checks or shutdown proof"],
+  "rollback": "Revert the code commit in an idle controlled deployment; retain every Operation, approval, Task, claim and workspace fact."
+}
