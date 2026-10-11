@@ -16,6 +16,10 @@ recheckOperationWriteFacts(intent)
 operationHistoryPage(projectId, deliveryId)
 loadMoreOperationHistory(projectId, deliveryId, signal)
 renderSummaryOperationHistory(panel, projectId, deliveryId)
+currentOperationProgress(source, request) // shared current read-side node presentation
+recordedOperationOutcome(source)         // sealed result.stage or summary result_stage
+consistentCurrentOperationSummary(source, projectId) // current cached locator agreement only
+observedApprovedRecoveryOperation(request, operation) // reading only, never control
 ```
 
 ## Wire and lifetime contracts
@@ -91,6 +95,64 @@ renderSummaryOperationHistory(panel, projectId, deliveryId)
 - A freshly accepted full Operation immediately denies duplicate work through a
   bounded reading projection; it does not start another polling/approval path.
 
+## Current recovery progress and sealed command results
+
+- `renderSummaryOperationHistory` reuses the same `currentOperationProgress`
+  as the complete-history path only for the current Request/Project, an unchanged
+  history page and its exact current active Operation ID/digest. An unavailable
+  Operations read, retained `state.changed` page or drifted row cannot attach a
+  new current stage to an old RUNNING source. Its keyed row signature includes
+  `{record: operationRenderFact(source), progress}` so Task-only stage changes and
+  independently read preparation observations update the current row.
+- The current row retains the originating action and separately shows actual
+  current phase/reason/responsibility/next step plus `preparationLatestSummary`.
+  Milestones remain saved observations; claim is not a model call, heartbeat,
+  candidate, QA/Review verdict or authority to repeat approval.
+- A SUCCEEDED command has a neutral `className="badge"` and says “命令已完成”.
+  `recordedOperationOutcome` uses its sealed `result.stage` or summary `result_stage`
+  for “操作已结束 · 当次交付已阻塞/等待处理”等. Only DONE states that the Requirement
+  was delivered. Historical records never borrow the latest Requirement phase.
+- Read-only recovery processing is independent of `consoleDeliveryReady` and
+  `operationDetailReadyScope`. `observedApprovedRecoveryOperation` requires a
+  successful current Operations read, no Project switch, exact Team/Project/Request,
+  the current active RUNNING CONTINUE_DELIVERY identity, its actual full
+  `intent.expected_checkpoint_sha256 === request.checkpoint_sha256`, valid exact
+  `approved_plan_sha256`, and an actual full successful preparation source matching
+  that plan/checkpoint via `operationReadingRecords`. A summary locator alone has
+  no result/approval and cannot establish this observation; a changed summary digest
+  cannot enhance reading from a stale full source. The same observation works when
+  Team read issue is null or busy/unavailable/timeout.
+- `consistentCurrentOperationSummary` requires at least one matching locator in
+  the bounded current Team summary-page cache, including any Team-wide page.
+  Every same-ID locator across its `items` and `active` arrays must agree with
+  the source's Team, exact selected Project and
+  status/sequence/digest. Non-summary servers retain the original path (`true`). A
+  Project poll already observing completion cannot be erased by an old Requirement
+  page's RUNNING record, regardless of page insertion order. A conflict is a
+  read-only refusal until freshly consistent pages are observed; it never updates
+  the shared operation reader or any control/POST gate and creates no persistent
+  conflict/epoch state. Same-page items/active disagreement is also refused.
+  Team-wide locators participate in the existing reading merger and therefore
+  cannot be omitted from this check when scoped Project pages are also cached.
+- `requestNodeExecution` checks this active source agreement before both its
+  controllable and independently observed `platformProcessing` branches. A true
+  control gate cannot short-circuit this read-side consistency check. Ordinary
+  Continue keeps its existing presentation and does not acquire a new approved-plan
+  requirement. `observedApprovedRecoveryOperation` separately applies the same
+  agreement check to both its active full source and successful preparation source;
+  only this exact-recovery observation requires the full plan/checkpoint binding.
+- This predicate only supports “平台正在处理恢复” when `requestNodeExecution` has
+  no newer current failure, wait, expired claim or successor execution. New Task
+  queue/role facts keep their original precedence. It never changes
+  `canControlCurrentTeam`, exact approval inputs or fresh write rechecks.
+  READY/full-detail/readiness failures still prohibit every POST.
+
+Good: current exact recovery is readable while runtime readiness is false; display
+its preparation and keep controls disabled. Base: an old BLOCKED result remains
+the sealed outcome of that operation after the Requirement advances. Bad: use summary-only plan
+metadata as full approval, show SUCCEEDED as blue/green delivery success, or attach
+current progress to a retained old history row.
+
 ## Validation matrix
 
 | Scenario | Required result |
@@ -107,6 +169,14 @@ renderSummaryOperationHistory(panel, projectId, deliveryId)
 | Same Project/Requirement IDs in another Team | Old pages cannot qualify active work or approvals |
 | Eight-count/32 MiB cache eviction of required source | No ready reading gate; budget stays bounded |
 | Cursor stale / initial empty page / page navigation | Old page labeled retained / first page filled / real DOM moves to chosen page |
+| Exact full recovery, runtime or detail write gate unavailable | Current preparation readable; control remains false; no approval or POST |
+| Current Request checkpoint / preparation digest / Team or Project changes | No recovery observation from old full sources |
+| Same RUNNING summary, new Coder→QA→Review / wait / failure / expired lease | Row signature and presentation follow true current Task facts |
+| Summary SUCCEEDED with BLOCKED/WAITING_HUMAN/DONE/CLOSED/PLANNING | Neutral command badge plus accurate historical outcome; only DONE says delivered |
+| Retained changed page or same-ID drifted active digest | Old row has no live progress or preparation claim |
+| Project/Requirement or items/active same-ID status/sequence/digest conflict | Neither active nor preparation source establishes current recovery; consistent rereads restore only reading |
+| Active summary conflict with controls true or false | Both processing-display paths refuse the conflict without changing control policy |
+| Consistent ordinary Continue without approved_plan_sha256 | Existing controllable presentation retained; no additional approval requirement |
 
 ## Tests, stock data and rollback
 
@@ -116,6 +186,10 @@ fences, Team isolation and cache byte/count refusal. Its browser counterpart use
 isolated Chrome/fake HTTP to verify actual 61-record/three-page DOM navigation,
 outside-page full reason, close release, unchanged polling and click-time drift.
 Keep readiness/engineering/operation/notice/UI/polling-state regressions.
+`recovery-progress-summary.test.cjs` drives the actual Console/summary/full-detail/
+preparation GET events and `requestOperationHistory` with fake HTTP and safe DOM.
+It covers these read/control distinctions, immutable input facts, sealed outcome,
+row signature, all three role phases and negative scope/freshness/current wait facts.
 
 No SQL/journal/Task/approval/workspace migration or rewrite. Original full records
 remain immutable and complete; the read-only backend projects them. Deploy only
