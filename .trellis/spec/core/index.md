@@ -81,6 +81,8 @@
 
 - [`incremental-polling.md`](incremental-polling.md): scoped read-side updates, retained DOM and drafts,
   source-signature invalidation for exact approvals and Project boundaries.
+- [`console-operation-summary-ui.md`](console-operation-summary-ui.md): bounded summary polling,
+  complete paginated history, owner-fenced full detail reads and fresh exact approval facts.
 
 - [`candidate-review-source.md`](candidate-review-source.md): complete candidate differences,
   typed source lineage, command-free verifiers and final serialized input budget.

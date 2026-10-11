@@ -1,0 +1,17 @@
+{
+  "name": "console-operation-summary-ui",
+  "title": "操作摘要轮询、完整历史分页与精确审批单条核验",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "1769977",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/operation-summary-reading.test.cjs",
+    "tests/team_view/browser/operation-summary-reading.test.cjs",
+    ".trellis/spec/core/console-operation-summary-ui.md",
+    ".trellis/spec/core/index.md",
+    ".trellis/tasks/10-12-console-operation-summary-ui/"
+  ],
+  "constraints": ["Incremental tests only", "Isolated worktree; no production changes", "Summary is reading only, never fake full Operation or approval authority"],
+  "rollback": "Revert frontend code during idle controlled deployment; retain compatible backend/read protocol and all durable Operation/history/approval facts."
+}
