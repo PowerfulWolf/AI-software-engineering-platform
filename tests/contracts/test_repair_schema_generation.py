@@ -52,6 +52,25 @@ def test_regeneration_preserves_every_published_allof_without_requiring_a_previo
         (
             "BaselineExecutionReservation",
             {
+                "retry_cause": "completed_output_unavailable",
+                "original_run_id": "run_original",
+                "current_invocation_start_sha256": "a",
+                "current_invocation_outcome_sha256": "b",
+                "completed_output_sha256": "c",
+                "reservation_already_applied": False,
+            },
+            {
+                "retry_cause": "completed_output_unavailable",
+                "original_run_id": "run_original",
+                "current_invocation_start_sha256": "a",
+                "current_invocation_outcome_sha256": "b",
+                "completed_output_sha256": "c",
+                "retry_failure": {},
+            },
+        ),
+        (
+            "BaselineExecutionReservation",
+            {
                 "retry_cause": "legacy_execution_abandoned",
                 "original_run_id": "run_original",
                 "current_invocation_start_sha256": "a",

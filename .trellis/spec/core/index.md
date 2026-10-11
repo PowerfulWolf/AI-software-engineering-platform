@@ -122,3 +122,4 @@
   patches, exact engineering decisions and historical source/queue accounting.
 
 - [`rejected-coder-output.md`](rejected-coder-output.md): complete legal draft preservation and same-Task exact retry for stopped rejected Coder progress, with no result rewrite or transient refund.
+- [`completed-coder-output-unavailable.md`](completed-coder-output-unavailable.md): separately verified native completion with an unknown unaccepted output, full same-Task baseline capture and ordinary-work PAUSE/RESUME.

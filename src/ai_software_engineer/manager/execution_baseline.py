@@ -43,6 +43,9 @@ from ai_software_engineer.manager.baseline_models import (
     ExecutionBaselinePlan,
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+from ai_software_engineer.manager.completed_output_checkpoint import (
+    require_completed_output_workspace,
+)
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
@@ -160,6 +163,14 @@ class ExecutionBaselineService:
                 base_revision=expected_base,
             )
             before = capture_mutation_inventory(worktree.path)
+            if facts.completed_output is not None:
+                require_completed_output_workspace(
+                    facts.completed_output,
+                    CapturedMutations.from_capture(dirty),
+                    before,
+                    facts.permissions,
+                    facts.denied_paths,
+                )
             conflicted = False
             preview: BaselineGitPreview | None
             if purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:

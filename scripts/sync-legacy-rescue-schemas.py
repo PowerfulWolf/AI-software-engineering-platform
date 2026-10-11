@@ -15,6 +15,9 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
     ExecutionBaselinePlan,
 )
+from ai_software_engineer.manager.completed_output_checkpoint import (
+    CompletedCoderOutputUnavailableProof,
+)
 from ai_software_engineer.multi_directory.models import JointCheckpoint
 from ai_software_engineer.team_view.models import TeamSnapshot
 from ai_software_engineer.web_console.models import (
@@ -41,6 +44,7 @@ MODELS = (
     NativeRuleChangeInspection,
     BaselineQueueRelease,
     TeamSnapshot,
+    CompletedCoderOutputUnavailableProof,
 )
 UPDATED = {
     "ExecutionBaselineBinding",
@@ -63,6 +67,7 @@ UPDATED = {
     "NativeRuleEpochReference",
     "ResumeExecutionBaselineIntent",
     "RoleQueueView",
+    "CompletedCoderOutputUnavailableProof",
 }
 
 
@@ -82,12 +87,14 @@ def main() -> None:
         # Name-only rescue updates otherwise replace it with the disposition enum.
         ("requirement-checkpoint", JointCheckpoint),
         ("knowledge-stage-workflow", StageWorkflowProof),
+        ("completed-coder-output-unavailable", CompletedCoderOutputUnavailableProof),
     )
     standalone_names = {f"{filename}.schema.json" for filename, _ in standalone}
     for filename, model in standalone:
         schema = model.model_json_schema()
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
         schema["$id"] = f"https://ai-software-engineer.local/schemas/{filename}.schema.json"
+        guards(schema)
         (ROOT / f"{filename}.schema.json").write_text(
             json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=model is TeamSnapshot) + "\n"
         )
@@ -158,12 +165,13 @@ def main() -> None:
         queue_path.write_text(
             json.dumps(queue_document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         )
-    # These standalone models have no handwritten legacy compatibility gates.
-    # Keep exact generated parity even when an embedded older model has such gates.
+    # Keep generated shape parity and the completed-output wire gate. Older
+    # standalone models have no handwritten legacy compatibility gates.
     for filename, model in standalone:
         schema = model.model_json_schema()
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
         schema["$id"] = f"https://ai-software-engineer.local/schemas/{filename}.schema.json"
+        guards(schema)
         (ROOT / f"{filename}.schema.json").write_text(
             json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=model is TeamSnapshot) + "\n"
         )
@@ -308,6 +316,95 @@ def guards(node: dict[str, object]) -> None:
                         "reservation_already_applied": {"const": False},
                     },
                 },
+            },
+            {
+                "if": {
+                    "required": ["retry_cause"],
+                    "properties": {"retry_cause": {"const": "completed_output_unavailable"}},
+                },
+                "then": {
+                    "required": [
+                        "original_run_id",
+                        "current_invocation_start_sha256",
+                        "current_invocation_outcome_sha256",
+                        "completed_output_sha256",
+                    ],
+                    "properties": {
+                        "original_run_id": {"type": "string"},
+                        "current_invocation_start_sha256": {"type": "string"},
+                        "current_invocation_outcome_sha256": {"type": "string"},
+                        "completed_output_sha256": {"type": "string"},
+                        "containment_sha256": {"type": "null"},
+                        "interruption_receipt_sha256": {"type": "null"},
+                        "retry_failure": {"type": "null"},
+                        "reservation_already_applied": {"const": False},
+                    },
+                },
+                "else": {"properties": {"completed_output_sha256": {"type": "null"}}},
+            },
+        ]
+    elif title == "CompletedCoderOutputUnavailableProof":
+        node["allOf"] = [
+            {
+                "properties": {
+                    "outcome": {
+                        "properties": {
+                            "result": {
+                                "required": ["error"],
+                                "properties": {
+                                    "status": {"const": "FAILED"},
+                                    "artifact": {"type": "null"},
+                                    "error": {
+                                        "type": "object",
+                                        "properties": {
+                                            "code": {"const": "WORK_INTERRUPTED"},
+                                            "transient": {"const": False},
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    },
+                    "capture_stop": {
+                        "properties": {
+                            "output_present": {"const": True},
+                            "cause": {"type": "null"},
+                            "original_error_code": {"type": "null"},
+                            "process_stop": {
+                                "properties": {
+                                    "kind": {"const": "completed"},
+                                    "returncode": {"const": 0},
+                                }
+                            },
+                        }
+                    },
+                },
+            }
+        ]
+    elif title == "BaselineExecutionFacts":
+        node["allOf"] = [
+            {
+                "if": {
+                    "required": ["continuation"],
+                    "properties": {
+                        "continuation": {
+                            "type": "object",
+                            "required": ["retry_cause"],
+                            "properties": {
+                                "retry_cause": {"const": "completed_output_unavailable"}
+                            },
+                        },
+                    },
+                },
+                "then": {
+                    "required": ["completed_output"],
+                    "properties": {
+                        "completed_output": {"type": "object"},
+                        "legacy_containment": {"type": "null"},
+                        "implementation_artifact_id": {"type": "null"},
+                    },
+                },
+                "else": {"properties": {"completed_output": {"type": "null"}}},
             }
         ]
     elif title in {"ExecutionBaselinePlan", "ExecutionBaselineBinding"}:

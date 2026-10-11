@@ -17,7 +17,7 @@ from pydantic import Field, model_validator
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, RouteAttemptOutcome
-from ai_software_engineer.agents.models import AgentRunStatus
+from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.artifacts.ordering import latest_accepted_artifact
 from ai_software_engineer.domain.agent import AgentPermissions
@@ -60,6 +60,9 @@ from ai_software_engineer.manager.baseline_models import (
     require_rescue_confirmation,
 )
 from ai_software_engineer.manager.baseline_native_rules import build_native_rule_change
+from ai_software_engineer.manager.completed_output_checkpoint import (
+    CompletedCoderOutputUnavailableProof,
+)
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightCheckpoint,
@@ -80,6 +83,7 @@ from ai_software_engineer.manager.legacy_local_execution import (
 )
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
 from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCollector
+from ai_software_engineer.orchestration.capture_reconciliation import validate_capture_stop
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
 from ai_software_engineer.orchestration.continuation_models import (
     ContinuationScope,
@@ -400,8 +404,7 @@ class ProductionBaselineFactCollector:
         disposition = item.wait_disposition
         if (
             self.purpose is not BaselinePurpose.SOURCE_REBIND
-            or item.status
-            not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+            or item.status not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
             or disposition is None
             or disposition.facts.classification not in {"EXECUTION_UNCERTAIN", "PLATFORM_BUG"}
         ):
@@ -721,7 +724,14 @@ class ProductionBaselineFactCollector:
             else None
         )
         invocation_proofs = self._invocations(task, items, receipts, assignments, legacy=legacy)
-        reservation = self._reservation(task, item, receipts, legacy=legacy)
+        completed_output = (
+            self._completed_output(task, item, step)
+            if not any(receipt.original_work_item_id == item.id for receipt in receipts)
+            else None
+        )
+        reservation = self._reservation(
+            task, item, receipts, legacy=legacy, completed_output=completed_output
+        )
         proof = BaselineQuiescenceProof(
             task_id=task.id,
             task_revision=revision,
@@ -758,6 +768,7 @@ class ProductionBaselineFactCollector:
             resolved_interruption_receipt_sha256s=resolved,
             continuation=reservation,
             legacy_containment=legacy,
+            completed_output=completed_output,
             permissions=self.permissions,
             denied_paths=task.constraints.denied_paths if task.constraints else (),
             facts_sha256="0" * 64,
@@ -1044,6 +1055,81 @@ class ProductionBaselineFactCollector:
             )
         return tuple(result)
 
+    def _completed_output(
+        self, task: Task, item: QueuedWorkItem, step: QueuedRoleStep
+    ) -> CompletedCoderOutputUnavailableProof | None:
+        root = self.state / "invocations"
+        records = KnowledgeRecordStore(root, read_only=True) if root.is_dir() else None
+        outcome = (
+            records.find("invocation-outcomes", item.id, DeliveryInvocationOutcome)
+            if records
+            else None
+        )
+        if (
+            outcome is None
+            or outcome.result.status is not AgentRunStatus.FAILED
+            or outcome.result.error is None
+            or outcome.result.error.code is not AgentErrorCode.WORK_INTERRUPTED
+        ):
+            return None
+        assert records is not None
+        start = records.get("invocation-starts", item.id, DeliveryInvocationStart)
+        ledger = FileContinuationStore(self.state / "continuations" / task.id, task_id=task.id)
+        capture_start = ledger.capture_start(start.request.run_id)
+        capture_stop = ledger.capture_stop(start.request.run_id)
+        if capture_stop.process_stop.kind != "completed":
+            return None
+        proof = CompletedCoderOutputUnavailableProof.create(
+            outcome=outcome, capture_start=capture_start, capture_stop=capture_stop
+        )
+        expected_scope = ContinuationScope(
+            team_id=self.scope.team_id,
+            project_id=self.scope.project_id,
+            repository_id=self.scope.repository_id,
+            requirement_id=self.requirement_id,
+            dispatch_sha256=self.allocation.dispatch_sha256,
+        )
+        if capture_start.scope != expected_scope or start != outcome.start:
+            raise ValueError("完成但结果未接纳的原执行不属于当前需求和分配")
+
+        def validate_inputs(request: AgentRequest) -> None:
+            if (
+                request != start.request
+                or request.permissions != self.permissions
+                or request.source_revision != step.boundary.source_revision
+                or self.queue.get(item.id) != item
+                or self.queue.step(item.id) != step
+                or records.get("invocation-starts", item.id, DeliveryInvocationStart) != start
+                or records.get("invocation-outcomes", item.id, DeliveryInvocationOutcome) != outcome
+                or ledger.capture_start(request.run_id) != capture_start
+                or ledger.capture_stop(request.run_id) != capture_stop
+            ):
+                raise ValueError("完成但结果未接纳的原执行或当前队列事实已变化")
+            retired = self.queue.rejected_output_artifact_ids(task.id)
+            if any(
+                accepted.work_item_id == item.id
+                or (
+                    accepted.checkpoint_sequence >= start.checkpoint_sequence
+                    and accepted.receipt.artifact_id not in retired
+                )
+                for accepted in self.queue.accepted(task.id)
+            ) or any(
+                event.artifact_ids
+                for event in self.repository.list_events(task.id)[capture_start.task_revision :]
+            ):
+                raise ValueError("原执行之后已有产物发布或交付采纳, 不能覆盖原结果")
+
+        validate_capture_stop(
+            start=capture_start,
+            stop=capture_stop,
+            task=task,
+            task_revision=self.repository.current_revision(task.id),
+            historical_claim=self.queue.original_claim(start.lease_id),
+            task_lock=self.guard,
+            validate_inputs=validate_inputs,
+        )
+        return proof
+
     def _reservation(
         self,
         task: Task,
@@ -1051,6 +1137,7 @@ class ProductionBaselineFactCollector:
         receipts: tuple[ExecutionInterruptionReceipt, ...],
         *,
         legacy: LegacyExecutionContainment | None = None,
+        completed_output: CompletedCoderOutputUnavailableProof | None = None,
     ) -> BaselineExecutionReservation:
         root = self.state / "invocations"
         records = KnowledgeRecordStore(root, read_only=True) if root.is_dir() else None
@@ -1081,6 +1168,27 @@ class ProductionBaselineFactCollector:
         if outcome is not None and outcome.result.status is AgentRunStatus.SUCCEEDED:
             raise ValueError("原调用已有成功结果, 需要先接纳封存结果, 不能用基线更新覆盖")
         failure = None
+        if completed_output is not None:
+            completed_output.validate_integrity()
+            if (
+                completed_output.outcome != outcome
+                or completed_output.outcome.start != start
+                or receipt is not None
+                or legacy is not None
+                or task.attempts != start.request.attempt
+                or task.work_budget_exhausted
+                or start.request.attempt + 1 > task.max_attempts
+            ):
+                raise ValueError("完成但结果未接纳的接续没有剩余工作额度或精确原执行")
+            return BaselineExecutionReservation(
+                current_attempt=start.request.attempt,
+                next_execution_attempt=start.request.attempt + 1,
+                retry_cause="completed_output_unavailable",
+                original_run_id=start.request.run_id,
+                current_invocation_start_sha256=start.start_sha256,
+                current_invocation_outcome_sha256=outcome.outcome_sha256,
+                completed_output_sha256=completed_output.proof_sha256,
+            )
         if legacy is not None:
             legacy.validate_integrity()
             if (

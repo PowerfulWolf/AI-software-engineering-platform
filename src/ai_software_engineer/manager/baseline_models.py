@@ -28,6 +28,10 @@ from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_u
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure, ExecutionAttempt
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git.mutation import WorkspaceMutationInventory
+from ai_software_engineer.manager.completed_output_checkpoint import (
+    CompletedCoderOutputUnavailableProof,
+    validate_completed_output_capture,
+)
 from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.recovery.models import digest
@@ -39,8 +43,15 @@ class BaselineExecutionReservation(DomainModel):
     current_attempt: ExecutionAttempt
     next_execution_attempt: ExecutionAttempt
     retry_cause: Literal[
-        "uninvoked", "local_execution_limit", "provider_transient", "legacy_execution_abandoned"
+        "uninvoked",
+        "local_execution_limit",
+        "provider_transient",
+        "legacy_execution_abandoned",
+        "completed_output_unavailable",
     ]
+    completed_output_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     containment_sha256: Sha256 | None = Field(default=None, exclude_if=lambda value: value is None)
     original_run_id: RunId | None = None
     current_invocation_start_sha256: Sha256 | None = None
@@ -62,6 +73,7 @@ class BaselineExecutionReservation(DomainModel):
                         self.interruption_receipt_sha256,
                         self.retry_failure,
                         self.containment_sha256,
+                        self.completed_output_sha256,
                     )
                 )
                 or self.next_execution_attempt != self.current_attempt
@@ -77,10 +89,24 @@ class BaselineExecutionReservation(DomainModel):
                 or self.interruption_receipt_sha256 is not None
                 or self.retry_failure is not None
                 or self.reservation_already_applied
+                or self.completed_output_sha256 is not None
             ):
                 raise ValueError(
                     "legacy disposition must consume new work without invented results"
                 )
+        elif self.retry_cause == "completed_output_unavailable":
+            if (
+                self.original_run_id is None
+                or self.current_invocation_start_sha256 is None
+                or self.current_invocation_outcome_sha256 is None
+                or self.completed_output_sha256 is None
+                or self.next_execution_attempt != self.current_attempt + 1
+                or self.interruption_receipt_sha256 is not None
+                or self.containment_sha256 is not None
+                or self.retry_failure is not None
+                or self.reservation_already_applied
+            ):
+                raise ValueError("完成但结果未接纳的接续必须消费普通工作额度并保留原结果")
         elif (
             self.original_run_id is None
             or self.current_invocation_start_sha256 is None
@@ -91,6 +117,7 @@ class BaselineExecutionReservation(DomainModel):
             )
             or (self.retry_cause == "provider_transient") != (self.retry_failure is not None)
             or self.containment_sha256 is not None
+            or self.completed_output_sha256 is not None
         ):
             raise ValueError("baseline retry must bind its exact original invocation and successor")
         if self.retry_failure is not None and (
@@ -124,6 +151,9 @@ class BaselineExecutionFacts(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     legacy_containment: LegacyExecutionContainment | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    completed_output: CompletedCoderOutputUnavailableProof | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     permissions: AgentPermissions
@@ -181,6 +211,36 @@ class BaselineExecutionFacts(DomainModel):
                 raise ValueError("legacy facts changed exact original invocation or reservation")
         elif reservation is not None and reservation.retry_cause == "legacy_execution_abandoned":
             raise ValueError("legacy reservation requires full trusted containment facts")
+        completion = self.completed_output
+        if completion is not None:
+            completion.validate_integrity()
+            start, request = completion.capture_start, completion.outcome.start.request
+            if (
+                reservation is None
+                or reservation.retry_cause != "completed_output_unavailable"
+                or reservation.completed_output_sha256 != completion.proof_sha256
+                or reservation.original_run_id != request.run_id
+                or reservation.current_invocation_start_sha256
+                != completion.outcome.start.start_sha256
+                or reservation.current_invocation_outcome_sha256
+                != completion.outcome.outcome_sha256
+                or (start.scope.team_id, start.scope.project_id, start.scope.repository_id)
+                != (self.scope.team_id, self.scope.project_id, self.scope.repository_id)
+                or start.task_intent_sha256 != task_intent_sha256(self.task)
+                or completion.outcome.start.work_item_id != self.work_item_id
+                or completion.outcome.start.checkpoint_sequence != self.checkpoint_sequence
+                or start.task_revision != self.task_revision
+                or request.task_id != self.task.id
+                or request.permissions != self.permissions
+                or request.attempt != self.task.attempts
+                or reservation.current_attempt != request.attempt
+                or containment is not None
+                or self.implementation_artifact_id is not None
+                or not set(request.input_artifact_ids).issubset(self.source_artifact_ids)
+            ):
+                raise ValueError("完成但结果未接纳的事实与当前任务、权限或普通工作预留不一致")
+        elif reservation is not None and reservation.retry_cause == "completed_output_unavailable":
+            raise ValueError("完成但结果未接纳的预留缺少完整原执行证明")
         return self
 
     def validate_integrity(self) -> None:
@@ -214,6 +274,13 @@ class ExecutionBaselinePlan(DomainModel):
         self.facts.validate_integrity()
         CapturedMutations.model_validate(self.dirty_capture.to_wire())
         CapturedMutations.model_validate(self.complete_capture.to_wire())
+        if self.facts.completed_output is not None:
+            validate_completed_output_capture(
+                self.facts.completed_output,
+                self.dirty_capture,
+                self.before_inventory,
+                self.facts.permissions,
+            )
         task = self.facts.task
         if (
             self.facts.native_rule_change is not None

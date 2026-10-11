@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import sys
 from collections.abc import Mapping
 from contextlib import closing
@@ -110,14 +111,24 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _ReportTempla
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    ("mode", "reject_after_baseline", "native_pause", "capture_pending"),
+    ("mode", "reject_after_baseline", "native_pause", "capture_pending", "completed_output"),
     [
-        (BaselineInputMode.PRESERVE_DRAFT, False, False, False),
-        (BaselineInputMode.CODER_REAPPLY, False, False, False),
-        (BaselineInputMode.PRESERVE_DRAFT, True, False, False),
-        pytest.param(BaselineInputMode.PRESERVE_DRAFT, False, True, False, id="pause_native_epoch"),
+        (BaselineInputMode.PRESERVE_DRAFT, False, False, False, False),
+        (BaselineInputMode.CODER_REAPPLY, False, False, False, False),
+        (BaselineInputMode.PRESERVE_DRAFT, True, False, False, False),
         pytest.param(
-            BaselineInputMode.PRESERVE_DRAFT, False, True, True, id="pause_missing_receipt"
+            BaselineInputMode.PRESERVE_DRAFT, False, True, False, False, id="pause_native_epoch"
+        ),
+        pytest.param(
+            BaselineInputMode.PRESERVE_DRAFT, False, True, True, False, id="pause_missing_receipt"
+        ),
+        pytest.param(
+            BaselineInputMode.PRESERVE_DRAFT,
+            False,
+            True,
+            True,
+            True,
+            id="completed_output_unavailable_pause_resume",
         ),
     ],
 )
@@ -129,6 +140,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     reject_after_baseline: bool,
     native_pause: bool,
     capture_pending: bool,
+    completed_output: bool,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -264,20 +276,32 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             if request.role is AgentRole.CODER and len(calls) == 1:
                 assert request.execution_baseline_sha256 is None
                 assert isinstance(adapter._interruption_control, NativeCoderContinuation)
+                output = Path(argv[argv.index("--output-last-message") + 1])
+                script = (
+                    "from pathlib import Path; import sys; sys.stdin.read(); "
+                    "Path('hello.txt').write_text('retained draft\\n'); "
+                    "Path('.mypy_cache').mkdir(); "
+                    "Path('.mypy_cache/cache.db').write_bytes(b'x' * 22_000_000); "
+                    "Path(sys.argv[1]).write_text('{}')"
+                    if completed_output
+                    else "from pathlib import Path; import sys,time; "
+                    "sys.stdin.read(); Path('hello.txt').write_text('retained draft\\n'); "
+                    "time.sleep(30)"
+                )
                 outcome = SubprocessCodexCommandRunner(guard).run(
                     (
                         sys.executable,
                         "-c",
-                        "from pathlib import Path; import sys,time; "
-                        "sys.stdin.read(); Path('hello.txt').write_text('retained draft\\n'); "
-                        "time.sleep(30)",
+                        script,
+                        str(output),
                     ),
                     cwd=cwd,
                     environment=environment,
                     stdin=stdin,
                     timeout_seconds=min(timeout_seconds, 0.5),
                 )
-                assert outcome.timed_out and outcome.process_stop is not None
+                assert outcome.timed_out is not completed_output
+                assert outcome.process_stop is not None
                 outcome.process_stop.validate_integrity()
                 with pytest.raises(ProcessLookupError):
                     os.killpg(outcome.process_stop.group_id, 0)
@@ -288,9 +312,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                         request,
                         cwd,
                         process_stop=outcome.process_stop,
-                        output_present=False,
-                        cause="local_execution_limit",
-                        original_error_code=AgentErrorCode.TIMEOUT,
+                        output_present=completed_output,
+                        cause=None if completed_output else "local_execution_limit",
+                        original_error_code=None if completed_output else AgentErrorCode.TIMEOUT,
                     )
                 return outcome
 
@@ -590,9 +614,20 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     )
     if capture_pending:
         assert receipt_store.receipts_for_task(pending.task_id) == ()
-        assert capture_refusals == [calls[0].request.run_id]
+        assert capture_refusals == ([] if completed_output else [calls[0].request.run_id])
         receipt_store.capture_start(calls[0].request.run_id).validate_integrity()
         receipt_store.capture_stop(calls[0].request.run_id).validate_integrity()
+    if completed_output:
+        assert results[0].status is AgentRunStatus.FAILED
+        assert results[0].artifact is None and results[0].error is not None
+        assert results[0].error.code is AgentErrorCode.WORK_INTERRUPTED
+        assert not results[0].error.transient
+        stop = receipt_store.capture_stop(calls[0].request.run_id)
+        assert stop.process_stop.kind == "completed" and stop.process_stop.returncode == 0
+        assert stop.output_present and stop.cause is None and stop.original_error_code is None
+        # Isolated fixture maintenance is separate from source recovery authority.
+        # The original output remains unparsed and its FAILED result remains immutable.
+        shutil.rmtree(original_worktree / ".mypy_cache")
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         frozen_task = tasks.get(pending.task_id)
         frozen_revision = tasks.current_revision(pending.task_id)
@@ -604,7 +639,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     assert current_item.attempt == frozen_task.attempts == (1 if capture_pending else 2)
     if capture_pending:
         assert current_item.wait_disposition is not None
-        assert current_item.wait_disposition.facts.classification == "EXECUTION_UNCERTAIN"
+        assert current_item.wait_disposition.facts.classification == (
+            "TRANSIENT_INFRA" if completed_output else "EXECUTION_UNCERTAIN"
+        )
     else:
         assert not host.work_queue.claims_for_work_item(current_item.id)
     assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
@@ -678,8 +715,22 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     native_plan = host.propose_execution_baseline(
         command.model_copy(update={"target_base_ref": unsafe_target}), project_id="project_test"
     )
-    (original_receipt,) = receipt_store.receipts_for_task(pending.task_id)
-    if capture_pending:
+    original_receipts = receipt_store.receipts_for_task(pending.task_id)
+    if completed_output:
+        assert original_receipts == ()
+        assert native_plan.facts.completed_output is not None
+        completed_proof = native_plan.facts.completed_output
+        assert completed_proof.outcome.result == results[0]
+        assert (
+            completed_proof.capture_start.scope.requirement_id
+            == pending.delivery_id
+            != public_delivery_id
+        )
+        assert native_plan.facts.continuation is not None
+        assert native_plan.facts.continuation.retry_cause == "completed_output_unavailable"
+        assert native_plan.facts.continuation.retry_failure is None
+    elif capture_pending:
+        (original_receipt,) = original_receipts
         assert original_receipt.request == calls[0].request
         assert original_receipt.scope.requirement_id == pending.delivery_id != public_delivery_id
         assert host.work_queue.get(current_item.id) == current_item
@@ -784,7 +835,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     assert binding.approved_base_ref == approved_source
     assert binding.execution_base_ref == execution_base
     assert binding.input_mode is mode
-    assert binding.resolved_interruption_receipt_sha256s == (original_receipt.receipt_sha256,)
+    assert binding.resolved_interruption_receipt_sha256s == tuple(
+        receipt.receipt_sha256 for receipt in original_receipts
+    )
     assert _git_output("branch", "--show-current", cwd=original_worktree) == original_branch
     assert (
         _git_output("rev-parse", "HEAD", cwd=original_worktree) == binding.execution_source_revision
@@ -995,7 +1048,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     )
     assert _git_output("rev-parse", "HEAD", cwd=repository) == execution_base
     assert not (repository / ".ase").exists()
-    assert receipt_store.receipts_for_task(frozen_task.id) == (original_receipt,)
+    assert receipt_store.receipts_for_task(frozen_task.id) == original_receipts
     assert all(result.status is AgentRunStatus.SUCCEEDED for result in results[1:])
     assert all(
         item.status is WorkItemStatus.CLOSED

@@ -448,6 +448,22 @@ Normal proof/reservation/capture/preview validation then builds the proposal.
 | Original successful result | Preserve/recover result; reject baseline overwrite and require ordinary result acceptance |
 | PAUSE hold, ordinary preflight, execute/continue recollection or legacy rescue | No proposal reconciliation or reinterpretation of historical invocation start |
 
+## Completed native output unavailable (2026-10-11)
+
+A FAILED WORK_INTERRUPTED/nontransient/no-artifact result may coexist with a separately
+sealed native completed returncode0/output_present=true stop. Its output content remains
+unknown. The baseline-only `completed_output_unavailable` reservation binds the exact
+original outcome/capture start/stop/claim; it does not fabricate an interruption, artifact,
+cause or provider refund. The final plan additionally validates original-before/current
+complete inventory, all mutations and full draft fingerprints. Consumed rejected-output
+decisions may retire only their exact old artifact IDs from current execution reads;
+raw publication receipts remain and current-run publication always prevents this capability.
+
+Existing SOURCE_REBIND, exact engineering approval, durable PAUSE and explicit latest-bound
+RESUME apply. Old absent fields preserve canonical hashes. Full signatures, validation
+matrix and stock-data handling are in
+[`completed-coder-output-unavailable.md`](completed-coder-output-unavailable.md).
+
 Good: prepare an exact new source while sealing a genuinely stopped draft, execute the approved
 plan with PAUSE, inspect native-rule changes and explicitly RESUME. Base: existing complete
 receipts and clean preflight keep their prior behavior. Bad: call HANDLE merely to seal facts
