@@ -172,6 +172,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     capture_pending: bool,
     completed_output: bool,
     same_base: bool,
+    provider_failure: bool = False,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -315,6 +316,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                     "Path('.mypy_cache/cache.db').write_bytes(b'x' * 22_000_000); "
                     "Path(sys.argv[1]).write_text('{}')"
                     if completed_output
+                    else "import sys; sys.stdin.read(); "
+                    "sys.stderr.write('Error: HTTP 401 Unauthorized\\n'); sys.exit(1)"
+                    if provider_failure
                     else "from pathlib import Path; import sys,time; "
                     "sys.stdin.read(); Path('hello.txt').write_text('retained draft\\n'); "
                     "time.sleep(30)"
@@ -329,9 +333,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                     cwd=cwd,
                     environment=environment,
                     stdin=stdin,
-                    timeout_seconds=min(timeout_seconds, 0.5),
+                    timeout_seconds=min(timeout_seconds, 5 if provider_failure else 0.5),
                 )
-                assert outcome.timed_out is not completed_output
+                assert outcome.timed_out is not (completed_output or provider_failure)
                 assert outcome.process_stop is not None
                 outcome.process_stop.validate_integrity()
                 with pytest.raises(ProcessLookupError):
@@ -344,14 +348,22 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                         cwd,
                         process_stop=outcome.process_stop,
                         output_present=completed_output,
-                        cause=None if completed_output else "local_execution_limit",
-                        original_error_code=None if completed_output else AgentErrorCode.TIMEOUT,
+                        cause=None
+                        if completed_output or provider_failure
+                        else "local_execution_limit",
+                        original_error_code=AgentErrorCode.AUTHENTICATION_ERROR
+                        if provider_failure
+                        else None
+                        if completed_output
+                        else AgentErrorCode.TIMEOUT,
                     )
                 return outcome
 
             assert request.execution_baseline_sha256 == expected_binding
             assert request.execution_base_ref == execution_base
-            assert "complete_patch" in stdin and "+retained draft" in stdin
+            assert "complete_patch" in stdin
+            if not provider_failure:
+                assert "+retained draft" in stdin
             context = FileContextStore(sidecar / "contexts").get(request.context_manifest_id)
             (section,) = tuple(s for s in context.sections if s.name == "execution.baseline")
             assert not section.truncated
@@ -362,7 +374,11 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                 hashlib.sha256(trusted.complete_patch.encode()).hexdigest()
                 == trusted.binding.retained_patch.sha256
             )
-            assert trusted.complete_patch.endswith("+retained draft\n")
+            assert (
+                trusted.complete_patch == ""
+                if provider_failure
+                else trusted.complete_patch.endswith("+retained draft\n")
+            )
             if native_pause:
                 assert expected_epoch is not None
                 assert trusted.binding.native_rule_epoch_sha256 == expected_epoch.epoch_sha256
@@ -413,7 +429,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                 with pytest.raises(WorkspacePolicyError):
                     policy.authorize_write(".trellis/spec/core/forbidden.md")
                 prior = (
-                    "retained draft\n"
+                    "hello\n"
+                    if provider_failure
+                    else "retained draft\n"
                     if mode is BaselineInputMode.PRESERVE_DRAFT
                     else "upstream greeting\n"
                 )
@@ -648,7 +666,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     )
     if capture_pending:
         assert receipt_store.receipts_for_task(pending.task_id) == ()
-        assert capture_refusals == ([] if completed_output else [calls[0].request.run_id])
+        assert capture_refusals == (
+            [] if completed_output or provider_failure else [calls[0].request.run_id]
+        )
         receipt_store.capture_start(calls[0].request.run_id).validate_integrity()
         receipt_store.capture_stop(calls[0].request.run_id).validate_integrity()
     if completed_output:
@@ -662,6 +682,15 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         # Isolated fixture maintenance is separate from source recovery authority.
         # The original output remains unparsed and its FAILED result remains immutable.
         shutil.rmtree(original_worktree / ".mypy_cache")
+    if provider_failure:
+        assert results[0].status is AgentRunStatus.FAILED
+        assert results[0].artifact is None and results[0].error is not None
+        assert results[0].error.code is AgentErrorCode.AUTHENTICATION_ERROR
+        assert not results[0].error.transient
+        stop = receipt_store.capture_stop(calls[0].request.run_id)
+        assert stop.process_stop.kind == "failed" and stop.process_stop.returncode == 1
+        assert not stop.output_present and stop.cause is None
+        assert stop.original_error_code is AgentErrorCode.AUTHENTICATION_ERROR
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         frozen_task = tasks.get(pending.task_id)
         frozen_revision = tasks.current_revision(pending.task_id)
@@ -674,7 +703,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     if capture_pending:
         assert current_item.wait_disposition is not None
         assert current_item.wait_disposition.facts.classification == (
-            "TRANSIENT_INFRA" if completed_output else "EXECUTION_UNCERTAIN"
+            "TRANSIENT_INFRA" if completed_output or provider_failure else "EXECUTION_UNCERTAIN"
         )
     else:
         assert not host.work_queue.claims_for_work_item(current_item.id)
@@ -698,7 +727,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         expected_work_item_id=current_item.id,
         expected_source_revision=approved_source,
         target_base_ref=None if same_base else execution_base,
-        purpose=BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+        purpose=BaselinePurpose.STOPPED_PROVIDER_RETRY
+        if same_base and provider_failure
+        else BaselinePurpose.COMPLETED_OUTPUT_RESCUE
         if same_base
         else BaselinePurpose.SOURCE_REBIND,
     )
@@ -774,6 +805,13 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         assert native_plan.facts.continuation is not None
         assert native_plan.facts.continuation.retry_cause == "completed_output_unavailable"
         assert native_plan.facts.continuation.retry_failure is None
+    elif provider_failure:
+        assert original_receipts == ()
+        assert native_plan.facts.stopped_provider_failure is not None
+        assert native_plan.facts.stopped_provider_failure.outcome.result == results[0]
+        assert native_plan.facts.continuation is not None
+        assert native_plan.facts.continuation.retry_cause == "provider_prerequisite_repaired"
+        assert native_plan.facts.continuation.retry_failure is None
     elif capture_pending:
         (original_receipt,) = original_receipts
         assert original_receipt.request == calls[0].request
@@ -844,7 +882,11 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     else:
         assert not preserve.conflicted
         plan = preserve
-    assert plan.complete_capture.patch.endswith("+retained draft\n")
+    assert (
+        plan.complete_capture.patch == ""
+        if provider_failure
+        else plan.complete_capture.patch.endswith("+retained draft\n")
+    )
     assert plan.dirty_capture.worktree_path == str(original_worktree)
     assert plan.complete_capture.base_revision == approved_source
     execute = BaselineExecuteCommand(
@@ -852,13 +894,18 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         task_id=frozen_task.id,
         expected_plan_sha256=plan.plan_sha256,
         reference="exact-engineering-baseline-decision",
+        confirm_provider_prerequisites_repaired=True if provider_failure else None,
         continuation_mode=BaselineContinuationMode.PAUSE
         if native_pause or same_base
         else BaselineContinuationMode.RESUME,
         approved_native_rule_change_sha256=native_digest if native_pause else None,
     )
     if same_base:
-        assert plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+        assert plan.purpose is (
+            BaselinePurpose.STOPPED_PROVIDER_RETRY
+            if provider_failure
+            else BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+        )
         assert plan.target_base_ref == plan.prepared_source_revision == approved_source
         assert plan.facts.native_rule_change is None
         assert plan.facts.legacy_containment is None
@@ -875,18 +922,28 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
 
     # A post-proposal edit invalidates the exact plan. Restoring exact bytes is safe replay.
     if mode is BaselineInputMode.PRESERVE_DRAFT:
+        original_body = (original_worktree / "hello.txt").read_bytes()
         (original_worktree / "hello.txt").write_text("unapproved drift\n")
         with pytest.raises((ValueError, RuntimeError)):
             host.execute_execution_baseline(execute, project_id="project_test")
         assert len(calls) == 1
-        (original_worktree / "hello.txt").write_text("retained draft\n")
+        (original_worktree / "hello.txt").write_bytes(original_body)
 
     # Keep the native Supervisor paused while publication commits the same-item overlay.
     binding = host.execute_execution_baseline(execute, project_id="project_test")
     expected_binding = binding.binding_sha256
+    if provider_failure:
+        assert plan.facts.stopped_provider_failure is not None
+        assert (
+            binding.stopped_provider_failure_sha256
+            == plan.facts.stopped_provider_failure.proof_sha256
+        )
+        assert binding.authority_source == "engineering_operator_decision"
+        assert frozen_task.retry_failures is None
     if same_base:
-        assert plan.facts.completed_output is not None
-        assert binding.completed_output_sha256 == plan.facts.completed_output.proof_sha256
+        if not provider_failure:
+            assert plan.facts.completed_output is not None
+            assert binding.completed_output_sha256 == plan.facts.completed_output.proof_sha256
         assert binding.execution_source_revision == binding.execution_base_ref == approved_source
         assert binding.native_rule_epoch_sha256 is None
     if native_pause:
@@ -965,6 +1022,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         )
         with pytest.raises(ValueError, match="职责权限"):
             product_only.continue_execution_baseline(continue_command, project_id="project_test")
+        paused_body = (original_worktree / "hello.txt").read_bytes()
         original_release = MySqlRoleQueue.release_baseline_pause
 
         def interrupted_release(*args: object, **kwargs: object) -> bool:
@@ -979,12 +1037,15 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         with pytest.raises(ValueError, match="现场"):
             host.continue_execution_baseline(continue_command, project_id="project_test")
         assert host.work_queue.get(rebound_item.id) == rebound_item and len(calls) == 1
-        (original_worktree / "hello.txt").write_text("retained draft\n")
+        (original_worktree / "hello.txt").write_text(
+            "staged drift\n" if provider_failure else "retained draft\n"
+        )
         _git("add", "hello.txt", cwd=original_worktree)
-        with pytest.raises(ValueError, match="暂存区"):
+        with pytest.raises(ValueError, match="现场|暂存区" if provider_failure else "暂存区"):
             host.continue_execution_baseline(continue_command, project_id="project_test")
         assert host.work_queue.get(rebound_item.id) == rebound_item and len(calls) == 1
         _git("reset", "--mixed", binding.execution_source_revision, cwd=original_worktree)
+        (original_worktree / "hello.txt").write_bytes(paused_body)
         original_resume = host.resume_delivery
 
         def interrupted_resume(*args: object, **kwargs: object) -> None:
@@ -995,12 +1056,15 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             host.continue_execution_baseline(continue_command, project_id="project_test")
         assert host.work_queue.get(rebound_item.id).status is WorkItemStatus.READY
         assert len(calls) == 1
+        if provider_failure:
+            (original_worktree / "hello.txt").write_text("staged drift\n")
         _git("add", "hello.txt", cwd=original_worktree)
-        with pytest.raises(ValueError, match="暂存区"):
+        with pytest.raises(ValueError, match="现场|暂存区" if provider_failure else "暂存区"):
             host.continue_execution_baseline(continue_command, project_id="project_test")
         assert host.work_queue.get(rebound_item.id).status is WorkItemStatus.READY
         assert len(calls) == 1
         _git("reset", "--mixed", binding.execution_source_revision, cwd=original_worktree)
+        (original_worktree / "hello.txt").write_bytes(paused_body)
         monkeypatch.setattr(host, "resume_delivery", original_resume)
         host.continue_execution_baseline(continue_command, project_id="project_test")
     else:
@@ -1434,3 +1498,22 @@ def test_public_repeated_preflight_waits_keep_exact_historical_sources_without_m
     )
     assert stored.bindings_for_task(task.id) == tuple(bindings)
     assert not (repository / ".ase").exists()
+
+
+@pytest.mark.mysql
+@pytest.mark.parametrize("same_base", [True, False], ids=["same_source", "updated_source"])
+def test_public_stopped_provider_retry_preserves_failure_then_delivers_with_independent_roles(
+    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, same_base: bool
+) -> None:
+    test_public_baseline_updates_original_workspace_then_completes_independent_delivery(
+        tmp_path,
+        mysql_dsn,
+        monkeypatch,
+        mode=BaselineInputMode.PRESERVE_DRAFT,
+        reject_after_baseline=False,
+        native_pause=not same_base,
+        capture_pending=True,
+        completed_output=False,
+        same_base=same_base,
+        provider_failure=True,
+    )

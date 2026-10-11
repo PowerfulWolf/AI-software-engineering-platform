@@ -147,10 +147,15 @@ def completed(
 ) -> Iterator[CompletedFixture]:
     descriptor = os.open(tmp_path / "original.lock", os.O_RDWR | os.O_CREAT, 0o600)
     problem = getattr(request, "param", None)
-    native = V2Fixture(tmp_path, Guard(descriptor), work_limit=1 if problem == "exhausted" else 5)
+    stopped_provider = isinstance(problem, str) and problem.startswith("stopped_provider")
+    native = V2Fixture(
+        tmp_path,
+        Guard(descriptor),
+        work_limit=1 if problem in {"exhausted", "stopped_provider_exhausted"} else 5,
+    )
     process: subprocess.Popen[bytes] | None = None
     try:
-        if problem == "named":
+        if problem == "named" or stopped_provider:
             # Baseline migration requires a semantic branch frozen in a fresh
             # NEW Task. Never alter a sealed invocation or an existing Task row.
             native.repository.close()
@@ -185,36 +190,46 @@ def completed(
         monkeypatch.setattr(CodexCliAgentAdapter, "run", forbidden_model)
         queue = CompletedQueue(native)
         native.claim = queue.original
+        if stopped_provider:
+            # Permanent provider failure introduces no new mutations. The lawful
+            # retained draft was already present at the immutable capture start.
+            (native.worktree.path / "src/app.py").write_text("VALUE = 2\n")
         start = seal_start(native, queue, tmp_path)
         continuation = native.service()
         assert continuation.started(native.request, native.worktree.path) is not None
-        (native.worktree.path / "src/app.py").write_text("VALUE = 2\n")
-        if problem == "live_process":
+        if not stopped_provider:
+            (native.worktree.path / "src/app.py").write_text("VALUE = 2\n")
+        if problem in {"live_process", "stopped_provider_live_process"}:
             process = subprocess.Popen(
                 (sys.executable, "-c", "import time; time.sleep(60)"), start_new_session=True
             )
             # A stale/forged historical observation must never defeat the current
             # real PGID probe. This test-owned process is cleaned up below.
-            returncode = 0
+            returncode = 1 if stopped_provider else 0
         else:
             process = subprocess.Popen(
-                (sys.executable, "-c", "raise SystemExit(0)"), start_new_session=True
+                (
+                    sys.executable,
+                    "-c",
+                    "raise SystemExit(1)" if stopped_provider else "raise SystemExit(0)",
+                ),
+                start_new_session=True,
             )
             returncode = process.wait(timeout=5)
         stop = NativeProcessStop.create(
             process_id=process.pid,
             group_id=process.pid,
             returncode=returncode,
-            kind="completed",
+            kind="failed" if stopped_provider else "completed",
             stopped_at=NOW + timedelta(seconds=1),
         )
         continuation.record_native_stop(
             native.request,
             native.worktree.path,
             process_stop=stop,
-            output_present=problem != "output_absent",
+            output_present=not stopped_provider and problem != "output_absent",
             cause=None,
-            original_error_code=None,
+            original_error_code=AgentErrorCode.AUTHENTICATION_ERROR if stopped_provider else None,
         )
         capture_start = native.store.capture_start(native.request.run_id)
         capture_stop = native.store.capture_stop(native.request.run_id)
@@ -222,9 +237,23 @@ def completed(
         ledger_root.parent.mkdir(mode=0o700)
         ledger = FileContinuationStore.initialize(ledger_root, task_id=native.task.id)
         ledger.put_capture_start(capture_start)
-        if problem != "missing_stop":
+        if problem not in {"missing_stop", "stopped_provider_missing_stop"}:
             ledger.put_capture_stop(capture_stop)
-        outcome = _outcome(start, native.result())
+        result = (
+            AgentResult.model_validate(
+                {
+                    **native.result().to_wire(),
+                    "error": AgentFailure(
+                        code=AgentErrorCode.AUTHENTICATION_ERROR,
+                        message="原提供方凭证前提不满足。",
+                        transient=False,
+                    ),
+                }
+            )
+            if stopped_provider
+            else native.result()
+        )
+        outcome = _outcome(start, result)
         records = KnowledgeRecordStore(tmp_path / "invocations")
         records.put("invocation-outcomes", queue.item.id, outcome)
         native.guard.live = False

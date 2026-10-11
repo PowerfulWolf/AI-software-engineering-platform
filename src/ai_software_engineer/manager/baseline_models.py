@@ -33,6 +33,10 @@ from ai_software_engineer.manager.completed_output_checkpoint import (
     validate_completed_output_capture,
 )
 from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
+from ai_software_engineer.manager.stopped_provider_checkpoint import (
+    StoppedProviderFailureProof,
+    validate_stopped_provider_capture,
+)
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.recovery.models import digest
 
@@ -48,8 +52,12 @@ class BaselineExecutionReservation(DomainModel):
         "provider_transient",
         "legacy_execution_abandoned",
         "completed_output_unavailable",
+        "provider_prerequisite_repaired",
     ]
     completed_output_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    stopped_provider_failure_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     containment_sha256: Sha256 | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -74,6 +82,7 @@ class BaselineExecutionReservation(DomainModel):
                         self.retry_failure,
                         self.containment_sha256,
                         self.completed_output_sha256,
+                        self.stopped_provider_failure_sha256,
                     )
                 )
                 or self.next_execution_attempt != self.current_attempt
@@ -107,6 +116,20 @@ class BaselineExecutionReservation(DomainModel):
                 or self.reservation_already_applied
             ):
                 raise ValueError("完成但结果未接纳的接续必须消费普通工作额度并保留原结果")
+        elif self.retry_cause == "provider_prerequisite_repaired":
+            if (
+                self.original_run_id is None
+                or self.current_invocation_start_sha256 is None
+                or self.current_invocation_outcome_sha256 is None
+                or self.stopped_provider_failure_sha256 is None
+                or self.next_execution_attempt != self.current_attempt + 1
+                or self.interruption_receipt_sha256 is not None
+                or self.containment_sha256 is not None
+                or self.completed_output_sha256 is not None
+                or self.retry_failure is not None
+                or self.reservation_already_applied
+            ):
+                raise ValueError("提供方前提修复接续必须消费普通工作额度并保留精确原失败")
         elif (
             self.original_run_id is None
             or self.current_invocation_start_sha256 is None
@@ -120,6 +143,11 @@ class BaselineExecutionReservation(DomainModel):
             or self.completed_output_sha256 is not None
         ):
             raise ValueError("baseline retry must bind its exact original invocation and successor")
+        if (
+            self.retry_cause != "provider_prerequisite_repaired"
+            and self.stopped_provider_failure_sha256 is not None
+        ):
+            raise ValueError("提供方前提失败证明不能混入其他执行预留")
         if self.retry_failure is not None and (
             self.retry_failure.attempt != self.current_attempt
             or self.retry_failure.run_id != self.original_run_id
@@ -154,6 +182,9 @@ class BaselineExecutionFacts(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     completed_output: CompletedCoderOutputUnavailableProof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    stopped_provider_failure: StoppedProviderFailureProof | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     permissions: AgentPermissions
@@ -241,6 +272,38 @@ class BaselineExecutionFacts(DomainModel):
                 raise ValueError("完成但结果未接纳的事实与当前任务、权限或普通工作预留不一致")
         elif reservation is not None and reservation.retry_cause == "completed_output_unavailable":
             raise ValueError("完成但结果未接纳的预留缺少完整原执行证明")
+        provider = self.stopped_provider_failure
+        if provider is not None:
+            provider.validate_integrity()
+            start, request = provider.capture_start, provider.outcome.start.request
+            if (
+                reservation is None
+                or reservation.retry_cause != "provider_prerequisite_repaired"
+                or reservation.stopped_provider_failure_sha256 != provider.proof_sha256
+                or reservation.original_run_id != request.run_id
+                or reservation.current_invocation_start_sha256
+                != provider.outcome.start.start_sha256
+                or reservation.current_invocation_outcome_sha256 != provider.outcome.outcome_sha256
+                or (start.scope.team_id, start.scope.project_id, start.scope.repository_id)
+                != (self.scope.team_id, self.scope.project_id, self.scope.repository_id)
+                or start.task_intent_sha256 != task_intent_sha256(self.task)
+                or provider.outcome.start.work_item_id != self.work_item_id
+                or provider.outcome.start.checkpoint_sequence != self.checkpoint_sequence
+                or start.task_revision != self.task_revision
+                or request.task_id != self.task.id
+                or request.permissions != self.permissions
+                or request.attempt != self.task.attempts
+                or reservation.current_attempt != request.attempt
+                or containment is not None
+                or completion is not None
+                or self.implementation_artifact_id is not None
+                or not set(request.input_artifact_ids).issubset(self.source_artifact_ids)
+            ):
+                raise ValueError("提供方前提失败事实与当前任务、原执行、权限或普通工作预留不一致")
+        elif (
+            reservation is not None and reservation.retry_cause == "provider_prerequisite_repaired"
+        ):
+            raise ValueError("提供方前提失败预留缺少完整原执行证明")
         return self
 
     def validate_integrity(self) -> None:
@@ -277,6 +340,13 @@ class ExecutionBaselinePlan(DomainModel):
         if self.facts.completed_output is not None:
             validate_completed_output_capture(
                 self.facts.completed_output,
+                self.dirty_capture,
+                self.before_inventory,
+                self.facts.permissions,
+            )
+        if self.facts.stopped_provider_failure is not None:
+            validate_stopped_provider_capture(
+                self.facts.stopped_provider_failure,
                 self.dirty_capture,
                 self.before_inventory,
                 self.facts.permissions,
@@ -333,6 +403,22 @@ class ExecutionBaselinePlan(DomainModel):
                 raise ValueError(
                     "已结束执行恢复必须使用原基线和完整合法草稿, 不能更换规范或执行模式"
                 )
+        elif self.purpose is BaselinePurpose.STOPPED_PROVIDER_RETRY:
+            if (
+                self.facts.stopped_provider_failure is None
+                or self.facts.legacy_containment is not None
+                or self.facts.completed_output is not None
+                or self.facts.native_rule_change is not None
+                or self.facts.source_native_rules_sha256 != self.facts.target_native_rules_sha256
+                or self.target_base_ref != expected_base
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.prepared_source_revision != self.dirty_capture.source_revision
+                or self.prepared_dirty_patch != self.dirty_capture.patch
+                or self.conflicted
+            ):
+                raise ValueError(
+                    "提供方前提失败恢复必须使用原基线和完整合法草稿, 不能更换规范或执行模式"
+                )
         elif self.target_base_ref == expected_base or self.facts.legacy_containment is not None:
             raise ValueError(
                 "source rebind must select a different base without legacy containment"
@@ -381,6 +467,9 @@ class BaselineOperatorAuthorization(DomainModel):
     confirm_local_execution_stopped: Literal[True] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    confirm_provider_prerequisites_repaired: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     authorization_sha256: Sha256
 
     @model_validator(mode="after")
@@ -388,6 +477,12 @@ class BaselineOperatorAuthorization(DomainModel):
         self.principal.require_duty(OperatorDuty.ENGINEERING)
         if self.confirm_legacy_containment and self.confirm_local_execution_stopped:
             raise ValueError("两种旧执行恢复确认不能同时使用")
+        require_provider_confirmation_shape(
+            self.confirm_provider_prerequisites_repaired,
+            self.continuation_mode,
+            self.confirm_legacy_containment,
+            self.confirm_local_execution_stopped,
+        )
         return self
 
     def require_plan_confirmation(self, plan: ExecutionBaselinePlan) -> None:
@@ -396,6 +491,9 @@ class BaselineOperatorAuthorization(DomainModel):
             and self.continuation_mode is not BaselineContinuationMode.PAUSE
         ):
             raise ValueError("已结束执行恢复批准后必须保持暂停, 再明确继续原需求")
+        require_provider_prerequisite_confirmation(
+            plan, self.confirm_provider_prerequisites_repaired, self.continuation_mode
+        )
         change = plan.facts.native_rule_change
         expected = change.change_sha256 if change is not None else None
         if self.approved_native_rule_change_sha256 != expected:
@@ -423,6 +521,7 @@ class BaselineOperatorAuthorization(DomainModel):
         submitted_at: datetime,
         confirm_legacy_containment: Literal[True] | None = None,
         confirm_local_execution_stopped: Literal[True] | None = None,
+        confirm_provider_prerequisites_repaired: Literal[True] | None = None,
         continuation_mode: BaselineContinuationMode = BaselineContinuationMode.RESUME,
         approved_native_rule_change_sha256: str | None = None,
     ) -> Self:
@@ -444,6 +543,7 @@ class BaselineOperatorAuthorization(DomainModel):
             approved_native_rule_change_sha256=approved_native_rule_change_sha256,
             confirm_legacy_containment=confirm_legacy_containment,
             confirm_local_execution_stopped=confirm_local_execution_stopped,
+            confirm_provider_prerequisites_repaired=confirm_provider_prerequisites_repaired,
             authorization_sha256="0" * 64,
         )
         value.require_plan_confirmation(plan)
@@ -537,3 +637,32 @@ class BaselineOperationStart(DomainModel):
         self.plan.validate_integrity()
         if self.start_sha256 != digest(self.model_dump(mode="json", exclude={"start_sha256"})):
             raise ValueError("baseline operation start changed")
+
+
+def require_provider_prerequisite_confirmation(
+    plan: ExecutionBaselinePlan,
+    confirmation: Literal[True] | None,
+    continuation_mode: BaselineContinuationMode,
+) -> None:
+    """A user checks original prerequisites; the platform asserts no provider health."""
+    if plan.facts.stopped_provider_failure is None:
+        if confirmation is not None:
+            raise ValueError("提供方前提确认只能用于对应的精确失败恢复方案")
+        return
+    if confirmation is not True:
+        raise ValueError("请明确确认原执行的提供方或本机调用前提已检查并修复")
+    if continuation_mode is not BaselineContinuationMode.PAUSE:
+        raise ValueError("提供方前提失败恢复批准后必须保持暂停, 再明确继续原需求")
+
+
+def require_provider_confirmation_shape(
+    confirmation: Literal[True] | None,
+    continuation_mode: BaselineContinuationMode,
+    legacy_confirmation: Literal[True] | None,
+    local_stop_confirmation: Literal[True] | None,
+) -> None:
+    if confirmation is not None:
+        if legacy_confirmation is not None or local_stop_confirmation is not None:
+            raise ValueError("提供方前提确认不能混用其他旧执行恢复确认")
+        if continuation_mode is not BaselineContinuationMode.PAUSE:
+            raise ValueError("提供方前提失败恢复批准后必须保持暂停, 再明确继续原需求")

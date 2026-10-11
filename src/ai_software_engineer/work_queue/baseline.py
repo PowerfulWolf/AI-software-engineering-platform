@@ -99,6 +99,23 @@ class BaselineQueueConsumption(DomainModel):
                 or self.next_work_item_id == self.work_item_id
             ):
                 raise ValueError("已结束执行恢复消费必须绑定原证据并使用独立下一工作身份")
+        provider = self.plan.facts.stopped_provider_failure
+        if provider is not None:
+            reservation = self.plan.facts.continuation
+            if (
+                reservation is None
+                or reservation.retry_cause != "provider_prerequisite_repaired"
+                or reservation.stopped_provider_failure_sha256 != provider.proof_sha256
+                or self.binding.stopped_provider_failure_sha256 != provider.proof_sha256
+                or self.binding.authority_source != "engineering_operator_decision"
+                or self.binding.continuation_mode is not BaselineContinuationMode.PAUSE
+                or self.next_work_item_id == self.work_item_id
+                or reservation.reservation_already_applied
+                or reservation.retry_failure is not None
+            ):
+                raise ValueError("提供方前提失败消费需要精确原失败、人工暂停和独立普通工作身份")
+        elif self.binding.stopped_provider_failure_sha256 is not None:
+            raise ValueError("提供方前提失败消费缺少对应的原执行证明")
         return self
 
 
@@ -337,6 +354,17 @@ def consume_baseline(
             or binding.authority_source != "engineering_operator_decision"
         ):
             raise QueueConflict("遗留未知执行不能退款、自动授权或复用旧工作预留")
+        if plan.facts.stopped_provider_failure is not None and (
+            reservation is None
+            or reservation.reservation_already_applied
+            or reservation.retry_cause != "provider_prerequisite_repaired"
+            or reservation.retry_failure is not None
+            or binding.authority_source != "engineering_operator_decision"
+            or binding.continuation_mode is not BaselineContinuationMode.PAUSE
+            or binding.stopped_provider_failure_sha256
+            != plan.facts.stopped_provider_failure.proof_sha256
+        ):
+            raise QueueConflict("提供方前提失败不能退款、自动授权或复用旧工作预留")
         if (
             reservation is None
             or task != plan.facts.task

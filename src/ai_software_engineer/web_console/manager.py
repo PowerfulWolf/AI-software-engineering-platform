@@ -368,6 +368,10 @@ class ManagerConsoleAdapter:
                         next_action=(
                             preparation.next_action
                             if preparation is not None
+                            else "原调用的认证失败和真实停止已核验, 完整合法进度已封存。"
+                            "请确认原模型认证或执行器配置前提已修复, 批准保留进度并保持暂停, "
+                            "再明确继续原需求; 原失败记录保留, 消耗普通开发额度。"
+                            if plan.purpose is BaselinePurpose.STOPPED_PROVIDER_RETRY
                             else "原执行已核验结束, 报告内容仍未知。完整合法进度已封存; "
                             "请核对精确恢复方案, 批准后保持暂停, 再明确继续原需求。"
                             if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE

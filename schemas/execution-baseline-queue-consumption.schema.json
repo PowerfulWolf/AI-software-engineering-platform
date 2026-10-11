@@ -687,6 +687,17 @@
           ],
           "default": null
         },
+        "stopped_provider_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoppedProviderFailureProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "permissions": {
           "$ref": "#/$defs/AgentPermissions"
         },
@@ -764,6 +775,52 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "provider_prerequisite_repaired"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "stopped_provider_failure"
+            ],
+            "properties": {
+              "stopped_provider_failure": {
+                "type": "object"
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "completed_output": {
+                "type": "null"
+              },
+              "implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "stopped_provider_failure": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -789,7 +846,8 @@
             "local_execution_limit",
             "provider_transient",
             "legacy_execution_abandoned",
-            "completed_output_unavailable"
+            "completed_output_unavailable",
+            "provider_prerequisite_repaired"
           ],
           "title": "Retry Cause",
           "type": "string"
@@ -806,6 +864,19 @@
           ],
           "default": null,
           "title": "Completed Output Sha256"
+        },
+        "stopped_provider_failure_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stopped Provider Failure Sha256"
         },
         "containment_sha256": {
           "anyOf": [
@@ -991,6 +1062,62 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "retry_cause"
+            ],
+            "properties": {
+              "retry_cause": {
+                "const": "provider_prerequisite_repaired"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "current_invocation_start_sha256",
+              "current_invocation_outcome_sha256",
+              "stopped_provider_failure_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "current_invocation_start_sha256": {
+                "type": "string"
+              },
+              "current_invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "string"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "containment_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
+              "reservation_already_applied": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -1006,7 +1133,8 @@
       "enum": [
         "source_rebind",
         "legacy_workspace_rescue",
-        "completed_output_rescue"
+        "completed_output_rescue",
+        "stopped_provider_retry"
       ],
       "title": "BaselinePurpose",
       "type": "string"
@@ -2262,6 +2390,19 @@
           "default": null,
           "title": "Completed Output Sha256"
         },
+        "stopped_provider_failure_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stopped Provider Failure Sha256"
+        },
         "scope": {
           "$ref": "#/$defs/EngineeringScope"
         },
@@ -2529,6 +2670,72 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "stopped_provider_retry"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "stopped_provider_failure_sha256",
+              "continuation_mode"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "stopped_provider_failure_sha256"
+            ],
+            "properties": {
+              "stopped_provider_failure_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation_mode"
+            ],
+            "properties": {
+              "purpose": {
+                "enum": [
+                  "source_rebind",
+                  "stopped_provider_retry"
+                ]
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -2684,6 +2891,50 @@
                     "type": "object"
                   },
                   "legacy_containment": {
+                    "type": "null"
+                  },
+                  "native_rule_change": {
+                    "type": "null"
+                  },
+                  "implementation_artifact_id": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "stopped_provider_retry"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "conflicted": {
+                "const": false
+              },
+              "facts": {
+                "required": [
+                  "stopped_provider_failure"
+                ],
+                "properties": {
+                  "stopped_provider_failure": {
+                    "type": "object"
+                  },
+                  "legacy_containment": {
+                    "type": "null"
+                  },
+                  "completed_output": {
                     "type": "null"
                   },
                   "native_rule_change": {
@@ -4034,6 +4285,106 @@
       "title": "OperatorDuty",
       "type": "string"
     },
+    "OwnedProcessIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "process_id": {
+          "exclusiveMinimum": 0,
+          "title": "Process Id",
+          "type": "integer"
+        },
+        "group_id": {
+          "exclusiveMinimum": 0,
+          "title": "Group Id",
+          "type": "integer"
+        },
+        "session_id": {
+          "exclusiveMinimum": 0,
+          "title": "Session Id",
+          "type": "integer"
+        },
+        "birth_identity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Birth Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "process_id",
+        "group_id",
+        "session_id",
+        "birth_identity"
+      ],
+      "title": "OwnedProcessIdentity",
+      "type": "object"
+    },
+    "OwnedSessionStopProof": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "proof_scope": {
+          "const": "owned_session_empty",
+          "default": "owned_session_empty",
+          "title": "Proof Scope",
+          "type": "string"
+        },
+        "boot_identity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Boot Identity",
+          "type": "string"
+        },
+        "leader": {
+          "$ref": "#/$defs/OwnedProcessIdentity"
+        },
+        "observed_processes": {
+          "items": {
+            "$ref": "#/$defs/OwnedProcessIdentity"
+          },
+          "maxItems": 16384,
+          "title": "Observed Processes",
+          "type": "array"
+        },
+        "observation_count": {
+          "maximum": 1000000,
+          "minimum": 2,
+          "title": "Observation Count",
+          "type": "integer"
+        },
+        "observations_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Observations Sha256",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "boot_identity",
+        "leader",
+        "observed_processes",
+        "observation_count",
+        "observations_sha256",
+        "observed_at",
+        "proof_sha256"
+      ],
+      "title": "OwnedSessionStopProof",
+      "type": "object"
+    },
     "PlanAcceptanceMapping": {
       "additionalProperties": false,
       "properties": {
@@ -5295,6 +5646,119 @@
       "title": "RoleAssignment",
       "type": "object"
     },
+    "StoppedProviderFailureProof": {
+      "additionalProperties": false,
+      "description": "Original permanent failure and exact native stop, never a health assertion.",
+      "properties": {
+        "kind": {
+          "const": "stopped_provider_failure",
+          "default": "stopped_provider_failure",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/DeliveryInvocationOutcome"
+        },
+        "capture_start": {
+          "$ref": "#/$defs/ExecutionCaptureStart"
+        },
+        "capture_stop": {
+          "$ref": "#/$defs/ExecutionCaptureStop"
+        },
+        "proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome",
+        "capture_start",
+        "capture_stop",
+        "proof_sha256"
+      ],
+      "title": "StoppedProviderFailureProof",
+      "type": "object",
+      "allOf": [
+        {
+          "properties": {
+            "outcome": {
+              "properties": {
+                "start": {
+                  "properties": {
+                    "request": {
+                      "properties": {
+                        "role": {
+                          "const": "coder"
+                        }
+                      }
+                    }
+                  }
+                },
+                "result": {
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "FAILED"
+                    },
+                    "artifact": {
+                      "type": "null"
+                    },
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "AUTHENTICATION_ERROR"
+                        },
+                        "transient": {
+                          "const": false
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "capture_stop": {
+              "properties": {
+                "output_present": {
+                  "const": false
+                },
+                "cause": {
+                  "type": "null"
+                },
+                "original_error_code": {
+                  "enum": [
+                    null,
+                    "AUTHENTICATION_ERROR"
+                  ]
+                },
+                "process_stop": {
+                  "properties": {
+                    "kind": {
+                      "const": "failed"
+                    },
+                    "returncode": {
+                      "not": {
+                        "const": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "Task": {
       "additionalProperties": false,
       "description": "A bounded request tied to one repository and delivery state.",
@@ -5656,106 +6120,6 @@
         "files"
       ],
       "title": "WorkspaceMutationInventory",
-      "type": "object"
-    },
-    "OwnedProcessIdentity": {
-      "additionalProperties": false,
-      "properties": {
-        "process_id": {
-          "exclusiveMinimum": 0,
-          "title": "Process Id",
-          "type": "integer"
-        },
-        "group_id": {
-          "exclusiveMinimum": 0,
-          "title": "Group Id",
-          "type": "integer"
-        },
-        "session_id": {
-          "exclusiveMinimum": 0,
-          "title": "Session Id",
-          "type": "integer"
-        },
-        "birth_identity": {
-          "maxLength": 128,
-          "minLength": 1,
-          "title": "Birth Identity",
-          "type": "string"
-        }
-      },
-      "required": [
-        "process_id",
-        "group_id",
-        "session_id",
-        "birth_identity"
-      ],
-      "title": "OwnedProcessIdentity",
-      "type": "object"
-    },
-    "OwnedSessionStopProof": {
-      "additionalProperties": false,
-      "properties": {
-        "schema_version": {
-          "const": "v1",
-          "default": "v1",
-          "title": "Schema Version",
-          "type": "string"
-        },
-        "proof_scope": {
-          "const": "owned_session_empty",
-          "default": "owned_session_empty",
-          "title": "Proof Scope",
-          "type": "string"
-        },
-        "boot_identity": {
-          "maxLength": 128,
-          "minLength": 1,
-          "title": "Boot Identity",
-          "type": "string"
-        },
-        "leader": {
-          "$ref": "#/$defs/OwnedProcessIdentity"
-        },
-        "observed_processes": {
-          "items": {
-            "$ref": "#/$defs/OwnedProcessIdentity"
-          },
-          "maxItems": 16384,
-          "title": "Observed Processes",
-          "type": "array"
-        },
-        "observation_count": {
-          "maximum": 1000000,
-          "minimum": 2,
-          "title": "Observation Count",
-          "type": "integer"
-        },
-        "observations_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Observations Sha256",
-          "type": "string"
-        },
-        "observed_at": {
-          "format": "date-time",
-          "title": "Observed At",
-          "type": "string"
-        },
-        "proof_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Proof Sha256",
-          "type": "string"
-        }
-      },
-      "required": [
-        "boot_identity",
-        "leader",
-        "observed_processes",
-        "observation_count",
-        "observations_sha256",
-        "observed_at",
-        "proof_sha256"
-      ],
-      "title": "OwnedSessionStopProof",
       "type": "object"
     }
   },

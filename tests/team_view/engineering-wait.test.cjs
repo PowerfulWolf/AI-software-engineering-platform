@@ -2044,7 +2044,7 @@ function completedRescuePlan(h) {
   const request = {task_id: h.task.task_id, run_id: 'run_original', role: 'coder', source_revision: 'c'.repeat(40)};
   const start = {request, work_item_id: h.step.work_item_id, lease_id: 'lease_original', checkpoint_sequence: 4, start_sha256: digest('1')};
   const proof = {kind: 'completed_coder_output_unavailable', output_content_status: 'unknown', proof_sha256: digest('2'),
-    outcome: {start, result: {status: 'FAILED', artifact: null, error: {code: 'WORK_INTERRUPTED', transient: false}}},
+    outcome: {start, result: {status: 'FAILED', error: {code: 'WORK_INTERRUPTED', transient: false}}},
     capture_start: {request, start_sha256: digest('3'), task_revision: 4, worktree_path: '/workspace/current'},
     capture_stop: {task_id: request.task_id, run_id: request.run_id, capture_start_sha256: digest('3'), output_present: true,
       cause: null, original_error_code: null, process_stop: {kind: 'completed', returncode: 0}}};
@@ -2235,4 +2235,14 @@ test('incremental reconciliation replaces old unknown-stop advice and controls w
   assert.doesNotMatch(text(retained), /这是该次调查保存的结果/);
   await approve.events.click();
   assert.equal(h.run('submitted.length'), 2, 'retained new-plan approval cannot survive proof invalidation');
+});
+
+test("completed output plan accepts canonical omitted artifact and explicit null but rejects a publication", () => {
+  for (const explicitNull of [false, true]) {
+    const h = harness(); completedRescueFixture(h); const plan = completedRescuePlan(h);
+    if (explicitNull) h.run("rescuePlan.facts.completed_output.outcome.result.artifact = null");
+    assert.equal(h.run('engineeringBaselinePlan(data.request, data.task, data.step, "completed_output_rescue")')?.plan_sha256, plan.plan_sha256);
+    h.run("rescuePlan.facts.completed_output.outcome.result.artifact = {}");
+    assert.equal(h.run('engineeringBaselinePlan(data.request, data.task, data.step, "completed_output_rescue")'), null);
+  }
 });

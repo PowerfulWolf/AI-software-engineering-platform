@@ -601,6 +601,7 @@ class TeamHost:
                     reference=command.reference,
                     confirm_legacy_containment=command.confirm_legacy_containment,
                     confirm_local_execution_stopped=command.confirm_local_execution_stopped,
+                    confirm_provider_prerequisites_repaired=command.confirm_provider_prerequisites_repaired,
                     continuation_mode=command.continuation_mode,
                     approved_native_rule_change_sha256=command.approved_native_rule_change_sha256,
                 )
@@ -610,6 +611,8 @@ class TeamHost:
                 or authority.confirm_legacy_containment != command.confirm_legacy_containment
                 or authority.confirm_local_execution_stopped
                 != command.confirm_local_execution_stopped
+                or authority.confirm_provider_prerequisites_repaired
+                != command.confirm_provider_prerequisites_repaired
                 or authority.continuation_mode != command.continuation_mode
                 or authority.approved_native_rule_change_sha256
                 != command.approved_native_rule_change_sha256

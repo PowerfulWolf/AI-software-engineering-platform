@@ -229,6 +229,18 @@ class FileExecutionBaselineStore:
             authority.require_plan_confirmation(plan)
             if authority.authorization_sha256 != binding.authority_sha256:
                 raise ValueError("已结束执行恢复没有对应的精确人工工程确认")
+        provider = plan.facts.stopped_provider_failure
+        if binding.stopped_provider_failure_sha256 != (provider.proof_sha256 if provider else None):
+            raise ValueError("提供方前提失败绑定缺少对应的完整原执行证据")
+        if provider is not None:
+            provider.validate_integrity()
+            authority = self.records.get(
+                "baseline-authorities", plan.plan_sha256, BaselineOperatorAuthorization
+            )
+            authority.validate_integrity()
+            authority.require_plan_confirmation(plan)
+            if authority.authorization_sha256 != binding.authority_sha256:
+                raise ValueError("提供方前提失败恢复没有对应的精确人工工程确认")
         if binding.purpose is not BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
             if binding.legacy_containment_sha256 is not None:
                 raise ValueError("普通基线绑定不能冒充旧执行救援")
@@ -288,6 +300,13 @@ class FileExecutionBaselineStore:
                     "原执行已结束, 但报告内容仍未知; 保留草稿不是已接纳产出或候选通过证明。\n"
                 )
                 if binding.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+                else (
+                    "原提供方前提失败已记录, 原执行已真实结束; "
+                    "工程授权者已声明检查并修复原调用前提。"
+                    "该声明不是平台健康检测或角色产出验收。完整合法草稿仅作为新执行输入, "
+                    "新执行仍需独立领取和重新产出, QA 与 Review 不得跳过。\n"
+                )
+                if binding.stopped_provider_failure_sha256 is not None
                 else (
                     "平台已按精确工程授权在同一需求分支更新代码执行基线。"
                     "原需求范围与验收保持有效。\n"

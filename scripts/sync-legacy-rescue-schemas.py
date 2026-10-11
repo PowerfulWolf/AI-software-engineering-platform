@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
+from ai_software_engineer.domain.delivery_resolution import DeliveryWaitInvestigation
 from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
 from ai_software_engineer.domain.execution_native_rules import (
     NativeRuleChangeInspection,
@@ -18,6 +19,7 @@ from ai_software_engineer.manager.baseline_models import (
 from ai_software_engineer.manager.completed_output_checkpoint import (
     CompletedCoderOutputUnavailableProof,
 )
+from ai_software_engineer.manager.stopped_provider_checkpoint import StoppedProviderFailureProof
 from ai_software_engineer.multi_directory.models import JointCheckpoint
 from ai_software_engineer.team_view.models import TeamSnapshot
 from ai_software_engineer.web_console.models import (
@@ -45,6 +47,8 @@ MODELS = (
     BaselineQueueRelease,
     TeamSnapshot,
     CompletedCoderOutputUnavailableProof,
+    StoppedProviderFailureProof,
+    DeliveryWaitInvestigation,
 )
 UPDATED = {
     "ExecutionBaselineBinding",
@@ -69,6 +73,8 @@ UPDATED = {
     "RoleQueueView",
     "CompletedCoderOutputUnavailableProof",
     "ProposeExecutionBaselineIntent",
+    "StoppedProviderFailureProof",
+    "DeliveryWaitInvestigation",
 }
 
 
@@ -89,6 +95,7 @@ def main() -> None:
         ("requirement-checkpoint", JointCheckpoint),
         ("knowledge-stage-workflow", StageWorkflowProof),
         ("completed-coder-output-unavailable", CompletedCoderOutputUnavailableProof),
+        ("stopped-provider-failure", StoppedProviderFailureProof),
     )
     standalone_names = {f"{filename}.schema.json" for filename, _ in standalone}
     for filename, model in standalone:
@@ -127,6 +134,7 @@ def main() -> None:
                 (ExecuteExecutionBaselineIntent, "confirm_local_execution_stopped"),
                 (ExecuteExecutionBaselineIntent, "continuation_mode"),
                 (ExecuteExecutionBaselineIntent, "approved_native_rule_change_sha256"),
+                (ExecuteExecutionBaselineIntent, "confirm_provider_prerequisites_repaired"),
             ):
                 source = intent_model.model_json_schema()
                 definitions[intent_model.__name__]["properties"][field] = source["properties"][
@@ -201,7 +209,9 @@ def guards(node: dict[str, object]) -> None:
             {
                 "if": {
                     "required": ["purpose"],
-                    "properties": {"purpose": {"const": "completed_output_rescue"}},
+                    "properties": {
+                        "purpose": {"enum": ["completed_output_rescue", "stopped_provider_retry"]}
+                    },
                 },
                 "then": {
                     "properties": {
@@ -507,6 +517,218 @@ def guards(node: dict[str, object]) -> None:
         }
         if gate not in existing:
             node["allOf"] = [*existing, gate]
+
+    # These are independent of the older rescue gates: every regenerated root
+    # and embedded definition must retain the permanent-provider boundary.
+    extra: list[dict[str, object]] = []
+    if title == "StoppedProviderFailureProof":
+        extra = [
+            {
+                "properties": {
+                    "outcome": {
+                        "properties": {
+                            "start": {
+                                "properties": {
+                                    "request": {"properties": {"role": {"const": "coder"}}}
+                                }
+                            },
+                            "result": {
+                                "required": ["error"],
+                                "properties": {
+                                    "status": {"const": "FAILED"},
+                                    "artifact": {"type": "null"},
+                                    "error": {
+                                        "type": "object",
+                                        "properties": {
+                                            "code": {"const": "AUTHENTICATION_ERROR"},
+                                            "transient": {"const": False},
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    },
+                    "capture_stop": {
+                        "properties": {
+                            "output_present": {"const": False},
+                            "cause": {"type": "null"},
+                            "original_error_code": {"enum": [None, "AUTHENTICATION_ERROR"]},
+                            "process_stop": {
+                                "properties": {
+                                    "kind": {"const": "failed"},
+                                    "returncode": {"not": {"const": 0}},
+                                }
+                            },
+                        }
+                    },
+                }
+            }
+        ]
+    elif title == "BaselineExecutionReservation":
+        extra = [
+            {
+                "if": {
+                    "required": ["retry_cause"],
+                    "properties": {"retry_cause": {"const": "provider_prerequisite_repaired"}},
+                },
+                "then": {
+                    "required": [
+                        "original_run_id",
+                        "current_invocation_start_sha256",
+                        "current_invocation_outcome_sha256",
+                        "stopped_provider_failure_sha256",
+                    ],
+                    "properties": {
+                        "original_run_id": {"type": "string"},
+                        "current_invocation_start_sha256": {"type": "string"},
+                        "current_invocation_outcome_sha256": {"type": "string"},
+                        "stopped_provider_failure_sha256": {"type": "string"},
+                        "completed_output_sha256": {"type": "null"},
+                        "containment_sha256": {"type": "null"},
+                        "interruption_receipt_sha256": {"type": "null"},
+                        "retry_failure": {"type": "null"},
+                        "reservation_already_applied": {"const": False},
+                    },
+                },
+                "else": {"properties": {"stopped_provider_failure_sha256": {"type": "null"}}},
+            }
+        ]
+    elif title == "BaselineExecutionFacts":
+        extra = [
+            {
+                "if": {
+                    "required": ["continuation"],
+                    "properties": {
+                        "continuation": {
+                            "type": "object",
+                            "required": ["retry_cause"],
+                            "properties": {
+                                "retry_cause": {"const": "provider_prerequisite_repaired"}
+                            },
+                        }
+                    },
+                },
+                "then": {
+                    "required": ["stopped_provider_failure"],
+                    "properties": {
+                        "stopped_provider_failure": {"type": "object"},
+                        "legacy_containment": {"type": "null"},
+                        "completed_output": {"type": "null"},
+                        "implementation_artifact_id": {"type": "null"},
+                    },
+                },
+                "else": {"properties": {"stopped_provider_failure": {"type": "null"}}},
+            }
+        ]
+    elif title in {"BaselineOperatorAuthorization", "ExecuteExecutionBaselineIntent"}:
+        extra = [
+            {
+                "if": {
+                    "required": ["confirm_provider_prerequisites_repaired"],
+                    "properties": {"confirm_provider_prerequisites_repaired": {"const": True}},
+                },
+                "then": {
+                    "required": ["continuation_mode"],
+                    "properties": {
+                        "continuation_mode": {"const": "pause"},
+                        "confirm_legacy_containment": {"type": "null"},
+                        "confirm_local_execution_stopped": {"type": "null"},
+                    },
+                },
+            }
+        ]
+    elif title == "ExecutionBaselinePlan":
+        extra = [
+            {
+                "if": {
+                    "required": ["purpose"],
+                    "properties": {"purpose": {"const": "stopped_provider_retry"}},
+                },
+                "then": {
+                    "properties": {
+                        "input_mode": {"const": "preserve_draft"},
+                        "conflicted": {"const": False},
+                        "facts": {
+                            "required": ["stopped_provider_failure"],
+                            "properties": {
+                                "stopped_provider_failure": {"type": "object"},
+                                "legacy_containment": {"type": "null"},
+                                "completed_output": {"type": "null"},
+                                "native_rule_change": {"type": "null"},
+                                "implementation_artifact_id": {"type": "null"},
+                            },
+                        },
+                    }
+                },
+            }
+        ]
+    elif title == "ExecutionBaselineBinding":
+        extra = [
+            {
+                "if": {
+                    "required": ["purpose"],
+                    "properties": {"purpose": {"const": "stopped_provider_retry"}},
+                },
+                "then": {
+                    "required": ["stopped_provider_failure_sha256", "continuation_mode"],
+                    "properties": {
+                        "input_mode": {"const": "preserve_draft"},
+                        "stopped_provider_failure_sha256": {"type": "string"},
+                    },
+                },
+            },
+            {
+                "if": {
+                    "required": ["stopped_provider_failure_sha256"],
+                    "properties": {"stopped_provider_failure_sha256": {"type": "string"}},
+                },
+                "then": {
+                    "required": ["continuation_mode"],
+                    "properties": {
+                        "purpose": {"enum": ["source_rebind", "stopped_provider_retry"]},
+                        "continuation_mode": {"const": "pause"},
+                        "authority_source": {"const": "engineering_operator_decision"},
+                        "completed_output_sha256": {"type": "null"},
+                        "legacy_containment_sha256": {"type": "null"},
+                        "superseded_implementation_artifact_id": {"type": "null"},
+                    },
+                },
+            },
+        ]
+    elif title == "DeliveryWaitInvestigation":
+        canonical = json.loads((ROOT / "engineering-wait-resolution.schema.json").read_text())
+        old = canonical["$defs"]["DeliveryWaitInvestigation"].get("allOf", [])
+        existing = node.get("allOf", [])
+        assert isinstance(existing, list)
+        node["allOf"] = [*existing, *(guard for guard in old if guard not in existing)]
+        extra = [
+            {
+                "if": {
+                    "required": ["provider_failure_code"],
+                    "properties": {"provider_failure_code": {"type": "string"}},
+                },
+                "then": {
+                    "required": [
+                        "invocation_start_sha256",
+                        "invocation_outcome_sha256",
+                        "original_run_id",
+                    ],
+                    "properties": {
+                        "invocation_start_sha256": {"type": "string"},
+                        "invocation_outcome_sha256": {"type": "string"},
+                        "original_run_id": {"type": "string"},
+                        "permitted_resolutions": {"maxItems": 0},
+                        "disposition": {
+                            "properties": {"facts": {"properties": {"role": {"const": "coder"}}}}
+                        },
+                    },
+                },
+            }
+        ]
+    if extra:
+        existing = node.get("allOf", [])
+        assert isinstance(existing, list)
+        node["allOf"] = [*existing, *(guard for guard in extra if guard not in existing)]
 
 
 if __name__ == "__main__":

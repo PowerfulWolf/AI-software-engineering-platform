@@ -702,6 +702,9 @@ def _engineering_history(
                                 "批准保留完整草稿继续。"
                             )
                             if baseline_plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                            else "工程人员声明原提供方前提已检查并修复, "
+                            "批准保留完整合法草稿并暂停。"
+                            if baseline_plan.facts.stopped_provider_failure is not None
                             else "原分支执行基线更新的精确工程授权已记录。"
                         ),
                         source_uri=(
@@ -727,6 +730,8 @@ def _engineering_history(
                         summary=(
                             "原需求完整现场救援已开始, 原执行结果仍记为未知。"
                             if baseline_plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                            else "原提供方前提失败的保留进度处理已开始, 尚未启动新的开发执行。"
+                            if baseline_plan.purpose is BaselinePurpose.STOPPED_PROVIDER_RETRY
                             else "原需求分支执行基线更新已开始, 完成结果以后续绑定记录为准。"
                         ),
                         source_uri=(
@@ -762,7 +767,10 @@ def _engineering_history(
                     occurred_at=binding.completed_at,
                     task_id=task.id,
                     summary=(
-                        "完整进度和工程决定已保存, 原需求保持暂停; 可先更新基线, 再明确继续。"
+                        "原失败记录与完整合法草稿已保留, 原代码基线保持; "
+                        "需求暂停, 需明确继续后才安排新开发执行。"
+                        if binding.purpose is BaselinePurpose.STOPPED_PROVIDER_RETRY
+                        else "完整进度和工程决定已保存, 原需求保持暂停; 可先更新基线, 再明确继续。"
                         if binding.continuation_mode is BaselineContinuationMode.PAUSE
                         else (
                             "完整草稿已保留, 原未知执行历史不变, 下一轮使用原任务剩余工作额度继续。"

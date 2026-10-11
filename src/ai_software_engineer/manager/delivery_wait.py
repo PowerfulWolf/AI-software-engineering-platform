@@ -9,10 +9,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from ai_software_engineer.agents.fallback import ModelRouteAttemptStoreError
-from ai_software_engineer.agents.models import AgentRunStatus
+from ai_software_engineer.agents.models import AgentErrorCode, AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore, ArtifactStoreError, artifact_digest
 from ai_software_engineer.domain.artifact import (
     ImplementationReportArtifact,
@@ -1494,6 +1494,26 @@ class DeliveryWaitService:
     ) -> DeliveryWaitInvestigation:
         assert item.wait_disposition is not None
         preflight_detail_action = _preflight_detail_action(prerequisites)
+        provider_failure_code: Literal["AUTHENTICATION_ERROR"] | None = (
+            "AUTHENTICATION_ERROR"
+            if start is not None
+            and outcome is not None
+            and outcome.start == start
+            and start.work_item_id == item.id
+            and start.request.task_id == task.id
+            and start.request.role is AgentRole.CODER
+            and start.request.source_revision == step.boundary.source_revision
+            and start.checkpoint_sequence == step.boundary.checkpoint_sequence
+            and start.request.attempt == item.attempt
+            and start.request.attempt == task.attempts
+            and outcome.result.status is AgentRunStatus.FAILED
+            and outcome.result.artifact is None
+            and outcome.result.error is not None
+            and outcome.result.error.code is AgentErrorCode.AUTHENTICATION_ERROR
+            and not outcome.result.error.transient
+            and not permitted
+            else None
+        )
         proof = DeliveryWaitInvestigation(
             task_id=task.id,
             work_item_id=item.id,
@@ -1514,6 +1534,7 @@ class DeliveryWaitService:
             ),
             invocation_start_sha256=start.start_sha256 if start else None,
             invocation_outcome_sha256=outcome.outcome_sha256 if outcome else None,
+            provider_failure_code=provider_failure_code,
             interruption_receipt_sha256=receipt.receipt_sha256 if receipt else None,
             process_stop_sha256=(
                 receipt.process_stop_sha256
@@ -1568,6 +1589,11 @@ class DeliveryWaitService:
                 else "已授权执行额度已耗尽。工程团队需核对原拒绝理由与现场; "
                 "由团队负责人决定执行资源或结束交付, 不会重复接纳已拒绝的原产出。"
                 if DeliveryProofMissing.BUDGET_EXHAUSTED in missing
+                else "原提供方或本机调用的凭证前提未满足, 本次开发执行失败。"
+                "请先检查并修复原调用配置, 再使用准备恢复方案入口保留合法草稿; "
+                "由工程授权者确认精确方案并保持暂停, 最后明确继续原需求。"
+                "平台不会自动验证提供方健康、退款或接纳原失败结果。"
+                if provider_failure_code is not None
                 else "原产出已被契约或非临时故障拒绝, 不能重复接纳。工程团队需查看原错误并"
                 "修复产物或执行器契约; 核验真实停机与完整合法现场后, 按剩余工作额度重新调查。"
                 "原产出、角色结论和历史保留。"
