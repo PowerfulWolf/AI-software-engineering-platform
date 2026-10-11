@@ -48,12 +48,33 @@ class WorkspaceMutationInventory:
         ).hexdigest()
 
 
-def capture_mutation_inventory(root: Path) -> WorkspaceMutationInventory:
-    """Compare two complete observations; never follow workspace symlinks."""
+def capture_mutation_inventory(
+    root: Path, *, known_oversized_file: MutationFile | None = None
+) -> WorkspaceMutationInventory:
+    """Compare complete observations; an exact maintenance fingerprint grants no write right.
+
+    Ordinary execution omits the optional fingerprint and retains its original
+    per-file bound. Trusted maintenance may observe one already hashed regular
+    file within the unchanged total budget, only if both passes match it exactly.
+    """
+    if known_oversized_file is not None:
+        expected = known_oversized_file
+        if (
+            expected.kind != "file"
+            or not expected.path
+            or any(part in {"", ".", ".."} for part in expected.path.split("/"))
+            or "\\" in expected.path
+            or any(ord(character) < 32 for character in expected.path)
+            or not MAX_INVENTORY_FILE_BYTES < expected.size <= MAX_INVENTORY_BYTES
+            or not 0 <= expected.mode <= 0o7777
+            or len(expected.sha256) != 64
+            or any(character not in "0123456789abcdef" for character in expected.sha256)
+        ):
+            raise MutationInventoryRejected("maintenance fingerprint is not an exact bounded file")
     if root.is_symlink() or not root.is_dir():
         raise MutationInventoryRejected("mutation inventory requires a regular workspace root")
     try:
-        first, second = _observe(root), _observe(root)
+        first, second = _observe(root, known_oversized_file), _observe(root, known_oversized_file)
     except (OSError, UnicodeError, ValueError) as error:
         raise MutationInventoryRejected("workspace mutation inventory could not be read") from error
     if first != second:
@@ -80,7 +101,9 @@ def is_execution_cache_path(path: str) -> bool:
     )
 
 
-def _observe(root: Path) -> WorkspaceMutationInventory:
+def _observe(
+    root: Path, known_oversized_file: MutationFile | None = None
+) -> WorkspaceMutationInventory:
     pending = [""]
     files: list[MutationFile] = []
     total_bytes = 0
@@ -96,6 +119,11 @@ def _observe(root: Path) -> WorkspaceMutationInventory:
                     if any(ord(c) < 32 for c in name) or "\\" in name:
                         raise MutationInventoryRejected("workspace contains an unsafe path")
                     path = prefix + name
+                    file_byte_limit = (
+                        known_oversized_file.size
+                        if known_oversized_file is not None and path == known_oversized_file.path
+                        else MAX_INVENTORY_FILE_BYTES
+                    )
                     metadata = entry.stat(follow_symlinks=False)
                     mode = stat.S_IMODE(metadata.st_mode)
                     if stat.S_ISDIR(metadata.st_mode):
@@ -119,7 +147,7 @@ def _observe(root: Path) -> WorkspaceMutationInventory:
                             path, "symlink", hashlib.sha256(target).hexdigest(), mode, len(target)
                         )
                     elif stat.S_ISREG(metadata.st_mode):
-                        if metadata.st_size > MAX_INVENTORY_FILE_BYTES:
+                        if metadata.st_size > file_byte_limit:
                             raise MutationInventoryRejected(
                                 "workspace file exceeds inventory limit"
                             )
@@ -138,7 +166,7 @@ def _observe(root: Path) -> WorkspaceMutationInventory:
                             size = 0
                             while chunk := os.read(file_fd, 1_000_000):
                                 size += len(chunk)
-                                if size > MAX_INVENTORY_FILE_BYTES:
+                                if size > file_byte_limit:
                                     raise MutationInventoryRejected(
                                         "workspace file exceeds inventory limit"
                                     )
@@ -163,6 +191,8 @@ def _observe(root: Path) -> WorkspaceMutationInventory:
                         raise MutationInventoryRejected("workspace exceeds inventory limits")
         finally:
             os.close(fd)
+    if known_oversized_file is not None and known_oversized_file not in files:
+        raise MutationInventoryRejected("exact maintenance fingerprint was not observed")
     return WorkspaceMutationInventory(tuple(sorted(files, key=lambda f: f.path)))
 
 
