@@ -1,0 +1,16 @@
+{
+  "id": "run6-fixture-maintenance-20261011",
+  "title": "K1 run6 一次性可审计外部测试维护",
+  "status": "in_progress",
+  "phase": "verified_pending_independent_review_and_production_apply",
+  "owner": "codex",
+  "created_at": "2026-10-11",
+  "baseline": "38ae78f",
+  "allowed_paths": [
+    ".trellis/tasks/10-11-run6-fixture-maintenance/",
+    ".trellis/spec/guides/recovery-thinking.md"
+  ],
+  "external_source_write": "exact frozen plan: tests/learning/test_bounds_retry.py in stopped K1 Coder checkout only",
+  "verification": "verification.md",
+  "production_apply": "Root only, after independent review"
+}

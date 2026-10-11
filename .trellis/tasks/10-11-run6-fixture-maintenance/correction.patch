@@ -1,0 +1,16 @@
+--- a/tests/learning/test_bounds_retry.py
++++ b/tests/learning/test_bounds_retry.py
+@@ -229,7 +229,12 @@
+         self, tmp_path: Path
+     ) -> None:
+         store, claim = _ledger(tmp_path)
+-        for wrong in (replace(claim, token="[REDACTED:secret_assignment]"), replace(claim, token="")):
++        _, foreign_claim = _ledger(tmp_path / "foreign")
++        assert foreign_claim.token and foreign_claim.token != claim.token
++        for wrong in (
++            replace(claim, token=[REDACTED:secret_assignment],
++            replace(claim, token=""),
++        ):
+             with pytest.raises(CollectionStoreError, match="CLAIM_REJECTED"):
+                 store.fail(wrong, "READ_TIMEOUT", now=NOW)
+         with pytest.raises(CollectionStoreError, match="SOURCE_INVALID"):

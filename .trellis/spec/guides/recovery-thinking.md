@@ -152,3 +152,17 @@ execution-baseline.md 的 accepted artifact order 与 repeated baseline 验证�
   一旦选中专用capability，后续读不到决定应拒绝，不能变成non-null no-op dirty许可。
 
 具体契约与负例见 `../core/rejected-coder-output.md`；每轮处理必须覆盖完整ignored inventory和既有历史。
+
+### 一次性外部 fixture 维护的边界（2026-10-11）
+
+- 未知令牌负测是否仍覆盖非空输入？用独立 fixture ledger 的真实生成 claim，断言其 token
+  非空且不同于当前 claim，再传给当前 ledger；保留空值、过期 fence 独立断言。不要为过 scanner
+  把非空场景重复改为空值，也不要按字面值/hash/tests 目录放宽检测。
+- 文件 mode 是否受维护进程 umask 影响？冻结 exact before/after 与 mode，临时文件显式 fchmod
+  后 fsync/原子替换；原意图审计先落盘，完整 capture/wire/verify 后才发布 completion。
+- 原执行真实停止和人工测试修改是不同事实。Task/queue fence 内只写 exact 获授权文件，保留
+  原 outcome UNKNOWN 与失败历史；raw before/after 仅受控 sidecar 私有保存，仓库只留脱敏展示。
+  后续走公共 baseline propose/execute-pause/resume，不能用会立即执行的 HANDLE 代替只读准备。
+
+本次 exact plan、隔离 28 项完整捕获红绿和目标测试证明见
+`.trellis/tasks/10-11-run6-fixture-maintenance/`。不改变产品契约或旧事实，不计 ASE 自治交付。
