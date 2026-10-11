@@ -1,0 +1,159 @@
+{
+  "observed_at": "2026-10-11T09:08:25.298135+00:00",
+  "deployed_commit": "fa85a65",
+  "service_pid": 52944,
+  "public_operation_id": "operation_fb34ea87afe9a0c0562d3028b1d07e7e",
+  "task": {
+    "id": "task_recovery_8ca06fa0aec236ab940597ad1482bfc8",
+    "status": "IMPLEMENTING",
+    "attempts": 5,
+    "max_attempts": 40,
+    "base_ref": "90cefe26a46c3b1593521f6416631f38472a4c58",
+    "branch_name": "ai/feature/k1-auto-knowledge-20261005-recovery-3"
+  },
+  "task_revision": 8,
+  "native_cursor": {
+    "task_id": "task_recovery_8ca06fa0aec236ab940597ad1482bfc8",
+    "stage": "DELIVERING",
+    "task_status": "IMPLEMENTING",
+    "task_revision": 8,
+    "checkpoint_sha256": "f4d80fcbc0576345c6e0426eab15567d2939f8684ecbb76d0a5d3c3f35a6d38a"
+  },
+  "consumed_resolution": {
+    "resolution": {
+      "kind": "delivery_wait_resolution",
+      "task_id": "task_recovery_8ca06fa0aec236ab940597ad1482bfc8",
+      "step_sha256": "72197948e684ecdbb5943d4872326738abb097878d4696126ce30a65659d39bb",
+      "proof_sha256": "e43679e52224b3b9525d51bd84f35dc2082de46bb47066b94aacee49dd2e0944",
+      "submitted_at": "2026-10-11T09:01:57.604141Z",
+      "work_item_id": "work_3b2b392b685bca6f86c29cec6788e5e259bb3defcb5fc9e2c9e1dcafbf507584",
+      "task_revision": 8,
+      "schema_version": "v1",
+      "rejected_output": {
+        "scope": {
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "repository_id": "repository_c78e1680f621ff06c808aa9559666412444fbd7b",
+          "repository_root": "/Users/zhangjunshuai/workspace/code/ai-workspace/AI-software-engineering-platform"
+        },
+        "task_id": "task_recovery_8ca06fa0aec236ab940597ad1482bfc8",
+        "work_item_id": "work_3b2b392b685bca6f86c29cec6788e5e259bb3defcb5fc9e2c9e1dcafbf507584",
+        "budget_source": "frozen_work_attempt",
+        "capture_sha256": "88f453c56c77e1942b948f7d4c1d117dd16fed20cfae9db14d9cdab4ba64cb45",
+        "rejection_code": "PROGRESS_SEQUENCE_MISMATCH",
+        "requirement_id": "delivery_dc5cf0aee44e5ffe0cb600557204e0d0",
+        "previous_run_id": "run_a3a4f9438abe40088c67db5efc50ab4f",
+        "source_revision": "90cefe26a46c3b1593521f6416631f38472a4c58",
+        "original_attempt": 4,
+        "checkpoint_sha256": "8478cd86fb4619b61b3a6771eed5b9a264fad422096cc9adfb2ccef2f2442b0d",
+        "expected_sequence": 4,
+        "original_lease_id": "lease_7acee435cc0363eec0ae8b64",
+        "reported_sequence": 9,
+        "checkpoint_sequence": 8,
+        "process_stop_sha256": "aee23794667479eda55408103a34ede5b5cb4afb53b7cc0ad6ce78d9345474d8",
+        "rejected_artifact_id": "art_coder_42479ee20e471e903336aa3db579b4f4",
+        "original_claim_sha256": "04ce656f3a748620a0434f5d080e341d4062912f8b168d64b96db19909805208",
+        "invocation_start_sha256": "f151376e4f9eee2d9972194383c51c5b0efb52bb78c94c15c0194b8bbb7ef2ad",
+        "rejected_artifact_sha256": "c8825cdb51c869111915c64b353527750bf13f967e24bc77fbe6bc7915f29b50",
+        "invocation_outcome_sha256": "76bc83ac087f72a9f9e68662d709f68f0124bdaa02c7265ebcd9e2f11df94ecd",
+        "original_dispatch_sequence": 0,
+        "workspace_inventory_sha256": "d14dbe071f165ee415d3162861c07bb98c07d365eba1a9f387761ced99dbf034",
+        "previous_context_manifest_id": "ctx_54045cc91616ccb63def25ba6042f8c43c9f752b088759cae00711fa914c3615"
+      },
+      "resolution_kind": "RETRY_REJECTED_CODER_OUTPUT",
+      "resolution_sha256": "a86383d8a635835c9329f1d82442e77d33a92d4c5f91e9300460fecb0935ec21",
+      "authorization_source": "organization_engineering_policy",
+      "task_snapshot_sha256": "2403dd434c71a3a9a7e258276adfabd332b715fb4f18bbdacc4c33f7d55b56f7",
+      "engineering_admission": {
+        "kind": "engineering_admission",
+        "policy": {
+          "kind": "engineering_policy",
+          "scope": {
+            "team_id": "team_ai",
+            "project_id": "project_ai-project_034252eb3595",
+            "repository_id": "repository_c78e1680f621ff06c808aa9559666412444fbd7b",
+            "repository_root": "/Users/zhangjunshuai/workspace/code/ai-workspace/AI-software-engineering-platform"
+          },
+          "grants": [
+            {
+              "capability": "delivery_wait_resolution",
+              "max_admissions": 3
+            },
+            {
+              "capability": "verification_refresh",
+              "max_admissions": 3
+            },
+            {
+              "capability": "swift_sandbox",
+              "max_admissions": 3
+            },
+            {
+              "capability": "python_mysql_sandbox",
+              "max_admissions": 3
+            },
+            {
+              "capability": "native_ui_sandbox",
+              "max_admissions": 3
+            },
+            {
+              "capability": "in_scope_prerequisite_repair",
+              "max_admissions": 3
+            },
+            {
+              "capability": "pre_execution_rebind",
+              "max_admissions": 3
+            },
+            {
+              "capability": "execution_baseline_rebind",
+              "max_admissions": 3
+            },
+            {
+              "capability": "owned_mysql_cleanup",
+              "max_admissions": 3
+            }
+          ],
+          "issued_by": {
+            "kind": "trusted_local_operator",
+            "duties": [
+              "PRODUCT",
+              "ENGINEERING"
+            ],
+            "operator_id": "operator:local-console"
+          },
+          "policy_id": "local-bounded-engineering-v1",
+          "policy_version": 1,
+          "schema_version": "v1",
+          "authorization_source": "organization_engineering_policy",
+          "max_total_admissions": 12
+        },
+        "task_id": "task_recovery_8ca06fa0aec236ab940597ad1482bfc8",
+        "admitted_at": "2026-10-11T09:01:57.604141Z",
+        "plan_sha256": "7c580b2e8f44f42d8bb5d1294333550d2b8076e5f2be44ad7b7b11e9d34fcaf5",
+        "capabilities": [
+          "delivery_wait_resolution"
+        ],
+        "facts_sha256": "e43679e52224b3b9525d51bd84f35dc2082de46bb47066b94aacee49dd2e0944",
+        "policy_sha256": "9c2684a7a500f907c987c942b63d66f530cb3b734846f2de6e225bad29ab1090",
+        "schema_version": "v1",
+        "admission_number": 1,
+        "admission_sha256": "3c09ca0e122deb8c351d1049178065e3a1ce6111cf7335b721b66a366683b10d",
+        "task_intent_sha256": "9ece46828f950845ef883231e1952f8966661dac5b7bf31dc550342b1a4c3b1c",
+        "authorization_source": "organization_engineering_policy"
+      },
+      "expected_source_revision": "90cefe26a46c3b1593521f6416631f38472a4c58",
+      "expected_disposition_sha256": "c926da5120815422cec0ebcfec66bc04785659c3da3135f1aa3a1b4eaea2e5aa",
+      "expected_task_intent_sha256": "9ece46828f950845ef883231e1952f8966661dac5b7bf31dc550342b1a4c3b1c",
+      "expected_checkpoint_sequence": 8
+    },
+    "budget_refund": false,
+    "next_work_item_id": "work_a86383d8a635835c9329f1d82442e77d33a92d4c5f91e9300460fecb0935ec21",
+    "resolution_sha256": "a86383d8a635835c9329f1d82442e77d33a92d4c5f91e9300460fecb0935ec21"
+  },
+  "immutable_files_unchanged": {
+    "/Users/zhangjunshuai/workspace/code/.ase/projects/project_ai-project_034252eb3595/repositories/repository_c78e1680f621ff06c808aa9559666412444fbd7b/state/invocations/invocation-starts-d5971f4f01ae708f7ad67d1ccaefaf3f61855cdef1cd668bd29b0d3d9574216f.json": true,
+    "/Users/zhangjunshuai/workspace/code/.ase/projects/project_ai-project_034252eb3595/repositories/repository_c78e1680f621ff06c808aa9559666412444fbd7b/state/invocations/invocation-outcomes-d5971f4f01ae708f7ad67d1ccaefaf3f61855cdef1cd668bd29b0d3d9574216f.json": true,
+    "/Users/zhangjunshuai/workspace/code/.ase/projects/project_ai-project_034252eb3595/repositories/repository_c78e1680f621ff06c808aa9559666412444fbd7b/artifacts/art_coder_42479ee20e471e903336aa3db579b4f4.json": true,
+    "/Users/zhangjunshuai/workspace/code/.ase/projects/project_ai-project_034252eb3595/repositories/repository_c78e1680f621ff06c808aa9559666412444fbd7b/state/continuations/task_recovery_8ca06fa0aec236ab940597ad1482bfc8/capture-start-run_a3a4f9438abe40088c67db5efc50ab4f.json": true,
+    "/Users/zhangjunshuai/workspace/code/.ase/projects/project_ai-project_034252eb3595/repositories/repository_c78e1680f621ff06c808aa9559666412444fbd7b/state/continuations/task_recovery_8ca06fa0aec236ab940597ad1482bfc8/capture-stop-run_a3a4f9438abe40088c67db5efc50ab4f.json": true
+  }
+}

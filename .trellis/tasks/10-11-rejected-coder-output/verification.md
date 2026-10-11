@@ -108,3 +108,33 @@ Before rollout root used only a real production READ ONLY transaction to run the
 wait reader: exact original Task, revision8 and attempt4 wait were validated. No Task/queue
 mutation or model call occurred. Full retained inventory and five immutable file SHA-256
 values are saved in production-before.json; public deployment/recovery verification follows.
+
+## Public production recovery verification (2026-10-11)
+
+Commit fa85a65 was pushed and deployed through the controlled service restart. Before restart
+there were zero active Operations, zero ACTIVE queue claims and no service descendants. The
+old lifecycle confirmed all operations/writes/executors/indexes ended before exit; service
+36329 was replaced by 52944. No force kill or lifecycle record deletion was used.
+
+Public CONTINUE_DELIVERY operation operation_fb34ea87afe9a0c0562d3028b1d07e7e used the
+verified original joint checkpoint4cd7e8f43914a6ce23c6e5252ac58cf362ae78d71683dbe290c8dfbaf3b246ae.
+The original native cursor was reattached to task_recovery_8ca06fa0aec236ab940597ad1482bfc8,
+DELIVERING/IMPLEMENTING/revision8, digestf4d80fcbc0576345c6e0426eab15567d2939f8684ecbb76d0a5d3c3f35a6d38a.
+The outer delivery service then used the Task's existing frozen organization engineering policy
+to handle the precise wait and consume RETRY_REJECTED_CODER_OUTPUT without a second human
+approval. It did not replay attempt4 or change its outcome.
+
+Resolution a86383d8a635835c9329f1d82442e77d33a92d4c5f91e9300460fecb0935ec21 closed only
+the original waiting work and reserved attempt5, with budget_refund=false. The same Task,
+source90cefe26a46c3b1593521f6416631f38472a4c58, semantic branch and retained worktree continue.
+The sealed inventory d14dbe071f165ee415d3162861c07bb98c07d365eba1a9f387761ced99dbf034 equals
+the complete inventory observed before maintenance. All five original immutable files retain
+exact byte SHA-256 values. Detailed read-only before/after facts are in production-before.json
+and production-after.json. No direct database mutation was used.
+
+Knowledge intent (88.064s) and assessment (160.450s) completed using Codex/gpt-6.1-sol. The new
+main Coder invocation run_b4c092e645be48a69dc754db1bfffa0b started at09:06:45.010789Z. At this
+verification point it has a live claim, not a final outcome or candidate. Requirement delivery
+remains in progress and still requires independent QA and Review. Team API read contention
+remains under separate investigation; these verified queue facts do not claim the production
+page has been visually validated.
