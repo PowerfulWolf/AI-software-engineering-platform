@@ -16,10 +16,11 @@ from ai_software_engineer.domain.delivery_disposition import DeliveryDisposition
 from ai_software_engineer.domain.engineering_authority import (
     EngineeringAdmission,
     EngineeringCapability,
+    EngineeringScope,
     LocalOperatorPrincipal,
     OperatorDuty,
 )
-from ai_software_engineer.domain.enums import TaskStatus
+from ai_software_engineer.domain.enums import AgentRole, TaskStatus
 from ai_software_engineer.domain.execution_baseline import FullGitRevision
 from ai_software_engineer.domain.identity import ContextId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
@@ -34,6 +35,7 @@ class DeliveryResolutionKind(StrEnum):
     RESUME_UNINVOKED = "RESUME_UNINVOKED"
     REVERIFY_CANDIDATE = "REVERIFY_CANDIDATE"
     RETRY_VERIFIER_PREPARATION = "RETRY_VERIFIER_PREPARATION"
+    RETRY_KNOWLEDGE_PREPARATION = "RETRY_KNOWLEDGE_PREPARATION"
 
 
 class DeliveryProofMissing(StrEnum):
@@ -51,6 +53,8 @@ class DeliveryProofMissing(StrEnum):
     VERIFICATION_EVIDENCE_UNAVAILABLE = "VERIFICATION_EVIDENCE_UNAVAILABLE"
     VERIFIER_PREPARATION_UNAVAILABLE = "VERIFIER_PREPARATION_UNAVAILABLE"
     NATIVE_EXECUTION_UNCERTAIN = "NATIVE_EXECUTION_UNCERTAIN"
+    KNOWLEDGE_PREPARATION_UNAVAILABLE = "KNOWLEDGE_PREPARATION_UNAVAILABLE"
+    KNOWLEDGE_WINDOW_EXHAUSTED = "KNOWLEDGE_WINDOW_EXHAUSTED"
 
 
 class DeliveryWaitCollectionFailure(StrEnum):
@@ -146,6 +150,58 @@ class OriginalInvocationAuthority(DomainModel):
         return self
 
 
+class KnowledgePreparationRetryEvidence(DomainModel):
+    """Exact stopped knowledge preparation and its finite, frozen next window."""
+
+    scope: EngineeringScope
+    requirement_id: NonEmptyStr
+    delivery_requirement_id: NonEmptyStr | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    task_id: TaskId
+    role: AgentRole
+    work_item_id: NonEmptyStr
+    original_lease_id: NonEmptyStr
+    original_claim_sha256: DispositionSha256
+    original_attempt: Annotated[StrictInt, Field(ge=1)]
+    original_dispatch_sequence: Annotated[StrictInt, Field(ge=0)]
+    checkpoint_sequence: Annotated[StrictInt, Field(ge=0)]
+    previous_run_id: RunId
+    previous_context_manifest_id: ContextId
+    source_revision: NonEmptyStr
+    snapshot_sha256: DispositionSha256
+    phase: Literal["intent", "assessment"]
+    intent_sha256: DispositionSha256
+    outcome_sha256: DispositionSha256
+    request_sha256: DispositionSha256
+    execution_record_sha256s: Annotated[
+        tuple[DispositionSha256, ...], Field(min_length=2, max_length=32)
+    ]
+    root_intent_sha256: DispositionSha256
+    initial_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=86_400)]
+    current_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=86_400)]
+    next_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=86_400)]
+    maximum_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=86_400)]
+    expansion_number: Annotated[StrictInt, Field(ge=1, le=2)]
+    budget_source: Literal["frozen_work_attempt"] = "frozen_work_attempt"
+
+    @model_validator(mode="after")
+    def validate_window(self) -> Self:
+        ensure_unique(self.execution_record_sha256s, "knowledge execution receipts")
+        maximum = min(self.initial_timeout_seconds * 4, 86_400)
+        current = min(self.initial_timeout_seconds * (2 ** (self.expansion_number - 1)), maximum)
+        if (
+            self.role not in {AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER}
+            or self.maximum_timeout_seconds != maximum
+            or self.current_timeout_seconds != current
+            or self.next_timeout_seconds != min(current * 2, maximum)
+            or self.next_timeout_seconds <= current
+            or (self.expansion_number == 1 and self.root_intent_sha256 != self.intent_sha256)
+        ):
+            raise ValueError("knowledge retry requires its exact finite doubled execution window")
+        return self
+
+
 class InspectDeliveryWait(DomainModel):
     work_item_id: NonEmptyStr
     expected_disposition_sha256: DispositionSha256
@@ -190,6 +246,9 @@ class DeliveryWaitInvestigation(DomainModel):
     original_authority: OriginalInvocationAuthority | None = None
     verification_retry: VerificationRetryEvidence | None = None
     verifier_preparation: VerifierPreparationEvidence | None = None
+    knowledge_preparation: KnowledgePreparationRetryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     retry_cause: ContinuationCause | None = None
     permitted_resolutions: tuple[DeliveryResolutionKind, ...] = ()
     missing: tuple[DeliveryProofMissing, ...] = ()
@@ -252,6 +311,29 @@ class DeliveryWaitInvestigation(DomainModel):
             or self.invocation_outcome_sha256 is not None
         ):
             raise ValueError("native preparation proof changed its exact pre-model facts")
+        if DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION in self.permitted_resolutions and (
+            self.knowledge_preparation is None
+        ):
+            raise ValueError("knowledge preparation retry requires exact sealed native stop facts")
+        if self.knowledge_preparation is not None and (
+            self.knowledge_preparation.task_id != self.task_id
+            or self.knowledge_preparation.work_item_id != self.work_item_id
+            or self.knowledge_preparation.role is not facts.role
+            or self.knowledge_preparation.source_revision != self.source_revision
+            or self.knowledge_preparation.checkpoint_sequence != self.checkpoint_sequence
+            or self.knowledge_preparation.previous_run_id != self.original_run_id
+            or self.invocation_start_sha256 is not None
+            or self.invocation_outcome_sha256 is not None
+            or facts.classification != "KNOWLEDGE_PREPARATION_LIMIT"
+            or facts.evidence_ids
+            != ("knowledge-preparation://" + self.knowledge_preparation.outcome_sha256,)
+            or self.permitted_resolutions
+            not in ((), (DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION,))
+            or self.original_authority is not None
+            or self.verification_retry is not None
+            or self.verifier_preparation is not None
+        ):
+            raise ValueError("knowledge preparation proof changed its exact pre-model facts")
         return self
 
     def recompute_sha256(self) -> str:
@@ -306,6 +388,9 @@ class DeliveryResolution(DomainModel):
     verifier_preparation: VerifierPreparationEvidence | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
+    )
+    knowledge_preparation: KnowledgePreparationRetryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
     )
 
     @model_validator(mode="after")
@@ -366,6 +451,17 @@ class DeliveryResolution(DomainModel):
                 raise ValueError(
                     "native preparation decision changed the retained candidate or action"
                 )
+        if (self.resolution_kind is DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION) != (
+            self.knowledge_preparation is not None
+        ):
+            raise ValueError("only knowledge preparation retry uses sealed knowledge stop facts")
+        if self.knowledge_preparation is not None and (
+            self.knowledge_preparation.task_id != self.task_id
+            or self.knowledge_preparation.work_item_id != self.work_item_id
+            or self.knowledge_preparation.source_revision != self.expected_source_revision
+            or self.knowledge_preparation.checkpoint_sequence != self.expected_checkpoint_sequence
+        ):
+            raise ValueError("knowledge preparation decision changed its exact task or source")
         return self
 
     def recompute_sha256(self) -> str:
@@ -471,6 +567,7 @@ class DeliveryWaitHandling(DomainModel):
                 or decision.task_revision != proof.task_revision
                 or decision.task_snapshot_sha256 != proof.task_snapshot_sha256
                 or decision.step_sha256 != proof.step_sha256
+                or decision.knowledge_preparation != proof.knowledge_preparation
                 or (
                     decision.task_id,
                     decision.work_item_id,

@@ -12,12 +12,15 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryWaitHandling,
     DeliveryWaitInvestigation,
     EngineeringDispositionRecord,
+    KnowledgePreparationRetryEvidence,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringAdmission, EngineeringScope
+from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.execution_baseline import BaselineContinuationMode, BaselinePurpose
 from ai_software_engineer.domain.model import JsonValue
 from ai_software_engineer.domain.task import Task
-from ai_software_engineer.knowledge.models import digest
+from ai_software_engineer.knowledge.legacy_scope import require_delivery_requirement_scope
+from ai_software_engineer.knowledge.models import KnowledgeError, KnowledgeRunBinding, digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
@@ -103,8 +106,62 @@ def _decision_matches_proof(decision: DeliveryResolution, proof: DeliveryWaitInv
             and decision.retry_cause != proof.retry_cause
         )
         or decision.verifier_preparation != proof.verifier_preparation
+        or decision.knowledge_preparation != proof.knowledge_preparation
     ):
         raise ValueError("engineering decision has another exact investigation")
+
+
+def _knowledge_details(evidence: KnowledgePreparationRetryEvidence | None) -> dict[str, JsonValue]:
+    if evidence is None:
+        return {}
+    return {
+        "knowledge_preparation": {
+            "role": evidence.role.value,
+            "phase": evidence.phase,
+            "initial_timeout_seconds": evidence.initial_timeout_seconds,
+            "current_timeout_seconds": evidence.current_timeout_seconds,
+            "next_timeout_seconds": evidence.next_timeout_seconds,
+            "maximum_timeout_seconds": evidence.maximum_timeout_seconds,
+            "expansion_number": evidence.expansion_number,
+            "budget_source": evidence.budget_source,
+        }
+    }
+
+
+def _require_knowledge_scope(
+    proof: DeliveryWaitInvestigation, scope: EngineeringScope, requirement_id: str, sidecar: Path
+) -> None:
+    knowledge = proof.knowledge_preparation
+    if knowledge is None:
+        return
+    if knowledge.scope != scope:
+        raise ValueError("knowledge investigation is outside the current Project Requirement")
+    if (knowledge.delivery_requirement_id or knowledge.requirement_id) != requirement_id:
+        raise ValueError("knowledge investigation is outside the current Project Requirement")
+    if knowledge.requirement_id == requirement_id:
+        return
+    binding = KnowledgeRunBinding(
+        run_id=knowledge.previous_run_id,
+        task_id=knowledge.task_id,
+        role=TeamRole(knowledge.role.value),
+        team_id=knowledge.scope.team_id,
+        project_id=knowledge.scope.project_id,
+        requirement_id=knowledge.requirement_id,
+        repository_ids=(knowledge.scope.repository_id,),
+        source_revision=knowledge.source_revision,
+        context_manifest_id=knowledge.previous_context_manifest_id,
+        snapshot_sha256=knowledge.snapshot_sha256,
+    )
+    try:
+        require_delivery_requirement_scope(
+            binding,
+            requirement_id,
+            records=KnowledgeRecordStore(sidecar / "knowledge" / "runs", read_only=True),
+        )
+    except KnowledgeError as error:
+        raise ValueError(
+            "knowledge investigation is outside the current Project Requirement"
+        ) from error
 
 
 def engineering_history(
@@ -114,10 +171,16 @@ def engineering_history(
     requirement_id: str,
     *,
     baseline_bindings: BaselineBindingSnapshot | None = None,
+    delivery_requirement_id: str | None = None,
 ) -> tuple[TimelineEntry, ...]:
     with source_inspection_scope():
         return _engineering_history(
-            sidecar, task, scope, requirement_id, baseline_bindings=baseline_bindings
+            sidecar,
+            task,
+            scope,
+            requirement_id,
+            baseline_bindings=baseline_bindings,
+            delivery_requirement_id=delivery_requirement_id,
         )
 
 
@@ -128,6 +191,7 @@ def _engineering_history(
     requirement_id: str,
     *,
     baseline_bindings: BaselineBindingSnapshot | None = None,
+    delivery_requirement_id: str | None = None,
 ) -> tuple[TimelineEntry, ...]:
     entries: list[TimelineEntry] = []
     if scope.repository_root != task.repository:
@@ -147,6 +211,9 @@ def _engineering_history(
                 continue
             if proof.task_intent_sha256 != intent:
                 raise ValueError("engineering investigation changed approved Task intent")
+            _require_knowledge_scope(
+                proof, scope, delivery_requirement_id or requirement_id, sidecar
+            )
             entries.append(
                 TimelineEntry(
                     id="investigation_" + proof.proof_sha256,
@@ -169,6 +236,7 @@ def _engineering_history(
                         ],
                         "work_item_id": proof.work_item_id,
                         "source_revision": proof.source_revision,
+                        **_knowledge_details(proof.knowledge_preparation),
                     },
                 )
             )
@@ -191,6 +259,9 @@ def _engineering_history(
                 "wait-investigations", decision.proof_sha256, DeliveryWaitInvestigation
             )
             proof.validate_integrity()
+            _require_knowledge_scope(
+                proof, scope, delivery_requirement_id or requirement_id, sidecar
+            )
             _decision_matches_proof(decision, proof)
             if decision.engineering_admission is not None:
                 EngineeringAuthority.validate(task=task, record=decision.engineering_admission)
@@ -231,6 +302,7 @@ def _engineering_history(
                         "resolution_kind": decision.resolution_kind.value,
                         "work_item_id": decision.work_item_id,
                         "proof_sha256": decision.proof_sha256,
+                        **_knowledge_details(decision.knowledge_preparation),
                     },
                 )
             )
@@ -250,6 +322,9 @@ def _engineering_history(
             if proof != handling.investigation:
                 raise ValueError("platform handling changed its sealed investigation")
             proof.validate_integrity()
+            _require_knowledge_scope(
+                proof, scope, delivery_requirement_id or requirement_id, sidecar
+            )
             if handling.resolution is not None:
                 decision = handling.resolution
                 decision.validate_integrity()
@@ -294,6 +369,7 @@ def _engineering_history(
                         ),
                         "proof_sha256": proof.proof_sha256,
                         "work_item_id": handling.work_item_id,
+                        **_knowledge_details(proof.knowledge_preparation),
                     },
                 )
             )

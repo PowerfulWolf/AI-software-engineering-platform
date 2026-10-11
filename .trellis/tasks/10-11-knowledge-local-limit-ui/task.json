@@ -1,0 +1,16 @@
+{
+  "name": "knowledge-local-limit-ui",
+  "title": "知识准备达到时限后的可理解前端处理闭环",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-11",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/engineering-wait.test.cjs",
+    ".trellis/spec/core/knowledge-local-limit-ui.md",
+    ".trellis/spec/core/index.md",
+    ".trellis/tasks/10-11-knowledge-local-limit-ui"
+  ],
+  "reviewed_by": "root with independent reviewer",
+  "verified_at": "2026-10-11"
+}

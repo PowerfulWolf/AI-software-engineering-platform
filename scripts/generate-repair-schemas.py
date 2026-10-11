@@ -1,8 +1,11 @@
 """Regenerate wire contracts changed by the explicit prerequisite repair gate."""
 
 import json
+from collections.abc import Callable
 from itertools import combinations
 from pathlib import Path
+from runpy import run_path
+from typing import cast
 
 from pydantic import TypeAdapter
 
@@ -44,6 +47,7 @@ for name in (
     "DeliveryWaitInvestigation",
     "DeliveryWaitHandling",
     "VerifierPreparationEvidence",
+    "KnowledgePreparationRetryEvidence",
 ):
     definitions[name]["allOf"] = engineering_wire["$defs"][name]["allOf"]
 for name in ("CreateRequirementIntent", "UpdateRequirementIntent"):
@@ -162,6 +166,17 @@ console["allOf"] = [
         },
     },
 ]
+# Reuse the canonical legacy rescue cross-field policy. Its main() is guarded,
+# so loading these functions never regenerates or mutates unrelated schemas.
+# A previous output is not a policy source: fresh generation must retain these
+# stop/survey/containment/READY-vs-WAITING guards alongside new engineering rules.
+legacy_guards = cast(
+    Callable[[dict[str, object]], None],
+    run_path(str(Path(__file__).with_name("sync-legacy-rescue-schemas.py")))["guards"],
+)
+for schema in schemas.values():
+    for node in (schema, *schema.get("$defs", {}).values()):
+        legacy_guards(node)
 for name, schema in schemas.items():
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     schema["$id"] = f"https://ai-software-engineer.local/schemas/{name}.schema.json"

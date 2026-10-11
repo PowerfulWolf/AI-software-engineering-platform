@@ -1,0 +1,17 @@
+{
+  "name": "schema-regeneration-guards",
+  "title": "恢复并防止Schema生成丢失旧受控恢复守卫",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-11",
+  "allowlist": [
+    "scripts/generate-repair-schemas.py",
+    "schemas/console-operation.schema.json",
+    "tests/contracts/test_repair_schema_generation.py",
+    ".trellis/spec/core/schema-regeneration-guards.md",
+    ".trellis/spec/core/index.md",
+    ".trellis/tasks/10-11-schema-regeneration-guards"
+  ],
+  "reviewed_by": "root with independent reviewer",
+  "verified_at": "2026-10-11"
+}

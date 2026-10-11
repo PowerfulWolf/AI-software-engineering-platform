@@ -1,5 +1,6 @@
 """Read queue facts inside the caller's existing read-only SQL snapshot."""
 
+from dataclasses import replace
 from datetime import datetime
 from typing import Literal
 
@@ -18,10 +19,17 @@ from ai_software_engineer.work_queue.execution_store import RoleQueueAdmission, 
 from ai_software_engineer.work_queue.models import QueuedWorkItem
 
 from .baseline_snapshot import BaselineBindingSnapshot
+from .knowledge_preparation import RoleExecutionScope, read_claim_source, read_execution_phase
 
 
 def read_role_queue(
-    cursor: DictCursor, *, task_id: str, repository_id: str, allocation_sha256: str, now: datetime
+    cursor: DictCursor,
+    *,
+    task_id: str,
+    repository_id: str,
+    allocation_sha256: str,
+    now: datetime,
+    execution_scope: RoleExecutionScope | None = None,
 ) -> tuple[RoleQueueView, ...]:
     cursor.execute(
         "SELECT TABLE_NAME FROM information_schema.TABLES "
@@ -69,6 +77,7 @@ def read_role_queue(
         agent_id = None
         heartbeat = expiry = None
         lease_state = None
+        assignment = lease = None
         if claims:
             claim = claims[0]
             assignment = RoleAssignment.model_validate_json(claim["assignment_json"])
@@ -97,12 +106,35 @@ def read_role_queue(
             liveness = "LEASE_VALID" if expiry > now else "LEASE_EXPIRED"
         elif (
             lease_state == "EXPIRED"
+            and lease is not None
             and expiry is not None
             and expiry <= now
             and item.status is WorkItemStatus.RETRY_SCHEDULED
             and item.wait_reason == f"lease_expired:{lease.id}"
         ):
             liveness = "LEASE_EXPIRED"
+        phase = None
+        if (
+            execution_scope is not None
+            and assignment is not None
+            and lease is not None
+            and item.status is WorkItemStatus.RUNNING
+            and liveness == "LEASE_VALID"
+        ):
+            source = read_claim_source(
+                cursor,
+                scope=execution_scope,
+                item=item,
+                lease=lease,
+                allocation_sha256=allocation_sha256,
+            )
+            if source is not None:
+                phase = read_execution_phase(
+                    scope=replace(execution_scope, source_revision=source),
+                    item=item,
+                    assignment=assignment,
+                    lease=lease,
+                )
         result.append(
             RoleQueueView(
                 work_item_id=item.id,
@@ -113,6 +145,7 @@ def read_role_queue(
                 heartbeat_at=heartbeat,
                 lease_expires_at=expiry,
                 lease_liveness=liveness,
+                execution_phase=phase,
                 wait_reason=item.wait_reason,
                 wait_disposition=item.wait_disposition,
                 wait_disposition_sha256=(

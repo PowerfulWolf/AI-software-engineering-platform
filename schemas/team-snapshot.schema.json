@@ -422,7 +422,8 @@
             "ENVIRONMENT_UNAVAILABLE",
             "ENGINEERING_AUTHORIZATION",
             "SOURCE_PREPARATION_DRIFT",
-            "EXECUTION_BASELINE_PAUSED"
+            "EXECUTION_BASELINE_PAUSED",
+            "KNOWLEDGE_PREPARATION_LIMIT"
           ],
           "title": "Classification",
           "type": "string"
@@ -1480,6 +1481,23 @@
           ],
           "default": null,
           "title": "Available At"
+        },
+        "execution_phase": {
+          "anyOf": [
+            {
+              "enum": [
+                "KNOWLEDGE_PREPARATION",
+                "ROLE_EXECUTION",
+                "FINALIZING"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Phase"
         },
         "heartbeat_at": {
           "anyOf": [

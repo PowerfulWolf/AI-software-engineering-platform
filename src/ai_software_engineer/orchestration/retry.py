@@ -40,6 +40,7 @@ from ai_software_engineer.domain.execution_baseline import CoderExecutionInput
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, DeliveryRetryFailure
 from ai_software_engineer.domain.task import Task, TaskId
+from ai_software_engineer.knowledge.invocation import KnowledgePreparationLocalLimit
 from ai_software_engineer.orchestration.runner import (
     AgentRunFailed,
     DeliveryContractViolation,
@@ -60,6 +61,7 @@ class RetryClassification(StrEnum):
     REQUIREMENT_AMBIGUITY = "REQUIREMENT_AMBIGUITY"
     BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
     PLATFORM_BUG = "PLATFORM_BUG"
+    KNOWLEDGE_PREPARATION_LIMIT = "KNOWLEDGE_PREPARATION_LIMIT"
 
 
 class RetryAction(StrEnum):
@@ -988,6 +990,19 @@ class RetryingOrchestrator(SerialOrchestrator):
             TaskStatus.QA: AgentRole.QA,
             TaskStatus.REVIEW: AgentRole.REVIEWER,
         }[current.status]
+        if isinstance(error, KnowledgePreparationLocalLimit):
+            intent = error.outcome.intent
+            if intent.binding.task_id != current.id or intent.binding.role.value != role.value:
+                raise DeliveryContractViolation("知识准备失败记录不属于当前任务和角色")
+            if self._delivery_failure_control is not None:
+                self._delivery_failure_control.wait(
+                    current,
+                    classification=RetryClassification.KNOWLEDGE_PREPARATION_LIMIT.value,
+                    reason="知识准备达到本次执行时限; 原执行结果已保存, "
+                    "需平台核验停止事实和剩余工作额度后继续原需求。",
+                    source_revision=intent.binding.source_revision,
+                    artifact_ids=("knowledge-preparation://" + error.outcome.outcome_sha256,),
+                )
         next_attempt = (
             self._record_transient(current, role, error.code.value) if error.retryable else None
         )
@@ -1004,9 +1019,9 @@ class RetryingOrchestrator(SerialOrchestrator):
             self._repository.get(task.id),
             classification,
             (
-                f"{role.value} knowledge preparation reached local time limit"
+                "知识准备达到本次执行时限, 原执行与工作现场保留。"
                 if error.expandable_timeout
-                else f"{role.value} knowledge preparation failed: {error.code.value}"
+                else f"知识准备失败, 原执行记录保留: {error.code.value}"
             ),
             current.attempts,
             (),

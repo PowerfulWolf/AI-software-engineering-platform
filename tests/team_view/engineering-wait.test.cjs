@@ -115,6 +115,216 @@ function handling(h, status = "PLATFORM_ATTENTION", missing = ["STOP_UNRECORDED"
   return result;
 }
 
+function knowledgePreparation(h, role = "coder", manual = true) {
+  const result = handling(h, "NEEDS_AUTHORIZATION", [], manual);
+  h.step.role = h.step.wait_disposition.facts.role = role;
+  h.task.status = {coder: "IMPLEMENTING", qa: "QA", reviewer: "REVIEW"}[role];
+  h.step.wait_disposition.facts.classification = "KNOWLEDGE_PREPARATION_LIMIT";
+  h.step.wait_disposition.reason = "知识准备达到本次执行时限, 交付已暂停。";
+  result.investigation.permitted_resolutions = ["RETRY_KNOWLEDGE_PREPARATION"];
+  result.investigation.knowledge_preparation = {
+    scope: {team_id: "team_current", project_id: h.request.project_id,
+      repository_id: "repository_current", repository_root: "/workspace/repository"},
+    requirement_id: h.request.id, task_id: h.task.task_id, role, work_item_id: h.step.work_item_id,
+    source_revision: result.source_revision, checkpoint_sequence: result.checkpoint_sequence,
+    phase: "intent", initial_timeout_seconds: 300, current_timeout_seconds: 300,
+    next_timeout_seconds: 600, maximum_timeout_seconds: 1200, expansion_number: 1,
+    budget_source: "frozen_work_attempt",
+  };
+  result.investigation.next_action = "知识准备原执行已结束, 主角色尚未开始, 可按精确方案扩大下次窗口。";
+  result.summary = "检查已完成, 原任务没有授权平台自动执行此处理。";
+  result.user_action = "工程授权者需确认所列知识准备方案后继续。";
+  return result;
+}
+
+for (const role of ["coder", "qa", "reviewer"]) test(`${role} knowledge preparation exposes its exact finite window and authorized decision`, async () => {
+  const h = harness();
+  knowledgePreparation(h, role);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const visible = visibleDescend(box).map(node => node.textContent).join(" ");
+  assert.match(visible, /300 秒.*600 秒/);
+  assert.match(visible, /冻结上限.*1200 秒.*1\/2/);
+  assert.match(visible, /1 次.*工作额度/);
+  assert.match(visible, /主执行尚未开始/);
+  assert.match(visible, /原需求.*进度.*保留/);
+  assert.doesNotMatch(text(box), /未识别.*方案|当前没有可安全执行的继续方案/);
+  await control(box, "扩大知识准备窗口并继续").events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.equal(intent.action, "RESOLVE_DELIVERY_WAIT");
+  assert.equal(intent.resolution_kind, "RETRY_KNOWLEDGE_PREPARATION");
+  assert.equal(intent.proof_sha256, digest("e"));
+  assert.equal(intent.expected_checkpoint_sha256, digest("a"));
+  for (const forbidden of ["timeout_seconds", "knowledge_preparation", "operator_id", "process_stopped"])
+    assert.equal(Object.hasOwn(intent, forbidden), false, forbidden);
+});
+
+test("knowledge preparation decision retains engineering duty, exact proof and frozen-window gates", async () => {
+  for (const changed of ["manual", "missing", "scope", "requirement", "source", "window", "proof"]) {
+    const h = harness();
+    const result = knowledgePreparation(h);
+    const proof = result.investigation;
+    if (changed === "manual") result.manual_resolution_allowed = false;
+    if (changed === "missing") delete proof.knowledge_preparation;
+    if (changed === "scope") proof.knowledge_preparation.scope.project_id = "foreign";
+    if (changed === "requirement") proof.knowledge_preparation.requirement_id = "foreign";
+    if (changed === "source") proof.knowledge_preparation.source_revision = "f".repeat(64);
+    if (changed === "window") proof.knowledge_preparation.next_timeout_seconds = 1201;
+    if (changed === "proof") proof.proof_sha256 = "bad";
+    assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"),
+      "扩大知识准备窗口并继续"), undefined, changed);
+  }
+  for (const change of ['data.request.checkpoint_sha256 = "f".repeat(64)',
+    'proof.knowledge_preparation.next_timeout_seconds = 1201',
+    'proof.proof_sha256 = "f".repeat(64)', 'handling.manual_resolution_allowed = false',
+    'data.request.project_id = "foreign"', 'teamReadIssue = "unavailable"',
+    'consoleSupportedActions = []',
+    'operations.push({operation_id: "active", status: "RUNNING", intent: {project_id: data.request.project_id, delivery_id: data.request.id}})']) {
+    const h = harness();
+    knowledgePreparation(h);
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    h.run(change);
+    await control(box, "扩大知识准备窗口并继续").events.click();
+    assert.equal(h.run("submitted.length"), 0, change);
+  }
+});
+
+test("automatic knowledge decision is recognized in current facts, history and copied report", async () => {
+  const h = harness();
+  const result = knowledgePreparation(h, "coder", false);
+  result.status = "RESOLVED";
+  result.resolution = {kind: "delivery_wait_resolution", resolution_kind: "RETRY_KNOWLEDGE_PREPARATION",
+    proof_sha256: result.investigation.proof_sha256, knowledge_preparation: result.investigation.knowledge_preparation,
+    authorization_source: "organization_engineering_policy"};
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.match(text(box), /继续决定已保存|继续决定已记录/);
+  assert.equal(control(box, "扩大知识准备窗口并继续"), undefined);
+  assert.equal(control(box, "让平台处理知识准备"), undefined);
+  const panel = new Element("section"); h.context.panel = panel;
+  h.run("requestOperationHistory(panel, data.request)");
+  assert.match(text(panel), /扩大知识准备窗口并继续/);
+  assert.match(text(panel), /600 秒/);
+  assert.match(text(panel), /平台按已授权组织工程策略继续（不是人工批准）/);
+  assert.doesNotMatch(text(panel), /未识别的继续方案/);
+  h.context.navigator = {clipboard: {writeText: async value => {h.context.copiedReport = value;}}};
+  await h.run("copyEngineeringWaitReport(data.request, handling)");
+  assert.match(h.context.copiedReport, /扩大知识准备窗口并继续/);
+  assert.match(h.context.copiedReport, /平台按已授权组织工程策略继续（不是人工批准）/);
+  assert.match(h.context.copiedReport, /300 秒.*600 秒/);
+  result.resolution = {...result.resolution, knowledge_preparation: {
+    ...result.resolution.knowledge_preparation, next_timeout_seconds: 1200}};
+  assert.equal(h.run("engineeringWaitDecision(data.request, data.step, proof)"), null);
+});
+
+for (const [missing, phrase, owner] of [
+  ["KNOWLEDGE_PREPARATION_UNAVAILABLE", /知识准备.*记录.*不完整/, /平台维护者/],
+  ["KNOWLEDGE_WINDOW_EXHAUSTED", /知识准备.*扩窗上限/, /工程负责人/],
+]) test(`${missing} explains its owner and next step in current, historical and copied reports`, async () => {
+  const h = harness();
+  const result = handling(h, missing === "KNOWLEDGE_WINDOW_EXHAUSTED" ? "BUDGET_EXHAUSTED" : "PLATFORM_ATTENTION", [missing]);
+  h.step.wait_disposition.facts.classification = "KNOWLEDGE_PREPARATION_LIMIT";
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.match(text(box), phrase); assert.match(text(box), owner);
+  assert.doesNotMatch(text(box), /未识别的检查项/);
+  assert.equal(control(box, "扩大知识准备窗口并继续"), undefined);
+  assert.equal(control(box, "让平台处理知识准备"), undefined);
+  const panel = new Element("section"); h.context.panel = panel;
+  h.run("requestOperationHistory(panel, data.request)");
+  assert.match(text(panel), phrase); assert.doesNotMatch(text(panel), /未识别的检查项/);
+  h.context.navigator = {clipboard: {writeText: async value => {h.context.copiedReport = value;}}};
+  await h.run("copyEngineeringWaitReport(data.request, handling)");
+  assert.match(h.context.copiedReport, phrase); assert.match(h.context.copiedReport, owner);
+  assert.doesNotMatch(h.context.copiedReport, new RegExp(missing + "|未识别的检查项"));
+  if (missing === "KNOWLEDGE_WINDOW_EXHAUSTED") {
+    assert.doesNotMatch(h.context.copiedReport, /决定是否追加执行额度|新的额度授权生效/);
+    assert.match(text(box), /修复.*重新评估|重新评估.*修复/);
+    assert.match(h.context.copiedReport, /本页没有追加窗口授权入口/);
+  }
+  assert.equal(result.investigation.permitted_resolutions.length, 0);
+});
+
+test("knowledge handling uses a matching product entry and copied exact decision window", async () => {
+  const h = harness();
+  h.step.wait_disposition.facts.classification = "KNOWLEDGE_PREPARATION_LIMIT";
+  let box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.ok(control(box, "让平台处理知识准备"));
+  assert.match(text(box), /点击“让平台处理知识准备”/);
+  const result = knowledgePreparation(h);
+  h.context.navigator = {clipboard: {writeText: async value => {h.context.copiedReport = value;}}};
+  await h.run("copyEngineeringWaitReport(data.request, handling)");
+  assert.match(h.context.copiedReport, /300 秒.*600 秒/);
+  assert.match(h.context.copiedReport, /冻结上限.*1200 秒/);
+  assert.match(h.context.copiedReport, /1 次.*工作额度/);
+  assert.equal(result.status, "NEEDS_AUTHORIZATION");
+});
+
+test("known stopped knowledge preparation never advertises continuation after its work budget is exhausted", () => {
+  const h = harness();
+  const result = knowledgePreparation(h);
+  result.investigation.missing = ["BUDGET_EXHAUSTED"];
+  result.investigation.permitted_resolutions = [];
+  h.run(`operations[0].intent.action = "INSPECT_DELIVERY_WAIT";
+    operations[0].result = {engineering_wait_investigation: proof, checkpoint_sha256: data.request.checkpoint_sha256};`);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.match(text(box), /执行额度已用完/);
+  assert.equal(control(box, "扩大知识准备窗口并继续"), undefined);
+  assert.equal(control(box, "让平台处理知识准备"), undefined);
+  assert.doesNotMatch(text(box), /可使用 1 次|下一次窗口 600 秒|将下一次知识准备窗口扩大/);
+});
+
+test("a retained knowledge handling control cannot submit after an exact exhausted proof arrives", async () => {
+  for (const missing of ["KNOWLEDGE_WINDOW_EXHAUSTED", "BUDGET_EXHAUSTED"]) {
+    const h = harness();
+    h.step.wait_disposition.facts.classification = "KNOWLEDGE_PREPARATION_LIMIT";
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    investigation(h, [missing]);
+    await control(box, "让平台处理知识准备").events.click();
+    assert.equal(h.run("submitted.length"), 0, missing);
+  }
+});
+
+test("knowledge execution history shows the sealed window and a stopped automatic decision", () => {
+  const h = harness();
+  const result = knowledgePreparation(h);
+  const target = new Element("ol"); h.context.target = target;
+  h.context.knowledgeHistory = {kind: "delivery_wait_resolution", resolution_kind: "RETRY_KNOWLEDGE_PREPARATION",
+    knowledge_preparation: result.investigation.knowledge_preparation, authorization_source: "organization_engineering_policy"};
+  h.run(`appendExecutionEntry(target, {id: "knowledge_resolution", task_id: data.task.task_id,
+    summary: "知识准备已处理", occurred_at: "2026-10-11T00:00:00Z", source_uri: "sidecar://wait/1",
+    details: knowledgeHistory}, data.task.task_id)`);
+  assert.match(text(target), /扩大知识准备窗口并继续/);
+  assert.match(text(target), /300 秒.*600 秒/);
+  assert.match(text(target), /平台按已授权组织工程策略继续（不是人工批准）/);
+  assert.doesNotMatch(text(target), /未识别的继续方案/);
+});
+
+test("a second knowledge expansion shows the frozen final window for assessment without increasing the maximum", () => {
+  const h = harness();
+  const result = knowledgePreparation(h);
+  Object.assign(result.investigation.knowledge_preparation, {phase: "assessment",
+    current_timeout_seconds: 600, next_timeout_seconds: 1200, expansion_number: 2});
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.match(text(box), /充分性评估.*600 秒.*1200 秒/);
+  assert.match(text(box), /冻结上限 1200 秒.*2\/2/);
+  assert.ok(control(box, "扩大知识准备窗口并继续"));
+});
+
+test("legacy continuation knowledge requires the verified parent delivery binding", () => {
+  for (const parent of ["requirement_current", "foreign", null, undefined]) {
+    const h = harness();
+    const result = knowledgePreparation(h, "qa");
+    result.investigation.knowledge_preparation.requirement_id = "task_continue_legacy";
+    if (parent !== undefined) result.investigation.knowledge_preparation.delivery_requirement_id = parent;
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.equal(Boolean(control(box, "扩大知识准备窗口并继续")), parent === h.request.id,
+      "legacy scope requires the explicit verified parent: " + parent);
+  }
+  const h = harness();
+  const result = knowledgePreparation(h);
+  result.investigation.knowledge_preparation.delivery_requirement_id = "foreign";
+  assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"),
+    "扩大知识准备窗口并继续"), undefined, "an explicit parent cannot be replaced by the native requirement");
+});
+
 test("product handling submits the exact wait without supplying engineering authority or stop facts", async () => {
   const h = harness();
   const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");

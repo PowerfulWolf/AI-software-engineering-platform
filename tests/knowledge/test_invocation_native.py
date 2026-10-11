@@ -44,9 +44,11 @@ from ai_software_engineer.knowledge.invocation import (
     KnowledgeInvocationJournal,
     KnowledgeInvocationOutcome,
     KnowledgeInvocationUncertain,
+    KnowledgePreparationLocalLimit,
     invocation_lane_sha256,
 )
 from ai_software_engineer.knowledge.models import KnowledgeRunBinding
+from ai_software_engineer.knowledge.preparation_retry import read_local_limit
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.work_queue.models import QueueClaim
 from tests.domain.factories import make_task
@@ -223,6 +225,8 @@ def test_real_consultation_failure_has_durable_native_receipts_and_never_restart
         ]
     )
     if native_outcome == "timeout":
+        assert isinstance(failed.value, KnowledgePreparationLocalLimit)
+        assert failed.value.outcome == outcome
         assert failed.value.code is AgentErrorCode.TIMEOUT
         assert failed.value.expandable_timeout and not failed.value.retryable
         assert outcome.failure.timeout_kind == "local_execution_limit"
@@ -233,6 +237,9 @@ def test_real_consultation_failure_has_durable_native_receipts_and_never_restart
     )
     with pytest.raises(StructuredModelError) as replay:
         reopened.consult(bound, frozen, {}, timeout_seconds=1)
+    if native_outcome == "timeout":
+        assert isinstance(replay.value, KnowledgePreparationLocalLimit)
+        assert replay.value.outcome == outcome
     assert replay.value.code == failed.value.code
     assert _known_records(root, bound) == (intent, outcome)
     assert (tmp_path / "started").read_text().splitlines() == ["started"]
@@ -303,6 +310,53 @@ def test_outcome_publication_failure_preserves_the_independent_real_stop(
     with pytest.raises(KnowledgeInvocationUncertain):
         service.consult(changed, frozen, {}, timeout_seconds=1)
     assert (tmp_path / "started").read_text().splitlines() == ["started"]
+
+
+def test_local_limit_index_failure_preserves_stop_and_replays_without_restarting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = _executable(tmp_path, "timeout")
+    backup = tmp_path / "backup-codex"
+    backup.write_text(
+        f"#!{sys.executable}\nfrom pathlib import Path\nPath('backup-started').touch()\n"
+    )
+    backup.chmod(0o700)
+    root = tmp_path / "knowledge"
+    frozen = snapshot()
+    bound = binding(frozen)
+    original_put = KnowledgeRecordStore.put
+
+    def reject_index[T: DomainModel](
+        records: KnowledgeRecordStore, namespace: str, key: str, record: T
+    ) -> T:
+        if namespace == "knowledge-local-limit-intents":
+            raise OSError("fixture local-limit index write failed")
+        return original_put(records, namespace, key, record)
+
+    monkeypatch.setattr(KnowledgeRecordStore, "put", reject_index)
+    service = KnowledgeConsultationService(
+        _client(tmp_path, executable, bound.role, backup=backup), KnowledgeRecordStore(root)
+    )
+    with pytest.raises(KnowledgeInvocationUncertain):
+        service.consult(bound, frozen, {}, timeout_seconds=1)
+    intent, outcome = _known_records(root, bound)
+    assert outcome.failure is not None
+    assert outcome.failure.timeout_kind == "local_execution_limit"
+    assert (
+        KnowledgeRecordStore(root).find(
+            "knowledge-local-limit-intents", outcome.outcome_sha256, KnowledgeInvocationIntent
+        )
+        is None
+    )
+    assert not (tmp_path / "backup-started").exists()
+    monkeypatch.setattr(KnowledgeRecordStore, "put", original_put)
+    with pytest.raises(KnowledgePreparationLocalLimit) as replay:
+        service.consult(bound, frozen, {}, timeout_seconds=1)
+    assert replay.value.outcome == outcome
+    assert read_local_limit(root, outcome.outcome_sha256) == outcome
+    assert _known_records(root, bound) == (intent, outcome)
+    assert (tmp_path / "started").read_text().splitlines() == ["started"]
+    assert not (tmp_path / "backup-started").exists()
 
 
 def test_lost_stop_receipt_leaves_pending_original_and_blocks_new_execution_identity(

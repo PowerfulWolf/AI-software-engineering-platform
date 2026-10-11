@@ -24,6 +24,7 @@ from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
     DeliveryResolutionKind,
+    KnowledgePreparationRetryEvidence,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringCapability
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
@@ -301,6 +302,149 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
 
     """T046 plus explicit native-reservation adoption and accepted-output receipts."""
 
+    @staticmethod
+    def _require_knowledge_window_predecessor(
+        current: KnowledgePreparationRetryEvidence,
+        previous: KnowledgePreparationRetryEvidence | None,
+    ) -> None:
+        if current.expansion_number == 1:
+            if previous is not None:
+                raise QueueConflict("知识准备不能丢弃已有扩窗历史重新获得额度")
+            return
+        if previous is None or (
+            current.expansion_number != previous.expansion_number + 1
+            or current.root_intent_sha256 != previous.root_intent_sha256
+            or current.initial_timeout_seconds != previous.initial_timeout_seconds
+            or current.current_timeout_seconds != previous.next_timeout_seconds
+            or current.maximum_timeout_seconds != previous.maximum_timeout_seconds
+            or current.scope != previous.scope
+            or current.task_id != previous.task_id
+            or current.role is not previous.role
+            or current.requirement_id != previous.requirement_id
+            or (current.delivery_requirement_id or current.requirement_id)
+            != (previous.delivery_requirement_id or previous.requirement_id)
+            or current.source_revision != previous.source_revision
+            or current.snapshot_sha256 != previous.snapshot_sha256
+        ):
+            raise QueueConflict("知识准备扩窗不匹配已消费的原决定链")
+
+    def knowledge_preparation_retry(
+        self, work_item_id: str, *, _depth: int = 0
+    ) -> KnowledgePreparationRetryEvidence | None:
+        """Read an already consumed exact decision; current configuration has no say."""
+        if _depth >= 512:
+            raise QueueCorruption("知识准备工作项历史超过有界读取上限, 需工程核验")
+        current = self.get(work_item_id)
+        parent_id = current.parent_work_item_id
+        if parent_id is None:
+            return None
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            connection.cursor(DictCursor) as cursor,
+        ):
+            cursor.execute(
+                "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
+                "AND event_type='WAIT_RESOLVED' "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.detail.next_work_item_id'))=%s "
+                "ORDER BY sequence DESC LIMIT 2",
+                (parent_id, current.id),
+            )
+            events = cursor.fetchall()
+            cursor.execute("SELECT payload_json FROM tasks WHERE id=%s", (current.task_id,))
+            task_row = cursor.fetchone()
+            if task_row is None:
+                raise QueueCorruption("知识准备决定没有对应任务")
+            task = _decode_task(current.task_id, str(task_row["payload_json"]))
+        step = self.step(current.id)
+        parent = self.get(parent_id)
+        parent_step = self.step(parent_id)
+        if (
+            parent.task_id != current.task_id
+            or parent.repository_id != current.repository_id
+            or parent.repository_scopes != current.repository_scopes
+            or parent_step.allocation_sha256 != step.allocation_sha256
+        ):
+            raise QueueCorruption("知识准备工作项祖先改变了原任务或仓库范围")
+        if (parent.role, parent.checkpoint_sequence, parent_step.boundary.source_revision) != (
+            current.role,
+            current.checkpoint_sequence,
+            step.boundary.source_revision,
+        ):
+            return None
+        previous = self.knowledge_preparation_retry(parent_id, _depth=_depth + 1)
+        matches: list[DeliveryResolution] = []
+        for row in events:
+            detail = json.loads(str(row["payload_json"])).get("detail", {})
+            if detail.get("next_work_item_id") != current.id:
+                continue
+            resolution = DeliveryResolution.model_validate(detail.get("resolution"))
+            resolution.validate_integrity()
+            if detail.get("resolution_sha256") != resolution.resolution_sha256:
+                raise QueueCorruption("已消费知识准备决定的完整正文与摘要不一致")
+            matches.append(resolution)
+        if not matches:
+            return previous
+        if len(matches) != 1:
+            raise QueueCorruption("知识准备存在不唯一的已消费决定")
+        resolution = matches[0]
+        if resolution.expected_task_intent_sha256 != task_intent_sha256(task):
+            raise QueueCorruption("知识准备决定不再符合当前任务的冻结范围")
+        if resolution.resolution_kind is not DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION:
+            return previous
+        evidence = resolution.knowledge_preparation
+        assert evidence is not None
+        if (
+            current.id != "work_" + resolution.resolution_sha256
+            or evidence.work_item_id != parent_id
+            or current.task_id != evidence.task_id
+            or current.repository_id != evidence.scope.repository_id
+            or current.role is not evidence.role
+            or current.attempt != evidence.original_attempt + 1
+            or current.checkpoint_sequence != evidence.checkpoint_sequence
+            or step.boundary.source_revision != evidence.source_revision
+        ):
+            raise QueueCorruption("知识准备下一窗口不属于当前工作项、角色和源码")
+        self._require_knowledge_window_predecessor(evidence, previous)
+        return evidence
+
+    def knowledge_timeout(self, task: Task, claim: QueueClaim) -> int | None:
+        """A fresh real claim may use only its own consumed next execution window."""
+        from ai_software_engineer.knowledge.preparation_retry import claim_identity_sha256
+
+        original = self.original_claim(claim.lease.id)
+        if claim_identity_sha256(original) != claim_identity_sha256(claim):
+            raise QueueConflict("知识准备窗口请求改变了当前真实领取身份")
+        item = self.get(claim.work_item.id)
+        if (
+            task.id != item.task_id
+            or item.status not in {WorkItemStatus.LEASED, WorkItemStatus.RUNNING}
+            or (
+                item.task_id,
+                item.role,
+                item.attempt,
+                item.checkpoint_sequence,
+                item.dispatch_sequence,
+            )
+            != (
+                claim.work_item.task_id,
+                claim.work_item.role,
+                claim.work_item.attempt,
+                claim.work_item.checkpoint_sequence,
+                claim.work_item.dispatch_sequence,
+            )
+        ):
+            raise QueueConflict("知识准备窗口请求不属于当前任务和执行身份")
+        evidence = self.knowledge_preparation_retry(item.id)
+        if evidence is not None and (
+            evidence.scope.repository_root != task.repository
+            or (
+                task.engineering_policy is not None
+                and task.engineering_policy.scope != evidence.scope
+            )
+        ):
+            raise QueueConflict("知识准备窗口请求改变了冻结工程范围")
+        return evidence.next_timeout_seconds if evidence is not None else None
+
     def resolve_wait(self, resolution: DeliveryResolution) -> QueuedWorkItem:
         """Consume sealed engineering proof with Task, queue and budget in one fence."""
         resolution.validate_integrity()
@@ -381,6 +525,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 DeliveryResolutionKind.RETRY_FROM_CHECKPOINT,
                 DeliveryResolutionKind.REVERIFY_CANDIDATE,
                 DeliveryResolutionKind.RETRY_VERIFIER_PREPARATION,
+                DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION,
             }:
                 if current.role not in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER):
                     raise QueueConflict("wait does not belong to a delivery role")
@@ -429,6 +574,53 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                         or task.attempts >= task.max_attempts
                     ):
                         raise QueueConflict("验证准备重试缺少精确已终结证据或冻结工作额度")
+                    updated_task = Task.model_validate(
+                        {**task.to_wire(), "attempts": task.attempts + 1}
+                    )
+                elif (
+                    resolution.resolution_kind is DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION
+                ):
+                    from ai_software_engineer.knowledge.preparation_retry import (
+                        claim_identity_sha256,
+                    )
+
+                    knowledge = resolution.knowledge_preparation
+                    if (
+                        knowledge is None
+                        or disposition.facts.classification != "KNOWLEDGE_PREPARATION_LIMIT"
+                        or disposition.facts.evidence_ids
+                        != ("knowledge-preparation://" + knowledge.outcome_sha256,)
+                        or knowledge.task_id != task.id
+                        or knowledge.work_item_id != current.id
+                        or knowledge.role is not current.role
+                        or knowledge.original_attempt != current.attempt
+                        or knowledge.original_attempt != task.attempts
+                        or knowledge.checkpoint_sequence != current.checkpoint_sequence
+                        or knowledge.scope.repository_id != current.repository_id
+                        or knowledge.scope.repository_root != task.repository
+                        or knowledge.source_revision != step.boundary.source_revision
+                        or task.work_budget_exhausted
+                        or task.attempts >= task.max_attempts
+                    ):
+                        raise QueueConflict("知识准备续跑缺少精确停止记录、冻结窗口或剩余工作额度")
+                    original_knowledge_claim = self.original_claim(knowledge.original_lease_id)
+                    if claim_identity_sha256(
+                        original_knowledge_claim
+                    ) != knowledge.original_claim_sha256 or (
+                        original_knowledge_claim.work_item.id,
+                        original_knowledge_claim.work_item.dispatch_sequence,
+                    ) != (current.id, knowledge.original_dispatch_sequence):
+                        raise QueueConflict("知识准备续跑改变了原执行的领取身份")
+                    self._require_knowledge_window_predecessor(
+                        knowledge, self.knowledge_preparation_retry(current.id)
+                    )
+                    cursor.execute(
+                        "SELECT lease_id FROM work_queue_claims WHERE task_id=%s "
+                        "AND state='ACTIVE' FOR UPDATE",
+                        (task.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("原任务仍有活跃领取, 不能开始知识准备续跑")
                     updated_task = Task.model_validate(
                         {**task.to_wire(), "attempts": task.attempts + 1}
                     )

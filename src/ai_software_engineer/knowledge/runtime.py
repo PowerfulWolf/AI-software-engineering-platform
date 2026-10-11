@@ -30,7 +30,7 @@ from ai_software_engineer.knowledge.gaps import (
     KnowledgeWaitPort,
 )
 from ai_software_engineer.knowledge.invocation import KnowledgeInvocationJournal
-from ai_software_engineer.knowledge.legacy_scope import retain_legacy_snapshot
+from ai_software_engineer.knowledge.legacy_scope import legacy_delivery_gaps, retain_legacy_snapshot
 from ai_software_engineer.knowledge.models import (
     KnowledgeError,
     KnowledgeRunBinding,
@@ -148,6 +148,7 @@ class KnowledgeRunContextBuilder:
         retrieval: KnowledgeRetrieval | None = None,
         wait_port: KnowledgeWaitPort | None = None,
         invocation_claim: Callable[[], QueueClaim] | None = None,
+        invocation_timeout: Callable[[Task, QueueClaim], int | None] | None = None,
     ) -> None:
         self.delegate, self.contexts, self.clients = delegate, contexts, clients
         self.repository_root, self.records = repository_root, records
@@ -155,6 +156,7 @@ class KnowledgeRunContextBuilder:
         self.sources, self.retrieval = sources, retrieval
         self.wait_port = wait_port
         self.invocation_claim = invocation_claim
+        self.invocation_timeout = invocation_timeout
 
     def build(
         self,
@@ -188,18 +190,14 @@ class KnowledgeRunContextBuilder:
         # Old prerequisite continuations omitted joint context on their first run.
         # Retain that exact gap scope for the same Task/role/candidate on resume;
         # the Requirement approval facade separately proves its native ownership.
-        legacy_gaps = tuple(
-            gap
-            for gap in self.records.list("gaps", KnowledgeGap)
-            if task.id.startswith("task_continue_")
-            and agent.role in {AgentRole.QA, AgentRole.REVIEWER}
-            and gap.binding.task_id == task.id
-            and gap.binding.requirement_id == task.id
-            and gap.binding.team_id == self.team_id
-            and gap.binding.project_id == self.project_id
-            and gap.binding.repository_ids == (self.repository_id,)
-            and gap.binding.role == TeamRole(agent.role.value)
-            and gap.binding.source_revision == base.source_revision
+        legacy_gaps = legacy_delivery_gaps(
+            self.records,
+            task_id=task.id,
+            role=TeamRole(agent.role.value),
+            team_id=self.team_id,
+            project_id=self.project_id,
+            repository_id=self.repository_id,
+            source_revision=base.source_revision,
         )
         if requirement_id != task.id and legacy_gaps:
             legacy_snapshot = snapshot_from_sources(
@@ -271,6 +269,13 @@ class KnowledgeRunContextBuilder:
             snapshot_sha256=snapshot.snapshot_sha256,
         )
         client = self.clients.for_project(self.repository_root, binding.role)
+        timeout = knowledge_phase_timeout(binding.role, agent.timeout_seconds)
+        if self.invocation_timeout is not None:
+            if self.invocation_claim is None:
+                raise KnowledgeError("KNOWLEDGE_TIMEOUT_REQUIRES_ACTUAL_CLAIM")
+            frozen_timeout = self.invocation_timeout(task, self.invocation_claim())
+            if frozen_timeout is not None:
+                timeout = frozen_timeout
         consultation = KnowledgeConsultationService(
             client,
             self.records,
@@ -284,7 +289,7 @@ class KnowledgeRunContextBuilder:
             binding,
             snapshot,
             {"task": task.to_wire(), "context": base.to_wire()},
-            timeout_seconds=knowledge_phase_timeout(binding.role, agent.timeout_seconds),
+            timeout_seconds=timeout,
         )
         if requires_frozen_reads(base):
             reads = retrieved_context_section(consultation, self.records)

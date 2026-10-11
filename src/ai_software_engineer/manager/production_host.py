@@ -20,6 +20,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryWaitInvestigation,
     HandleDeliveryWait,
     InspectDeliveryWait,
+    KnowledgePreparationRetryEvidence,
     ResolveDeliveryWait,
 )
 from ai_software_engineer.domain.engineering_authority import (
@@ -820,6 +821,10 @@ class TeamHost:
             with self._work_queue.idle_task_scope(current.id):
                 return collector.observe_stop(current, step, guard)
 
+        def knowledge_retry(work_item_id: str) -> KnowledgePreparationRetryEvidence | None:
+            with self._work_queue.idle_task_scope(task.id):
+                return self._work_queue.knowledge_preparation_retry(work_item_id)
+
         return DeliveryWaitService(
             repository=repository,
             queue=self._work_queue,
@@ -832,6 +837,10 @@ class TeamHost:
             engineering_authority=EngineeringAuthority(self._team.directory("work-items")),
             fact_collector=collect_wait_facts,
             stop_observer=observe_wait_stop,
+            knowledge_requirement_id=(
+                delivery_id if delivery_id.startswith("delivery_multi_") else task.id
+            ),
+            knowledge_retry=knowledge_retry,
             prerequisite_collector=lambda current, step: (
                 runtime.backend.inspect_delivery_wait_prerequisites(
                     current,

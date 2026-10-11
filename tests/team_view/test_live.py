@@ -168,7 +168,12 @@ def test_valid_current_role_lease_presents_wait_instead_of_continue(
         ),
     )
     result = _request_with_current_work(request, [task])
-    assert result.next_action.startswith(f"{title} 正在执行")
+    assert result.execution is not None
+    assert result.execution.reason_code == "ROLE_WORK_CLAIMED"
+    assert result.execution.reason.startswith(f"{title} 已领取当前工作")
+    assert "细分执行进度暂未上报" in result.execution.reason
+    assert "主执行是否开始尚无细分记录" in result.next_action
+    assert "正在执行" not in result.next_action
     assert "等待" in result.next_action
     assert "继续交付" not in result.next_action
     assert "模型调用" not in result.next_action

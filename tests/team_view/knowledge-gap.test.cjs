@@ -40,7 +40,9 @@ function harness(fetcher) {
     AbortController, structuredClone, supportedActions,
   });
   const source = fs.readFileSync(path.join(__dirname, "../../src/ai_software_engineer/team_view/app.js"), "utf8");
-  vm.runInContext(source.replace(/\nrefresh\(\);\nsetInterval\(refresh, 5000\);\s*$/, "\n"), context);
+  const scheduledInitialization = "\nrefresh();\nsetInterval(() => {refresh(); void refreshRecoveryPreparationProgress();}, 5000);\n";
+  assert.ok(source.endsWith(scheduledInitialization), "known scheduled initialization changed");
+  vm.runInContext(source.slice(0, -scheduledInitialization.length), context);
   vm.runInContext(`
     snapshot = {team_id: "team_test", selected_project_id: "project_test", requests: [{id: "r1", project_id: "project_test", title: "Requirement", stage: "WAITING_HUMAN", checkpoint_sha256: "checkpoint-a", scopes: [], documents: [], dialogue: []}], tasks: [], agents: [], projects: []};
     selected = {kind: "request", id: "r1"}; page = "requests";
@@ -781,8 +783,10 @@ test("empty diagnostics distinguish valid role execution from completed call rec
       status: "RUNNING", intent: {delivery_id: "r1", project_id: "project_test"}})`, h.context);
     details.open = true;
     await details.events.toggle();
-    if (active) assert.match(text(details), /正在执行.*最近心跳/);
-    else assert.doesNotMatch(text(details), /正在执行/);
+    if (active) {
+      assert.match(text(details), /执行中.*最近心跳/);
+      assert.match(text(details), /已领取工作/);
+    } else assert.doesNotMatch(text(details), /最近心跳/);
     assert.match(text(details), /已完成.*阶段调用/);
     assert.match(text(details), /查看角色执行记录/);
     assert.doesNotMatch(text(details), /历史缺失记录无法补回/);

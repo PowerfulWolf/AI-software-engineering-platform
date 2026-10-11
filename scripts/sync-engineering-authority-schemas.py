@@ -6,6 +6,7 @@ from typing import Annotated
 
 from pydantic import Field, TypeAdapter
 
+from ai_software_engineer.domain.delivery_disposition import DeliveryFailureFacts
 from ai_software_engineer.domain.delivery_resolution import (
     RESULT_REPLAY_REJECTED_CLASSIFICATIONS,
     DeliveryResolution,
@@ -128,6 +129,17 @@ resolution_schema["$defs"]["DeliveryResolution"]["allOf"] = [
             "else": {"properties": {"verifier_preparation": {"type": "null"}}},
         },
     },
+    {
+        "if": {
+            "required": ["resolution_kind"],
+            "properties": {"resolution_kind": {"const": "RETRY_KNOWLEDGE_PREPARATION"}},
+        },
+        "then": {
+            "required": ["knowledge_preparation"],
+            "properties": {"knowledge_preparation": {"type": "object"}},
+        },
+        "else": {"properties": {"knowledge_preparation": {"type": "null"}}},
+    },
 ]
 resolution_schema["$defs"]["DeliveryWaitHandling"]["allOf"] = [
     {
@@ -188,6 +200,61 @@ resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] = [
             }
         },
     },
+    {
+        "if": {
+            "required": ["permitted_resolutions"],
+            "properties": {
+                "permitted_resolutions": {"contains": {"const": "RETRY_KNOWLEDGE_PREPARATION"}}
+            },
+        },
+        "then": {
+            "required": ["knowledge_preparation"],
+            "properties": {"knowledge_preparation": {"type": "object"}},
+        },
+    },
+    {
+        "if": {
+            "required": ["knowledge_preparation"],
+            "properties": {"knowledge_preparation": {"type": "object"}},
+        },
+        "then": {
+            "required": ["original_run_id"],
+            "properties": {
+                "original_run_id": {"type": "string"},
+                "invocation_start_sha256": {"type": "null"},
+                "invocation_outcome_sha256": {"type": "null"},
+                "original_authority": {"type": "null"},
+                "verification_retry": {"type": "null"},
+                "verifier_preparation": {"type": "null"},
+                "permitted_resolutions": {
+                    "maxItems": 1,
+                    "items": {"const": "RETRY_KNOWLEDGE_PREPARATION"},
+                },
+                "disposition": {
+                    "properties": {
+                        "facts": {
+                            "properties": {
+                                "classification": {"const": "KNOWLEDGE_PREPARATION_LIMIT"},
+                                "evidence_ids": {
+                                    "minItems": 1,
+                                    "maxItems": 1,
+                                    "items": {"pattern": "^knowledge-preparation://[a-f0-9]{64}$"},
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+        },
+    },
+]
+resolution_schema["$defs"]["KnowledgePreparationRetryEvidence"]["allOf"] = [
+    {
+        "properties": {
+            "role": {"enum": ["coder", "qa", "reviewer"]},
+            "execution_record_sha256s": {"uniqueItems": True},
+        }
+    }
 ]
 resolution_schema["$defs"]["VerifierPreparationEvidence"]["allOf"] = [
     {
@@ -232,12 +299,26 @@ resolution_schema["$defs"]["VerifierPreparationEvidence"]["allOf"] = [
 # every copy's capability enum synchronized without erasing their hand-written
 # validation matrices or unrelated definitions.
 capability_schema = TypeAdapter(EngineeringCapability).json_schema()
+failure_schema = DeliveryFailureFacts.model_json_schema()
+failure_schema.pop("$defs")
 for path in (Path(__file__).resolve().parents[1] / "schemas").glob("*.schema.json"):
     embedded = json.loads(path.read_text(encoding="utf-8"))
     definitions = embedded.get("$defs", {})
+    changed = False
     if (
         "EngineeringCapability" in definitions
         and definitions["EngineeringCapability"] != capability_schema
     ):
         definitions["EngineeringCapability"] = capability_schema
+        changed = True
+    # The Team snapshot has its own complete model generator and read-side owner.
+    # Other embedded copies must keep the same strict failure classification.
+    if (
+        path.name != "team-snapshot.schema.json"
+        and "DeliveryFailureFacts" in definitions
+        and definitions["DeliveryFailureFacts"] != failure_schema
+    ):
+        definitions["DeliveryFailureFacts"] = failure_schema
+        changed = True
+    if changed:
         path.write_text(json.dumps(embedded, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

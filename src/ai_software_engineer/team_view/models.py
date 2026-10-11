@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import AwareDatetime
+from pydantic import AwareDatetime, Field
 
 from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
 from ai_software_engineer.domain.delivery_disposition import DeliveryDisposition
@@ -77,6 +77,9 @@ class RoleQueueView(DomainModel):
     heartbeat_at: AwareDatetime | None = None
     lease_expires_at: AwareDatetime | None = None
     lease_liveness: Literal["UNKNOWN", "LEASE_VALID", "LEASE_EXPIRED"] = "UNKNOWN"
+    execution_phase: Literal["KNOWLEDGE_PREPARATION", "ROLE_EXECUTION", "FINALIZING"] | None = (
+        Field(default=None, exclude_if=lambda value: value is None)
+    )
     wait_reason: str | None = None
     wait_disposition: DeliveryDisposition | None = None
     wait_disposition_sha256: str | None = None

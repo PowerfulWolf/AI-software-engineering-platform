@@ -141,9 +141,32 @@ def effective_step(
     latest: bool = True,
 ) -> QueuedRoleStep:
     """Resolve source at an exact historical invocation, or the current uninvoked input."""
+    records = consumptions(queue, original.work_item.task_id)
+    selected, found = resolve_step_overlays(
+        original, records, baseline_sha256=baseline_sha256, latest=latest
+    )
+    if not latest and baseline_sha256 is not None and not found:
+        _require_inherited_baseline(queue, original, baseline_sha256, records)
+        # Descendants bind their own candidate/input, not the baseline's Coder source.
+        return original
+    return selected
+
+
+def resolve_step_overlays(
+    original: QueuedRoleStep,
+    records: tuple[BaselineQueueConsumption, ...],
+    *,
+    baseline_sha256: str | None = None,
+    latest: bool = True,
+) -> tuple[QueuedRoleStep, bool]:
+    """Pure immutable source resolution shared with read-only projections.
+
+    The caller supplies a validated ordered consumption prefix. False means an
+    exact requested baseline was not a local overlay; authorization of inherited
+    baselines remains the queue service's independent responsibility.
+    """
     selected = original
     found = baseline_sha256 is None
-    records = consumptions(queue, original.work_item.task_id)
     for record in records:
         if (
             record.work_item_id != original.work_item.id
@@ -167,15 +190,13 @@ def effective_step(
         if record.binding.binding_sha256 == baseline_sha256:
             found = True
             if not latest:
-                return selected
+                return selected, found
     if not latest:
         if baseline_sha256 is None:
-            return original
+            return original, found
         if not found:
-            _require_inherited_baseline(queue, original, baseline_sha256, records)
-            # Descendants bind their own candidate/input, not the baseline's Coder source.
-            return original
-    return selected
+            return original, found
+    return selected, found
 
 
 def _require_inherited_baseline(

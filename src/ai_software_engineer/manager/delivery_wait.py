@@ -32,6 +32,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryWaitInvestigation,
     HandleDeliveryWait,
     InspectDeliveryWait,
+    KnowledgePreparationRetryEvidence,
     OriginalInvocationAuthority,
     ResolveDeliveryWait,
     VerificationRetryEvidence,
@@ -61,7 +62,13 @@ from ai_software_engineer.git.mutation import (
     WorkspaceMutationInventory,
     capture_mutation_inventory,
 )
+from ai_software_engineer.knowledge.legacy_scope import require_delivery_requirement_scope
 from ai_software_engineer.knowledge.models import KnowledgeError, digest
+from ai_software_engineer.knowledge.preparation_retry import (
+    KnowledgeWindowExhausted,
+    preparation_retry_evidence,
+    read_local_limit,
+)
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightCheckpoint,
@@ -182,6 +189,8 @@ class DeliveryWaitService:
         engineering_authority: EngineeringAuthority | None = None,
         fact_collector: WaitFactCollector | None = None,
         stop_observer: WaitStopObserver | None = None,
+        knowledge_requirement_id: str | None = None,
+        knowledge_retry: Callable[[str], KnowledgePreparationRetryEvidence | None] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.repository, self.queue, self.sidecar_state = repository, queue, sidecar_state
@@ -191,6 +200,10 @@ class DeliveryWaitService:
         self.artifacts = artifacts
         self.engineering_authority, self.fact_collector = engineering_authority, fact_collector
         self.stop_observer = stop_observer
+        self.knowledge_requirement_id, self.knowledge_retry = (
+            knowledge_requirement_id,
+            knowledge_retry,
+        )
         self.clock = clock or (lambda: datetime.now(UTC))
         self.records = KnowledgeRecordStore(sidecar_state / "delivery-waits")
 
@@ -511,6 +524,14 @@ class DeliveryWaitService:
                 "保留原工作区; 不要重复启动 Coder。平台不会凭租约到期判定已经停机。",
                 "原调用实际结束并封存停止记录后, 再检查状态。",
             )
+        if DeliveryProofMissing.KNOWLEDGE_WINDOW_EXHAUSTED in missing:
+            return (
+                "BUDGET_EXHAUSTED",
+                "知识准备已达到本任务冻结的扩窗上限。",
+                "工程负责人需检查知识输入或执行器耗时, 修复后重新评估; "
+                "平台保留原需求和历史, 不会继续放大时限或重复必败执行。",
+                "工程团队完成原因修复或另行精确资源授权后再处理。",
+            )
         if DeliveryProofMissing.BUDGET_EXHAUSTED in missing:
             return (
                 "BUDGET_EXHAUSTED",
@@ -670,6 +691,12 @@ class DeliveryWaitService:
                         }
                         else None
                     ),
+                    knowledge_preparation=(
+                        proof.knowledge_preparation
+                        if command.resolution_kind
+                        is DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION
+                        else None
+                    ),
                 )
                 resolution = resolution.model_copy(
                     update={"resolution_sha256": resolution.recompute_sha256()}
@@ -767,6 +794,7 @@ class DeliveryWaitService:
         )
         verification_retry = None
         verifier_preparation = None
+        knowledge_preparation = None
         original_authority = None
         inventory: WorkspaceMutationInventory | None = None
         observed_stop: ExecutionCaptureStop | None = None
@@ -878,7 +906,23 @@ class DeliveryWaitService:
                 missing.append(DeliveryProofMissing.BUDGET_EXHAUSTED)
         if rejected_outcome and not permitted:
             missing.append(DeliveryProofMissing.OUTCOME_REJECTED)
-        if start is None:
+        if item.wait_disposition.facts.classification == "KNOWLEDGE_PREPARATION_LIMIT":
+            if start is not None or outcome is not None:
+                missing.append(DeliveryProofMissing.KNOWLEDGE_PREPARATION_UNAVAILABLE)
+            else:
+                try:
+                    knowledge_preparation = self._claimed_knowledge_preparation(item, task, step)
+                    if task.work_budget_exhausted or task.attempts >= task.max_attempts:
+                        missing.append(DeliveryProofMissing.BUDGET_EXHAUSTED)
+                    else:
+                        permitted = (DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION,)
+                except KnowledgeWindowExhausted:
+                    missing.append(DeliveryProofMissing.KNOWLEDGE_WINDOW_EXHAUSTED)
+                except (QueueLeaseLost, ContinuationRejected):
+                    missing.append(DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN)
+                except (ValueError, QueueError, OSError, KnowledgeError):
+                    missing.append(DeliveryProofMissing.KNOWLEDGE_PREPARATION_UNAVAILABLE)
+        elif start is None:
             preparation_ids = tuple(
                 value
                 for value in item.wait_disposition.facts.evidence_ids
@@ -930,7 +974,48 @@ class DeliveryWaitService:
             original_authority=original_authority,
             verification_retry=verification_retry,
             verifier_preparation=verifier_preparation,
+            knowledge_preparation=knowledge_preparation,
             observed_stop=observed_stop,
+        )
+
+    def _claimed_knowledge_preparation(
+        self, item: QueuedWorkItem, task: Task, step: QueuedRoleStep
+    ) -> KnowledgePreparationRetryEvidence:
+        assert item.wait_disposition is not None
+        evidence_ids = item.wait_disposition.facts.evidence_ids
+        prefix = "knowledge-preparation://"
+        if len(evidence_ids) != 1 or not evidence_ids[0].startswith(prefix):
+            raise DeliveryWaitRejected("知识准备等待没有精确原执行记录")
+        if any(record.work_item_id == item.id for record in self.queue.accepted(task.id)):
+            raise DeliveryWaitRejected("主角色已有接纳结果, 不能作为尚未开始的知识准备继续")
+        outcome = read_local_limit(
+            self.sidecar_state.parent / "knowledge" / "runs", evidence_ids[0].removeprefix(prefix)
+        )
+        intent = outcome.intent
+        if intent.claim is None:
+            raise DeliveryWaitRejected("知识准备记录缺少原领取身份或不属于当前需求")
+        if self.knowledge_requirement_id is not None:
+            require_delivery_requirement_scope(
+                intent.binding,
+                self.knowledge_requirement_id,
+                records=KnowledgeRecordStore(
+                    self.sidecar_state.parent / "knowledge" / "runs", read_only=True
+                ),
+            )
+        if item.parent_work_item_id is not None and self.knowledge_retry is None:
+            raise DeliveryWaitRejected("缺少原知识准备窗口的已消费决定, 禁止重新计算窗口")
+        previous = self.knowledge_retry(item.id) if self.knowledge_retry is not None else None
+        return preparation_retry_evidence(
+            outcome=outcome,
+            task=task,
+            item=item,
+            source_revision=step.boundary.source_revision,
+            scope=self.scope,
+            historical_claim=self.queue.original_claim(intent.claim.lease.id),
+            previous=previous,
+            delivery_requirement_id=(
+                self.knowledge_requirement_id or intent.binding.requirement_id
+            ),
         )
 
     def _claimed_verifier_preparation(
@@ -1365,6 +1450,7 @@ class DeliveryWaitService:
         original_authority: OriginalInvocationAuthority | None = None,
         verification_retry: VerificationRetryEvidence | None = None,
         verifier_preparation: VerifierPreparationEvidence | None = None,
+        knowledge_preparation: KnowledgePreparationRetryEvidence | None = None,
         observed_stop: ExecutionCaptureStop | None = None,
     ) -> DeliveryWaitInvestigation:
         assert item.wait_disposition is not None
@@ -1383,6 +1469,8 @@ class DeliveryWaitService:
             original_run_id=(
                 start.request.run_id
                 if start
+                else knowledge_preparation.previous_run_id
+                if knowledge_preparation
                 else (verifier_preparation.previous_run_id if verifier_preparation else None)
             ),
             invocation_start_sha256=start.start_sha256 if start else None,
@@ -1408,6 +1496,7 @@ class DeliveryWaitService:
             original_authority=original_authority,
             verification_retry=verification_retry,
             verifier_preparation=verifier_preparation,
+            knowledge_preparation=knowledge_preparation,
             retry_cause=receipt.cause
             if receipt
             else observed_stop.cause
@@ -1416,7 +1505,15 @@ class DeliveryWaitService:
             permitted_resolutions=permitted,
             missing=missing,
             next_action=(
-                "已核验原验证准备已经结束而角色模型尚未启动; 可使用一次已授权工作额度"
+                f"知识准备原执行已结束, 主角色尚未开始。可使用一次剩余工作额度, "
+                f"把下次准备窗口扩大到 {knowledge_preparation.next_timeout_seconds} 秒, "
+                "重新领取原任务继续; 原知识记录和执行历史保留。"
+                if permitted == (DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION,)
+                and knowledge_preparation is not None
+                else "知识准备已达到冻结扩窗上限, 不再重复执行; "
+                "工程负责人需检查知识输入与执行器耗时, 保留原需求和全部历史。"
+                if DeliveryProofMissing.KNOWLEDGE_WINDOW_EXHAUSTED in missing
+                else "已核验原验证准备已经结束而角色模型尚未启动; 可使用一次已授权工作额度"
                 "重新领取独立验收, 原执行证据与结果保留。"
                 if permitted == (DeliveryResolutionKind.RETRY_VERIFIER_PREPARATION,)
                 else "已核验保留候选、原 QA 未完成的原因及当前前提; "

@@ -63,6 +63,40 @@ function approvedRecovery() {
   return run;
 }
 
+for (const [reasonCode, phrase, badge] of [
+  ["ROLE_KNOWLEDGE_PREPARATION", "准备开发所需知识", "准备知识"],
+  ["ROLE_FINALIZING", "保存并核验", "保存结果"],
+]) {
+  test(`Task, Requirement and activity preserve backend ${reasonCode} phase`, () => {
+    const run = setup();
+    run(`task.execution = request.execution = {
+      state: "RUNNING", responsibility: "team", reason_code: ${JSON.stringify(reasonCode)},
+      reason: ${JSON.stringify("Coder 正在" + phrase + "。")},
+      next_action: ${JSON.stringify("请等待平台" + phrase + "。")}, action_required: false};
+      task.role_queue = [{role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID"}];`);
+    for (const expression of ["productExecutionSummary(task)", "productExecutionSummary(request)", "roleExecutionActivity(task)"]) {
+      const content = text(run(expression));
+      assert.match(content, new RegExp(phrase), expression);
+      assert.match(content, new RegExp(badge), expression);
+      assert.doesNotMatch(content, /细分进度暂未上报|当前角色正在执行，请等待/, expression);
+    }
+    assert.equal(run("requestNodeExecution(request).status"), "RUNNING");
+    assert.equal(run("taskExecutionPresentation(task).state"), "running");
+  });
+}
+
+test("a live claim without fine receipts stays neutral about the main role call", () => {
+  const run = setup();
+  run(`task.execution = request.execution = {state: "RUNNING", responsibility: "team",
+    reason_code: "ROLE_WORK_CLAIMED"};
+    task.role_queue = [{role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID"}];`);
+  for (const expression of ["productExecutionSummary(task)", "productExecutionSummary(request)", "roleExecutionActivity(task)"]) {
+    const content = text(run(expression));
+    assert.match(content, /已领取工作/);
+    assert.doesNotMatch(content, /当前角色正在执行|准备知识|保存结果/);
+  }
+});
+
 test("exact prepared recovery summary names its current confirmation instead of the historical blocked phase", () => {
   const run = stoppedRecovery();
   const saved = run("JSON.stringify({request, task, operations})");

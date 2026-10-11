@@ -51,7 +51,8 @@
         "ENVIRONMENT_UNAVAILABLE",
         "ENGINEERING_AUTHORIZATION",
         "SOURCE_PREPARATION_DRIFT",
-        "EXECUTION_BASELINE_PAUSED"
+        "EXECUTION_BASELINE_PAUSED",
+        "KNOWLEDGE_PREPARATION_LIMIT"
       ],
       "title": "Classification",
       "type": "string"

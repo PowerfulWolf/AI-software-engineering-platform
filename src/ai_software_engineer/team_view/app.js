@@ -827,7 +827,53 @@ const engineeringResolutionLabels = {
   RESUME_UNINVOKED: "继续未开始的工作",
   REVERIFY_CANDIDATE: "重新测试当前候选",
   RETRY_VERIFIER_PREPARATION: "重试验证准备",
+  RETRY_KNOWLEDGE_PREPARATION: "扩大知识准备窗口并继续",
 };
+const engineeringAuthorizationLabels = {
+  engineering_operator_decision: "工程负责人明确决定",
+  organization_engineering_policy: "平台按已授权组织工程策略继续（不是人工批准）",
+  human_decision: "人工精确批准",
+};
+function knowledgePreparationWindowLines(evidence) {
+  if (!evidence || !["coder", "qa", "reviewer"].includes(evidence.role) ||
+      !["intent", "assessment"].includes(evidence.phase) || evidence.budget_source !== "frozen_work_attempt" ||
+      ![1, 2].includes(evidence.expansion_number) ||
+      !["initial_timeout_seconds", "current_timeout_seconds", "next_timeout_seconds", "maximum_timeout_seconds"]
+        .every(key => Number.isSafeInteger(evidence[key]) && evidence[key] >= 1 && evidence[key] <= 86400)) return [];
+  const maximum = Math.min(evidence.initial_timeout_seconds * 4, 86400);
+  const current = Math.min(evidence.initial_timeout_seconds * 2 ** (evidence.expansion_number - 1), maximum);
+  if (evidence.maximum_timeout_seconds !== maximum || evidence.current_timeout_seconds !== current ||
+      evidence.next_timeout_seconds !== Math.min(current * 2, maximum) || evidence.next_timeout_seconds <= current) return [];
+  const role = {coder: "Coder", qa: "QA", reviewer: "Reviewer"}[evidence.role];
+  const phase = {intent: "检索意图准备", assessment: "充分性评估"}[evidence.phase];
+  return [
+    `${role} 知识${phase}：本次窗口 ${current} 秒 → 下一次窗口 ${evidence.next_timeout_seconds} 秒。`,
+    `冻结上限 ${maximum} 秒；本次扩窗 ${evidence.expansion_number}/2。`,
+    "执行额度：使用 1 次原任务剩余的冻结工作额度，不重置已用额度。",
+    "原需求、代码分支和已有开发进度保留；后续仍需独立 QA 和 Review，处理决定不代表验收通过。",
+  ];
+}
+function matchingKnowledgePreparationEvidence(request, step, proof) {
+  const evidence = proof?.knowledge_preparation;
+  const facts = step.wait_disposition?.facts;
+  if (!facts || facts.classification !== "KNOWLEDGE_PREPARATION_LIMIT" ||
+      !knowledgePreparationWindowLines(evidence).length ||
+      evidence.scope?.team_id !== snapshot?.team_id || evidence.scope?.project_id !== request.project_id ||
+      (evidence.delivery_requirement_id ?? evidence.requirement_id) !== request.id || evidence.task_id !== proof.task_id ||
+      evidence.work_item_id !== step.work_item_id || evidence.role !== step.role ||
+      evidence.source_revision !== proof.source_revision || evidence.checkpoint_sequence !== proof.checkpoint_sequence) return null;
+  const task = currentRequestTasks(request).find(item => item.task_id === proof.task_id);
+  if (task?.scope?.root && evidence.scope.repository_root !== task.scope.root) return null;
+  return evidence;
+}
+function engineeringWaitHandlingLabel(step) {
+  return step.wait_disposition?.facts.classification === "KNOWLEDGE_PREPARATION_LIMIT"
+    ? "让平台处理知识准备" : "让平台处理中断";
+}
+function knowledgePreparationWaitExhausted(step, proof) {
+  return step.wait_disposition?.facts.classification === "KNOWLEDGE_PREPARATION_LIMIT" &&
+    proof?.missing?.some(item => ["KNOWLEDGE_WINDOW_EXHAUSTED", "BUDGET_EXHAUSTED"].includes(item));
+}
 const engineeringProofMissingGuidance = {
   TASK_PROCESS_LIVE: ["原工作仍在运行", "平台执行服务", "等待原工作结束，避免同时启动第二次执行。", "原工作结束并保存记录后再检查。"],
   INVOCATION_UNRECORDED: ["原执行的启动记录不完整", "平台维护者", "核对并补齐平台实际执行记录，不能把没有记录当作未执行。", "平台修复记录后再检查。"],
@@ -843,6 +889,8 @@ const engineeringProofMissingGuidance = {
   VERIFICATION_EVIDENCE_UNAVAILABLE: ["之前的测试记录或候选版本不完整", "工程团队", "核对已保存的测试报告与代码版本，补齐原验证证据。", "原验证证据核对完成后再检查。"],
   VERIFIER_PREPARATION_UNAVAILABLE: ["之前的验证准备记录不完整", "平台维护者", "核对验证准备过程与执行记录，保留当前代码候选。", "平台修复验证准备记录后再检查。"],
   NATIVE_EXECUTION_UNCERTAIN: ["原验证尚未确认结束", "平台执行服务", "先确认原测试或构建的实际结果，再继续独立验收。", "原验证结束且结果已保存后再检查。"],
+  KNOWLEDGE_PREPARATION_UNAVAILABLE: ["知识准备的执行记录不完整或未通过校验", "ASE 平台维护者", "核对原知识调用、实际结束记录和领取身份，修复记录关联或读取问题；保留原需求、代码进度和知识记录，不能靠重复执行绕过校验。", "平台修复知识准备记录后，再重新处理。"],
+  KNOWLEDGE_WINDOW_EXHAUSTED: ["知识准备已达到冻结扩窗上限", "工程负责人", "检查知识输入或执行器耗时，修复后重新评估；原需求和全部历史保留，不会继续放大时限或重复必败执行。", "工程负责人完成知识输入或执行器耗时的原因修复，并重新评估资源方案后，再重新检查状态；本页没有追加窗口授权入口，重复检查不增加窗口。"],
 };
 const engineeringHandlingStatuses = new Set(["RESOLVED", "WAITING_EXECUTION", "NEEDS_AUTHORIZATION",
   "PLATFORM_ATTENTION", "WAITING_PREREQUISITES", "BUDGET_EXHAUSTED"]);
@@ -1021,11 +1069,16 @@ function engineeringWaitDecision(request, step, proof) {
   if (!proof) return null;
   const bound = engineeringWaitIntent(request, step);
   const handling = engineeringWaitHandling(request, step);
+  const matchesKnowledge = decision => decision?.resolution_kind !== "RETRY_KNOWLEDGE_PREPARATION" ||
+    matchingKnowledgePreparationEvidence(request, step, proof) &&
+    sameEngineeringWaitProofFacts({knowledge_preparation: decision.knowledge_preparation},
+      {knowledge_preparation: proof.knowledge_preparation});
   if (handling?.status === "RESOLVED" && handling.resolution?.proof_sha256 === handling.investigation.proof_sha256 &&
-      engineeringResolutionLabels[handling.resolution.resolution_kind]) return handling.resolution;
+      engineeringResolutionLabels[handling.resolution.resolution_kind] && matchesKnowledge(handling.resolution)) return handling.resolution;
   return operations.find(item => item.status === "SUCCEEDED" &&
     item.intent.action === "RESOLVE_DELIVERY_WAIT" && sameEngineeringWaitIntent(item.intent, bound) &&
-    item.result?.engineering_wait_resolution?.proof_sha256 === proof.proof_sha256)?.result.engineering_wait_resolution || null;
+    item.result?.engineering_wait_resolution?.proof_sha256 === proof.proof_sha256 &&
+    matchesKnowledge(item.result.engineering_wait_resolution))?.result.engineering_wait_resolution || null;
 }
 function engineeringWaitCanResolve(request, step, proof) {
   const handling = engineeringWaitHandling(request, step);
@@ -1037,7 +1090,8 @@ function engineeringWaitCanResolve(request, step, proof) {
     permission &&
     (!handling || handling.status === "NEEDS_AUTHORIZATION" && handling.manual_resolution_allowed === true) &&
     (proof.permitted_resolutions || []).length > 0 &&
-    proof.permitted_resolutions.every(kind => Boolean(engineeringResolutionLabels[kind]));
+    proof.permitted_resolutions.every(kind => Boolean(engineeringResolutionLabels[kind]) &&
+      (kind !== "RETRY_KNOWLEDGE_PREPARATION" || matchingKnowledgePreparationEvidence(request, step, proof)));
 }
 async function submitEngineeringWaitOperation(intent) {
   const request = requestById(intent.delivery_id);
@@ -1047,6 +1101,7 @@ async function submitEngineeringWaitOperation(intent) {
   if (!current || !canControlCurrentTeam() || !consoleSupportsOperation(intent.action) ||
       activeOperation(request.id, request.project_id) ||
       !["INSPECT_DELIVERY_WAIT", "HANDLE_DELIVERY_WAIT", "RESOLVE_DELIVERY_WAIT"].includes(intent.action) ||
+      (intent.action === "HANDLE_DELIVERY_WAIT" && knowledgePreparationWaitExhausted(current.step, proof)) ||
       (intent.action === "RESOLVE_DELIVERY_WAIT" &&
       (!proof || proof.proof_sha256 !== intent.proof_sha256 ||
        !(proof.permitted_resolutions || []).includes(intent.resolution_kind) ||
@@ -1085,11 +1140,14 @@ function engineeringActiveOperationBox(request, operation) {
   return panel;
 }
 function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, handling = null, legacyRescue = false, rescueFailure = null, controlUnavailable = null} = {}) {
+  const knowledgeWindow = !(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_KNOWLEDGE_PREPARATION")
+    ? knowledgePreparationWindowLines(proof.knowledge_preparation) : [];
   if (historical) {
     target.append(el("p", "当次调查 · " + humanizeBlockingText(proof.next_action || "调查结果未提供处理建议。")),
       el("p", "这是该次调查保存的结果；当前原因与操作以页面上方为准。", "muted"));
     if (proof.missing?.length) target.append(el("p", "当次未完成项 · " + proof.missing.map(item =>
       engineeringProofMissingGuidance[item]?.[0] || "平台返回了未识别的检查项，不能据此继续").join("；")));
+    for (const line of knowledgeWindow) target.append(el("p", "当次知识准备方案 · " + line));
     return;
   }
   const missing = proof.missing || [];
@@ -1119,6 +1177,7 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
     const known = permitted.length === proof.permitted_resolutions?.length;
     target.append(el("p", permitted.length && known ? "检查已通过，可按以下方案继续 · " + permitted.join("、")
       : "当前没有可安全执行的继续方案，需平台维护者处理。"));
+    for (const line of knowledgeWindow) target.append(el("p", line));
   }
 }
 function engineeringWaitCurrentFacts(request, step, proof, handling, decision, active) {
@@ -1134,8 +1193,16 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
       : saved ? "已记录可核验的开发进度，处理会保留原工作区和历史记录。"
       : "平台不会因本次处理自动清空原工作区；可复用进度仍需由检查结果确认。",
     platform: "可以检查原执行，并在现有授权允许时处理和继续。不会改变需求范围，也不会替代测试与评审。",
-    user: "你可以点击“让平台处理中断”。如果需要额外授权，页面会明确列出待决定的方案。",
+    user: `你可以点击“${engineeringWaitHandlingLabel(step)}”。如果需要额外授权，页面会明确列出待决定的方案。`,
   };
+  const knowledge = matchingKnowledgePreparationEvidence(request, step, proof);
+  if (knowledge) {
+    const role = {coder: "Coder", qa: "QA", reviewer: "Reviewer"}[knowledge.role];
+    facts.happened = `${role} 知识准备达到本次执行时限，原执行已核验结束，主执行尚未开始。`;
+    facts.preservation = "原需求、代码分支、已有开发进度和知识记录保留；不会清空工作区或重建需求。";
+    if (!missing.length)
+      facts.platform = `可使用 1 次原任务剩余的冻结工作额度，将下一次知识准备窗口扩大到 ${knowledge.next_timeout_seconds} 秒，再领取原任务继续。`;
+  }
   if (/^[a-f0-9]{64}$/.test(proof?.process_stop_sha256 || "") &&
       !missing.includes("STOP_UNRECORDED") && missing.includes("CHECKPOINT_UNAVAILABLE")) {
     facts.happened = proof.retry_cause === "local_execution_limit"
@@ -1162,6 +1229,13 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
   } else if (engineeringWaitCanResolve(request, step, proof)) {
     facts.platform = "已检查原执行和保留进度，现有规则要求工程授权者确认所列方案后继续。";
     facts.user = "需要工程授权者确认按页面所列方案继续；不需要手工核验内部记录。";
+  }
+  if (missing.includes("KNOWLEDGE_WINDOW_EXHAUSTED") && !active && !decision) {
+    facts.platform = "知识准备已达到冻结扩窗上限，当前不能继续扩大窗口或重复执行。";
+    facts.user = engineeringProofMissingGuidance.KNOWLEDGE_WINDOW_EXHAUSTED[2];
+  } else if (knowledgePreparationWaitExhausted(step, proof) && !active && !decision) {
+    facts.platform = "本任务冻结的工作额度已用完，当前不能继续知识准备。";
+    facts.user = "工程负责人需评估执行资源或结束交付；新的精确授权生效后再检查，重复处理不会重置额度。";
   }
   const task = engineeringWaitSteps(request).find(item => item.step.work_item_id === step.work_item_id)?.task;
   if (!active && !decision && task && engineeringLegacyRescueFacts(request, task, step, proof, handling)) {
@@ -1221,6 +1295,11 @@ async function copyEngineeringWaitReport(request, handling) {
       : preparation?.next_action || (rescue ? "在当前需求详情点击“准备保留进度的恢复方案”；先看平台检查结果，方案准备完成后由工程授权者明确确认所列实际停止前提，再批准继续原需求。" : humanizeBlockingText(handling.user_action || "无"))),
     "复查时机 · " + (failure ? "平台修复本次失败后，再重新检查恢复前提；重复调查不能修复内部异常。"
       : rescue ? "按恢复前提检查所列下一步处理后重新检查；旧执行结果仍保持未知。" : humanizeBlockingText(handling.recheck_when || "处理记录或执行前提更新后")),
+    ...(!(proof?.missing || []).length && proof?.permitted_resolutions?.includes("RETRY_KNOWLEDGE_PREPARATION")
+      ? knowledgePreparationWindowLines(proof.knowledge_preparation).map(line => "知识准备方案 · " + line) : []),
+    ...(handling.resolution ? ["工程决定 · " + (engineeringResolutionLabels[handling.resolution.resolution_kind] || "当前继续方案未识别")] : []),
+    ...(handling.resolution?.authorization_source ? ["授权来源 · " +
+      (engineeringAuthorizationLabels[handling.resolution.authorization_source] || "授权来源未识别")] : []),
     ...(failure ? ["恢复准备操作 · " + failure.operation_id, "准备操作状态 · " + failure.status,
       "错误编号 · " + failure.error_code, "安全排障说明 · " + failure.detail,
       "原调查说明 · " + humanizeBlockingText(handling.summary || "未提供处理说明")] : []),
@@ -1289,12 +1368,12 @@ function engineeringWaitBox(request, task, step) {
     const canResolve = engineeringWaitCanResolve(request, step, proof);
     const actions = viewBlock(el("div", undefined, "engineering-wait-actions"), "engineering-wait-actions",
       [bound, proof, handling, Boolean(rescue), canResolve, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions]);
-    if (consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve &&
+    if (consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && !knowledgePreparationWaitExhausted(step, proof) &&
       !["NEEDS_AUTHORIZATION", "PLATFORM_ATTENTION", "BUDGET_EXHAUSTED", "WAITING_PREREQUISITES"].includes(handling?.status))
-      actions.append(deliveryButton("让平台处理中断", () => submitEngineeringWaitOperation({
+      actions.append(deliveryButton(engineeringWaitHandlingLabel(step), () => submitEngineeringWaitOperation({
         ...bound, action: "HANDLE_DELIVERY_WAIT",
       }), "primary"));
-    if (consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && handling?.status === "PLATFORM_ATTENTION")
+    if (consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && !knowledgePreparationWaitExhausted(step, proof) && handling?.status === "PLATFORM_ATTENTION")
       actions.append(deliveryButton("平台修复后重新处理", () => submitEngineeringWaitOperation({
         ...bound, action: "HANDLE_DELIVERY_WAIT",
       }), "primary"));
@@ -1996,7 +2075,7 @@ function taskExecutionPresentation(task) {
       task.execution.responsibility === "engineering")
     return {...engineeringExecutionCheck(), reason: task.execution.reason, nextAction: task.execution.next_action};
   if (status === "WAITING_ENGINEERING") return engineeringExecutionCheck();
-  if (status === "RUNNING") return runningRolePresentation();
+  if (status === "RUNNING") return runningRolePresentation(task.execution);
   if (status === "READY") return queuedRolePresentation();
   if (status === "RETRY_SCHEDULED") return {state: "paused", label: "待重试", status, responsibility: "team",
     reason: "模型执行重试已排队。", nextAction: "请等待计划重试，平台将按记录的时间继续。"};
@@ -2004,9 +2083,15 @@ function taskExecutionPresentation(task) {
     reason: "平台正在准备已批准的执行计划。", nextAction: "请等待本轮准备完成。"};
   return {label: label(status), status};
 }
-function runningRolePresentation() {
-  return {state: "running", label: "执行中", status: "RUNNING", responsibility: "team",
-    reason: "当前角色正在执行，请等待本轮处理完成。", nextAction: "请等待本轮角色执行完成。"};
+function runningRolePresentation(execution) {
+  const phase = execution?.state === "RUNNING" ? {
+    ROLE_KNOWLEDGE_PREPARATION: "准备知识", ROLE_FINALIZING: "保存结果",
+  }[execution.reason_code] : null;
+  return {state: "running", label: phase ? "执行中 · " + phase : "执行中", status: "RUNNING", responsibility: "team",
+    reason: execution?.state === "RUNNING" && execution.reason
+      ? execution.reason : "当前角色已领取工作，细分执行进度暂未上报。",
+    nextAction: execution?.state === "RUNNING" && execution.next_action
+      ? execution.next_action : "请等待当前工作处理；主执行是否开始尚无细分记录。"};
 }
 function queuedRolePresentation() {
   return {state: "paused", label: "等待调度", status: "READY", responsibility: "team",
@@ -2176,12 +2261,14 @@ function requestRecoveryDecision(request) {
     nextAction: recoveryApprovalNextAction(approval)} : null;
 }
 function requestRoleDispatch(tasks) {
-  const steps = tasks.filter(task => !task.terminal && !task.blocker &&
+  const entries = tasks.filter(task => !task.terminal && !task.blocker &&
     !waitingExecutionStep(task) && !interruptedExecution(task) &&
     !["WAITING", "STOPPED", "INTERRUPTED"].includes(task.execution?.state)).flatMap(task =>
-    (task.role_queue || []).filter(step => step.role === roleForTaskStatus[task.status] && !interruptedStep(step)));
-  if (steps.some(step => step.status === "RUNNING" && step.lease_liveness === "LEASE_VALID"))
-    return {...runningRolePresentation(), currentRoleDispatch: true};
+    (task.role_queue || []).filter(step => step.role === roleForTaskStatus[task.status] && !interruptedStep(step))
+      .map(step => ({task, step})));
+  const running = entries.find(({step}) => step.status === "RUNNING" && step.lease_liveness === "LEASE_VALID");
+  if (running) return {...runningRolePresentation(running.task.execution), currentRoleDispatch: true};
+  const steps = entries.map(({step}) => step);
   if (steps.some(step => ["READY", "LEASED"].includes(step.status)))
     return {...queuedRolePresentation(), label: "已排队", currentRoleDispatch: true};
   if (steps.some(step => step.status === "RETRY_SCHEDULED"))
@@ -8668,8 +8755,9 @@ function roleExecutionActivity(task) {
   for (const step of task.role_queue || []) {
     if (step.status !== "RUNNING" || step.lease_liveness !== "LEASE_VALID" ||
         roleStatus[step.role] !== task.status) continue;
-    section.append(el("p", `${label(step.role)}正在执行 · 最近心跳 ${time(step.heartbeat_at)}。`));
-    section.append(el("p", "执行租约有效；模型请求、工具执行与等待返回的细分进度暂未上报。", "muted"));
+    const execution = runningRolePresentation(task.execution);
+    section.append(el("p", `${label(step.role)} · ${execution.label} · 最近心跳 ${time(step.heartbeat_at)}。`));
+    section.append(el("p", execution.reason, "muted"));
   }
   return section;
 }
@@ -8851,6 +8939,8 @@ function appendEngineeringExecutionDetails(target, technical, details) {
       engineeringProofMissingGuidance[value]?.[0] || "平台返回了未识别的检查项，不能据此继续").join("；")));
     const permitted = (details.permitted_resolutions || []).map(value => engineeringResolutionLabels[value]).filter(Boolean);
     if (permitted.length) target.append(el("p", "允许的处理方式 · " + permitted.join("、")));
+    if (!missing.length && details.permitted_resolutions?.includes("RETRY_KNOWLEDGE_PREPARATION"))
+      for (const line of knowledgePreparationWindowLines(details.knowledge_preparation)) target.append(el("p", line));
     target.append(el("p", "调查只记录事实，不改变验收结论。", "muted"));
   } else if (details.kind === "delivery_wait_handling") {
     const status = {
@@ -8866,10 +8956,14 @@ function appendEngineeringExecutionDetails(target, technical, details) {
     if (details.user_action) target.append(el("p", "当次用户操作 · " + humanizeBlockingText(details.user_action), "muted"));
     if (details.recheck_when) target.append(el("p", "当次复查时机 · " + humanizeBlockingText(details.recheck_when), "muted"));
     if (details.resolution) appendEngineeringExecutionDetails(target, technical, details.resolution);
+    else if (["RESOLVED", "NEEDS_AUTHORIZATION"].includes(details.status))
+      for (const line of knowledgePreparationWindowLines(details.knowledge_preparation)) target.append(el("p", line));
   } else if (details.kind === "delivery_wait_resolution") {
     target.append(el("p", "工程决定 · " + (engineeringResolutionLabels[details.resolution_kind] ||
       "平台返回了未识别的继续方案，不能据此执行")));
     if (details.operator_id) target.append(el("p", "实际处理者 · " + details.operator_id, "muted"));
+    if (details.resolution_kind === "RETRY_KNOWLEDGE_PREPARATION")
+      for (const line of knowledgePreparationWindowLines(details.knowledge_preparation)) target.append(el("p", line));
     target.append(el("p", "此记录是工程决定；实际执行和验收结果以之后的角色报告为准。", "muted"));
   } else if (details.kind === "engineering_disposition_record") {
     if (details.next_action) target.append(el("p", "下一步 · " + humanizeBlockingText(details.next_action)));
@@ -8882,11 +8976,8 @@ function appendEngineeringExecutionDetails(target, technical, details) {
     target.append(el("p", "准备检查不代表 QA 或 Review 通过。", "muted"));
     if (details.failure_reason) technical.append(el("p", "准备原因类型 · " + details.failure_reason, "paths"));
   }
-  if (details.authorization_source) technical.append(el("p", "授权来源 · " + {
-    engineering_operator_decision: "工程负责人明确决定",
-    organization_engineering_policy: "平台按已授权组织工程策略继续（不是人工批准）",
-    human_decision: "人工精确批准",
-  }[details.authorization_source] || "授权来源未识别", "muted"));
+  if (details.authorization_source) technical.append(el("p", "授权来源 · " +
+    (engineeringAuthorizationLabels[details.authorization_source] || "授权来源未识别"), "muted"));
   if (details.work_item_id) technical.append(el("p", "工作项 · " + details.work_item_id, "paths"));
   if (details.proof_sha256) technical.append(el("p", "调查摘要 · " + details.proof_sha256, "paths"));
 }

@@ -97,6 +97,16 @@
 - [`web-console.md`](web-console.md)
 - [`planning-gate.md`](planning-gate.md)
 - [`active-knowledge.md`](active-knowledge.md)
+- [`structured-execution-observation.md`](structured-execution-observation.md): exact-route
+  admission, owned native stop / definitive not-started facts and separate HTTP round trips.
+- [`knowledge-preparation-phase.md`](knowledge-preparation-phase.md): current-claim read-only
+  knowledge, main execution and finalizing phases shared by Task and Requirement UI.
+- [`knowledge-local-limit-ui.md`](knowledge-local-limit-ui.md): exact finite knowledge
+  retry decisions, directly visible windows, Chinese missing facts and complete history/report.
+- [`knowledge-local-limit.md`](knowledge-local-limit.md): stopped native knowledge preparation,
+  same-Task finite windows, consumed queue decisions and exact legacy/native Requirement identities.
+- [`schema-regeneration-guards.md`](schema-regeneration-guards.md): canonical cross-field
+  guards survive fresh Pydantic Schema regeneration and isolated repeatability tests.
 - [`knowledge-index.md`](knowledge-index.md)
 - [`product-failure-diagnostics.md`](product-failure-diagnostics.md)
 - [`delivery-disposition.md`](delivery-disposition.md): shared waiting responsibility, resume facts,

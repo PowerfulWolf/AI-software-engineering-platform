@@ -1403,12 +1403,45 @@ def _task_execution(task: TaskView) -> DeliveryExecutionView:
     if current is not None:
         title = "QA" if current.role is AgentRole.QA else current.role.value.title()
         if current.status is WorkItemStatus.RUNNING and current.lease_liveness == "LEASE_VALID":
+            if current.execution_phase == "KNOWLEDGE_PREPARATION":
+                work = {
+                    AgentRole.CODER: "开发",
+                    AgentRole.QA: "测试",
+                    AgentRole.REVIEWER: "评审",
+                }[current.role]
+                return DeliveryExecutionView(
+                    state="RUNNING",
+                    responsibility="team",
+                    reason_code="ROLE_KNOWLEDGE_PREPARATION",
+                    reason=f"{title} 正在准备{work}所需知识, 本轮主执行尚未开始。",
+                    next_action=f"请等待 ASE 准备{work}所需知识, 再进入本轮执行。",
+                )
+            if current.execution_phase == "FINALIZING":
+                return DeliveryExecutionView(
+                    state="RUNNING",
+                    responsibility="team",
+                    reason_code="ROLE_FINALIZING",
+                    reason=f"{title} 本轮结果已返回, 平台正在保存并核验; 阶段是否通过尚未确定。",
+                    next_action="请等待平台保存并核验本轮结果。",
+                )
             return DeliveryExecutionView(
                 state="RUNNING",
                 responsibility="team",
-                reason_code="ROLE_RUNNING",
-                reason=f"{title} 正在执行。细分进度暂未上报。",
-                next_action=f"{title} 正在执行。请等待当前执行完成。",
+                reason_code=(
+                    "ROLE_RUNNING"
+                    if current.execution_phase == "ROLE_EXECUTION"
+                    else "ROLE_WORK_CLAIMED"
+                ),
+                reason=(
+                    f"{title} 正在执行。"
+                    if current.execution_phase == "ROLE_EXECUTION"
+                    else f"{title} 已领取当前工作, 细分执行进度暂未上报。"
+                ),
+                next_action=(
+                    f"{title} 正在执行。请等待当前执行完成。"
+                    if current.execution_phase == "ROLE_EXECUTION"
+                    else "请等待当前工作处理; 主执行是否开始尚无细分记录。"
+                ),
             )
         if current.status is WorkItemStatus.RETRY_SCHEDULED:
             return DeliveryExecutionView(
@@ -2086,6 +2119,7 @@ def _read_task_details(
     candidate_revision = projection.tasks[0].candidate_revision
     if checkpoint_bound:
         candidate_revision = cp.candidate_revision or candidate_revision
+    from ai_software_engineer.team_view.knowledge_preparation import RoleExecutionScope
     from ai_software_engineer.team_view.queue_reader import read_role_queue
 
     role_queue = read_role_queue(
@@ -2094,6 +2128,16 @@ def _read_task_details(
         repository_id=dispatch.repository_id,
         allocation_sha256=dispatch.dispatch_sha256,
         now=datetime.now(UTC),
+        execution_scope=(
+            RoleExecutionScope(
+                sidecar=native.sidecar,
+                team_id=native.team_id,
+                project_id=base.project_id,
+                requirement_id=base.request_id,
+            )
+            if native.team_id is not None
+            else None
+        ),
     )
     continuation_receipt = None
     if native.team_id is not None:
@@ -2111,6 +2155,7 @@ def _read_task_details(
             ),
             cp.delivery_id,
             baseline_bindings=baseline_bindings,
+            delivery_requirement_id=base.request_id,
         )
         from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
         from ai_software_engineer.team_view.queue_reader import read_pending_baseline_continuation

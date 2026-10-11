@@ -20,6 +20,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryWaitHandlingStatus,
     DeliveryWaitInvestigation,
     EngineeringDispositionRecord,
+    KnowledgePreparationRetryEvidence,
     delivery_wait_resolution_plan_sha256,
 )
 from ai_software_engineer.domain.engineering_authority import (
@@ -37,7 +38,8 @@ from ai_software_engineer.domain.execution_baseline import (
 )
 from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
 from ai_software_engineer.domain.task import Task
-from ai_software_engineer.knowledge.models import KnowledgeError, digest
+from ai_software_engineer.knowledge.gaps import KnowledgeGap
+from ai_software_engineer.knowledge.models import KnowledgeError, KnowledgeSnapshot, digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
@@ -207,6 +209,234 @@ def _publish(
 
 def _bytes(sidecar: Path) -> dict[Path, bytes]:
     return {path: path.read_bytes() for path in sidecar.rglob("*") if path.is_file()}
+
+
+def _knowledge_proof(task: Task) -> DeliveryWaitInvestigation:
+    original = _proof(task)
+    knowledge = KnowledgePreparationRetryEvidence(
+        scope=_scope(task),
+        requirement_id="delivery_history",
+        task_id=task.id,
+        role=AgentRole.CODER,
+        work_item_id=original.work_item_id,
+        original_lease_id="lease_history",
+        original_claim_sha256="a" * 64,
+        original_attempt=1,
+        original_dispatch_sequence=0,
+        checkpoint_sequence=original.checkpoint_sequence,
+        previous_run_id="run_history",
+        previous_context_manifest_id="ctx_" + "b" * 64,
+        source_revision=task.base_ref,
+        snapshot_sha256="c" * 64,
+        phase="intent",
+        intent_sha256="d" * 64,
+        outcome_sha256="e" * 64,
+        request_sha256="f" * 64,
+        execution_record_sha256s=("1" * 64, "2" * 64),
+        root_intent_sha256="d" * 64,
+        initial_timeout_seconds=600,
+        current_timeout_seconds=600,
+        next_timeout_seconds=1200,
+        maximum_timeout_seconds=2400,
+        expansion_number=1,
+    )
+    facts = DeliveryFailureFacts.model_validate(
+        {
+            **original.disposition.facts.to_wire(),
+            "classification": "KNOWLEDGE_PREPARATION_LIMIT",
+            "evidence_ids": ["knowledge-preparation://" + knowledge.outcome_sha256],
+        }
+    )
+    disposition = decide_delivery_disposition(facts)
+    proof = DeliveryWaitInvestigation.model_validate(
+        {
+            **original.to_wire(),
+            "disposition": disposition.to_wire(),
+            "disposition_sha256": disposition.disposition_sha256,
+            "knowledge_preparation": knowledge.to_wire(),
+            "retry_cause": None,
+            "original_run_id": knowledge.previous_run_id,
+            "permitted_resolutions": ["RETRY_KNOWLEDGE_PREPARATION"],
+        }
+    )
+    return proof.model_copy(update={"proof_sha256": proof.recompute_sha256()})
+
+
+def _knowledge_decision(proof: DeliveryWaitInvestigation) -> DeliveryResolution:
+    decision = DeliveryResolution(
+        task_id=proof.task_id,
+        work_item_id=proof.work_item_id,
+        expected_disposition_sha256=proof.disposition_sha256,
+        expected_task_intent_sha256=proof.task_intent_sha256,
+        expected_source_revision=proof.source_revision,
+        expected_checkpoint_sequence=proof.checkpoint_sequence,
+        task_revision=proof.task_revision,
+        task_snapshot_sha256=proof.task_snapshot_sha256,
+        step_sha256=proof.step_sha256,
+        resolution_kind=DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION,
+        proof_sha256=proof.proof_sha256,
+        operator_principal=LocalOperatorPrincipal.trusted_local(),
+        submitted_at=proof.inspected_at + timedelta(seconds=1),
+        knowledge_preparation=proof.knowledge_preparation,
+        resolution_sha256="0" * 64,
+    )
+    return decision.model_copy(update={"resolution_sha256": decision.recompute_sha256()})
+
+
+def test_knowledge_retry_history_keeps_window_without_exposing_execution_identity(
+    tmp_path: Path,
+) -> None:
+    task = make_task().model_copy(update={"status": TaskStatus.IMPLEMENTING, "attempts": 1})
+    proof = _knowledge_proof(task)
+    decision = _knowledge_decision(proof)
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, decision, _handling(proof, decision))
+    before = _bytes(sidecar)
+    history = engineering_history(sidecar, task, _scope(task), "delivery_history")
+    assert len(history) == 3
+    for entry in history:
+        assert entry.details["knowledge_preparation"] == {
+            "role": "coder",
+            "phase": "intent",
+            "initial_timeout_seconds": 600,
+            "current_timeout_seconds": 600,
+            "next_timeout_seconds": 1200,
+            "maximum_timeout_seconds": 2400,
+            "expansion_number": 1,
+            "budget_source": "frozen_work_attempt",
+        }
+    assert before == _bytes(sidecar)
+
+
+def test_knowledge_retry_history_rejects_resealed_decision_with_another_request(
+    tmp_path: Path,
+) -> None:
+    task = make_task()
+    proof = _knowledge_proof(task)
+    decision = _knowledge_decision(proof)
+    assert decision.knowledge_preparation is not None
+    evidence = decision.knowledge_preparation.model_copy(update={"request_sha256": "3" * 64})
+    changed = decision.model_copy(update={"knowledge_preparation": evidence})
+    changed = changed.model_copy(update={"resolution_sha256": changed.recompute_sha256()})
+    changed.validate_integrity()
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, changed)
+    before = _bytes(sidecar)
+    with pytest.raises(ValueError, match="another exact investigation"):
+        engineering_history(sidecar, task, _scope(task), "delivery_history")
+    assert before == _bytes(sidecar)
+
+
+@pytest.mark.parametrize("mismatch", ["project", "requirement"])
+def test_knowledge_retry_history_rejects_another_registered_scope(
+    tmp_path: Path, mismatch: str
+) -> None:
+    task = make_task()
+    proof = _knowledge_proof(task)
+    assert proof.knowledge_preparation is not None
+    evidence = proof.knowledge_preparation
+    if mismatch == "project":
+        evidence = evidence.model_copy(
+            update={"scope": evidence.scope.model_copy(update={"project_id": "project_foreign"})}
+        )
+    else:
+        evidence = evidence.model_copy(update={"requirement_id": "delivery_foreign"})
+    proof = proof.model_copy(update={"knowledge_preparation": evidence})
+    proof = proof.model_copy(update={"proof_sha256": proof.recompute_sha256()})
+    proof.validate_integrity()
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof)
+    before = _bytes(sidecar)
+    with pytest.raises(ValueError, match="outside the current Project Requirement"):
+        engineering_history(sidecar, task, _scope(task), "delivery_history")
+    assert before == _bytes(sidecar)
+
+
+def test_knowledge_history_binds_parent_without_changing_native_preflight_scope(
+    tmp_path: Path,
+) -> None:
+    task = make_task()
+    sidecar = tmp_path / "sidecar"
+    proof = _knowledge_proof(task)
+    _publish(sidecar, proof)
+    before = _bytes(sidecar)
+    result = engineering_history(
+        sidecar,
+        task,
+        _scope(task),
+        "delivery_native_child",
+        delivery_requirement_id="delivery_history",
+    )
+    assert len(result) == 1 and result[0].source_sha256 == proof.proof_sha256
+    assert _bytes(sidecar) == before
+
+
+@pytest.mark.parametrize("missing", [None, "gap", "snapshot", "parent"])
+def test_legacy_knowledge_history_requires_independent_gap_snapshot_and_parent(
+    tmp_path: Path, missing: str | None
+) -> None:
+    from tests.knowledge.test_delivery_requirement_scope import _legacy_binding
+
+    bound, original_records = _legacy_binding(tmp_path)
+    task = make_task().model_copy(update={"id": bound.task_id, "base_ref": bound.source_revision})
+    proof = _knowledge_proof(task)
+    assert proof.knowledge_preparation is not None
+    scope = EngineeringScope(
+        team_id=bound.team_id,
+        project_id=bound.project_id,
+        repository_id=bound.repository_ids[0],
+        repository_root=task.repository,
+    )
+    knowledge = proof.knowledge_preparation.model_copy(
+        update={
+            "scope": scope,
+            "role": AgentRole.QA,
+            "requirement_id": task.id,
+            "delivery_requirement_id": None if missing == "parent" else "delivery_multi_parent",
+            "snapshot_sha256": bound.snapshot_sha256,
+        }
+    )
+    disposition = decide_delivery_disposition(
+        proof.disposition.facts.model_copy(update={"role": AgentRole.QA})
+    )
+    proof = proof.model_copy(
+        update={
+            "disposition": disposition,
+            "disposition_sha256": disposition.disposition_sha256,
+            "knowledge_preparation": knowledge,
+        }
+    )
+    proof = proof.model_copy(update={"proof_sha256": proof.recompute_sha256()})
+    proof.validate_integrity()
+    sidecar = tmp_path / "sidecar"
+    target = KnowledgeRecordStore(sidecar / "knowledge" / "runs")
+    if missing != "gap":
+        for gap in original_records.list("gaps", KnowledgeGap):
+            target.put("gaps", gap.gap_id, gap)
+    if missing != "snapshot":
+        snapshot = original_records.get("snapshots", bound.snapshot_sha256, KnowledgeSnapshot)
+        target.put("snapshots", snapshot.snapshot_sha256, snapshot)
+    _publish(sidecar, proof)
+    before = _bytes(sidecar)
+    if missing is None:
+        history = engineering_history(
+            sidecar,
+            task,
+            scope,
+            "delivery_native_child",
+            delivery_requirement_id="delivery_multi_parent",
+        )
+        assert len(history) == 1 and history[0].source_sha256 == proof.proof_sha256
+    else:
+        with pytest.raises(ValueError, match="outside the current Project Requirement"):
+            engineering_history(
+                sidecar,
+                task,
+                scope,
+                "delivery_native_child",
+                delivery_requirement_id="delivery_multi_parent",
+            )
+    assert _bytes(sidecar) == before
 
 
 def test_complete_engineering_history_is_read_only_and_keeps_actor_and_source(

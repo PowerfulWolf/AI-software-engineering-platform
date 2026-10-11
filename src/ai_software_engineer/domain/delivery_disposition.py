@@ -57,6 +57,7 @@ class DeliveryFailureFacts(DomainModel):
         "ENGINEERING_AUTHORIZATION",
         "SOURCE_PREPARATION_DRIFT",
         "EXECUTION_BASELINE_PAUSED",
+        "KNOWLEDGE_PREPARATION_LIMIT",
     ]
     source_revision: NonEmptyStr
     task_intent_sha256: DispositionSha256
@@ -201,6 +202,16 @@ def decide_delivery_disposition(facts: DeliveryFailureFacts) -> DeliveryDisposit
         action, condition = DeliveryNextAction.REMEDIATE_CANDIDATE, "fresh_role_claim"
         reason = "独立验收发现问题, 原始反馈已保存并交给 Coder 修改。"
         next_action = "Coder 按原始反馈返工, 随后重新进行独立 QA 和 Review。"
+    elif reason_code == "KNOWLEDGE_PREPARATION_LIMIT":
+        action, condition = (
+            DeliveryNextAction.INVESTIGATE_EXECUTION,
+            "verified_execution_resolution",
+        )
+        reason = "知识准备达到本次执行时限, 交付已暂停, 原执行与知识记录保留。"
+        next_action = (
+            "点击“让平台处理知识准备”; ASE 核验原执行结束和剩余额度后, "
+            "按原授权扩大下一次知识准备窗口。缺少工程授权时由工程授权者确认。"
+        )
     elif reason_code in {"EXECUTION_UNCERTAIN", "PLATFORM_BUG", "INVALID_OUTPUT"}:
         action, condition = (
             DeliveryNextAction.INVESTIGATE_EXECUTION,

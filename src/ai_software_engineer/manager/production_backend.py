@@ -1664,6 +1664,7 @@ class ProductionProjectDeliveryBackend:
                 sources=runtime_config.context_sources,
                 wait_port=WorkerKnowledgeWait(worker_guard, knowledge_records),
                 invocation_claim=knowledge_claim,
+                invocation_timeout=queue.knowledge_timeout,
             )
             if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory)
             else baseline_contexts

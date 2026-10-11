@@ -139,6 +139,9 @@ def test_running_requires_current_role_and_valid_execution_claim() -> None:
     assert projected.execution is not None
     assert projected.execution.state == "RUNNING"
     assert projected.execution.responsibility == "team"
+    assert projected.execution.reason_code == "ROLE_WORK_CLAIMED"
+    assert "已领取当前工作" in projected.execution.reason
+    assert "正在执行" not in projected.execution.reason
     assert "租约" not in projected.next_action
     for changes in ({"lease_liveness": "UNKNOWN"}, {"role": AgentRole.QA}):
         changed = task.model_copy(
@@ -146,6 +149,37 @@ def test_running_requires_current_role_and_valid_execution_claim() -> None:
         )
         execution = _with_execution_state(changed).execution
         assert execution is not None and execution.state == "UNKNOWN"
+
+
+@pytest.mark.parametrize(
+    ("phase", "reason_code", "text"),
+    [
+        ("KNOWLEDGE_PREPARATION", "ROLE_KNOWLEDGE_PREPARATION", "准备开发所需知识"),
+        ("ROLE_EXECUTION", "ROLE_RUNNING", "正在执行"),
+        ("FINALIZING", "ROLE_FINALIZING", "保存并核验"),
+    ],
+)
+def test_task_and_requirement_preserve_exact_current_role_phase(
+    phase: str, reason_code: str, text: str
+) -> None:
+    task = _task(status=WorkItemStatus.RUNNING, lease_liveness="LEASE_VALID", execution_phase=phase)
+    projected = _with_execution_state(task)
+    assert projected.execution is not None and projected.execution.state == "RUNNING"
+    assert projected.execution.reason_code == reason_code
+    assert text in projected.execution.reason
+    assert _with_execution_state(projected).execution == projected.execution
+    request = RequestView(
+        id=task.request_id,
+        project_id=task.project_id,
+        title=task.title,
+        stage="DELIVERING",
+        scopes=(task.scope,),
+        next_action="Old generic advice",
+        checkpoint_sha256="a" * 64,
+    )
+    requirement = _request_with_current_work(request, [projected])
+    assert requirement.execution == projected.execution
+    assert text in requirement.next_action or phase == "ROLE_EXECUTION"
 
 
 def test_requirement_keeps_phase_separate_from_execution_wait() -> None:

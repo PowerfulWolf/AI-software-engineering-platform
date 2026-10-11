@@ -13,12 +13,15 @@ from ai_software_engineer.knowledge.gaps import (
     KnowledgeGapRaised,
     KnowledgeGapService,
 )
+from ai_software_engineer.knowledge.models import KnowledgeError
 from ai_software_engineer.knowledge.runtime import KnowledgeRunContextBuilder
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.production_backend import ProductionProjectDeliveryBackend
 from ai_software_engineer.orchestration import FileRunContextBuilder, RetryingOrchestrator
 from ai_software_engineer.store import SqliteTaskRepository
+from ai_software_engineer.work_queue.models import QueueClaim
 from tests.knowledge.test_consultation import Model, RepositoryInspectionModel
+from tests.orchestration.test_native_continuation import claim as native_claim
 from tests.orchestration.test_retry import ScriptedAdapter
 from tests.orchestration.test_runner import _clock, _definitions, _task
 
@@ -110,6 +113,48 @@ def test_native_knowledge_calls_use_the_admitted_role_window(
     definition = _definitions()[role].model_copy(update={"timeout_seconds": role_timeout})
     builder.build(task, definition, attempt=1)
     assert model.timeouts == [role_timeout] * 2
+
+
+def test_consumed_knowledge_window_is_resolved_from_current_claim_before_consultation(
+    tmp_path: Path,
+) -> None:
+    model = Model()
+    task, _, _, builder = _builder(tmp_path, model=model)
+    original = native_claim(task, 1)
+    claim = original.model_copy(
+        update={
+            "work_item": original.work_item.model_copy(
+                update={"repository_id": builder.repository_id}
+            ),
+            "assignment": original.assignment.model_copy(
+                update={"repository_id": builder.repository_id}
+            ),
+        }
+    )
+    resolved = []
+
+    def frozen_timeout(current: Task, current_claim: QueueClaim) -> int:
+        assert current == task and current_claim == claim
+        resolved.append(current_claim.lease.id)
+        return 2400
+
+    builder.invocation_claim = lambda: claim
+    builder.invocation_timeout = frozen_timeout
+    definition = _definitions()[AgentRole.CODER].model_copy(update={"timeout_seconds": 60})
+    builder.build(task, definition, attempt=1)
+    assert model.timeouts == [2400, 2400]
+    assert resolved == [claim.lease.id]
+
+
+def test_knowledge_window_override_without_actual_claim_refuses_before_model_call(
+    tmp_path: Path,
+) -> None:
+    model = Model()
+    task, _, _, builder = _builder(tmp_path, model=model)
+    builder.invocation_timeout = lambda task, claim: 2400
+    with pytest.raises(KnowledgeError, match="ACTUAL_CLAIM"):
+        builder.build(task, _definitions()[AgentRole.CODER], attempt=1)
+    assert model.timeouts == []
 
 
 def test_active_retrieval_then_independent_native_delivery(tmp_path: Path) -> None:

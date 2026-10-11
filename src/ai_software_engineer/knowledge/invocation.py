@@ -49,6 +49,38 @@ class KnowledgeInvocationUncertain(ContinuationExecutionUncertain):
     """Preserve the original preparation when its complete result is unavailable."""
 
 
+class KnowledgePreparationLocalLimit(StructuredModelError):
+    """A complete recorded failure; this identity grants no execution authority."""
+
+    def __init__(
+        self, outcome: KnowledgeInvocationOutcome, *, safe_message: str | None = None
+    ) -> None:
+        outcome.validate_integrity()
+        failure = outcome.failure
+        if (
+            outcome.state != "FAILED"
+            or failure is None
+            or failure.code is not AgentErrorCode.TIMEOUT
+            or failure.timeout_kind != "local_execution_limit"
+        ):
+            raise ValueError("knowledge local limit requires its complete typed failure")
+        self.outcome = outcome
+        super().__init__(
+            failure.code,
+            safe_message or failure.safe_message,
+            transient=False,
+            timeout_kind="local_execution_limit",
+            http_status=failure.http_status,
+            request_id=failure.request_id,
+            correlation_id=failure.correlation_id,
+        )
+
+    def with_context(self, context: str) -> KnowledgePreparationLocalLimit:
+        return KnowledgePreparationLocalLimit(
+            self.outcome, safe_message=f"{context}: {self.safe_message}"
+        )
+
+
 def invocation_lane_sha256(binding: KnowledgeRunBinding) -> str:
     """A new Run, Context, revision or lease must not hide an unfinished call."""
     return invocation_scope_lane_sha256(
@@ -447,9 +479,12 @@ class KnowledgeInvocationJournal:
                 )
         except StructuredModelError as error:
             observer.require_complete()
-            self._finish(
+            failed = self._finish(
                 records, key, intent, observer, failure=KnowledgeInvocationFailure.from_error(error)
             )
+            if error.expandable_timeout:
+                self._publish_local_limit(failed)
+                raise KnowledgePreparationLocalLimit(failed) from error
             raise
         except StructuredObservationRejected as error:
             raise KnowledgeInvocationUncertain(
@@ -474,7 +509,7 @@ class KnowledgeInvocationJournal:
         *,
         result: KnowledgeInvocationResult | None = None,
         failure: KnowledgeInvocationFailure | None = None,
-    ) -> None:
+    ) -> KnowledgeInvocationOutcome:
         outcome = KnowledgeInvocationOutcome.create(
             intent=intent,
             state="RETURNED" if result is not None else "FAILED",
@@ -485,6 +520,7 @@ class KnowledgeInvocationJournal:
         )
         with execution_scope(current_execution_guard()):
             records.put(_OUTCOMES, key, outcome)
+        return outcome
 
     @staticmethod
     def _require_outcome(
@@ -499,15 +535,24 @@ class KnowledgeInvocationJournal:
             if records.get(_OBSERVATIONS, record.record_sha256, KnowledgeExecutionRecord) != record:
                 raise KnowledgeInvocationUncertain("原知识调用的执行观察无法重新核实。")
 
-    @classmethod
+    def _publish_local_limit(self, outcome: KnowledgeInvocationOutcome) -> None:
+        """Index already sealed facts so exact engineering reads need no lane scan."""
+        with execution_scope(current_execution_guard()):
+            self.records.put(
+                "knowledge-local-limit-intents", outcome.outcome_sha256, outcome.intent
+            )
+
     def _replay(
-        cls, records: KnowledgeRecordStore, key: str, intent: KnowledgeInvocationIntent
+        self, records: KnowledgeRecordStore, key: str, intent: KnowledgeInvocationIntent
     ) -> StructuredModelResult:
         outcome = records.find(_OUTCOMES, key, KnowledgeInvocationOutcome)
         if outcome is None:
             raise KnowledgeInvocationUncertain("原知识调用已记录, 结果尚未完整保存; 禁止重复调用。")
-        cls._require_outcome(records, intent, outcome)
+        self._require_outcome(records, intent, outcome)
         if outcome.failure is not None:
+            if outcome.failure.timeout_kind == "local_execution_limit":
+                self._publish_local_limit(outcome)
+                raise KnowledgePreparationLocalLimit(outcome)
             raise outcome.failure.as_error()
         assert outcome.result is not None
         return outcome.result.as_result()

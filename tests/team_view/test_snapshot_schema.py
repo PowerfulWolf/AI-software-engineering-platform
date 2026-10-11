@@ -99,7 +99,7 @@ def test_team_snapshot_published_schema_has_exact_model_parity() -> None:
 
 def test_team_snapshot_schema_accepts_exact_typed_task_and_waiting_facts() -> None:
     snapshot = _snapshot()
-    payload = snapshot.to_wire()
+    payload = json.loads(snapshot.model_dump_json())
     Draft202012Validator(_schema(), format_checker=FormatChecker()).validate(payload)
 
     restored = TeamSnapshot.model_validate(payload)
@@ -112,6 +112,29 @@ def test_team_snapshot_schema_accepts_exact_typed_task_and_waiting_facts() -> No
     assert queue.wait_disposition is not None
     assert queue.wait_disposition.facts.task_intent_sha256 == task.task_intent_sha256
     assert queue.wait_disposition_sha256 == queue.wait_disposition.disposition_sha256
+
+
+@pytest.mark.parametrize("phase", ["KNOWLEDGE_PREPARATION", "ROLE_EXECUTION", "FINALIZING"])
+def test_role_phase_schema_accepts_each_typed_presentation_only_value(phase: str) -> None:
+    snapshot = _snapshot()
+    task = snapshot.tasks[0]
+    step = task.role_queue[0].model_copy(update={"execution_phase": phase})
+    updated = snapshot.model_copy(
+        update={"tasks": (task.model_copy(update={"role_queue": (step,)}),)}
+    )
+    Draft202012Validator(_schema(), format_checker=FormatChecker()).validate(updated.to_wire())
+    assert TeamSnapshot.model_validate(updated.to_wire()) == updated
+
+
+def test_absent_role_phase_preserves_nested_legacy_dump_and_hash() -> None:
+    snapshot = _snapshot()
+    payload = json.loads(snapshot.model_dump_json())
+    queue = payload["tasks"][0]["role_queue"][0]
+    assert "execution_phase" not in queue
+    before = snapshot.model_dump_json()
+    queue["execution_phase"] = None
+    restored = TeamSnapshot.model_validate(payload)
+    assert restored.model_dump_json() == before
 
 
 @pytest.mark.parametrize("representation", ["omitted", "null"])

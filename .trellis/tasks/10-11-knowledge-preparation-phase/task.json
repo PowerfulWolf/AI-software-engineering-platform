@@ -1,0 +1,29 @@
+{
+  "name": "knowledge-preparation-phase",
+  "title": "交付执行知识准备阶段的可信前端展示",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-11",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/knowledge_preparation.py",
+    "src/ai_software_engineer/team_view/models.py",
+    "src/ai_software_engineer/team_view/queue_reader.py",
+    "src/ai_software_engineer/team_view/reader.py",
+    "src/ai_software_engineer/team_view/app.js",
+    "src/ai_software_engineer/work_queue/baseline.py",
+    "schemas/team-snapshot.schema.json",
+    "tests/team_view/test_knowledge_preparation_phase.py",
+    "tests/team_view/test_knowledge_phase_source.py",
+    "tests/team_view/test_knowledge_phase_queue.py",
+    "tests/team_view/test_product_execution.py",
+    "tests/team_view/test_snapshot_schema.py",
+    "tests/team_view/test_live.py",
+    "tests/team_view/product-execution.test.cjs",
+    "tests/team_view/knowledge-gap.test.cjs",
+    ".trellis/spec/core/knowledge-preparation-phase.md",
+    ".trellis/spec/core/index.md",
+    ".trellis/tasks/10-11-knowledge-preparation-phase"
+  ],
+  "reviewed_by": "root with independent reviewer",
+  "verified_at": "2026-10-11"
+}
