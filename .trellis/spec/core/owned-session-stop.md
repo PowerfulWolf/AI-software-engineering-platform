@@ -18,6 +18,7 @@ this is not full process-tree containment. Retained output pipes still independe
 
 ```python
 # owned_sessions.py
+_DarwinInspector.identity(pid: int) -> OwnedProcessIdentity | None  # private read seam
 OwnedSessionController(process: subprocess.Popen[str] | subprocess.Popen[bytes])
 controller.observe_session()  # active owner polling, read only
 controller.stop(timeout_seconds=1.0) -> OwnedSessionStopProof
@@ -48,6 +49,20 @@ processes and one second per scan; saturated/partial/denied inspection is unknow
 processes with zero SID are excluded before constructing a positive owned identity. The controller
 retains at most 16,384 observed PID/birth identities and hashes at most 1,000,000 observations in
 constant memory. The latter supports legitimate long native polling; it does not retain scan bodies.
+
+Darwin's initial SID read and BSD birth query are separate OS calls. If the birth query returns a
+short result with errno 0/ENOENT or another non-ESRCH failure, recheck current SID once: only a fresh
+kernel `ProcessLookupError` (ESRCH) proves that this queried PID disappeared. A still-living PID,
+changed/recycled SID or denied/invalid SID query remains unknown. The unreadable birth result itself
+never proves absence, and no birth identity is reconstructed. Initial kernel absence and an actual
+BSD ESRCH keep their existing absence semantics; complete birth records still require the second
+matching SID check. The controller, signals and recorded-proof reader all use this same inspector.
+
+This defensive disappearing-process seam has deterministic errno 0/ENOENT red/green tests plus
+real Darwin exit coverage. It does not establish the first cause of the integrated public delivery
+fixture that once stopped after QA with only `OwnedProcessesUncertain`; a diagnostic rerun and
+bounded real command/process-churn probes did not reproduce that original error. Preserve this
+distinction in delivery reports instead of claiming that an unknown original cause is resolved.
 
 Each signal checks current boot, original leader identity and all known births, then freshly verifies
 the exact target PID/PGID/SID/birth. Signals go to individually verified members, never an unchecked
@@ -107,6 +122,8 @@ scope overflow preserves uncertainty. It never fabricates a failed provider resu
 | Observed child uses setsid and closes both pipes | unknown; no successful stop/registry clear; stored original birth also rejects read-side reuse |
 | Unobserved setsid child closes pipes | explicitly outside owned SID proof; no whole-tree claim |
 | Denied, partial, oversized or saturated enumeration; boot/birth drift | no unchecked signal, no registry clear, Host cannot READY |
+| Short Darwin birth query after an initial live SID; fresh kernel ESRCH | queried PID absent; two full empty sweeps, known-birth, EOF and save gates still required |
+| Short Darwin birth query while SID remains live/changes or its recheck is denied/invalid | unknown; no absent process, signal or successful stop is inferred |
 | Leader already reaped before capture | no retrospective stronger ownership proof |
 | Stop/evidence/receipt put or run seal fails after real process exit | all affected snapshots uncertain; drain stays blocked |
 | Multiple nested successful commands before outer seal | snapshots stay finalizing until actual seal completes |

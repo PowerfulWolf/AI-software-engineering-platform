@@ -228,6 +228,15 @@ class _DarwinInspector:
         if count != ctypes.sizeof(value):
             if ctypes.get_errno() == errno.ESRCH:
                 return None
+            # A process can exit between getsid and the BSD birth query. Its
+            # short result/errno alone is not absence, but a fresh kernel ESRCH
+            # is. A live, recycled or denied PID still has unknown birth facts.
+            try:
+                os.getsid(pid)
+            except ProcessLookupError:
+                return None
+            except OSError as error:
+                raise OwnedSessionUnknown("OS process birth identity is unavailable") from error
             raise OwnedSessionUnknown("OS process birth identity is unavailable")
         if value.pid != pid or not value.start_sec or value.start_usec >= 1_000_000:
             raise OwnedSessionUnknown("OS process birth identity is incomplete")

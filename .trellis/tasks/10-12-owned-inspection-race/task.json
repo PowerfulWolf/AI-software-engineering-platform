@@ -1,0 +1,26 @@
+{
+  "name": "owned-inspection-race",
+  "title": "仅在 fresh ESRCH 证明进程消失时排除 Darwin birth 查询竞态",
+  "status": "in_progress",
+  "phase": "verified_pending_root_integration",
+  "created_at": "2026-10-12",
+  "worktree": "/Users/zhangjunshuai/workspace/code/ase-owned-session-stop",
+  "allowlist": [
+    "src/ai_software_engineer/owned_sessions.py",
+    "src/ai_software_engineer/owned_processes.py",
+    "tests/execution/test_owned_session_inspection.py",
+    "tests/execution/test_owned_session_stop.py",
+    ".trellis/spec/core/owned-session-stop.md",
+    ".trellis/tasks/10-12-owned-inspection-race"
+  ],
+  "validation": [
+    "focused pytest inspection/session/finalization tests",
+    "scoped Ruff and strict mypy",
+    "independent read-only review"
+  ],
+  "constraints": [
+    "no main edits, production ASE operations, production DB reads or full tests",
+    "only fresh kernel ESRCH proves disappearance; active or denied birth stays unknown",
+    "original public fixture first-cause remains unproven"
+  ]
+}
