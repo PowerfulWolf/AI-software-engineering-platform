@@ -31,8 +31,12 @@ The service owns its inspector. Callers cannot provide a prevalidated result or 
 that skips validation. The selector enables reuse only for the exact current
 `NativeRecoveryFactsVerifier` class, shared by the service and builder as the same instance.
 Reuse also requires the actual bound `validate` method to have this same verifier as
-its receiver and the standard `NativeRecoveryFactsVerifier.validate` delegate as its
-function. Instance overrides, a method bound to another port, and subclass overrides
+its receiver and the original `NativeRecoveryFactsVerifier.validate` delegate as its
+function. Compare against its definition-time private function reference, not the
+currently replaceable class attribute. The authorization service must also have the exact
+standard class and both actual `require_current_authorization` / `_require_current`
+bindings must match their original definition-time functions and this same receiver.
+Instance/class overrides, a method bound to another port, and subclass overrides
 retain the original validation path. The standard delegate runs the complete `inspect`.
 
 Production seams are `src/ai_software_engineer/recovery/service.py` and
@@ -54,9 +58,10 @@ Plan and the complete `NativeRecoveryFacts` with the ones used for derivation. A
 new fact set that differs from the first gate rejects even when Plan digest is unchanged.
 Task derivation, source lineage, permissions, budgets, metadata and wire fields are unchanged.
 
-`require_current_authorization` remains compatible: supported native services return the
-typed gate's `.plan`; generic validate-only services run their original two `validate`
-calls around capture verification. The new typed method rejects unsupported ports rather
+`require_current_authorization` retains its original complete `_require_current` path;
+every service runs its original two `validate` calls around capture verification, including
+trusted stronger service/facts implementations. Only the supported builder selects the
+separate typed gate. The new typed method rejects unsupported ports rather
 than inventing native facts. A subclass or instance-specific stronger `validate`, or a builder using an
 independent verifier instance, follows the original complete
 `require -> builder.inspect -> require` path. That compatibility path retains its existing
@@ -76,7 +81,7 @@ optimization and does not establish current facts or authority.
 | Plan stays identical but complete native source/target/profile/baseline changes during derivation | Final complete-facts comparison rejects; no replacement Task or receipt |
 | Receipt, Plan bytes, directory identity or live capture body changes mid-derivation | Original fresh gate rejects; retain existing records and mutation evidence |
 | Capture callback changes current source | Fresh facts-after rejects; no draft publication |
-| Unsupported/subclass/instance stronger validate port | Typed method rejects; old entry/builder path preserves all stronger validation calls |
+| Unsupported/subclass/instance/class stronger validate or service authorization port | Typed method rejects; public authorization and old builder path preserve all stronger validation calls |
 | Equivalent independent native verifier | Original five-inspection builder path and unchanged output |
 | OfflineAuthority first allocation / replay | Four builders × eight observations = 32 / three builders × eight = 24; getters, eight/six captures and both transaction fences unchanged |
 | Changed complete body at the second dispatch fence | Reject; no committed dispatch or skipped current check |

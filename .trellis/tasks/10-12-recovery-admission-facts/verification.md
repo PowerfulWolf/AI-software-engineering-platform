@@ -86,3 +86,44 @@ path afterward. This optimization does not itself approve or restart delivery.
 Rollback restores the old redundant middle inspection without changing stored bytes.
 Larger shared-observation windows are deferred and require separate admission/callback/
 transaction design and review. Runtime deployment and any current Operation remain root-owned.
+
+## Root integration and additional trusted-composition review
+
+Root cherry-picked the worker commit as `ac39c2e` onto
+`task/delivery-input-recovery-integration`, retaining the earlier complete-read scope and
+Product approval prefix. An initial seven-case integration check passed in 12.01 seconds;
+it included native wire equivalence, instance validation, allocation fences, real public
+approval/sealing scope and the Designer's independent Product fences.
+
+A subsequent narrow independent review found more extension differences: service instance/
+subclass public authorization, protected current validation and class-level Native validation
+could be skipped. Memory-loaded pre-change Service/Builder code rejected each stronger port;
+the first integrated implementation returned a draft without calling it. The production
+entry constructs the ordinary Service directly; no actual K1 extension/bypass was established.
+
+Root added six exact regression cases before fixing the code:
+
+```sh
+PYTHONPATH=src /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/python -m pytest tests/recovery/test_authorized_facts.py::test_service_extension_keeps_original_authorization_gate tests/recovery/test_authorized_facts.py::test_class_stronger_native_validate_keeps_original_authorization_gate -q --tb=short
+```
+
+Red: **6 failed in 2.71 seconds**, each missing the required `RecoveryRejected`. Public
+authorization now follows its complete original `_require_current` route. The typed builder
+requires the exact standard service, same actual receivers and original definition-time
+public/protected/Native functions. Class-level replacements cannot qualify by comparing to
+the currently replaceable class attribute. Every typed gate repeats that eligibility check.
+
+```sh
+PYTHONPATH=src /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/python -m pytest tests/recovery/test_authorized_facts.py -q --tb=short
+```
+
+Green: **25 passed in 11.70 seconds**. Independent review reran only the six new cases and
+one standard native count case: **7 passed, 18 deselected in 3.70 seconds**. Public approval
+and allocator-scope integration after the correction: **2 passed in 10.47 seconds**. Counts
+overlap, so these are command results rather than unique-case totals. Ruff check/format,
+strict Mypy for the three modified source/test files and diff checks passed. No full suite.
+
+The Native definition-time delegate reference is the only `current.py` change in this
+correction. Stored authority/Task/wire bytes and normal count reductions remain unchanged;
+existing data require no migration. Main, registered source and the active production
+Operation were not modified or restarted. Deploy only after they safely become idle.

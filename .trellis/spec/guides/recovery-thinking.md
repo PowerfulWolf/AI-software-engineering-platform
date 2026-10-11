@@ -195,3 +195,16 @@ execution-baseline.md 的 accepted artifact order 与 repeated baseline 验证�
   approval/current权限不能加入跨调用或模型期间的成功缓存。
 - 运行中的生产Operation需要保留原授权及现场；冷读重放的时间不代表它当前在哪个函数。
   新优化只在合法idle维护边界上线，不重复提交审批或重写旧记录来制造进度。
+
+### 优化路径必须保留可信校验扩展（2026-10-12）
+
+- 用新的内部 typed 结果绕过旧公共授权方法之前，先验证可信 composition 是否增强了该方法
+  或受保护的当前事实校验。只确认 Native verifier 的 exact class 不足以保留 Service 的扩展。
+- 标准方法身份要比较定义时保留的原函数、实际 receiver 与函数绑定；比较当前 class attribute
+  会把 class-level replacement 自己认成标准实现。实例、子类、类级覆盖都要有精确拒绝负例。
+- 公共授权入口保留原完整路径。只有确认标准 composition 的内部 builder 才派生已有末次
+  完整事实；最终 gate 再次检查资格和完整 Plan/facts。未满足优化条件回原路径，不删更强校验。
+- 用原版本调用图作对照，证明旧路径拒绝而新路径曾放行，再修到红绿。区分可信扩展兼容问题
+  和真实生产配置；没有观察到生产扩展时，不能宣称现有需求曾被越权放行。
+
+执行契约和新增六个拒绝回归见 `../core/recovery-admission-facts.md`。

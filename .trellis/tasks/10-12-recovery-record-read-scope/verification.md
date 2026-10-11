@@ -184,3 +184,37 @@ bounded private intermediate statistics for future work, without rerunning or ex
 this measurement budget. Both timeout paths reset the dedicated test database; all 13
 mutable facts tables were checked empty, with no owned observer/offline-Codex process
 remaining. This measurement is incomplete and is not a K1 recovery result.
+
+## Later bounded baseline phase diagnostic
+
+After fixing the observer's missing intermediate records, one new baseline-only probe
+ran with a 45-second deadline. It is not a repeat performance comparison: observer behavior
+and the random small fixture differ from the earlier 120-second probes. The observer now
+publishes at startup/phase entry/every five seconds, records all-call counts before phase
+selection, saves only function names for the main Python stack, and serializes private
+0600 snapshots with monotonic sequence numbers. A 10,000-counter smoke cost about 0.0015
+CPU seconds, which does not measure total observer overhead.
+
+Collection completed at 1.582 seconds; test body began at 1.614; the authentic owned failed
+fixture reached source/proposal at 4.994. That phase completed at 17.781, taking 12.787646
+wall / 3.322146 CPU seconds, with 15 full SourceReader inspections, 40 read-only SQL
+transactions, 15 capture verifications and 10 inventory function calls. Exact approval
+began at 28.132; the last 40.062-second snapshot still showed that phase, with partial
+11.930201 wall / 3.183599 CPU seconds, 15 source reads, 40 read-only SQL transactions,
+15 capture verifications and nine inventory calls. Each inventory function internally
+observes twice; these counters are function calls, not file passes. The final sampled
+stack was the real Native facts/workspace/capture/Git subprocess chain.
+
+The driver stopped after 45.139 seconds with SIGTERM. No completion data exist for sealing,
+dispatch, seed or first provider admission, and the final five seconds are unknown.
+The dedicated test database had 13 empty mutable tables before/after, no other connections
+at admission, and no owned subprocess after cleanup; the exclusive lock was released.
+No production Host/SQL/Requirement/workspace was accessed. Original 120-second positions
+remain unknown; improved observability cannot restore their missing facts or prove why
+they timed out. Detailed private reports live under `/tmp/ase-recovery-phase-baseline-short-*`.
+
+The later admission-facts task reduces a supported builder from five complete inspections
+to four. Its modern static dispatch prefix is therefore 24 inspections / 144 source reads,
+with a further eight inspections / 48 reads for seed/first admission. This is the new code
+graph, not observed production execution or a latency forecast. The earlier 30/180 and
+10/60 counts above accurately describe their original version and are retained as history.
