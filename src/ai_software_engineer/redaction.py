@@ -485,6 +485,205 @@ def _source_assignment_facts(
     return frozenset(safe_starts), tuple(extra)
 
 
+def _source_dynamic_interpolation_spans(
+    tree: ast.Module, content: str, lines: list[str], offsets: list[int]
+) -> frozenset[tuple[int, int]]:
+    """Prove exact runtime credential interpolation, without masking a string.
+
+    Only a direct single-writer binding in the same ordinary lexical scope can
+    establish provenance. This does not execute Python or confer authority on
+    arbitrary expressions, closures, parameters or source-looking log text.
+    """
+    imports = _source_stdlib_imports(tree)
+    if not imports:
+        return frozenset()
+    nodes = tuple(ast.walk(tree))
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    scope_kinds = (
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ClassDef,
+        ast.Lambda,
+        ast.ListComp,
+        ast.SetComp,
+        ast.DictComp,
+        ast.GeneratorExp,
+    )
+
+    def scope_of(node: ast.AST) -> ast.AST:
+        parent = parents.get(node)
+        while parent is not None and not isinstance(parent, scope_kinds):
+            parent = parents.get(parent)
+        return parent if parent is not None else tree
+
+    # These observed reflective entrances can mutate constructor/name bindings
+    # without an AST Store. Existing exec/eval/globals/locals checks also apply.
+    reflective_modules = {"sys", "inspect", "importlib", "builtins"}
+    reflective_attributes = {"f_locals", "f_globals", "_getframe", "currentframe", "import_module"}
+    if any(
+        (
+            isinstance(node, ast.Import)
+            and any(alias.name.split(".")[0] in reflective_modules for alias in node.names)
+        )
+        or (
+            isinstance(node, ast.ImportFrom)
+            and (
+                node.module is not None
+                and (
+                    node.module.split(".")[0] in reflective_modules
+                    or node.module == "unittest.mock"
+                    or (
+                        node.module == "unittest"
+                        and any(alias.name == "mock" for alias in node.names)
+                    )
+                )
+            )
+        )
+        or (
+            isinstance(node, ast.Attribute)
+            and (
+                node.attr in reflective_attributes
+                or (
+                    node.attr in {"patch", "setattr", "delattr"}
+                    and (
+                        not isinstance(call := parents.get(node), ast.Call)
+                        or call.func is not node
+                        or node.attr == "patch"
+                        or not call.args
+                        or not isinstance(call.args[0], ast.Name)
+                        or call.args[0].id in imports
+                    )
+                )
+            )
+        )
+        or (isinstance(node, ast.Name) and node.id == "vars" and isinstance(node.ctx, ast.Load))
+        # Common test monkeypatch APIs can rewrite the trusted constructor even
+        # when their target is assembled from string fragments. A typed call is
+        # enough to revoke this narrow proof; unknown calls remain conservative
+        # through the ordinary source scanner.
+        or (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"patch", "setattr"}
+        )
+        or (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and (node.value == "secrets" or node.value.startswith("secrets."))
+        )
+        for node in nodes
+    ):
+        return frozenset()
+    scopes = {node: scope_of(node) for node in nodes}
+    writers_by_name: dict[tuple[ast.AST, str], list[ast.Name]] = {}
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            writers_by_name.setdefault((scopes[node], node.id), []).append(node)
+    ambiguous_bindings: dict[tuple[ast.AST, str], bool] = {}
+    result: set[tuple[int, int]] = set()
+    for interpolation in nodes:
+        if not (
+            isinstance(interpolation, ast.FormattedValue)
+            and isinstance(interpolation.value, ast.Name)
+            and interpolation.conversion == -1
+            and interpolation.format_spec is None
+        ):
+            continue
+        joined = parents.get(interpolation)
+        if not (
+            isinstance(joined, ast.JoinedStr)
+            and len(joined.values) == 2
+            and isinstance(joined.values[0], ast.Constant)
+            and joined.values[1] is interpolation
+        ):
+            continue
+        name = interpolation.value.id
+        if ast.get_source_segment(content, interpolation) != "{" + name + "}":
+            continue
+        scope = scopes[interpolation]
+        if not isinstance(scope, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        # Default arguments/decorators and conditional bindings are not body facts.
+        statement: ast.AST = interpolation
+        while parents.get(statement) is not scope:
+            parent = parents.get(statement)
+            if parent is None:
+                break
+            statement = parent
+        if statement not in scope.body:
+            continue
+        writers = writers_by_name.get((scope, name), [])
+        if len(writers) != 1:
+            continue
+        target = writers[0]
+        binding = parents.get(target)
+        if not (
+            isinstance(binding, ast.Assign)
+            and binding in scope.body
+            and scope.body.index(binding) < scope.body.index(statement)
+            and isinstance(binding.value, ast.Call)
+            and binding.targets == [target]
+        ):
+            continue
+        key = scope, name
+        if key not in ambiguous_bindings:
+            ambiguous_bindings[key] = False
+            scope_nodes: tuple[ast.AST, ...] = tuple(ast.walk(scope))
+        else:
+            if ambiguous_bindings[key]:
+                continue
+            # A repeated interpolation of the same binding reuses only its
+            # syntactic ambiguity fact, never a domain admission or verdict.
+            scope_nodes = ()
+        for node in scope_nodes:
+            if (
+                (isinstance(node, ast.arg) and node.arg == name)
+                or (isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names)
+                or (
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                    and node is not scope
+                    and node.name == name
+                )
+                or (
+                    isinstance(node, ast.alias)
+                    and (node.name == "*" or (node.asname or node.name.split(".")[0]) == name)
+                )
+                or (
+                    isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar))
+                    and node.name == name
+                )
+                or (isinstance(node, ast.MatchMapping) and node.rest == name)
+                or (isinstance(node, ast.Name) and node.id == name and scopes[node] is not scope)
+            ):
+                ambiguous_bindings[key] = True
+                break
+        if ambiguous_bindings[key]:
+            continue
+        call = binding.value
+        callee = call.func.value if isinstance(call.func, ast.Attribute) else call.func
+        imported = imports.get(callee.id) if isinstance(callee, ast.Name) else None
+        if (
+            imported is None
+            or imported[0] != "secrets"
+            or not _source_proven_value(call, "", imports)
+        ):
+            continue
+        if interpolation.end_lineno is None or interpolation.end_col_offset is None:
+            continue
+        start = offsets[interpolation.lineno - 1] + len(
+            lines[interpolation.lineno - 1]
+            .encode("utf-8")[: interpolation.col_offset]
+            .decode("utf-8")
+        )
+        end = offsets[interpolation.end_lineno - 1] + len(
+            lines[interpolation.end_lineno - 1]
+            .encode("utf-8")[: interpolation.end_col_offset]
+            .decode("utf-8")
+        )
+        result.add((start, end))
+    return frozenset(result)
+
+
 def _inspect_source(
     content: str, *, source_path: str | None = None
 ) -> tuple[RedactionOccurrence, ...]:
@@ -527,6 +726,7 @@ def _inspect_source(
         offsets.append(offsets[-1] + len(line))
     try:
         safe_starts, extra = _source_assignment_facts(tree, content, lines, offsets)
+        dynamic_spans = _source_dynamic_interpolation_spans(tree, content, lines, offsets)
     except (ValueError, RecursionError, MemoryError, OverflowError, UnicodeError):
         return detected
     excluded: list[tuple[int, int]] = []
@@ -547,6 +747,10 @@ def _inspect_source(
 
     def protect(match: re.Match[str]) -> str:
         nonlocal excluded_index
+        # The assignment detector excludes the final brace; require the exact
+        # proven AST span, rather than exempting any containing string token.
+        if (match.start(2), match.end(2) + 1) in dynamic_spans:
+            return "source_reference"
         while excluded_index < len(excluded) and excluded[excluded_index][1] <= match.start():
             excluded_index += 1
         if excluded_index < len(excluded) and excluded[excluded_index][0] <= match.start():

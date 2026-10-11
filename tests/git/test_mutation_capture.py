@@ -29,6 +29,9 @@ from tests.git.test_capture import workspace as workspace
         "@dataclass\nclass Session:\n    token: str = field(repr=False)\n",
         "import secrets\ndef issue():\n    token = secrets.token_urlsafe(32)\n    return token\n",
         "def read(row):\n    token: object = row['token_hash']\n    return token\n",
+        "import secrets\ndef test_negative():\n"
+        "    credential = secrets.token_urlsafe(32)\n"
+        '    return f"https://example.invalid/check?token={credential}"\n',
     ],
 )
 def test_source_reference_is_captured_unchanged_through_wire_and_verify(
@@ -68,6 +71,8 @@ def test_source_reference_is_captured_unchanged_through_wire_and_verify(
         "    mod.token_urlsafe = lambda n: 'clear-text-value'\n"
         "mutate(secrets)\ntoken = secrets.token_urlsafe(32)\n",
         "import secrets\nexecute = exec\nexecute(code)\ntoken = secrets.token_urlsafe(32)\n",
+        "import secrets\ndef test_negative():\n"
+        '    credential = "fixed-value"\n    return f"token={credential}"\n',
     ],
 )
 def test_source_reference_classifier_still_rejects_secret_values(
