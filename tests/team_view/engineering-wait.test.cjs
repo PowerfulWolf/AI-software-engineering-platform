@@ -96,7 +96,8 @@ function investigation(h, missing = []) {
   h.run(`operations = [{operation_id: "inspect_current", status: "SUCCEEDED",
     updated_at: "2026-10-05T01:00:00Z",
     intent: {...engineeringWaitIntent(data.request, data.step), action: "INSPECT_DELIVERY_WAIT"},
-    result: {engineering_wait_investigation: proof, checkpoint_sha256: data.request.checkpoint_sha256}}];`);
+    result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      engineering_wait_investigation: proof, checkpoint_sha256: data.request.checkpoint_sha256}}];`);
   return proof;
 }
 function handling(h, status = "PLATFORM_ATTENTION", missing = ["STOP_UNRECORDED"], manual = false) {
@@ -111,7 +112,8 @@ function handling(h, status = "PLATFORM_ATTENTION", missing = ["STOP_UNRECORDED"
     recheck_when: "平台补齐结束记录后再检查。"};
   h.context.handling = result;
   h.run(`operations[0].intent.action = "HANDLE_DELIVERY_WAIT";
-    operations[0].result = {engineering_wait_handling: handling, checkpoint_sha256: data.request.checkpoint_sha256};`);
+    operations[0].result = {project_id: data.request.project_id, delivery_id: data.request.id,
+      engineering_wait_handling: handling, checkpoint_sha256: data.request.checkpoint_sha256};`);
   return result;
 }
 
@@ -220,7 +222,8 @@ test("rejected output decisions cannot match another saved capture and remain vi
   h.context.resolution = {kind: "delivery_wait_resolution", resolution_kind: "RETRY_REJECTED_CODER_OUTPUT",
     proof_sha256: proof.proof_sha256, rejected_output: structuredClone(proof.rejected_output)};
   h.run(`operations.push({status: "SUCCEEDED", intent: {...engineeringWaitIntent(data.request, data.step),
-    action: "RESOLVE_DELIVERY_WAIT"}, result: {engineering_wait_resolution: resolution}})`);
+    action: "RESOLVE_DELIVERY_WAIT"}, result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      checkpoint_sha256: data.request.checkpoint_sha256, engineering_wait_resolution: resolution}})`);
   assert.ok(h.run("engineeringWaitDecision(data.request, data.step, proof)"));
   h.run('resolution.rejected_output.checkpoint_sha256 = "f".repeat(64)');
   assert.equal(h.run("engineeringWaitDecision(data.request, data.step, proof)"), null);
@@ -355,7 +358,8 @@ test("known stopped knowledge preparation never advertises continuation after it
   result.investigation.missing = ["BUDGET_EXHAUSTED"];
   result.investigation.permitted_resolutions = [];
   h.run(`operations[0].intent.action = "INSPECT_DELIVERY_WAIT";
-    operations[0].result = {engineering_wait_investigation: proof, checkpoint_sha256: data.request.checkpoint_sha256};`);
+    operations[0].result = {project_id: data.request.project_id, delivery_id: data.request.id,
+      engineering_wait_investigation: proof, checkpoint_sha256: data.request.checkpoint_sha256};`);
   const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   assert.match(text(box), /执行额度已用完/);
   assert.equal(control(box, "扩大知识准备窗口并继续"), undefined);
@@ -577,7 +581,8 @@ test("manual resolution requires a current complete handling proof and explicit 
       assert.equal(control(box, "继续原交付"), undefined);
       h.run(`operations.push({...operations[0], operation_id: "newer_inspection", updated_at: "2026-10-05T03:00:00Z",
         intent: {...engineeringWaitIntent(data.request, data.step), action: "INSPECT_DELIVERY_WAIT"},
-        result: {engineering_wait_investigation: proof, checkpoint_sha256: data.request.checkpoint_sha256}});`);
+        result: {project_id: data.request.project_id, delivery_id: data.request.id,
+          engineering_wait_investigation: proof, checkpoint_sha256: data.request.checkpoint_sha256}});`);
       assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"), "继续原交付"), undefined,
         "a fresh investigation cannot restore engineering permission that the handler explicitly denied");
       continue;
@@ -652,7 +657,8 @@ test("handling decisions preserve the durable wait and history labels investigat
   h.run(`operations.push({operation_id: "inspect_after_decision", status: "SUCCEEDED",
     updated_at: "2026-10-05T03:00:00Z",
     intent: {...engineeringWaitIntent(data.request, data.step), action: "INSPECT_DELIVERY_WAIT"},
-    result: {engineering_wait_investigation: {...proof, inspected_at: "2026-10-05T03:00:00Z",
+    result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      engineering_wait_investigation: {...proof, inspected_at: "2026-10-05T03:00:00Z",
       proof_sha256: "1".repeat(64)}, checkpoint_sha256: data.request.checkpoint_sha256}});`);
   const refreshed = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   assert.match(text(refreshed), /继续决定已记录/);
@@ -668,7 +674,8 @@ test("a later investigation with identical facts and a new timestamp keeps the h
   h.run(`operations.push({operation_id: "inspect_after_handling", status: "SUCCEEDED",
     updated_at: "2026-10-05T03:00:00Z",
     intent: {...engineeringWaitIntent(data.request, data.step), action: "INSPECT_DELIVERY_WAIT"},
-    result: {engineering_wait_investigation: {...proof, inspected_at: "2026-10-05T03:00:00Z",
+    result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      engineering_wait_investigation: {...proof, inspected_at: "2026-10-05T03:00:00Z",
       proof_sha256: "1".repeat(64), prerequisite_receipt_sha256: "2".repeat(64)},
       checkpoint_sha256: data.request.checkpoint_sha256}});`);
   const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
@@ -688,7 +695,8 @@ test("a changed or failed later investigation keeps old handling in history and 
     h.run(`operations.push({operation_id: "inspect_changed", status: newerStatus,
       updated_at: "2026-10-05T03:00:00Z",
       intent: {...engineeringWaitIntent(data.request, data.step), action: "INSPECT_DELIVERY_WAIT"},
-      result: {engineering_wait_investigation: {...proof, inspected_at: "2026-10-05T03:00:00Z",
+      result: {project_id: data.request.project_id, delivery_id: data.request.id,
+        engineering_wait_investigation: {...proof, inspected_at: "2026-10-05T03:00:00Z",
         proof_sha256: "1".repeat(64), missing: ["CHECKPOINT_DRIFT"], permitted_resolutions: []},
         checkpoint_sha256: data.request.checkpoint_sha256}});`);
     const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
@@ -706,7 +714,8 @@ test("a changed or failed later investigation keeps old handling in history and 
     h.run(`operations.push({operation_id: "inspect_complete_again", status: "SUCCEEDED",
       updated_at: "2026-10-05T04:00:00Z",
       intent: {...engineeringWaitIntent(data.request, data.step), action: "INSPECT_DELIVERY_WAIT"},
-      result: {engineering_wait_investigation: {...proof, inspected_at: "2026-10-05T04:00:00Z",
+      result: {project_id: data.request.project_id, delivery_id: data.request.id,
+        engineering_wait_investigation: {...proof, inspected_at: "2026-10-05T04:00:00Z",
         proof_sha256: "3".repeat(64), workspace_inventory_sha256: "4".repeat(64)},
         checkpoint_sha256: data.request.checkpoint_sha256}});`);
     assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"), "继续原交付"), undefined,
@@ -817,11 +826,14 @@ test("engineering decision keeps the durable wait visible and all operation reco
   h.run(`operations.push({operation_id: "resolve_current", status: "SUCCEEDED",
     updated_at: "2026-10-05T02:00:00Z",
     intent: {...engineeringWaitIntent(data.request, data.step), action: "RESOLVE_DELIVERY_WAIT", proof_sha256: proof.proof_sha256},
-    result: {engineering_wait_resolution: {kind: "delivery_wait_resolution", resolution_kind: "RETRY_FROM_CHECKPOINT", proof_sha256: proof.proof_sha256,
+    result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      checkpoint_sha256: data.request.checkpoint_sha256,
+      engineering_wait_resolution: {kind: "delivery_wait_resolution", resolution_kind: "RETRY_FROM_CHECKPOINT", proof_sha256: proof.proof_sha256,
       authorization_source: "engineering_operator_decision", operator_principal: {operator_id: "operator:actual"}}}});
     for (let index = 0; index < 10; index++) operations.push({operation_id: "old_" + index,
       status: "SUCCEEDED", updated_at: "2026-10-04T00:00:00Z", intent: {delivery_id: data.request.id,
-      project_id: data.request.project_id, action: "CONTINUE_DELIVERY"}, result: {next_action: "<img onerror=evil>"}});`);
+      project_id: data.request.project_id, action: "CONTINUE_DELIVERY"}, result: {
+        project_id: data.request.project_id, delivery_id: data.request.id, next_action: "<img onerror=evil>"}});`);
   const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   assert.match(text(box), /决定已记录/);
   assert.equal(control(box, "继续原交付"), undefined);
@@ -878,7 +890,8 @@ function baselinePlan(h, conflicted = false, mode = "preserve_draft") {
   h.run(`operations = [{operation_id: "baseline_proposal", status: "SUCCEEDED", updated_at: "2026-10-05T01:00:00Z",
     intent: {...engineeringBaselineFacts(data.request, data.task, data.step), action: "PROPOSE_EXECUTION_BASELINE",
       target_base_ref: baselinePlan.target_base_ref, input_mode: baselinePlan.input_mode},
-    result: {checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: baselinePlan}}];`);
+    result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: baselinePlan}}];`);
   return plan;
 }
 
@@ -968,7 +981,8 @@ function legacyRescuePlan(h) {
   h.run(`operations.push({operation_id: "legacy_proposal", status: "SUCCEEDED", updated_at: "2026-10-06T02:00:00Z",
     intent: {...engineeringBaselineFacts(data.request, data.task, data.step), action: "PROPOSE_EXECUTION_BASELINE",
       purpose: "legacy_workspace_rescue", target_base_ref: rescuePlan.target_base_ref, input_mode: "preserve_draft"},
-    result: {checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: rescuePlan}});`);
+    result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: rescuePlan}});`);
   return plan;
 }
 
@@ -1374,7 +1388,8 @@ test("typed capture waiting stays distinct from internal failure and drives the 
   h.run(`operations.push({operation_id: "capture_waiting", status: "SUCCEEDED", updated_at: "2026-10-07T02:00:00Z",
     intent: {...engineeringBaselineFacts(data.request, data.task, data.step), action: "PROPOSE_EXECUTION_BASELINE",
       purpose: "legacy_workspace_rescue", target_base_ref: "c".repeat(40), input_mode: "preserve_draft"},
-    result: {checkpoint_sha256: data.request.checkpoint_sha256, legacy_rescue_preparation: preparation}});`);
+    result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      checkpoint_sha256: data.request.checkpoint_sha256, legacy_rescue_preparation: preparation}});`);
   h.context.navigator = {clipboard: {writeText: async value => {h.context.copiedReport = value;}}};
   const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   assert.match(text(box), /恢复前提尚未满足/);
@@ -1484,7 +1499,8 @@ test("native rule review retains every current repository plan and prunes remove
     operations.push({operation_id: "baseline_other", status: "SUCCEEDED", updated_at: "2026-10-05T02:00:00Z",
       intent: {...engineeringBaselineFacts(data.request, otherTask, otherStep), action: "PROPOSE_EXECUTION_BASELINE",
         target_base_ref: otherPlan.target_base_ref, input_mode: otherPlan.input_mode},
-      result: {checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: otherPlan}});
+      result: {project_id: data.request.project_id, delivery_id: data.request.id,
+        checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: otherPlan}});
     saveNativeRuleReview(baselinePlan, "AGENTS.md", {status: "READY", inspection: {unified_diff: "first complete rules"}});`);
   h.run("engineeringWaitBox(data.request, data.task, data.step); engineeringWaitBox(data.request, otherTask, otherStep)");
   assert.equal(h.run("nativeRulePlanReviewed(baselinePlan)"), true, "rendering the other plan cannot erase first review");
@@ -1569,7 +1585,8 @@ function currentApprovalFixture(h, kind = "coder_recovery") {
   h.run(`operations = [{operation_id: "current_approval", status: "SUCCEEDED", updated_at: "2026-10-05T01:00:00Z",
     intent: {action: "CONTINUE_DELIVERY", project_id: data.request.project_id, delivery_id: data.request.id,
       expected_checkpoint_sha256: data.request.checkpoint_sha256},
-    result: {delivery_id: data.request.id, checkpoint_sha256: data.request.checkpoint_sha256, approval}}];`);
+    result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      checkpoint_sha256: data.request.checkpoint_sha256, approval}}];`);
   return approval;
 }
 
@@ -2058,7 +2075,8 @@ function completedRescuePlan(h) {
   h.run(`operations = [{operation_id: 'completed_proposal', status: 'SUCCEEDED', updated_at: '2026-10-11T00:00:00Z',
     intent: {...engineeringBaselineFacts(data.request, data.task, data.step), action: 'PROPOSE_EXECUTION_BASELINE',
       purpose: 'completed_output_rescue', input_mode: 'preserve_draft'},
-    result: {checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: rescuePlan}}]`);
+    result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: rescuePlan}}]`);
   return plan;
 }
 
