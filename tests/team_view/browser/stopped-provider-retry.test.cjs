@@ -34,6 +34,20 @@ async function waiting(t) {
   return {...h, request, task, step, plan};
 }
 
+async function sourceWaiting(t) {
+  const h = await waiting(t);
+  Object.assign(h.plan, {purpose: "source_rebind", target_base_ref: "f".repeat(40), prepared_source_revision: "f".repeat(40)});
+  h.plan.facts.native_rule_change = {change_sha256: "7".repeat(64), target: {epoch_sha256: "8".repeat(64)},
+    changes: [{path: "AGENTS.md", change: "modified", before: {sha256: "9".repeat(64)}, after: {sha256: "0".repeat(64)}}]};
+  Object.assign(h.state.operations[0].intent, {purpose: "source_rebind", target_base_ref: h.plan.target_base_ref});
+  await h.page.route("http://ui.test/api/v1/operations/operation_prepare/native-rules?path=AGENTS.md", route => route.fulfill({json: {
+    delta: h.plan.facts.native_rule_change.changes[0], epoch: h.plan.facts.native_rule_change.target,
+    unified_diff: "--- AGENTS.md\n+++ AGENTS.md\n-old full rule\n+new full exact rule",
+  }}));
+  await h.tick();
+  return h;
+}
+
 test("provider prerequisite confirmation survives unrelated polling and stays visible at narrow widths", async t => {
   const h = await waiting(t);
   const confirmation = h.page.getByRole("checkbox", {name: "确认原模型认证或执行器配置前提已修复", exact: true});
@@ -66,4 +80,50 @@ test("changed exact plan resets confirmation and detached approval cannot submit
   let submissions = 0;
   await h.page.route("http://ui.test/api/v1/operations", async route => {if (route.request().method() === "POST") submissions++; return route.fallback();});
   await original.evaluate(node => node.click()); assert.equal(submissions, 0);
+});
+
+test("source-rebind proof has one exact decision with independent review and stable consent during polling", async t => {
+  const h = await sourceWaiting(t);
+  const detail = h.page.locator("#detail");
+  assert.equal(await detail.getByRole("button", {name: "准备保留进度的续跑方案", exact: true}).count(), 0);
+  const provider = detail.getByRole("checkbox", {name: "确认原模型认证或执行器配置前提已修复", exact: true});
+  const rules = detail.getByRole("checkbox", {name: "确认目标版本的项目规范变更", exact: true});
+  const approve = detail.getByRole("button", {name: "批准更新基线，保持暂停", exact: true});
+  assert.equal(await rules.isDisabled(), true); assert.equal(await approve.isDisabled(), true);
+  await provider.check(); assert.equal(await approve.isDisabled(), true);
+  await detail.getByRole("button", {name: "查看规范变更 · AGENTS.md", exact: true}).click();
+  await rules.waitFor({state: "visible"}); await h.page.waitForFunction(() => nativeRuleReviewsRevision > 1);
+  assert.equal(await rules.isDisabled(), false);
+  assert.equal(await provider.isChecked(), false, "review changes require fresh separate consent");
+  await rules.check(); assert.equal(await approve.isDisabled(), true);
+  await provider.check(); await provider.focus();
+  await provider.evaluate(node => {window.sourceProviderConsent = node;});
+  await rules.evaluate(node => {window.sourceRulesConsent = node;});
+  assert.equal(await approve.isDisabled(), false);
+  h.task.last_activity = "2026-10-12T00:00:02Z"; await h.tick();
+  assert.equal(await provider.evaluate(node => node === window.sourceProviderConsent && node.checked && document.activeElement === node), true);
+  assert.equal(await rules.evaluate(node => node === window.sourceRulesConsent && node.checked), true);
+  assert.match(await detail.innerText(), /原认证失败|原调用的认证失败/);
+  assert.match(await detail.innerText(), /不退还原执行额度/);
+  for (const width of [390, 1440]) {
+    await h.page.setViewportSize({width, height: 900});
+    const bounds = await approve.boundingBox(); assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width);
+  }
+});
+
+test("source-rebind plan changes reset both consents and detach the old exact approval", async t => {
+  const h = await sourceWaiting(t);
+  const detail = h.page.locator("#detail");
+  const provider = detail.getByRole("checkbox", {name: "确认原模型认证或执行器配置前提已修复", exact: true});
+  const rules = detail.getByRole("checkbox", {name: "确认目标版本的项目规范变更", exact: true});
+  await detail.getByRole("button", {name: "查看规范变更 · AGENTS.md", exact: true}).click();
+  await h.page.waitForFunction(() => nativeRuleReviewsRevision > 1);
+  await provider.check(); await rules.check();
+  const old = await detail.getByRole("button", {name: "批准更新基线，保持暂停", exact: true}).elementHandle();
+  let submissions = 0;
+  await h.page.route("http://ui.test/api/v1/operations", async route => {if (route.request().method() === "POST") submissions++; return route.fallback();});
+  h.plan.plan_sha256 = "5".repeat(64); await h.tick();
+  assert.equal(await provider.isChecked(), false); assert.equal(await rules.isChecked(), false);
+  assert.equal(await rules.isDisabled(), true);
+  await old.evaluate(node => node.click()); assert.equal(submissions, 0);
 });

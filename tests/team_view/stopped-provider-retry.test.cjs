@@ -79,6 +79,14 @@ test("new failure prefix is localized without treating unknown exits as authenti
   assert.match(h.run('humanizeBlockingText("NONTRANSIENT_INFRA: Coder failed at attempt 1: coder run run_original failed: Codex CLI provider execution failed")'), /Coder 第 1 次执行失败.*原始诊断|Coder 第 1 次执行失败.*模型服务执行失败/);
   assert.equal(h.run('humanizeBlockingText("NONTRANSIENT_INFRA: coder knowledge preparation failed: PROVIDER_UNAVAILABLE")'), "Coder 知识准备失败（原因代码：PROVIDER_UNAVAILABLE），请检查模型服务后再继续。");
 });
+function sourceRebindFixture(h, rules = false) {
+  h.run(`data.plan.purpose = "source_rebind"; data.plan.target_base_ref = data.plan.prepared_source_revision = "f".repeat(40);
+    operations[1].intent.purpose = "source_rebind"; operations[1].intent.target_base_ref = data.plan.target_base_ref;`);
+  if (rules) h.plan.facts.native_rule_change = {change_sha256: "7".repeat(64), changes: [
+    {path: "AGENTS.md", change: "modified"},
+  ]};
+  return h;
+}
 
 test("provider preparation uses one target-free check without claiming the prerequisites fixed", async () => {
   const h = fixture();
@@ -166,4 +174,98 @@ test("canonical omitted artifact and explicit null both preserve an exact failed
     const plan = h.run('engineeringBaselinePlan(data.request, data.task, data.step, "stopped_provider_retry")');
     assert.equal(plan?.plan_sha256, h.plan.plan_sha256);
   }
+});
+
+test("a current source-rebind provider plan supplies the displayed decision and copied next action", async () => {
+  const h = sourceRebindFixture(fixture(true), true);
+  const panel = h.run('const panel = document.createElement("section"); appendEngineeringBaseline(panel, data.request, data.task, data.step); appendEngineeringStoppedProviderRetry(panel, data.request, data.task, data.step); panel');
+  assert.ok(button(panel, "批准更新基线，保持暂停"));
+  assert.equal(button(panel, "准备保留进度的续跑方案"), undefined);
+  const current = h.run('engineeringWaitCurrentFacts(data.request, data.step, data.proof, null, null, null)');
+  assert.match(current.preservation, /完整封存/);
+  assert.match(current.user, /批准更新基线，保持暂停/);
+  assert.doesNotMatch(current.user, /准备保留进度的续跑方案/);
+  h.run(`globalThis.copied = ""; globalThis.navigator = {clipboard: {writeText: async value => {copied = value;}}};
+    data.handling = {task_id: data.task.task_id, work_item_id: data.step.work_item_id, investigation: data.proof,
+      collection_failed: true, collection_failure: "WORKSPACE_CAPTURE_REJECTED", summary: "旧封存失败。", handling_sha256: "6".repeat(64)};`);
+  await h.run('copyEngineeringWaitReport(data.request, data.handling)');
+  const report = h.run("copied");
+  assert.match(report, /当前续跑方案 · 4444/);
+  assert.match(report, /目标代码版本 · f{40}/);
+  assert.match(report, /原处理结果 · /);
+  assert.match(report, /完整项目规范变更/);
+  assert.match(report, /批准更新基线，保持暂停/);
+  assert.doesNotMatch(report, /当前结果 · |用户操作 · .*准备保留进度的续跑方案/);
+});
+
+test("source-rebind provider approval requires independent prerequisite and reviewed native-rule consent", async () => {
+  const h = sourceRebindFixture(fixture(true), true);
+  let panel = h.run('const panel = document.createElement("section"); appendEngineeringBaseline(panel, data.request, data.task, data.step); panel');
+  let checks = descendants(panel).filter(node => node.tagName === "INPUT" && node.type === "checkbox");
+  assert.equal(checks.length, 2);
+  checks.forEach(check => {check.checked = true; check.events.change();});
+  await button(panel, "批准更新基线，保持暂停").events.click();
+  assert.equal(h.run("submitted.length"), 0, "unread full rules cannot be approved through forged checkbox events");
+  h.run('saveNativeRuleReview(data.plan, "AGENTS.md", {status: "READY", inspection: {unified_diff: "full exact native rule change"}})');
+  panel = h.run('const fresh = document.createElement("section"); appendEngineeringBaseline(fresh, data.request, data.task, data.step); fresh');
+  checks = descendants(panel).filter(node => node.tagName === "INPUT" && node.type === "checkbox");
+  assert.equal(checks.every(check => check.checked === false), true);
+  const approve = button(panel, "批准更新基线，保持暂停");
+  for (const [provider, rules] of [[true, false], [false, true]]) {
+    checks[0].checked = provider; checks[1].checked = rules; checks.forEach(check => check.events.change());
+    assert.equal(approve.disabled, true);
+    await approve.events.click(); assert.equal(h.run("submitted.length"), 0);
+  }
+  checks.forEach(check => {check.checked = true; check.events.change();});
+  assert.equal(approve.disabled, false); await approve.events.click();
+  assert.equal(h.run("submitted.length"), 1);
+  assert.equal(h.run("submitted[0].expected_plan_sha256"), h.plan.plan_sha256);
+  assert.equal(h.run("submitted[0].approved_native_rule_change_sha256"), "7".repeat(64));
+  assert.equal(h.run("submitted[0].confirm_provider_prerequisites_repaired"), true);
+  assert.equal(h.run("submitted[0].continuation_mode"), "pause");
+  assert.equal(h.run('Object.hasOwn(submitted[0], "purpose")'), false, "execute retains its original plan contract");
+});
+
+test("only the newest exact provider plan controls guidance across source and same-source purposes", () => {
+  const h = sourceRebindFixture(fixture(true));
+  h.run(`const earlier = JSON.parse(JSON.stringify(operations[1])); earlier.operation_id = "earlier";
+    earlier.updated_at = "2026-10-12T00:00:30Z"; earlier.intent.purpose = "stopped_provider_retry";
+    delete earlier.intent.target_base_ref; earlier.result.execution_baseline_plan.purpose = "stopped_provider_retry";
+    earlier.result.execution_baseline_plan.plan_sha256 = "8".repeat(64);
+    earlier.result.execution_baseline_plan.target_base_ref = earlier.result.execution_baseline_plan.prepared_source_revision = "c".repeat(40);
+    operations.push(earlier);`);
+  let facts = h.run('engineeringWaitCurrentFacts(data.request, data.step, data.proof, null, null, null)');
+  assert.match(facts.user, /批准更新基线，保持暂停/);
+  h.run('earlier.updated_at = "2026-10-12T00:02:00Z"');
+  facts = h.run('engineeringWaitCurrentFacts(data.request, data.step, data.proof, null, null, null)');
+  assert.doesNotMatch(facts.user, /批准更新基线/);
+  h.run('earlier.intent.project_id = "project_other"');
+  facts = h.run('engineeringWaitCurrentFacts(data.request, data.step, data.proof, null, null, null)');
+  assert.match(facts.user, /批准更新基线，保持暂停/);
+});
+
+test("foreign, invalid and unrelated source plans cannot replace provider preparation", () => {
+  for (const mutation of ['operations[1].intent.project_id = "project_other"',
+    'data.plan.facts.stopped_provider_failure.capture_stop.run_id = "run_other"',
+    'delete data.plan.facts.stopped_provider_failure']) {
+    const h = sourceRebindFixture(fixture(true)); h.run(mutation);
+    const panel = h.run('const panel = document.createElement("section"); appendEngineeringStoppedProviderRetry(panel, data.request, data.task, data.step); panel');
+    assert.ok(button(panel, "准备保留进度的续跑方案"), mutation);
+    assert.doesNotMatch(text(panel), /平台已核验原执行已停止/);
+  }
+});
+
+test("an old same-source callback cannot submit after a newer exact source-rebind plan", async () => {
+  const h = fixture(true);
+  const panel = h.run('const panel = document.createElement("section"); appendEngineeringStoppedProviderRetry(panel, data.request, data.task, data.step); panel');
+  const confirmation = descendants(panel).find(node => node.tagName === "INPUT");
+  confirmation.checked = true; confirmation.events.change();
+  h.run(`const next = JSON.parse(JSON.stringify(operations[1])); next.operation_id = "source_next";
+    next.updated_at = "2026-10-12T00:02:00Z"; next.intent.purpose = "source_rebind";
+    next.intent.target_base_ref = "f".repeat(40); next.result.execution_baseline_plan.purpose = "source_rebind";
+    next.result.execution_baseline_plan.plan_sha256 = "9".repeat(64);
+    next.result.execution_baseline_plan.target_base_ref = next.result.execution_baseline_plan.prepared_source_revision = "f".repeat(40);
+    operations.push(next);`);
+  await button(panel, "确认前提已修复，保留进度").events.click();
+  assert.equal(h.run("submitted.length"), 0);
 });
