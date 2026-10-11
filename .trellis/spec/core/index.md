@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`console-idle-backoff.md`](console-idle-backoff.md): finite idle dispatch backoff,
+  immediate durable-submission and stop wakeups, unchanged complete claim validation.
+
 - [`operation-summaries.md`](operation-summaries.md): bounded read-only history pagination, full-byte validation, active completeness and exact-detail separation.
 
 - [`native-cli-unknown-failure.md`](native-cli-unknown-failure.md): trusted native diagnostics and nontransient unknown exits.
