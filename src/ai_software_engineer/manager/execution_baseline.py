@@ -655,6 +655,15 @@ class StoredCoderExecutionInputResolver:
             raise ValueError("bound baseline has no immutable patch body store")
         return self.store.required_context(source.baseline)
 
+    def require_current(self, binding: ExecutionBaselineBinding, task: Task) -> None:
+        """Reopen all authority/epoch/patch evidence before trusting a v2 projection."""
+        binding.require_task(task)
+        source = self.current(task, implementation=None, progress=None)
+        # current() reads the complete append-only store and validates each
+        # operation, authority, native epoch, retained patch SHA and UTF-8 body.
+        if source.baseline != binding:
+            raise ValueError("执行基线上下文不是最新的完整可信执行绑定")
+
     def native_rule_epoch(self, source: CoderExecutionInput) -> NativeRuleEpoch | None:
         if source.baseline is None or source.baseline.native_rule_epoch_sha256 is None:
             return None

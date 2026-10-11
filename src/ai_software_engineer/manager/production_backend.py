@@ -1209,7 +1209,9 @@ class ProductionProjectDeliveryBackend:
 
         native_registry = None
         if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory):
-            selected_adapters = selected_adapters.with_execution_guard(worker_guard)
+            selected_adapters = selected_adapters.with_execution_guard(
+                worker_guard
+            ).with_baseline_verifier(baseline_inputs)
             if baseline_inputs.store is not None and baseline_inputs.store.bindings_for_task(
                 dispatch.task_id
             ):

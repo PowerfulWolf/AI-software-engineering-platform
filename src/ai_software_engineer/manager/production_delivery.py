@@ -32,6 +32,7 @@ from ai_software_engineer.config import (
     ProviderRouteConfig,
 )
 from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
+from ai_software_engineer.context.execution_baseline import ExecutionBaselineContextVerifier
 from ai_software_engineer.domain import AgentDefinition, AgentRole, TeamRole
 from ai_software_engineer.domain.native_verification import (
     NativeVerificationWaiting,
@@ -82,12 +83,14 @@ class ConfiguredDeliveryRouteAdapterFactory:
         verification_evidence: VerificationEvidenceProvider | None = None,
         interruption_control: CoderInterruptionControl | None = None,
         registered_verifier: RegisteredNativePythonVerifier | None = None,
+        baseline_verifier: ExecutionBaselineContextVerifier | None = None,
     ) -> None:
         self._initial_admission = initial_workspace_admission
         self._execution_guard = execution_guard
         self._verification_evidence = verification_evidence
         self._interruption_control = interruption_control
         self._registered_verifier = registered_verifier
+        self._baseline_verifier = baseline_verifier
 
     def with_execution_guard(self, guard: ExecutionGuard) -> ConfiguredDeliveryRouteAdapterFactory:
         """Bind Worker ownership while preserving explicitly approved recovery admission."""
@@ -97,6 +100,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             verification_evidence=self._verification_evidence,
             interruption_control=self._interruption_control,
             registered_verifier=self._registered_verifier,
+            baseline_verifier=self._baseline_verifier,
         )
 
     def with_initial_workspace_admission(
@@ -110,6 +114,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             verification_evidence=self._verification_evidence,
             interruption_control=self._interruption_control,
             registered_verifier=self._registered_verifier,
+            baseline_verifier=self._baseline_verifier,
         )
 
     def wrap_initial_workspace_admission(
@@ -128,6 +133,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             verification_evidence=provider,
             interruption_control=self._interruption_control,
             registered_verifier=self._registered_verifier,
+            baseline_verifier=self._baseline_verifier,
         )
 
     def with_interruption_control(
@@ -139,6 +145,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             verification_evidence=self._verification_evidence,
             interruption_control=control,
             registered_verifier=self._registered_verifier,
+            baseline_verifier=self._baseline_verifier,
         )
 
     def with_registered_verifier(
@@ -151,6 +158,20 @@ class ConfiguredDeliveryRouteAdapterFactory:
             verification_evidence=self._verification_evidence,
             interruption_control=self._interruption_control,
             registered_verifier=registry,
+            baseline_verifier=self._baseline_verifier,
+        )
+
+    def with_baseline_verifier(
+        self, verifier: ExecutionBaselineContextVerifier
+    ) -> ConfiguredDeliveryRouteAdapterFactory:
+        """Preserve a trusted complete-store reader across every provider wrapper."""
+        return ConfiguredDeliveryRouteAdapterFactory(
+            initial_workspace_admission=self._initial_admission,
+            execution_guard=self._execution_guard,
+            verification_evidence=self._verification_evidence,
+            interruption_control=self._interruption_control,
+            registered_verifier=self._registered_verifier,
+            baseline_verifier=verifier,
         )
 
     def prepare_verifier(
@@ -242,7 +263,9 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 agent_id=definition.id,
                 agent_version=definition.version,
                 prompt_builder=prompt_builder,
-                candidate_source=BoundCandidateSource(context_resolver),
+                candidate_source=BoundCandidateSource(
+                    context_resolver, baseline_verifier=self._baseline_verifier
+                ),
                 executable=config.codex_executable,
                 proxy_base_url=config.codex_cli_proxy_base_url if proxy else None,
                 proxy_api_key_env=config.codex_cli_proxy_api_key_env if proxy else None,

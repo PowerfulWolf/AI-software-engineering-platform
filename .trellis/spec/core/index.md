@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`baseline-context-projection.md`](baseline-context-projection.md): versioned preserve-draft
+  reading projections, complete-store verification and unchanged full reapply input.
+
 - [`dynamic-credential-source.md`](dynamic-credential-source.md): exact AST provenance for
   runtime-generated negative security test input, unchanged generic secret detection and full captures.
 

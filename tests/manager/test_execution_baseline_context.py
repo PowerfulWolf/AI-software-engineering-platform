@@ -194,7 +194,7 @@ def test_all_role_contexts_use_exact_native_epoch_before_consultation(
 
 
 @pytest.mark.parametrize("role", [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER])
-def test_baseline_required_context_is_full_for_all_delivery_roles(
+def test_preserved_baseline_context_keeps_full_store_evidence_for_all_delivery_roles(
     tmp_path: Path, role: AgentRole
 ) -> None:
     f = setup(tmp_path)
@@ -288,11 +288,14 @@ def test_baseline_required_context_is_full_for_all_delivery_roles(
         }
     )
     type(request).model_validate(request.to_wire())
-    assert execution_baseline_from_context(context, request, task) == binding
+    assert execution_baseline_from_context(context, request, task, verifier=resolver) == binding
     section = next(section for section in context.sections if section.name == "execution.baseline")
-    assert "VALUE = 2" in section.content and "EXTRA = 3" in section.content
-    assert "password=settings.password" in section.content
-    assert 'secret = foreign / \\"secret.json\\"' in section.content
+    body = resolver.required_context(resolver.current(task, implementation=None, progress=None))
+    assert body is not None
+    assert "VALUE = 2" in body and "EXTRA = 3" in body
+    assert "password=settings.password" in body
+    assert 'secret = foreign / "secret.json"' in body
+    assert "complete_patch" not in json.loads(section.content)
     assert not section.truncated
     assert task.base_ref != binding.execution_base_ref and plan.source_revision == task.base_ref
     finalized = append_knowledge_context(
@@ -318,9 +321,13 @@ def test_baseline_required_context_is_full_for_all_delivery_roles(
     assert verified.sections[-1].name == "knowledge.consultation"
     assert sum(s.name == "execution.baseline" for s in verified.sections) == 1
     if role is not AgentRole.CODER:
-        snapshot = BoundCandidateSource(StoredContextResolver(contexts, artifacts)).append(
-            request, f.worktree.path, "prompt"
-        )
+        with pytest.raises(WorkspacePolicyError, match="baseline"):
+            BoundCandidateSource(StoredContextResolver(contexts, artifacts)).append(
+                request, f.worktree.path, "prompt"
+            )
+        snapshot = BoundCandidateSource(
+            StoredContextResolver(contexts, artifacts), baseline_verifier=resolver
+        ).append(request, f.worktree.path, "prompt")
         payload = source_payload(snapshot.removeprefix("prompt"))
         assert payload["base_revision"] == binding.execution_base_ref
         assert payload["candidate_revision"] == candidate
@@ -347,11 +354,11 @@ def test_baseline_required_context_is_full_for_all_delivery_roles(
             ),
         ):
             with pytest.raises(WorkspacePolicyError, match="baseline"):
-                BoundCandidateSource(StoredContextResolver(contexts, artifacts)).append(
-                    bad_request, f.worktree.path, "prompt"
-                )
+                BoundCandidateSource(
+                    StoredContextResolver(contexts, artifacts), baseline_verifier=resolver
+                ).append(bad_request, f.worktree.path, "prompt")
     changed = json.loads(section.content)
-    changed["complete_patch"] += "unexpected extra mutation\n"
+    changed["retained_patch"]["sha256"] = "e" * 64
     content = json.dumps(changed)
     bad_section = section.model_copy(
         update={"content": content, "sha256": hashlib.sha256(content.encode()).hexdigest()}
@@ -365,7 +372,7 @@ def test_baseline_required_context_is_full_for_all_delivery_roles(
         }
     )
     with pytest.raises(ValueError, match="补丁"):
-        execution_baseline_from_context(bad_context, request, task)
+        execution_baseline_from_context(bad_context, request, task, verifier=resolver)
     with pytest.raises(ContextSourceError, match="完整输入不一致"):
         BaselineRunContextBuilder(
             SimpleNamespace(build=lambda *args, **kwargs: bad_context),

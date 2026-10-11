@@ -37,7 +37,10 @@ from ai_software_engineer.agents.fallback import (
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import FileContextStore
-from ai_software_engineer.context.execution_baseline import ExecutionBaselineContext
+from ai_software_engineer.context.execution_baseline import (
+    PreservedWorktreeBaselineContext,
+    parse_execution_baseline_context,
+)
 from ai_software_engineer.context.native import validate_native_rule_epoch_context
 from ai_software_engineer.domain import (
     AgentDefinition,
@@ -261,13 +264,14 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             assert request.execution_base_ref == execution_base
             context = FileContextStore(sidecar / "contexts").get(request.context_manifest_id)
             (section,) = tuple(s for s in context.sections if s.name == "execution.baseline")
-            trusted = ExecutionBaselineContext.model_validate_json(section.content)
+            trusted = parse_execution_baseline_context(section.content)
             assert not section.truncated
             assert trusted.binding.binding_sha256 == expected_binding
-            assert hashlib.sha256(trusted.complete_patch.encode()).hexdigest() == (
-                trusted.binding.retained_patch.sha256
-            )
-            assert "+unknown retained draft" in trusted.complete_patch
+            assert isinstance(trusted, PreservedWorktreeBaselineContext)
+            assert trusted.retained_patch == trusted.binding.retained_patch
+            assert "complete_patch" not in json.loads(section.content)
+            if request.role is AgentRole.CODER:
+                assert (cwd / "hello.txt").read_text() == "unknown retained draft\n"
             if expected_epoch is not None:
                 assert trusted.binding.native_rule_epoch_sha256 == expected_epoch.epoch_sha256
                 validate_native_rule_epoch_context(context, expected_epoch)

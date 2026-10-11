@@ -10,7 +10,10 @@ from typing import cast
 import pytest
 
 from ai_software_engineer.agents.models import AgentRequest
-from ai_software_engineer.context.execution_baseline import ExecutionBaselineContext
+from ai_software_engineer.context.execution_baseline import (
+    ExecutionBaselineContext,
+    PreservedWorktreeBaselineContext,
+)
 from ai_software_engineer.context.models import ContextBudget, ContextBundle, ContextSection
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.execution_baseline import (
@@ -198,8 +201,10 @@ def test_context_cannot_invent_a_missing_baseline_history(tmp_path: Path) -> Non
         )
 
 
+@pytest.mark.parametrize("context_version", ["v1", "v2"])
 def test_preserved_draft_terminal_context_keeps_real_source_and_capture_base_distinct(
     tmp_path: Path,
+    context_version: str,
 ) -> None:
     from ai_software_engineer.domain.enums import TaskStatus
     from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
@@ -245,9 +250,14 @@ def test_preserved_draft_terminal_context_keeps_real_source_and_capture_base_dis
             "execution_base_ref": binding.execution_base_ref,
         }
     )
-    content = ExecutionBaselineContext.from_required_context(
+    complete = ExecutionBaselineContext.from_required_context(
         binding, f.service.store.required_context(binding)
-    ).model_dump_json()
+    )
+    content = (
+        PreservedWorktreeBaselineContext.from_complete(complete).model_dump_json()
+        if context_version == "v2"
+        else complete.model_dump_json()
+    )
     context = ContextBundle(
         context_id=request.context_manifest_id,
         task_id=task.id,

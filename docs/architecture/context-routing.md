@@ -58,6 +58,14 @@ SHA-256；相同 identity 的重复登记返回首次观察值，不同内容复
 
 Builder 始终生成并优先交付 `policy`、`task`、`role`；提供且不同于 `Task.base_ref` 的 candidate revision 时再生成 `candidate`。声明来源按 `(priority, uri, source_id)` 排序，因此调用方输入顺序不会影响结果。来源 ID 必须唯一，生成 ID (`policy/task/role/candidate`) 不能被外部 source 占用。
 
+执行基线的 `preserve_draft` 新 Context 使用 v2 阅读投影：完整 typed binding、角色说明及
+旧补丁 URI/SHA-256/字节数。生成前平台仍校验完整不可变方案、授权、规范版本、现场与补丁；
+读取该投影的候选验证、原生验证和终态恢复入口必须重新通过完整 store verifier，缺失则拒绝。
+草稿已在受控工作区保留，不再在每个角色 prompt 重复内嵌旧补丁。`coder_reapply` 从干净基线
+开始，仍必须完整携带旧补丁正文；历史 v1 Context 的原正文和摘要保持不变。投影不替代审批、
+实际停止证明或 QA/Review verdict，详见
+[`baseline-context-projection.md`](../../.trellis/spec/core/baseline-context-projection.md)。
+
 ## 4. 构建算法与确定性
 
 1. 校验 Task、role、`attempt ∈ [1, 10]` 和无控制字符的 `candidate_revision`；未提供 candidate 时使用 `Task.base_ref`。

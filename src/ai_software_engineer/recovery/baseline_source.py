@@ -12,6 +12,7 @@ from ai_software_engineer.domain.task import Task
 from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.team_workspace import _reject_symlinks
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
@@ -130,7 +131,21 @@ def require_terminal_baseline_context(
         or start.checkpoint_sequence < latest.prior_task_revision
     ):
         raise ValueError("terminal request differs from the exact latest execution baseline")
-    observed = execution_baseline_from_context(context, request, task)
+    baseline_root = sidecar / "state/execution-baselines" / task.id
+    # Historical v1 callers may already supply fully verified epochs. They
+    # retain their original inline-patch contract. V2 refuses an absent reader
+    # in execution_baseline_from_context rather than trusting the projection.
+    verifier = (
+        StoredCoderExecutionInputResolver(FileExecutionBaselineStore(baseline_root, read_only=True))
+        if baseline_root.exists()
+        else None
+    )
+    observed = execution_baseline_from_context(
+        context,
+        request,
+        task,
+        verifier=verifier,
+    )
     if observed != latest:
         raise ValueError("terminal context differs from the store-verified execution baseline")
     return latest

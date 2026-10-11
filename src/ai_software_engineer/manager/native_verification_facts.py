@@ -7,7 +7,10 @@ from ai_software_engineer.agents.execution import ExecutionGuard
 from ai_software_engineer.agents.models import AgentRequest
 from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.context import FileContextStore
-from ai_software_engineer.context.execution_baseline import execution_baseline_from_context
+from ai_software_engineer.context.execution_baseline import (
+    ExecutionBaselineContextVerifier,
+    execution_baseline_from_context,
+)
 from ai_software_engineer.domain import (
     AgentDefinition,
     AgentRole,
@@ -101,7 +104,10 @@ class ProductionNativeVerificationFacts:
             raise ValueError("native verification is not the currently authorized serial role")
         claim = lease.claim
         context = self.contexts.get(request.context_manifest_id)
-        baseline = execution_baseline_from_context(context, request, task)
+        verifier = (
+            self.inputs if isinstance(self.inputs, ExecutionBaselineContextVerifier) else None
+        )
+        baseline = execution_baseline_from_context(context, request, task, verifier=verifier)
         current = (
             self.inputs.current(task, implementation=None, progress=None) if self.inputs else None
         )
