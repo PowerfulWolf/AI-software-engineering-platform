@@ -27,6 +27,7 @@ from ai_software_engineer.manager.baseline_models import (
     ExecutionBaselinePlan,
 )
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
+from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.store.mysql_repository import _decode_task, _encode, open_mysql_connection
 from ai_software_engineer.work_queue.execution_store import (
     QueuedRoleStep,
@@ -148,7 +149,9 @@ class BaselineQueueRelease(DomainModel):
         return self
 
 
+@source_inspection_scope()
 def consumptions(queue: MySqlRoleQueue, task_id: str) -> tuple[BaselineQueueConsumption, ...]:
+    """Freshly validate every row, sharing only bounded pure scans within this read."""
     with (
         closing(open_mysql_connection(queue._dsn)) as connection,
         connection.cursor(DictCursor) as cursor,
