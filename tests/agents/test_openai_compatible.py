@@ -18,6 +18,7 @@ from ai_software_engineer.agents import (
     OpenAICompatibleConfigurationError,
     PromptMessage,
     PromptPayload,
+    RequestPromptBuilder,
     StoredContextResolver,
 )
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
@@ -33,6 +34,7 @@ from ai_software_engineer.orchestration import FileRunContextBuilder
 from tests.domain.factories import (
     NOW,
     make_agent,
+    make_coder_progress_artifact,
     make_implementation_artifact,
     make_plan_artifact,
     make_task,
@@ -357,7 +359,7 @@ def test_endpoint_must_be_safe_http_url(endpoint: str) -> None:
 
 
 def test_context_prompt_builder_keeps_machine_policy_in_system_message() -> None:
-    request = _coder_request()
+    request = _coder_request().model_copy(update={"attempt": 4})
     artifact = _align(make_implementation_artifact(), request)
     request = request.model_copy(update={"input_artifact_ids": (artifact.artifact_id,)})
     context = ContextBundle(
@@ -401,7 +403,8 @@ def test_context_prompt_builder_keeps_machine_policy_in_system_message() -> None
     assert "project_observations" in payload.messages[0].content
     assert "independent verification" in payload.messages[0].content
     assert json.loads(payload.messages[1].content)["output_contract"] == {
-        "parent_artifact_ids": [artifact.artifact_id]
+        "coder_progress_checkpoint_sequence": request.attempt,
+        "parent_artifact_ids": [artifact.artifact_id],
     }
 
     assert payload.messages[0].role == "system"
@@ -409,6 +412,41 @@ def test_context_prompt_builder_keeps_machine_policy_in_system_message() -> None
     assert payload.messages[1].role == "user"
     assert request.context_manifest_id in payload.messages[1].content
     assert artifact.artifact_id in payload.messages[1].content
+    assert "exact current request attempt" in payload.messages[0].content
+    assert "queue/state-event checkpoint sequence" in payload.messages[0].content
+
+
+def test_request_prompt_explicitly_binds_progress_to_attempt() -> None:
+    request = _coder_request().model_copy(update={"attempt": 4})
+    prompt = RequestPromptBuilder().build(request)
+    assert json.loads(prompt.messages[1].content)["output_contract"] == {
+        "coder_progress_checkpoint_sequence": 4
+    }
+    assert "exact current request attempt" in prompt.messages[0].content
+    assert "queue/state-event checkpoint sequence" in prompt.messages[0].content
+
+
+@pytest.mark.parametrize("sequence", [4, 8, 9])
+def test_chat_progress_binds_exact_attempt_before_acceptance(sequence: int) -> None:
+    request = _coder_request().model_copy(update={"attempt": 4})
+    template = make_coder_progress_artifact()
+    artifact = _align(
+        template.model_copy(
+            update={
+                "content": template.content.model_copy(update={"checkpoint_sequence": sequence})
+            }
+        ),
+        request,
+    )
+    result = _adapter(
+        RecordingTransport(response=HttpResponse(status_code=200, body=_provider_body(artifact)))
+    ).run(request)
+    if sequence == 4:
+        assert result.status is AgentRunStatus.SUCCEEDED and result.artifact is not None
+    else:
+        assert result.status is AgentRunStatus.FAILED and result.artifact is None
+        assert result.error is not None and result.error.code is AgentErrorCode.INVALID_OUTPUT
+        assert not result.error.transient and "开发检查点" in result.error.message
 
 
 def test_context_prompt_builder_rejects_cross_task_input_artifact() -> None:

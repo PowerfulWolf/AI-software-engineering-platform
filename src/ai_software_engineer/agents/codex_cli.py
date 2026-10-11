@@ -30,10 +30,14 @@ from ai_software_engineer.agents.continuation import (
     native_stop_recorder,
 )
 from ai_software_engineer.agents.execution import ExecutionGuard, NativeProcessStop, execution_scope
-from ai_software_engineer.agents.json_schema import strict_output_schema
+from ai_software_engineer.agents.json_schema import (
+    bind_coder_progress_sequence,
+    strict_output_schema,
+)
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
     AgentFailure,
+    AgentOutputContractError,
     AgentRequest,
     AgentResult,
     AgentRunStatus,
@@ -640,7 +644,9 @@ class CodexCliAgentAdapter:
             schema_path = temporary_root / "output-schema.json"
             output_path = temporary_root / "last-message.json"
             schema_path.write_text(
-                json.dumps(_artifact_schema(request.role), ensure_ascii=False),
+                json.dumps(
+                    _artifact_schema(request.role, attempt=request.attempt), ensure_ascii=False
+                ),
                 encoding="utf-8",
             )
             image_arguments: list[str] = []
@@ -857,7 +863,7 @@ class CodexCliAgentAdapter:
         except ValueError as error:
             raise _CodexOutputContractError("GIT_CONTRACT", raw_output) from error
         try:
-            return AgentResult(
+            result = AgentResult(
                 run_id=request.run_id,
                 task_id=request.task_id,
                 role=request.role,
@@ -868,6 +874,10 @@ class CodexCliAgentAdapter:
                 artifact=artifact,
                 duration_ms=_elapsed_ms(started),
             )
+            result.validate_current_output()
+            return result
+        except AgentOutputContractError as error:
+            return error.result
         except ValueError:
             return _failure(
                 request,
@@ -1002,7 +1012,7 @@ class CodexCliAgentAdapter:
             policy.authorize_write(path)
 
 
-def _artifact_schema(role: AgentRole) -> dict[str, object]:
+def _artifact_schema(role: AgentRole, *, attempt: int | None = None) -> dict[str, object]:
     from ai_software_engineer.domain.artifact import (
         ImplementationReportArtifact,
         PlanArtifact,
@@ -1026,7 +1036,10 @@ def _artifact_schema(role: AgentRole) -> dict[str, object]:
         schema = QaReportArtifact.model_json_schema()
     else:
         schema = ReviewReportArtifact.model_json_schema()
-    return strict_output_schema(cast(dict[str, object], schema))
+    normalized = strict_output_schema(cast(dict[str, object], schema))
+    if role is AgentRole.CODER and attempt is not None:
+        bind_coder_progress_sequence(normalized, attempt=attempt)
+    return normalized
 
 
 def _compile_prompt(
@@ -1059,6 +1072,11 @@ def _compile_prompt(
             "parent_artifact_ids": expected_parents,
             "producer_role": request.role.value,
             "producer_run_id": request.run_id,
+            **(
+                {"coder_progress_checkpoint_sequence": request.attempt}
+                if request.role is AgentRole.CODER
+                else {}
+            ),
             "supersedes_by_kind": (
                 {
                     kind.value: artifact_id
@@ -1102,7 +1120,10 @@ def _compile_prompt(
             "changes and return a provisional implementation-report whose source_revision and "
             "content.commit_sha both equal the exact request source revision; the platform will "
             "policy-check and bind the candidate. If more work is required, return coder-progress "
-            "with status CONTINUE_REQUIRED, the complete changed-file inventory, completed and "
+            "with status CONTINUE_REQUIRED and content.checkpoint_sequence exactly equal to "
+            "OUTPUT_BINDINGS.coder_progress_checkpoint_sequence (the current request attempt). "
+            "Do not increment it or copy the queue/state-event checkpoint sequence. Include "
+            "the complete changed-file inventory, completed and "
             "remaining plan steps, tests, and concrete next actions. A progress checkpoint is not "
             "a candidate and must not claim completion. "
             "Prioritize focused required tests before broader optional suites. Stop expanding "

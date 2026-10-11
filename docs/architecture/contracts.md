@@ -438,6 +438,13 @@ Coder 可输出 `coder-progress` 或 `implementation-report`。前者绑定输�
 候选 SHA。后续 progress 通过同 kind `supersedes` 串联，最终 implementation-report 以 progress
 作为 parent，但只有 implementation-report 才允许 Task 进入 QA。
 
+`coder-progress.content.checkpoint_sequence` 必须精确等于本次 `AgentRequest.attempt`。
+它不是队列 checkpoint、Task revision 或上次产物序号的递增值。动态 provider Schema 以
+`const` 绑定当前 attempt，prompt 同时明确该值。新调用及旧结果重放在 live 接纳边界再次校验；
+错误返回非临时 `INVALID_OUTPUT`，不得自动修正模型的 JSON 或创建候选。
+旧 `AgentResult`/`DeliveryInvocationOutcome` 仍按原模型读取与验摘要；新 live 校验不能使已封存
+的旧错误产出变成不可读损坏记录。编排保留最终序号守卫，并在写入ArtifactStore前校验新结果。
+
 ## 9. Python 领域入口
 
 `src/ai_software_engineer/domain/` 是 Python 控制平面的唯一领域类型入口。`TaskStatus`、

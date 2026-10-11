@@ -25,6 +25,7 @@ from ai_software_engineer.agents.model_diagnostics import safe_request_id
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
     AgentFailure,
+    AgentOutputContractError,
     AgentRequest,
     AgentResult,
     AgentRunStatus,
@@ -40,6 +41,7 @@ from ai_software_engineer.context.models import ContextBundle, ContextId
 from ai_software_engineer.context.ports import ContextStore
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.artifact import Artifact, ArtifactId, validate_artifact_payload
+from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, WirePayload
 from ai_software_engineer.domain.visual_evidence import PromptImage
 
@@ -341,6 +343,8 @@ def _read_http_body(
 def _output_contract(request: AgentRequest) -> WirePayload:
     """Expose orchestrator-owned lineage separately from context dependencies."""
     contract: WirePayload = {}
+    if request.role is AgentRole.CODER:
+        contract["coder_progress_checkpoint_sequence"] = request.attempt
     if request.expected_parent_artifact_ids is not None:
         contract["parent_artifact_ids"] = list(request.expected_parent_artifact_ids)
     if request.expected_supersedes_by_kind is not None:
@@ -352,6 +356,16 @@ def _output_contract(request: AgentRequest) -> WirePayload:
             )
         }
     return contract
+
+
+def _progress_output_guidance(request: AgentRequest) -> str:
+    if request.role is not AgentRole.CODER:
+        return ""
+    return (
+        " For coder-progress, content.checkpoint_sequence must equal "
+        "output_contract.coder_progress_checkpoint_sequence, the exact current request attempt. "
+        "Do not increment it or use a queue/state-event checkpoint sequence."
+    )
 
 
 _PROJECT_OBSERVATION_GUIDANCE = (
@@ -383,6 +397,7 @@ class RequestPromptBuilder:
             "supersedes value selected by the returned Artifact kind from "
             "output_contract.supersedes_by_kind; "
             "input_artifact_ids are context dependencies, not necessarily direct parents."
+            + _progress_output_guidance(request)
             + _PROJECT_OBSERVATION_GUIDANCE
         )
         user = json.dumps(
@@ -443,7 +458,9 @@ class ContextPromptBuilder:
             "supersedes value selected by the returned Artifact kind from "
             "output_contract.supersedes_by_kind; "
             "input_artifact_ids are context dependencies, not necessarily direct parents.\n"
-            f"MACHINE_POLICY={policy_sections[0]}" + _PROJECT_OBSERVATION_GUIDANCE
+            f"MACHINE_POLICY={policy_sections[0]}"
+            + _progress_output_guidance(request)
+            + _PROJECT_OBSERVATION_GUIDANCE
         )
         sections: list[dict[str, JsonValue]] = []
         for section in context.sections:
@@ -608,7 +625,10 @@ class OpenAICompatibleAgentAdapter:
                 usage=usage,
                 duration_ms=duration_ms,
             )
+            result.validate_current_output()
             return result
+        except AgentOutputContractError as error:
+            return error.result
         except (UnicodeDecodeError, TypeError, ValueError, KeyError, IndexError):
             usage = _extract_usage(provider_payload)
             return _failure(

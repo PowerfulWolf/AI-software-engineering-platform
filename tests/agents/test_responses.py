@@ -29,12 +29,21 @@ from ai_software_engineer.domain import (
     ArtifactKind,
     ChangedFile,
     ChangeType,
+    CoderProgressArtifact,
     NetworkAccess,
     QaReportArtifact,
 )
 from ai_software_engineer.tools import PolicyBoundToolRegistry, ToolRequest, ToolResult
-from tests.agents.test_openai_compatible import StaticPromptBuilder, _coder_request
-from tests.domain.factories import make_implementation_artifact, make_qa_artifact
+from tests.agents.test_openai_compatible import (
+    RecordingTransport,
+    StaticPromptBuilder,
+    _coder_request,
+)
+from tests.domain.factories import (
+    make_coder_progress_artifact,
+    make_implementation_artifact,
+    make_qa_artifact,
+)
 
 
 @pytest.mark.parametrize("role", list(AgentRole))
@@ -178,6 +187,59 @@ def _request(base: str) -> tuple[AgentRequest, AgentDefinition]:
         timeout_seconds=60,
     )
     return request, definition
+
+
+@pytest.mark.parametrize("sequence", [4, 8, 9])
+def test_responses_progress_binds_exact_attempt_in_transport_and_acceptance(
+    tmp_path: Path, sequence: int
+) -> None:
+    root, base = _repository(tmp_path)
+    original, definition = _request(base)
+    request = original.model_copy(update={"attempt": 4})
+    template = make_coder_progress_artifact()
+    artifact = template.model_copy(
+        update={
+            "task_id": request.task_id,
+            "source_revision": base,
+            "context_manifest_id": request.context_manifest_id,
+            "parent_artifact_ids": (),
+            "producer": template.producer.model_copy(update={"run_id": request.run_id}),
+            "content": template.content.model_copy(
+                update={"checkpoint_sequence": sequence, "changed_files": ()}
+            ),
+        }
+    )
+    transport = RecordingTransport(
+        response=HttpResponse(
+            status_code=200,
+            body=json.dumps({"output_text": json.dumps({"artifact": artifact.to_wire()})}).encode(),
+        )
+    )
+    result = ResponsesAgentAdapter(
+        workspace_root=root,
+        endpoint="https://example.invalid/v1",
+        api_key="test-key",
+        model="model",
+        agent=definition,
+        prompt_builder=StaticPromptBuilder(),
+        transport=transport,
+    ).run(request)
+    body = json.loads(transport.calls[0][2])
+    schema = body["text"]["format"]["schema"]
+    sequence_schema = schema["$defs"]["CoderProgressContent"]["properties"]["checkpoint_sequence"]
+    assert sequence_schema["const"] == 4
+    assert Draft202012Validator(sequence_schema).is_valid(4)
+    assert not Draft202012Validator(sequence_schema).is_valid(8)
+    assert not Draft202012Validator(sequence_schema).is_valid(9)
+    if sequence == 4:
+        assert result.status is AgentRunStatus.SUCCEEDED
+        assert isinstance(result.artifact, CoderProgressArtifact)
+        assert result.artifact.content.checkpoint_sequence == 4
+    else:
+        assert result.status is AgentRunStatus.FAILED and result.artifact is None
+        assert result.error is not None and result.error.code is AgentErrorCode.INVALID_OUTPUT
+        assert not result.error.transient and "开发检查点" in result.error.message
+    assert _git(root, "rev-parse", "HEAD") == base
 
 
 class _CoderTransport:

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from ai_software_engineer.agents import (
     AgentErrorCode,
@@ -32,6 +33,7 @@ from ai_software_engineer.domain import (
     AgentRole,
     ChangedFile,
     ChangeType,
+    CoderProgressArtifact,
     ImplementationReportArtifact,
 )
 from tests.agents.test_openai_compatible import StaticPromptBuilder, _coder_request, _request
@@ -346,8 +348,11 @@ class _DirtyFailureRunner:
 
 
 class _ProgressRunner:
-    def __init__(self, request: AgentRequest) -> None:
+    def __init__(self, request: AgentRequest, *, checkpoint_sequence: int | None = None) -> None:
         self.request = request
+        self.checkpoint_sequence = checkpoint_sequence
+        self.schema: object = None
+        self.prompt = ""
 
     def run(
         self,
@@ -358,7 +363,9 @@ class _ProgressRunner:
         stdin: str,
         timeout_seconds: float,
     ) -> CodexInvocationResult:
-        del environment, stdin, timeout_seconds
+        del environment, timeout_seconds
+        self.schema = json.loads(Path(argv[argv.index("--output-schema") + 1]).read_text())
+        self.prompt = stdin
         target = cwd / "src" / "partial.py"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("PARTIAL = True\n", encoding="utf-8")
@@ -372,6 +379,11 @@ class _ProgressRunner:
                 "producer": template.producer.model_copy(update={"run_id": self.request.run_id}),
                 "content": template.content.model_copy(
                     update={
+                        "checkpoint_sequence": (
+                            self.checkpoint_sequence
+                            if self.checkpoint_sequence is not None
+                            else self.request.attempt
+                        ),
                         "changed_files": (
                             ChangedFile(
                                 path="src/partial.py",
@@ -379,7 +391,7 @@ class _ProgressRunner:
                                 lines_added=1,
                                 lines_deleted=0,
                             ),
-                        )
+                        ),
                     }
                 ),
             }
@@ -623,6 +635,42 @@ def test_coder_progress_preserves_authorized_draft_for_the_next_run(tmp_path: Pa
     assert second.artifact.kind.value == "implementation-report"
     assert _git(root, "rev-parse", "HEAD") == second.artifact.source_revision
     assert _git(root, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize("sequence", [4, 8, 9])
+def test_progress_output_binds_exact_attempt_before_success(tmp_path: Path, sequence: int) -> None:
+    root, base = _repository(tmp_path)
+    request = _coder_request().model_copy(update={"source_revision": base, "attempt": 4})
+    runner = _ProgressRunner(request, checkpoint_sequence=sequence)
+    result = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="fixture",
+        agent_id="agent_coder_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=runner,
+    ).run(request)
+    if sequence == request.attempt:
+        assert result.status is AgentRunStatus.SUCCEEDED
+        assert isinstance(result.artifact, CoderProgressArtifact)
+        assert result.artifact.content.checkpoint_sequence == 4
+    else:
+        assert result.status is AgentRunStatus.FAILED and result.artifact is None
+        assert result.error is not None and result.error.code is AgentErrorCode.INVALID_OUTPUT
+        assert "开发检查点" in result.error.message
+    assert isinstance(runner.schema, dict)
+    sequence_schema = runner.schema["$defs"]["CoderProgressContent"]["properties"][
+        "checkpoint_sequence"
+    ]
+    assert sequence_schema["const"] == 4
+    assert Draft202012Validator(sequence_schema).is_valid(4)
+    assert not Draft202012Validator(sequence_schema).is_valid(8)
+    assert not Draft202012Validator(sequence_schema).is_valid(9)
+    binding, _ = json.JSONDecoder().raw_decode(runner.prompt.split("OUTPUT_BINDINGS=", 1)[1])
+    assert binding["coder_progress_checkpoint_sequence"] == 4
+    assert "Do not increment it or copy the queue/state-event checkpoint sequence" in runner.prompt
+    assert _git(root, "rev-parse", "HEAD") == base
+    assert (root / "src" / "partial.py").read_text() == "PARTIAL = True\n"
 
 
 def test_platform_finalizes_draft_in_real_linked_worktree(tmp_path: Path) -> None:

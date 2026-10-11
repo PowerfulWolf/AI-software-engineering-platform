@@ -1,0 +1,23 @@
+{
+  "name": "coder-progress-contract",
+  "title": "精确约束开发检查点序号并保留历史产出",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-11",
+  "allowlist": [
+    "src/ai_software_engineer/agents",
+    "tests/agents",
+    ".trellis/spec/core/structured-execution-observation.md",
+    "docs/architecture/contracts.md",
+    ".trellis/tasks/10-11-coder-progress-contract",
+    "src/ai_software_engineer/work_queue/invocation.py",
+    "src/ai_software_engineer/orchestration/runner.py",
+    "tests/work_queue/test_invocation.py",
+    "tests/orchestration/test_retry.py",
+    "docs/architecture/prompt-protocol.md",
+    "tests/work_queue/test_invocation_journal.py",
+    "tests/orchestration/test_progress_output_contract.py"
+  ],
+  "reviewed_by": "root independent of implementation worker",
+  "verified_at": "2026-10-11"
+}

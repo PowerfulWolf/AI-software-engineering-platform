@@ -18,6 +18,7 @@ from ai_software_engineer.agents import (
 )
 from ai_software_engineer.agents.continuation import InterruptionRetryControl
 from ai_software_engineer.agents.execution import AgentInvocationControl
+from ai_software_engineer.agents.models import AgentOutputContractError
 from ai_software_engineer.artifacts import ArtifactStore, seal_artifact
 from ai_software_engineer.artifacts.ordering import (
     ArtifactOrderingError,
@@ -433,15 +434,26 @@ class SerialOrchestrator:
         if request.run_id in seen_run_ids:
             raise DeliveryContractViolation(f"duplicate Agent run ID: {request.run_id}")
         seen_run_ids.add(request.run_id)
-        replayed = (
-            self._invocation_control.result(request)
-            if self._invocation_control is not None and role is not AgentRole.ORCHESTRATOR
-            else None
-        )
+        try:
+            replayed = (
+                self._invocation_control.result(request)
+                if self._invocation_control is not None and role is not AgentRole.ORCHESTRATOR
+                else None
+            )
+        except AgentOutputContractError as error:
+            raise AgentRunFailed(error.result) from error
         result = replayed or self._agent_adapter.run(request)
         self._guard_write()
         self._validate_result_identity(request, result)
-        if self._invocation_control is not None and role is not AgentRole.ORCHESTRATOR:
+        try:
+            result.validate_current_output()
+        except AgentOutputContractError as error:
+            result = error.result
+        if (
+            replayed is None
+            and self._invocation_control is not None
+            and role is not AgentRole.ORCHESTRATOR
+        ):
             self._invocation_control.completed(request, result)
         if result.status is not AgentRunStatus.SUCCEEDED or result.artifact is None:
             raise AgentRunFailed(result)

@@ -113,3 +113,32 @@ Rollback optional wiring while idle; retain all newly sealed observations and
 original audit records. The previous failure mode was a subprocess compatibility
 bridge dropping trusted stop evidence before raising/JSON parsing. Keep regression
 tests at that actual bridge and production structured-client boundary.
+
+## Request-bound Coder progress admission (2026-10-11)
+
+The current request's progress sequence is a semantic output contract, distinct from
+native execution completion. `AgentResult.validate_current_output()` checks
+`coder-progress.content.checkpoint_sequence == AgentResult.attempt`; provider dynamic
+schemas bind it to the exact request attempt, and both native `OUTPUT_BINDINGS` and
+the shared prompt output contract spell out the value. `AgentOutputContractError`
+represents a nontransient `INVALID_OUTPUT`, not a provider outage or a platform bug.
+
+Apply this explicit live validation before new `SUCCEEDED` invocation/artifact
+publication and before using a sealed result for replay. Do not add it to the global
+Pydantic model validator: historical outputs must remain parseable and digest-verifiable.
+A rejected old result stays immutable and cannot be overwritten with a new FAILED
+result or replayed as accepted progress. A stop receipt only proves local execution
+ended; it does not establish valid output or a completed delivery checkpoint.
+
+| Input | Required behavior |
+| --- | --- |
+| attempt 4, progress sequence 4 | Continue existing identity/lineage/workspace guards |
+| attempt 4, sequence 8 or 9 | Nontransient INVALID_OUTPUT, no artifact/QA advancement |
+| Old sealed SUCCEEDED sequence 9 | Historical read/hash succeeds; live replay rejects |
+| Non-progress output or typed existing failure | Existing semantics unchanged |
+| Fake adapter bypasses provider schema | Runner live boundary still rejects before artifact put |
+
+Required regressions use real Codex/Responses/chat adapter output, a fake runner result,
+and durable invocation read/replay. No static wire or SQL schema change is required.
+Current K1's old rejected output is not repaired by this forward validation: it requires
+a separately verified complete stopped-workspace receipt and exact continuation decision.

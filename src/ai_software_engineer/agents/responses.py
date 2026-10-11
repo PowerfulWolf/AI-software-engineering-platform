@@ -26,10 +26,14 @@ from ai_software_engineer.agents.execution import (
     SynchronousToolLoopStop,
     execution_scope,
 )
-from ai_software_engineer.agents.json_schema import strict_output_schema
+from ai_software_engineer.agents.json_schema import (
+    bind_coder_progress_sequence,
+    strict_output_schema,
+)
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
     AgentFailure,
+    AgentOutputContractError,
     AgentRequest,
     AgentResult,
     AgentRunStatus,
@@ -284,6 +288,8 @@ class ResponsesAgentAdapter:
                 cause="local_execution_limit" if local_limit else "provider_transient",
                 timed_out=local_limit,
             )
+        except AgentOutputContractError as error:
+            result = error.result
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             result = _safe_failure(
                 request,
@@ -477,6 +483,7 @@ class ResponsesAgentAdapter:
                 input_items,
                 request.role,
                 reasoning_effort=self._reasoning_effort,
+                attempt=request.attempt,
             )
             response = self._transport.post(
                 self._endpoint,
@@ -612,7 +619,7 @@ class ResponsesAgentAdapter:
                     self._candidate_commit,
                 )
             window.remaining()
-            return AgentResult(
+            result = AgentResult(
                 run_id=request.run_id,
                 task_id=request.task_id,
                 role=request.role,
@@ -624,6 +631,8 @@ class ResponsesAgentAdapter:
                 usage=latest_usage,
                 duration_ms=_elapsed_ms(started),
             )
+            result.validate_current_output()
+            return result
         raise _LocalExecutionLimit("Responses turn budget exceeded")
 
 
@@ -633,6 +642,7 @@ def _request_body(
     role: AgentRole,
     *,
     reasoning_effort: ReasoningEffort,
+    attempt: int | None = None,
 ) -> bytes:
     payload: WirePayload = {
         "model": model,
@@ -645,7 +655,7 @@ def _request_body(
                 "type": "json_schema",
                 "name": role.value.replace("-", "_") + "_artifact",
                 "strict": True,
-                "schema": cast(JsonValue, _artifact_schema(role)),
+                "schema": cast(JsonValue, _artifact_schema(role, attempt=attempt)),
             }
         },
     }
@@ -833,7 +843,7 @@ def _normalize_endpoint(endpoint: str) -> str:
     return parsed._replace(path=path, query="", fragment="").geturl()
 
 
-def _artifact_schema(role: AgentRole) -> dict[str, object]:
+def _artifact_schema(role: AgentRole, *, attempt: int | None = None) -> dict[str, object]:
     if role is AgentRole.ORCHESTRATOR:
         schema = PlanArtifact.model_json_schema()
     elif role is AgentRole.CODER:
@@ -843,6 +853,8 @@ def _artifact_schema(role: AgentRole) -> dict[str, object]:
     else:
         schema = ReviewReportArtifact.model_json_schema()
     normalized = strict_output_schema(cast(dict[str, object], schema))
+    if role is AgentRole.CODER and attempt is not None:
+        bind_coder_progress_sequence(normalized, attempt=attempt)
     definitions = cast(dict[str, object], normalized.pop("$defs", {}))
     if role is AgentRole.QA:
         # Domain environment metadata is a free-form JSON object. Strict output

@@ -229,6 +229,34 @@ class AgentResult(DomainModel):
         if artifact.context_manifest_id != self.context_manifest_id:
             raise ValueError("AgentResult Artifact context_manifest_id mismatch")
 
+    def validate_current_output(self) -> None:
+        """Validate live acceptance without invalidating immutable historical records."""
+        if (
+            self.status is AgentRunStatus.SUCCEEDED
+            and isinstance(self.artifact, CoderProgressArtifact)
+            and self.artifact.content.checkpoint_sequence != self.attempt
+        ):
+            raise AgentOutputContractError(self)
+
+
+class AgentOutputContractError(ValueError):
+    """An intact recorded result is not a valid output for current execution."""
+
+    def __init__(self, result: AgentResult) -> None:
+        message = (
+            "开发检查点 checkpoint_sequence 必须等于本次执行 attempt; 产出未被接纳, 开发文件保留。"
+        )
+        self.result = result.model_copy(
+            update={
+                "status": AgentRunStatus.FAILED,
+                "artifact": None,
+                "error": AgentFailure(
+                    code=AgentErrorCode.INVALID_OUTPUT, message=message, transient=False
+                ),
+            }
+        )
+        super().__init__(message)
+
 
 class FakeScenario(DomainModel):
     """One deterministic fake behavior and optional typed Artifact payload."""
@@ -258,6 +286,7 @@ __all__ = [
     "AgentAttempt",
     "AgentErrorCode",
     "AgentFailure",
+    "AgentOutputContractError",
     "AgentRequest",
     "AgentResult",
     "AgentRunStatus",

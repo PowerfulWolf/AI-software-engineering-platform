@@ -132,6 +132,7 @@ class DurableInvocationControl:
         outcome.validate_integrity()
         if outcome.start.request != request:
             raise QueueConflict("invocation result is not for this exact request")
+        outcome.result.validate_current_output()
         return outcome.result
 
     def completed(self, request: AgentRequest, result: AgentResult) -> None:
@@ -139,6 +140,7 @@ class DurableInvocationControl:
         start = self.records.get("invocation-starts", key, DeliveryInvocationStart)
         if start.request != request:
             raise QueueConflict("invocation completion changed its request")
+        result.validate_current_output()
         outcome = DeliveryInvocationOutcome(start=start, result=result, outcome_sha256="0" * 64)
         outcome = outcome.model_copy(
             update={

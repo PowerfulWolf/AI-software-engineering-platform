@@ -33,6 +33,7 @@ from ai_software_engineer.domain import (
 )
 from tests.domain.factories import (
     CANDIDATE_SHA,
+    make_coder_progress_artifact,
     make_implementation_artifact,
     make_plan_artifact,
     make_qa_artifact,
@@ -367,6 +368,41 @@ def test_agent_result_itself_rejects_artifact_identity_mismatch() -> None:
             status=AgentRunStatus.SUCCEEDED,
             artifact=mismatched,
         )
+
+
+@pytest.mark.parametrize("sequence", [4, 8, 9])
+def test_live_progress_sequence_uses_attempt_without_invalidating_historical_bytes(
+    sequence: int,
+) -> None:
+    request = _request(AgentRole.CODER, attempt=4)
+    template = make_coder_progress_artifact()
+    artifact = _align(
+        template.model_copy(
+            update={
+                "content": template.content.model_copy(update={"checkpoint_sequence": sequence})
+            }
+        ),
+        request,
+    )
+    result = AgentResult(
+        run_id=request.run_id,
+        task_id=request.task_id,
+        role=request.role,
+        attempt=request.attempt,
+        source_revision=request.source_revision,
+        context_manifest_id=request.context_manifest_id,
+        status=AgentRunStatus.SUCCEEDED,
+        artifact=artifact,
+    )
+    historical = result.to_wire()
+    restored = AgentResult.model_validate(historical)
+    assert restored.to_wire() == historical
+    if sequence == request.attempt:
+        restored.validate_current_output()
+    else:
+        with pytest.raises(ValueError, match=r"checkpoint_sequence.*attempt"):
+            restored.validate_current_output()
+    assert restored.to_wire() == historical
 
 
 @pytest.mark.parametrize(

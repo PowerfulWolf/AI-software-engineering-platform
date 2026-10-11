@@ -91,6 +91,8 @@ When blocked by ambiguity, missing dependency, or required permission, stop and 
 输出二选一：未完成时为 `coder-progress`（不产生 candidate）；完成时为 provisional
 `implementation-report`，通过 `CandidateCommitSkill` 机器校验后由平台绑定 candidate commit SHA。
 Coder 不能把“测试应该通过”写成测试证据。
+返回 `coder-progress` 时，`content.checkpoint_sequence` 精确填写本次 request 的 `attempt`，
+不能使用队列 checkpoint_sequence 或 Task revision；平台在 schema/prompt/live接纳三处核验。
 
 ## QA
 
