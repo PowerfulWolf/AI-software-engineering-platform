@@ -377,7 +377,11 @@ No schema, permissions, model routing or environment-variable changes.
 #### Contracts
 
 - The owned POSIX runner supplies a private, unlinked `TemporaryFile` as stdin, closes its parent
-  descriptor after spawn, and polls output with `communicate(timeout=0.2)` plus `guard.check()`.
+  descriptor after spawn, and uses a bounded selector drain in at most 0.2-second windows plus
+  `guard.check()`. Each ready stream receives one fixed-size read before the deadline is checked
+  again. Repeated `communicate(timeout=0.2)` is forbidden: its internal transcript still grows
+  throughout execution even if the final return value is truncated. See the T043 runtime capture
+  contract in `production-team-host.md`.
 - Never send prompt bytes through the first short `communicate(input)` and then retry with None:
   CPython does not register stdin writes again after an input timeout; a pipe-sized prefix is not
   the full prompt, and EOF never arrives. A renewing lease proves ownership, not model progress.
@@ -395,6 +399,8 @@ Lost ownership still kills the child before returning; startup failures remain t
 `tests/work_queue/test_owned_execution.py` uses a real local subprocess delayed 0.4s, exceeding
 the 0.2s polling interval, and a prompt larger than pipe capacity; assert exact character count,
 no timeout, 0600 mode and zero hard links. Retain owner-loss/Task-lock/candidate-finalization tests.
+`tests/agents/test_native_output_bounds.py` also keeps continuous stdout/stderr from starving the
+watchdog or ownership checks; escaped descendants retaining either pipe never establish EOF.
 Wrong: `communicate(prompt, timeout=.2)` then `communicate(None, timeout=.2)`.
 Correct: `Popen(stdin=anonymous_prompt)` then ownership-fenced output-only polling.
 ## Cross-connection Task snapshot reads

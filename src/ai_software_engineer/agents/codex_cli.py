@@ -20,6 +20,7 @@ from typing import Literal, Protocol, cast
 
 from pydantic import TypeAdapter, ValidationError
 
+from ai_software_engineer.agents._native_output import _STREAM_LIMIT, _NativeOutputDrain
 from ai_software_engineer.agents.candidate_binding import BoundCandidateSource
 from ai_software_engineer.agents.codex_policy import candidate_read_snapshot, no_command_arguments
 from ai_software_engineer.agents.continuation import (
@@ -226,7 +227,7 @@ class SubprocessCodexCommandRunner:
 
         check_owner()
         started = time.monotonic()
-        process: subprocess.Popen[str] | None = None
+        process: subprocess.Popen[bytes] | None = None
         failure_kind: Literal["input_preparation_failed", "process_spawn_failed"] = (
             "input_preparation_failed"
         )
@@ -234,11 +235,9 @@ class SubprocessCodexCommandRunner:
         # The child inherits the Task lock. Even if the host is killed, another
         # Worker cannot reuse this worktree while the executor still owns it.
         try:
-            # On POSIX, communicate(None) after a timed-out partial input no
-            # longer polls stdin for writes. A large prompt can therefore strand
-            # Codex waiting for EOF forever. Give it an anonymous, private input
-            # descriptor, then poll only output and ownership. The parent closes
-            # its copy immediately; the child owns the remaining descriptor.
+            # Give the complete prompt an anonymous, private input descriptor;
+            # timed output polling must never strand partial stdin without EOF.
+            # The parent closes its copy immediately after the child inherits it.
             with tempfile.TemporaryFile(mode="w+b") as prompt:
                 prompt.write(stdin.encode("utf-8"))
                 prompt.seek(0)
@@ -251,8 +250,7 @@ class SubprocessCodexCommandRunner:
                     stdin=prompt,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True,
-                    errors="replace",
+                    bufsize=0,
                     start_new_session=True,
                     pass_fds=guard.inherited_fds if guard is not None else (),
                 )
@@ -264,25 +262,60 @@ class SubprocessCodexCommandRunner:
             setup_error = error
         assert process is not None
         ownership: OwnedProcessObservation | None = None
+        output: _NativeOutputDrain | None = None
+        output_closed = False
+
+        def close_output() -> None:
+            nonlocal output_closed
+            if output_closed:
+                return
+            output_closed = True
+            try:
+                with ExitStack() as cleanup:
+                    for pipe in (process.stdout, process.stderr):
+                        if pipe is not None:
+                            cleanup.callback(pipe.close)
+                    if output is not None:
+                        cleanup.callback(output.close)
+            except BaseException as error:
+                if ownership is not None:
+                    ownership.uncertain()
+                raise CodexExecutionUnconfirmed("原执行输出资源收尾无法确认") from error
+
+        def drain(timeout: float) -> bool:
+            nonlocal output
+            if output is None:
+                assert process.stdout is not None and process.stderr is not None
+                output = _NativeOutputDrain(process.stdout, process.stderr)
+            return output.poll(process, timeout=timeout)
 
         def stop() -> tuple[str, str]:
             try:
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    return process.communicate(timeout=1)
-                except subprocess.TimeoutExpired:
+                if not drain(1):
                     with suppress(ProcessLookupError):
                         os.killpg(process.pid, signal.SIGKILL)
-                    return process.communicate(timeout=1)
-            except (subprocess.TimeoutExpired, OSError) as error:
+                    if not drain(1):
+                        raise subprocess.TimeoutExpired(argv, 1)
+                assert output is not None
+                return output.result()
+            except BaseException as error:
                 if ownership is not None:
                     ownership.uncertain()
+                # A drain/setup error must not leave a TERM-resistant owned
+                # leader running. Reaping it still does not establish pipe EOF.
+                with suppress(OSError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                with suppress(OSError, subprocess.TimeoutExpired):
+                    process.wait(timeout=1)
+                if not isinstance(error, (subprocess.TimeoutExpired, OSError)):
+                    raise
                 # Escaped descendants can retain pipes after the group dies.
                 raise CodexExecutionUnconfirmed("原执行输出收尾停止状态无法确认") from error
 
         def stopped(kind: str) -> NativeProcessStop | None:
-            # communicate() reaps the leader, but descendants can survive it.
+            # Draining and reaping the leader cannot prove descendants stopped.
             # Only the owned process session's absence establishes this fact.
             for sent in (signal.SIGTERM, signal.SIGKILL):
                 try:
@@ -321,6 +354,9 @@ class SubprocessCodexCommandRunner:
 
         def publish(result: CodexInvocationResult) -> CodexInvocationResult:
             nonlocal observed
+            # Cleanup can fail too. Do not clear the Host's live observation or
+            # publish a stop until both proven EOF pipes are locally released.
+            close_output()
             observed = True
             if observer is not None:
                 try:
@@ -351,27 +387,22 @@ class SubprocessCodexCommandRunner:
                     if proof is None:
                         raise CodexExecutionUnconfirmed("原执行进程停止状态无法确认")
                     result = publish(
-                        CodexInvocationResult(
-                            process.returncode, _bounded(stdout), _bounded(stderr), True, proof
-                        )
+                        CodexInvocationResult(process.returncode, stdout, stderr, True, proof)
                     )
                     check_owner()
                     return result
-                try:
-                    stdout, stderr = process.communicate(timeout=0.2)
+                if drain(0.2):
+                    assert output is not None
+                    stdout, stderr = output.result()
                     check_owner()
                     proof = stopped("completed" if process.returncode == 0 else "failed")
                     if proof is None:
                         raise CodexExecutionUnconfirmed("原执行进程停止状态无法确认")
                     result = publish(
-                        CodexInvocationResult(
-                            process.returncode, _bounded(stdout), _bounded(stderr), False, proof
-                        )
+                        CodexInvocationResult(process.returncode, stdout, stderr, False, proof)
                     )
                     check_owner()
                     return result
-                except subprocess.TimeoutExpired:
-                    continue
         except CodexExecutionUnconfirmed:
             if ownership is not None:
                 ownership.uncertain()
@@ -385,16 +416,14 @@ class SubprocessCodexCommandRunner:
                 raise
             proof = stopped("completed" if process.returncode == 0 else "failed")
             if proof is not None and not observed:
-                publish(
-                    CodexInvocationResult(
-                        process.returncode, _bounded(stdout), _bounded(stderr), False, proof
-                    )
-                )
+                publish(CodexInvocationResult(process.returncode, stdout, stderr, False, proof))
             elif proof is None and ownership is not None:
                 ownership.uncertain()
             if not setup_completed:
                 raise CodexExecutionUnconfirmed("原执行进程初始化记录异常; 暂停后续执行") from error
             raise
+        finally:
+            close_output()
 
     def run_observed(
         self,
@@ -1833,7 +1862,7 @@ def _failure(
     )
 
 
-def _bounded(value: str, limit: int = 1_000_000) -> str:
+def _bounded(value: str, limit: int = _STREAM_LIMIT) -> str:
     if len(value) <= limit:
         return value
     head = limit // 2

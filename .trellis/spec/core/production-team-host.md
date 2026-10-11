@@ -350,6 +350,55 @@ Hashes identify these captured strings, not an untruncated transcript; truncatio
 for full provider evidence. TimeoutExpired partial bytes use UTF-8 replacement decoding. No durable
 raw transcript or new secret-bearing log is introduced.
 
+##### Runtime-bounded native output (2026-10-11)
+
+`agents/_native_output.py::_NativeOutputDrain.poll(process: Popen[bytes], *, timeout: float) -> bool`
+is private to one `SubprocessCodexCommandRunner._run_owned` invocation. It drains both unbuffered
+binary pipes through a POSIX selector, reading at most 64 KiB from each ready stream per iteration,
+then rechecks the local polling deadline. The outer runner retains its 0.2-second ownership and
+execution-limit observations. No reader threads, output spool files or cross-call cache are used.
+
+Each stream owns an incremental UTF-8 `errors="replace"` decoder and universal-newline decoder.
+CRLF/CR and characters split between reads have exactly the previous complete text-mode semantics;
+an actual empty read flushes incomplete trailing input. Capture stores only the first 500,000 and
+most recent 500,000 decoded characters, with no growing list of discarded fragments. The returned
+text equals the old `_bounded(complete_normalized_text)`, including shorter output. The character
+limit does not claim an exact Python heap byte limit: string representation, bounded decode chunks,
+and temporary concatenations have finite additional allocation.
+
+Runtime success and failure cleanup use the same drain. TERM allows one second to drain/reap;
+if incomplete, KILL allows one more second. Only real EOF from **both** pipes, leader reap and owned
+group absence authorize the existing stop callback. Release selector and local pipe resources
+before that callback and before clearing Host ownership; closing a descriptor never supplies EOF.
+An escaped descendant may retain either pipe after the group disappears; keep the Host observation
+uncertain and raise `CodexExecutionUnconfirmed`. Setup/read/resource-close failures also fail closed,
+best-effort kill/reap the actual owned leader, and release the remaining local resources. A failed
+stop-persistence callback is called once, retains uncertain ownership, and cannot enable fallback.
+Post-Popen registration failure keeps its existing real cleanup/proof path: a proven stop may be
+recorded, then initialization still fails as uncertain; it never emits a NOT_STARTED record.
+
+| Runtime case | Required result |
+| --- | --- |
+| Both streams exceed limit while child still runs | Each stream remains bounded; isolated in-flight allocation test passes |
+| Split UTF-8, invalid bytes, split CRLF and incomplete final sequence | Same normalized text as complete UTF-8 replacement text-mode read |
+| Long Unicode output with trailing failure marker | Exactly the old character-level head/tail result; marker retained |
+| Continuous output, timeout or owner loss | Bounded polling; TERM/KILL, reap and proof before callback/return |
+| One escaped descendant holds only stdout or only stderr | No false stop callback; uncertain Host; local pipes released |
+| Either local pipe/selector close or output setup/read fails | Remaining resources released; no accepted result or fabricated EOF |
+| Stop callback raises; ownership is lost after publication | No second publication; preserve actual sealed facts and correct uncertainty |
+
+Tests: `tests/agents/test_native_output_bounds.py`, relevant `test_codex_cli.py`,
+`test_structured_observation.py`, `test_structured_execution.py`,
+`tests/execution/test_owned_processes.py`, and `tests/work_queue/test_owned_execution.py`.
+Good: continuously discard middle output while verifying native stop independently. Base: small
+output keeps identical text and hashes. Bad: truncate only after `communicate` returns, decode each
+chunk independently, or equate local fd close with EOF.
+
+No invocation/result Schema, SQL, historical artifact or observation migration is required.
+Do not backfill old output or unknown stop records. This change is loaded only at an idle controlled
+service-maintenance boundary; existing active processes retain their old implementation. Rollback
+restores the prior runner/helper code while keeping all durable facts and preserved workspaces.
+
 | Case | Routing / diagnostics |
 |---|---|
 | Clean quota/rate/auth exit | Existing typed routing; safe cause/exit/digests added |
