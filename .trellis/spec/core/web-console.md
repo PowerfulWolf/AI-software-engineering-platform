@@ -2145,3 +2145,13 @@ supervisor 返回边界）及 Node/真实 fixture Chrome准备明细用例。
 存量数据处置：不改SQL、不重写旧 Operation、不补造历史 milestone；当前已接受命令继续按
 原运行事实监管。服务空闲后受控加载，新增观察仅覆盖以后真实开始的操作。回滚观察/API/
 资产并受控加载，保留原执行历史和已保存明细；这些明细不影响任何审批或执行权限。
+
+
+## Versioned bounded Operation history reads (2026-10-12)
+
+`GET /api/v1/operation-summaries` and `operation_summary_contract_version=v0.1` add the explicit
+read-only protocol in [`operation-summaries.md`](operation-summaries.md). Pagination preserves all
+history and includes the complete scope's active set. Complete bytes are rehashed each request;
+bounded reading projections alone can survive polls. Original complete GET, mutation admission,
+claim, precise approval, Task/Role verdict and durable Operation history remain unchanged. A short
+summary or locator digest cannot replace the complete approval body or current checkpoint facts.

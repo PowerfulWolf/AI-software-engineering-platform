@@ -38,6 +38,8 @@
 
 ## Files
 
+- [`operation-summaries.md`](operation-summaries.md): bounded read-only history pagination, full-byte validation, active completeness and exact-detail separation.
+
 - [`native-cli-unknown-failure.md`](native-cli-unknown-failure.md): trusted native diagnostics and nontransient unknown exits.
 - [`nontransient-delivery-routing.md`](nontransient-delivery-routing.md): ordinary work budgets for permanent and unknown failures, unchanged retry accounting.
 

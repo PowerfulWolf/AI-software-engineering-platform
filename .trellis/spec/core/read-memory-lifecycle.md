@@ -951,3 +951,14 @@ bytes, candidate, role verdict, queue or retained development work is changed. L
 optimization at an idle controlled service maintenance boundary; refresh the same Project to use
 it. Rollback restores the previous reader and repeated validation cost, without changing facts or
 requiring a replacement Requirement.
+
+
+## Bounded cross-request Operation reading projections (2026-10-12)
+
+The explicit exception in [`operation-summaries.md`](operation-summaries.md) permits only a bounded
+512-entry / 2 MiB serialized reading projection cache on FileConsoleOperationStore. It never retains
+complete Operations, source/patch/plan/approval bodies or current execution/READY decisions. Each
+request rereads and hashes every complete historical record under shared flock; exact unchanged
+per-operation byte inventories alone permit projection reuse. This does not relax scope-local
+Team/baseline/engineering helpers or full GET/mutation/claim/approval checks. Cache capacity is an
+optimization budget, not a history/output truncation policy.

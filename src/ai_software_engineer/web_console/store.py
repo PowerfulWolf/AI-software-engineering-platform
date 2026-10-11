@@ -28,6 +28,12 @@ from .models import (
     IdempotencyKey,
     OperationId,
 )
+from .summary_models import OperationSummary, OperationSummaryPage, OperationSummaryQuery
+from .summary_projection import (
+    OperationSummaryCache,
+    SummaryProjectionUnavailable,
+    build_summary_page,
+)
 
 # A Console operation can include an exact baseline plan with two complete
 # mutation captures, its prepared patch and the workspace inventory. This is a
@@ -59,6 +65,7 @@ class ConsoleOperationStore(Protocol):
 
     def get(self, operation_id: str) -> ConsoleOperation: ...
     def list_current(self) -> tuple[ConsoleOperation, ...]: ...
+    def summary_page(self, query: OperationSummaryQuery) -> OperationSummaryPage: ...
     def claim_next(self, *, at: datetime) -> ConsoleOperation | None: ...
 
     def succeed(
@@ -131,6 +138,32 @@ class InMemoryConsoleOperationStore:
     def list_current(self) -> tuple[ConsoleOperation, ...]:
         with self._lock:
             return tuple(history[-1] for _, history in sorted(self._histories.items()))
+
+    def summary_page(self, query: OperationSummaryQuery) -> OperationSummaryPage:
+        with self._lock:
+            versions = tuple(
+                item for _, history in sorted(self._histories.items()) for item in history
+            )
+            for item in versions:
+                item.validate_integrity()
+            inventory = hashlib.sha256(
+                "".join(item.operation_sha256 for item in versions).encode()
+            ).hexdigest()
+            summaries = tuple(
+                OperationSummary.from_operation(history[-1])
+                for _, history in sorted(self._histories.items())
+            )
+            try:
+                return build_summary_page(
+                    summaries=summaries,
+                    inventory_sha256=inventory,
+                    query=query,
+                    team_id=self.team_id,
+                )
+            except SummaryProjectionUnavailable as error:
+                raise ConsoleOperationConflict(
+                    "operation summaries cannot be read safely"
+                ) from error
 
     def claim_next(self, *, at: datetime) -> ConsoleOperation | None:
         with self._lock:
@@ -239,6 +272,8 @@ class FileConsoleOperationStore:
         self.root = root.absolute()
         self.team_id = team_id
         self._idle_inventory_sha256: str | None = None
+        self._summary_cache = OperationSummaryCache()
+        self._summary_cache_lock = Lock()
         _reject_symlinks(self.root)
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -323,6 +358,66 @@ class FileConsoleOperationStore:
     def list_current(self) -> tuple[ConsoleOperation, ...]:
         with self._locked(shared=True):
             return self._list_current()
+
+    def summary_page(self, query: OperationSummaryQuery) -> OperationSummaryPage:
+        # Separate lock serializes this tiny cache, not authoritative store reads.
+        with self._summary_cache_lock, self._locked(shared=True), source_inspection_scope():
+            inventory, operations = self._summary_inventory()
+            self._summary_cache.discard_absent({operation_id for operation_id, _ in operations})
+            summaries = []
+            for operation_id, digest in operations:
+
+                def read_current(
+                    operation_id: str = operation_id, digest: str = digest
+                ) -> ConsoleOperation | None:
+                    operation = self._current(operation_id)
+                    # Never associate a projection with bytes that drifted during replay.
+                    if self._summary_directory_digest(self.root / operation_id) != digest:
+                        raise ConsoleOperationConflict("operation changed during summary replay")
+                    return operation
+
+                summary = self._summary_cache.project(operation_id, digest, read_current)
+                if summary is not None:
+                    summaries.append(summary)
+            try:
+                return build_summary_page(
+                    summaries=tuple(summaries),
+                    inventory_sha256=inventory,
+                    query=query,
+                    team_id=self.team_id,
+                )
+            except SummaryProjectionUnavailable as error:
+                raise ConsoleOperationConflict(
+                    "operation summaries cannot be read safely"
+                ) from error
+
+    def _summary_inventory(self) -> tuple[str, tuple[tuple[str, str], ...]]:
+        inventory = hashlib.sha256()
+        operations = []
+        for directory in sorted(self.root.glob("operation_*")):
+            _reject_symlinks(directory)
+            if not directory.is_dir():
+                continue
+            TypeAdapter(OperationId).validate_python(directory.name)
+            digest = self._summary_directory_digest(directory)
+            name = directory.name.encode()
+            inventory.update(len(name).to_bytes(8, "big"))
+            inventory.update(name)
+            inventory.update(bytes.fromhex(digest))
+            operations.append((directory.name, digest))
+        return inventory.hexdigest(), tuple(operations)
+
+    def _summary_directory_digest(self, directory: Path) -> str:
+        _reject_symlinks(directory)
+        inventory = hashlib.sha256()
+        for path in sorted(directory.glob("*.json")):
+            _reject_symlinks(path)
+            name = path.name.encode()
+            body = _read_regular(path, MAX_CONSOLE_OPERATION_BYTES)
+            inventory.update(len(name).to_bytes(8, "big"))
+            inventory.update(name)
+            inventory.update(hashlib.sha256(body).digest())
+        return inventory.hexdigest()
 
     def claim_next(self, *, at: datetime) -> ConsoleOperation | None:
         with self._locked():

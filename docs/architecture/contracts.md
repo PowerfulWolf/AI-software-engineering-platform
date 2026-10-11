@@ -1094,3 +1094,13 @@ wait routes retain their own controls. Exact active RESUME means continuation is
 being prepared, not that a role model started. Task detail links to its same-Project
 owning requirement. Full validation, Schema gates and stock-data handling are in
 [completed-coder-output-unavailable.md](../../.trellis/spec/core/completed-coder-output-unavailable.md).
+
+
+### Bounded Console operation summaries
+
+`GET /api/v1/operation-summaries` advertises `operation_summary_contract_version=v0.1`, returns
+strict paginated reading projections and a complete scoped active set, and supports ETag only after
+fresh complete journal byte/path verification. Four `console-operation-{summary,page,cursor,query}`
+JSON Schemas define the wire. All original full Operation GET and exact approval/mutation/claim
+contracts remain authoritative; summary identities and shortened text cannot grant execution or
+approval. See `.trellis/spec/core/operation-summaries.md` for bounds and negative cases.

@@ -76,6 +76,12 @@ from .shutdown import (
     ShutdownState,
 )
 from .store import ConsoleOperationConflict, ConsoleOperationNotFound
+from .summary_models import (
+    SUMMARY_CONTRACT_VERSION,
+    OperationSummaryPage,
+    OperationSummaryQuery,
+    StaleOperationCursor,
+)
 
 
 def _read_native_rule_change(
@@ -219,6 +225,11 @@ class ConsoleApplication(Protocol):
     def get(self, operation_id: str) -> ConsoleOperation: ...
     def list_operations(self) -> tuple[ConsoleOperation, ...]: ...
     def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]: ...
+
+
+@runtime_checkable
+class _OperationSummaryReader(Protocol):
+    def summary_page(self, query: OperationSummaryQuery) -> OperationSummaryPage: ...
 
 
 @runtime_checkable
@@ -408,6 +419,43 @@ def create_console_app(
                 409, "KNOWLEDGE_RESOLUTION_REJECTED", "Resolution could not be approved safely."
             )
 
+    @app.get("/api/v1/operation-summaries")
+    async def operation_summaries(request: Request) -> Response:
+        if not isinstance(console, _OperationSummaryReader):
+            return _error(404, "NOT_AVAILABLE", "当前服务不支持操作摘要读取。")
+        allowed = {"project_id", "delivery_id", "page_size", "cursor"}
+        parameters = request.query_params
+        try:
+            if any(key not in allowed or len(parameters.getlist(key)) != 1 for key in parameters):
+                raise ValueError("invalid operation summary query")
+            size = parameters.get("page_size", "25")
+            if not size.isascii() or not size.isdecimal():
+                raise ValueError("invalid operation summary page size")
+            query = OperationSummaryQuery(
+                project_id=parameters.get("project_id"),
+                delivery_id=parameters.get("delivery_id"),
+                page_size=int(size),
+                cursor=parameters.get("cursor"),
+            )
+        except ValueError:
+            return _error(
+                400, "OPERATION_SUMMARY_QUERY_INVALID", "操作记录查询参数无效, 请重新读取第一页。"
+            )
+        try:
+            page = await run_in_threadpool(console.summary_page, query)
+        except StaleOperationCursor:
+            return _error(409, "OPERATION_CURSOR_STALE", "操作记录已更新, 请从最新第一页重新查看。")
+        except (ConsoleOperationConflict, ValidationError, OSError, ValueError):
+            return _error(
+                503,
+                "OPERATION_STATE_INVALID",
+                "平台暂时无法完整核验操作记录, 交付操作暂不可用。原需求和进度保留。",
+            )
+        headers = {"ETag": page.etag, "Cache-Control": "no-cache"}
+        if request.headers.get("if-none-match") == page.etag:
+            return Response(status_code=304, headers=headers)
+        return JSONResponse(page.model_dump(mode="json"), headers=headers)
+
     @app.get("/api/v1/operations")
     async def operations() -> Response:
         try:
@@ -429,6 +477,11 @@ def create_console_app(
                 "delivery_ready": delivery_ready,
                 "operation_contract_version": _OPERATION_CONTRACT_VERSION,
                 "supported_actions": supported_actions,
+                **(
+                    {"operation_summary_contract_version": SUMMARY_CONTRACT_VERSION}
+                    if isinstance(console, _OperationSummaryReader)
+                    else {}
+                ),
             }
         )
 
