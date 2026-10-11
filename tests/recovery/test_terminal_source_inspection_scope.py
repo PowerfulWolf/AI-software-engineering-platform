@@ -123,7 +123,10 @@ def proposal_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Proposa
         ProductionProjectDeliveryBackend,
         SimpleNamespace(
             prepare=lambda _: SimpleNamespace(preparation=prepared),
-            _facts=lambda _: SimpleNamespace(profile=None),
+            _facts=lambda _: SimpleNamespace(
+                profile=None,
+                workspace=SimpleNamespace(manifest=SimpleNamespace(project_id="project_test")),
+            ),
         ),
     )
     config = ProductionConfig(

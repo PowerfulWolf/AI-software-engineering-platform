@@ -1,5 +1,96 @@
 # Read-side memory lifecycle
 
+## Recovery-observation-local history reuse (2026-10-11)
+
+### Scope and signatures
+
+Apply to original Coder recovery source inspection when the Project retains large retired
+Requirements. Retirement validation and historical child ownership previously read the same
+prefix twice; parent discovery then read it a third time. This cost is independent of model
+execution and can make recovery preparation appear idle.
+
+```python
+class RequirementHistoryReader(RequirementCheckpointReader, Protocol):
+    def history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]: ...
+
+_NativeRequirementHistory.history(delivery_id: str) -> tuple[JointCheckpoint, ...]
+_NativeRequirementHistory.current(delivery_id: str) -> JointCheckpoint | None
+_require_native_active(project, delivery_id, *, journal=None, history=None) -> None
+_parent(team, cp, approval, *, journals=None) -> tuple[str | None, str | None]
+```
+
+### Contracts
+
+- Each `_require_native_active` observation owns a new private reader. Within `_parent`,
+  retirement checks and parent search share that same reader; it is discarded when that
+  observation returns or fails. For each retired entry, read one complete `JointJournal.history`,
+  validate its exact latest digest/owner through the shared retirement helper and inspect every
+  historical child, including children absent from the latest checkpoint. Release the full
+  returned tuple before reading the next retired prefix; retain only its private latest model.
+- Validate replacement references after all retired own prefixes. A replacement may itself be
+  retired; its captured latest model is therefore reusable regardless of sorted ID order. A
+  missing or foreign replacement still fails closed. All entries and replacements must validate
+  before raising `RequirementRetiredError`, so an early child match cannot hide later corruption.
+  Ordinary `retired_delivery_ids` uses the same exact entry/replacement helpers in its original
+  per-entry order; its behavior and public checkpoint-only reader interface remain unchanged.
+- Current-only active parents and unretired replacements use `JointJournal.current`, which
+  validates the whole prefix but deep-copies only the latest checkpoint. Do not turn those reads
+  into full-history copies to reduce other read counts. The private reader's `history` always
+  returns a complete fresh tuple to its immediate consumer; it does not cache or truncate that
+  tuple. Only immutable latest facts are shared among same-observation consumers.
+- The existing `_parent_journals` may reuse only `JointJournal`'s bounded exact-byte/predecessor
+  validation cache. Initial retirement checks use that same journal. It still rereads every
+  complete byte, rechecks every path/filename, hash, schema, owner and chain on the next
+  observation. No complete prefix, retirement set, activity conclusion, authorization or
+  successful recovery decision is retained between observations or requests.
+- Every initial and parent-observation prefix read performs the per-JSON no-symlink,
+  regular-file and 8,000,000-byte preflight before the journal reads bytes; the early native gate
+  can no longer block on a historical FIFO before reaching the parent's preflight. Retirement
+  and parent search consume private copied typed
+  models read-only; no consumer mutates their nested dictionaries, exposes this helper to
+  agents or weakens public `JointJournal.current/history` return isolation.
+- Keep the separate early retirement check, both `_parent` observations, both Source/Facts
+  observations and every Git/worktree verification. Prefix reuse cannot freeze facts across
+  those safety fences or postpone current workspace verification.
+
+### Validation matrix / good, base, bad
+
+| Facts | Required behavior |
+| --- | --- |
+| One retired Requirement used by retirement digest and historical child check | Each numbered JSON read once through the journal in that observation |
+| Same retired prefix used in `_parent` discovery | One journal read plus the original bounded regular-file preflight |
+| Replacement referenced by retirement and parent inventory | One complete verified prefix; independently validate its Team/Project owner |
+| Replacement is itself retired, in either ID order | One history per retired prefix; replacement validation reuses verified latest |
+| Active/nonretired parent with 32+ historical checkpoints | Complete validation, exactly one latest deep copy; no full-history ownership |
+| Moving from one retired prefix to the next | Non-latest returned copies from the previous prefix are already released |
+| Early retired child match plus later bad retirement/replacement | Integrity/owner/missing-record failure remains visible before retired rejection |
+| Next observation receives a new tail/tombstone | Read complete old and new records; reject a now-retired child |
+| Same-size/same-mtime historical tamper, missing initial file, symlink or FIFO | Fail closed; no recovery/approval or unbounded FIFO read |
+| Nested dictionary changed in a public journal return | Existing validation cache and later ownership facts remain unmodified |
+
+Good: one parent observation shares a complete immutable prefix, then the later observation
+reads it again. Base: an unrelated child returns no parent and still validates the retired
+audit history. Bad: reuse a retired-ID set across the before/after fence, read only the tail,
+trust mtime, or remove bounded preflight to improve a latency number.
+
+### Incremental tests, existing data and rollback
+
+`tests/recovery/test_history_reuse.py` uses real temporary journal files and `Path.read_bytes`
+counts. Its pre-fix regression is 2 reads per retired record / 3 during parent discovery; the
+repair is 1 journal read per observation, with one explicit bounded preflight at both early
+and parent gates. These journal counts exclude the independent preflight byte read; the early
+gate gains that safety read while avoiding repeated journal decoding/copying. Keep non-MySQL
+retirement/deletion, journal return-isolation, terminal-source and
+preparation-source tests, including their independent fresh fact/capture read counts. No
+portable wall-clock threshold or production probe belongs in these unit tests.
+
+存量数据处置：no SQL/journal migration, new Requirement, Task reset, approval consumption or
+workspace rewrite. Load the repaired reader only through an idle controlled service restart;
+the original Requirement and every historical fact remain valid. Rollback restores repeated
+read cost and does not change durable delivery state. The root cause was optimizing single
+`current` decoding while missing the adjacent full-prefix consumers; prevent recurrence with
+actual file-read work counts alongside correctness and lifetime regressions.
+
 ## 1. Scope / trigger
 
 Long-lived Console polling must release completed Project histories. Apply this contract when

@@ -18,7 +18,6 @@ from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId, Sha256
 from ai_software_engineer.multi_directory.models import JointCheckpoint
-from ai_software_engineer.multi_directory.store import JointJournal
 
 RetirementReason = Literal["deleted", "replaced"]
 _MAX_RETIREMENT_BYTES = 256_000
@@ -28,6 +27,12 @@ class RequirementCheckpointReader(Protocol):
     """Read the latest checkpoint from a fully verified Requirement prefix."""
 
     def current(self, delivery_id: str) -> JointCheckpoint | None: ...
+
+
+class RequirementHistoryReader(RequirementCheckpointReader, Protocol):
+    """Read complete verified prefixes for historical native-child ownership."""
+
+    def history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]: ...
 
 
 class RequirementRetirementError(RuntimeError):
@@ -136,29 +141,37 @@ class RequirementRetirementStore:
     def retired_delivery_ids(self, journal: RequirementCheckpointReader) -> frozenset[str]:
         record = self.retirement()
         for entry in record.entries:
-            checkpoint = journal.current(entry.delivery_id)
-            if checkpoint is None or checkpoint.checkpoint_sha256 != entry.checkpoint_sha256:
-                raise RequirementRetirementError(
-                    "Requirement retirement does not match immutable journal"
-                )
-            if (
-                checkpoint.team_id != self.team_id
-                or checkpoint.team_manifest_sha256 != self.team_manifest_sha256
-                or checkpoint.project_id != self.project_id
-                or checkpoint.project_manifest_sha256 != self.project_manifest_sha256
-            ):
-                raise RequirementRetirementError("retired Requirement owner mismatch")
-            if entry.replacement_delivery_id is not None:
-                replacement = journal.current(entry.replacement_delivery_id)
-                if replacement is None:
-                    raise RequirementRetirementError("Requirement replacement journal is missing")
-                try:
-                    self._validate_checkpoint_owner(replacement)
-                except RequirementRetirementError as error:
-                    raise RequirementRetirementError(
-                        "Requirement replacement owner mismatch"
-                    ) from error
+            self._validate_retirement_entry(entry, journal.current(entry.delivery_id))
+            self._validate_retirement_replacement(entry, journal)
         return frozenset(entry.delivery_id for entry in record.entries)
+
+    def _validate_retirement_entry(
+        self, entry: RequirementRetirementEntry, checkpoint: JointCheckpoint | None
+    ) -> None:
+        if checkpoint is None or checkpoint.checkpoint_sha256 != entry.checkpoint_sha256:
+            raise RequirementRetirementError(
+                "Requirement retirement does not match immutable journal"
+            )
+        if (
+            checkpoint.team_id != self.team_id
+            or checkpoint.team_manifest_sha256 != self.team_manifest_sha256
+            or checkpoint.project_id != self.project_id
+            or checkpoint.project_manifest_sha256 != self.project_manifest_sha256
+        ):
+            raise RequirementRetirementError("retired Requirement owner mismatch")
+
+    def _validate_retirement_replacement(
+        self, entry: RequirementRetirementEntry, journal: RequirementCheckpointReader
+    ) -> None:
+        if entry.replacement_delivery_id is None:
+            return
+        replacement = journal.current(entry.replacement_delivery_id)
+        if replacement is None:
+            raise RequirementRetirementError("Requirement replacement journal is missing")
+        try:
+            self._validate_checkpoint_owner(replacement)
+        except RequirementRetirementError as error:
+            raise RequirementRetirementError("Requirement replacement owner mismatch") from error
 
     def entry(self, delivery_id: str) -> RequirementRetirementEntry | None:
         return next(
@@ -166,20 +179,25 @@ class RequirementRetirementStore:
             None,
         )
 
-    def require_native_active(self, delivery_id: str, journal: JointJournal) -> None:
+    def require_native_active(self, delivery_id: str, journal: RequirementHistoryReader) -> None:
         """A direct child command cannot bypass its deleted parent Requirement."""
         TypeAdapter(DeliveryId).validate_python(delivery_id)
-        retired_ids = self.retired_delivery_ids(journal)
-        for parent_id in sorted(retired_ids):
-            history = journal.history(parent_id)
+        record = self.retirement()
+        is_retired = False
+        for entry in record.entries:
+            history = journal.history(entry.delivery_id)
+            self._validate_retirement_entry(entry, history[-1] if history else None)
             if any(
                 child.checkpoint.delivery_id == delivery_id
                 for parent in history
                 for child in parent.children
             ):
-                raise RequirementRetiredError()
+                is_retired = True
             parent = history[-1]
-            if parent.plan is None:
+            # Parent discovery needs only the validated latest checkpoint. Do
+            # not retain every retired prefix while reading the next one.
+            del history
+            if is_retired or parent.plan is None:
                 continue
             # Lazy imports keep the retirement storage contract independent of
             # production composition while sharing its deterministic child ID.
@@ -192,7 +210,14 @@ class RequirementRetirementStore:
                     _delivery_id(derived.root, derived.requirement, namespace=parent.project_id)
                     == delivery_id
                 ):
-                    raise RequirementRetiredError()
+                    is_retired = True
+        # A replacement may itself have been retired. Validate those references
+        # after all own prefixes so a read-local reader can reuse their latest
+        # checkpoints regardless of ID order, without keeping full histories.
+        for entry in record.entries:
+            self._validate_retirement_replacement(entry, journal)
+        if is_retired:
+            raise RequirementRetiredError()
 
     def retire(
         self,

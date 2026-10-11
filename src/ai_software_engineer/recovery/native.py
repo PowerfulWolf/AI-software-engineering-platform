@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import TypeAdapter
@@ -50,6 +50,7 @@ from ai_software_engineer.manager.dispatch import DeliveryAllocation, DispatchCo
 from ai_software_engineer.manager.mysql_dispatch_authority import _decode_allocation
 from ai_software_engineer.manager.production_backend import _designer_run_id
 from ai_software_engineer.manager.store import FileProjectPreparationStore
+from ai_software_engineer.multi_directory.models import JointCheckpoint
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
 from ai_software_engineer.multi_directory.retirement import (
     RequirementRetiredError,
@@ -145,6 +146,13 @@ class NativeRecoverySourceReader:
         self._environment = dict(environment)
         self._parent_journals: dict[Path, JointJournal] = {}
 
+    def _parent_journal(self, project: ProjectWorkspace) -> JointJournal:
+        journal = self._parent_journals.get(project.requirements_root)
+        if journal is None:
+            journal = JointJournal(project.requirements_root, read_only=True)
+            self._parent_journals[project.requirements_root] = journal
+        return journal
+
     @source_inspection_scope()
     def inspect(
         self, scope: RecoveryScope, *, failed_run_id: str, failed_context_id: str
@@ -174,7 +182,9 @@ class NativeRecoverySourceReader:
                 read_only=True,
             )
             project, repository = team.project_registry().locate_repository(scope.repository_id)
-            _require_native_active(project, scope.delivery_id)
+            _require_native_active(
+                project, scope.delivery_id, journal=self._parent_journal(project)
+            )
             root = repository.root
             journal = FileProjectDeliveryCheckpointStore(
                 root / "state/project-deliveries", read_only=True
@@ -223,7 +233,7 @@ class NativeRecoverySourceReader:
             read_only=True,
         )
         project, repository = team.project_registry().locate_repository(scope.repository_id)
-        _require_native_active(project, scope.delivery_id)
+        _require_native_active(project, scope.delivery_id, journal=self._parent_journal(project))
         root = repository.root
         for relative in (
             "state/product",
@@ -674,9 +684,48 @@ def _preparation(root: Path, repository_id: str, expected: str) -> ProjectPrepar
     return matches[0]
 
 
+@dataclass(slots=True)
+class _NativeRequirementHistory:
+    """Keep only private latest checkpoints during one ownership observation.
+
+    Every new observation creates a new instance and rereads every journal byte.
+    Only the underlying Journal's existing exact-byte validation cache is shared.
+    Full histories are returned to their immediate consumer and never retained.
+    Consumers must inspect all returned models without mutating nested data.
+    """
+
+    journal: JointJournal
+    _currents: dict[str, JointCheckpoint | None] = field(default_factory=dict)
+
+    def _preflight(self, delivery_id: str) -> None:
+        directory = self.journal.directory(delivery_id)
+        _reject_symlinks(directory)
+        for path in directory.glob("*.json"):
+            _read_regular(path, 8_000_000)
+
+    def history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]:
+        self._preflight(delivery_id)
+        history = self.journal.history(delivery_id)
+        self._currents[delivery_id] = history[-1] if history else None
+        return history
+
+    def current(self, delivery_id: str) -> JointCheckpoint | None:
+        if delivery_id not in self._currents:
+            self._preflight(delivery_id)
+            self._currents[delivery_id] = self.journal.current(delivery_id)
+        return self._currents[delivery_id]
+
+
 def _require_native_active(
-    project: ProjectWorkspace, delivery_id: str, *, journal: JointJournal | None = None
+    project: ProjectWorkspace,
+    delivery_id: str,
+    *,
+    journal: JointJournal | None = None,
+    history: _NativeRequirementHistory | None = None,
 ) -> None:
+    snapshot = history or _NativeRequirementHistory(
+        journal or JointJournal(project.requirements_root, read_only=True)
+    )
     RequirementRetirementStore(
         project.requirements_root,
         team_id=project.team.manifest.team_id,
@@ -684,9 +733,7 @@ def _require_native_active(
         project_id=project.manifest.project_id,
         project_manifest_sha256=project.manifest.manifest_sha256,
         read_only=True,
-    ).require_native_active(
-        delivery_id, journal or JointJournal(project.requirements_root, read_only=True)
-    )
+    ).require_native_active(delivery_id, snapshot)
 
 
 def _parent(
@@ -702,13 +749,14 @@ def _parent(
         journal = JointJournal(project.requirements_root, read_only=True)
         if journals is not None:
             journals[project.requirements_root] = journal
-    _require_native_active(project, cp.delivery_id, journal=journal)
+    # Retirement and parent search consume the same complete prefix, but the
+    # later _parent observation starts over and observes new tails/retirements.
+    history = _NativeRequirementHistory(journal)
+    _require_native_active(project, cp.delivery_id, history=history)
     matches: list[tuple[str, str]] = []
     for directory in sorted(project.requirements_root.glob("delivery_multi_*")):
         _reject_symlinks(directory)
-        for path in directory.glob("*.json"):
-            _read_regular(path, 8_000_000)
-        parent = journal.current(directory.name)
+        parent = history.current(directory.name)
         if parent is None:
             continue
         if (
