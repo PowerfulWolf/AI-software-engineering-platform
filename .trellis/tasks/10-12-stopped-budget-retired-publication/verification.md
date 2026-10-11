@@ -136,3 +136,47 @@ immutable-decode changes require a safe idle controlled deployment. Runtime
 deployment alone does not authorize a new Task source baseline: any later source
 update must use the original Requirement's explicit current baseline/approval
 flow. Retain this exact approval and all settlement history through that step.
+
+## Original Requirement crossed first claimed execution — 2026-10-12
+
+The same single approval Operation continued; no second approval, Requirement or
+manual production state update was submitted. Public preparation records now include
+`DISPATCH_COMMITTED` at `2026-10-11T22:13:07.559855Z`, `SEED_VERIFIED` at
+`22:28:35.604268Z`, and `EXECUTION_CLAIMED` at `22:28:46.705971Z`. The dispatch
+digest is `4af8c641fe7135cda3510bc45797c44e3d25f2ada959009f91b046a3d41e510a`.
+Dispatch persistence and Task materialization are different boundaries: the latter
+follows seed and additional Context preparation.
+
+Read-only SQL and native invocation records observed the exact successor Task as
+`IMPLEMENTING`, attempt 1, at approved base
+`176997764f8b0d3a43c0b4daee5ee6424e9aae71`, with current Coder WorkItem
+`work_9f2c8d58fcb43f582178d25e647cd1de7ef6fecee6851186cf391057966943db`.
+Run `run_cd17fc4c9d254fdf8ae13f19d0cc1fe9` has an invocation start at
+`22:30:47.480310Z`. Its ACTIVE lease continued heartbeats through the last
+`22:48:00Z` observation. The public completed-call records contain two successful
+`codex/gpt-6.1-sol` Coder knowledge phases: intent and assessment. These are real
+model calls, separately recorded from the main development process.
+
+At `22:45:54Z`, a structured process inventory first observed the service-owned
+Codex process and its code-mode-host child. They were still observed at `22:48:10Z`.
+This proves process startup observation, not candidate completion or a verdict; the
+invocation start and a valid claim alone did not prove the main process had started.
+Its precise preceding preparation frame remains unknown. At the latest bounded
+observation there was still no outcome, candidate, QA, Review or final Handoff, and
+the original Operation remained RUNNING without a terminal error.
+
+The preparation's multi-hour latency is a platform performance failure, even though
+it eventually progresses. Isolated maintenance repairs now cover bounded summaries,
+idle polling, complete-byte decode reuse, complete Product approval-prefix reading,
+local authorized Task facts and the two-observation terminal window. Incremental
+evidence and explicit scope limits are in their respective tasks. Frontend summary
+repairs separately restore recovery progress, neutral command completion and coherent
+scope observations. These changes are committed/pushed on the maintenance branch,
+but production is still the original `1769977` instance while its owned work runs.
+
+No current stopping boundary can cancel this active preparation safely: controlled
+shutdown drains the admitted Operation, and `resume` merely removes drain. Do not
+force-kill the service to deploy, equate service restart with original Run stop, or
+reuse an unsealed dirty seed as a successful receipt. Continue monitoring the same
+Run, use actual outcomes/waits and independent candidate-bound QA/Review, then deploy
+maintenance at a genuine idle boundary. No full test suite was run by maintenance.
