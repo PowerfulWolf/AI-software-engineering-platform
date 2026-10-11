@@ -78,6 +78,13 @@ Correct：新增字段显式排除 absent 默认，并回放原报告 key/读取
   dispatch SHA、Task intent SHA、source revision 与冻结 policy；admission 保持原 source/permissions。
   receipt 不是模型 progress、候选或 verdict；policy admission 不能记成真实人工批准。
   新 QA/Reviewer claim 优先于旧 Coder receipt，旧记录不重新形成当前阻塞。
+- `execution.receipt_uri/policy_id` 不能回退到最新历史 receipt。只有当前唯一未关闭 Coder
+  work（Task 为 IMPLEMENTING）与实际 `DeliveryInvocationStart` 的 work ID、Task、role、attempt
+  精确一致，且 receipt 的 `original_work_item_id`、完整 request、`claim_lease_id` 分别等于
+  start 的 work ID、request、lease ID，才能显示当前 receipt。正式 policy admission 只是
+  继承草稿的历史输入；新 Run 没有自己的 receipt 时不能用前一 Run 的停止/封存事实替代。
+  暂停基线、QA/Review 与终态不继承 Coder receipt；后续重算从已校验 timeline 的精确当前
+  work 绑定取得引用，不沿用旧 `execution` 字段。缺 start/store 时保持引用为空，不创建目录。
 - 独立候选验证的 `VERIFIED` 只投影本次候选验证已通过（`COMPLETED/team`），不能宣称整个需求
   已交付。`VERIFICATION_SUPERSEDED` 投影 `SUPERSEDED/team` 和历史已替代说明，不能作为新的
   工程故障或建议恢复旧计划；`VERIFICATION_INTERRUPTED` 与否定 verdict 仍保留停止/返工事实。
@@ -115,6 +122,48 @@ scope/intent/policy 变化拒绝。MySQL fixture 必须串行，避免共享测�
 存量无需改库或重写 journal；新服务只增加兼容投影并读取已验证历史。
 空闲加载前端后刷新可见；回滚此读侧提交并刷新不删除 receipt、Task 或历史批准。
 本节替代历史章节中把 lease 过期直接称为“执行已中断”、把通用工程等待要求用户继续审批的文案。
+
+### 当前执行与历史中断引用隔离（2026-10-12）
+
+Scope：`team_view/reader.py` 中 Task/Requirement 的当前 `execution` 引用。此修复不改变
+排队、恢复授权、角色 verdict 或持久化事实；沿用现有可空 `receipt_uri/policy_id` wire 字段。
+
+Signatures：`_continuation_history(..., role_queue=()) -> (timeline, current_receipt | None)`；
+`_current_execution_receipt(sidecar, task, role_queue, receipts) -> receipt | None`；
+`_with_execution_state(TaskView) -> TaskView`。
+
+已验证的 receipt/admission 全部进入 timeline，再由既有历史合并进入 execution_history。
+只有 direct 当前 receipt 在其**读投影** details 中附加 `current_execution_work_item_id` 和
+`current_execution_attempt`；它们不写回 receipt，也不成为批准或停止证明。后续 Task 和
+Requirement 重算只能使用同 Task、当前唯一 open Coder work、同 attempt 的该标记，并以
+receipt digest、URI、policy 引用原封存事实。不能沿用任意旧 `TaskView.execution` 的引用。
+
+| 输入事实 | 当前引用与历史 |
+| --- | --- |
+| 当前 Coder work 有 exact receipt 和相等完整 request/lease 的实际 start | 当前显示该 receipt；全历史保留 |
+| 新 work 无自己的 receipt，旧 work 有合法 receipt | 当前引用为空；旧 receipt 仍完整可读 |
+| exact receipt 存在但 start/store 尚不存在 | 当前引用为空；不创建目录或补造 start |
+| admission 已封存或新调用已实际开始，但尚无该调用自己的 receipt | admission 和原 receipt 只显示为历史输入 |
+| baseline 暂停的新 work、QA/Review、终态 | 不继承旧 Coder receipt；当前状态保持实际 queue/verdict 投影 |
+| 同 work ID 的 start request/source/run/context、lease 或 digest 不同 | fail closed；不标为 current，不改文件 |
+| 新当前 receipt 后续追加，随后刷新 | 选择 exact 新 work receipt，不替换或改写旧文件 |
+| 重复投影或将已读 Task 改为新 work/阶段 | 按当前绑定重新计算；旧引用不能复活 |
+
+Good：第 8 轮没有 receipt 时，只在历史看到第 6 轮保存记录；当前等待理由仍来自第 8 轮。
+Base：没有中断历史或没有 current start 时保持可空引用。Bad：用 `receipts[-1]`、最大 attempt、
+时间戳或 admission 文件存在来推断当前执行已停止/草稿已封存。
+
+增量验证：`tests/team_view/test_continuation_history.py` 覆盖真实目录只读、正式 admission、
+新 v2 receipt 追加、精确绑定负例、暂停/后续角色和重复 Task/Requirement 重算。
+`test_baseline_snapshot.py::test_task_read_snapshot_wires_all_three_real_projections` 从实际
+reader 组合路径证明历史照常可读，历史 receipt 不附到另一个 queue work。已有完整历史、
+Task snapshot、product execution 测试保持；无需 MySQL 测试库或模型调用。
+
+存量数据处置：无需改库、迁移、删 receipt 或重写 Operation/journal。真实 K1 的历史 run 6
+以及后续封存的 run 8 receipt 都合法；问题仅在 reader 的当前引用选择。受控空闲加载修复版、
+刷新原需求后，新 work（包括 baseline 暂停的 work 9）没有自己的 receipt 时显示空引用，
+历史照常保留。当前阻塞理由和公开批准/继续步骤不受此修复影响。回滚此读侧代码并刷新即可，
+不会丢失现场、审计或授权，但会恢复原误导性引用。
 
 ### 恢复摘要的当前阶段与节点一致（2026-10-10）
 

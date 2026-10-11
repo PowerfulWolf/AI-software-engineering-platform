@@ -1146,6 +1146,7 @@ def _continuation_history(
     artifacts: tuple[Artifact, ...] = (),
     *,
     baseline_bindings: BaselineBindingSnapshot | None = None,
+    role_queue: tuple[RoleQueueView, ...] = (),
 ) -> tuple[tuple[TimelineEntry, ...], ExecutionInterruptionReceipt | None]:
     """Read every immutable interruption/admission, including feedback-bound sources."""
     root = sidecar / "state" / "continuations" / task.id
@@ -1271,7 +1272,69 @@ def _continuation_history(
                 },
             )
         )
-    return tuple(entries), receipts[-1]
+    current_receipt = _current_execution_receipt(sidecar, task, role_queue, receipts)
+    if current_receipt is not None:
+        entries = [
+            entry.model_copy(
+                update={
+                    "details": {
+                        **entry.details,
+                        "current_execution_work_item_id": current_receipt.original_work_item_id,
+                        "current_execution_attempt": current_receipt.request.attempt,
+                    }
+                }
+            )
+            if entry.id == "interruption_" + current_receipt.receipt_sha256
+            else entry
+            for entry in entries
+        ]
+    return tuple(entries), current_receipt
+
+
+def _current_execution_receipt(
+    sidecar: Path,
+    task: Task,
+    role_queue: tuple[RoleQueueView, ...],
+    receipts: tuple[ExecutionInterruptionReceipt, ...],
+) -> ExecutionInterruptionReceipt | None:
+    """A prior receipt/admission cannot stand in for the current call's own facts."""
+    if task.status is not TaskStatus.IMPLEMENTING:
+        return None
+    opened = tuple(step for step in role_queue if step.status is not WorkItemStatus.CLOSED)
+    if len(opened) > 1:
+        raise ValueError("current receipt requires one serial queue work item")
+    if not opened or opened[0].role is not AgentRole.CODER:
+        return None
+    current = opened[0]
+    matches = tuple(r for r in receipts if r.original_work_item_id == current.work_item_id)
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("current work item has conflicting interruption receipts")
+    root = sidecar / "state" / "invocations"
+    _reject_symlinks(root)
+    if not root.exists():
+        return None
+    from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
+
+    start = KnowledgeRecordStore(root, read_only=True).find(
+        "invocation-starts", current.work_item_id, DeliveryInvocationStart
+    )
+    if start is None:
+        return None
+    start.validate_integrity()
+    receipt = matches[0]
+    if (
+        start.work_item_id != current.work_item_id
+        or start.request.task_id != task.id
+        or start.request.role is not current.role
+        or start.request.attempt != current.attempt
+        or receipt.request != start.request
+        or receipt.claim_lease_id != start.lease_id
+        or receipt.process_stop.stopped_at < start.started_at
+    ):
+        raise ValueError("current receipt changed its exact invocation identity")
+    return receipt
 
 
 def _execution_interrupted(task: TaskView) -> bool:
@@ -1483,13 +1546,27 @@ def _task_execution(task: TaskView) -> DeliveryExecutionView:
 
 def _with_execution_state(task: TaskView) -> TaskView:
     execution = _task_execution(task)
-    if task.execution is not None:
-        execution = execution.model_copy(
-            update={
-                "policy_id": task.execution.policy_id,
-                "receipt_uri": task.execution.receipt_uri,
-            }
-        )
+    if not task.terminal and task.status == "IMPLEMENTING":
+        opened = tuple(step for step in task.role_queue if step.status is not WorkItemStatus.CLOSED)
+        if len(opened) == 1 and opened[0].role is AgentRole.CODER:
+            current = opened[0]
+            for entry in task.timeline:
+                details = entry.details
+                if (
+                    entry.task_id == task.task_id
+                    and details.get("kind") == "execution_interruption_receipt"
+                    and details.get("current_execution_work_item_id") == current.work_item_id
+                    and details.get("current_execution_attempt") == current.attempt
+                    and details.get("receipt_sha256") == entry.source_sha256
+                    and isinstance(details.get("policy_sha256"), str)
+                ):
+                    execution = execution.model_copy(
+                        update={
+                            "policy_id": details["policy_sha256"],
+                            "receipt_uri": entry.source_uri,
+                        }
+                    )
+                    break
     updates: dict[str, object] = {"execution": execution}
     if execution.state in {"WAITING", "RUNNING", "QUEUED", "RETRY_SCHEDULED"}:
         updates["next_action"] = execution.next_action
@@ -2143,7 +2220,6 @@ def _read_task_details(
             else None
         ),
     )
-    continuation_receipt = None
     if native.team_id is not None:
         from ai_software_engineer.domain.engineering_authority import EngineeringScope
         from ai_software_engineer.team_view.engineering_history import engineering_history
@@ -2182,7 +2258,7 @@ def _read_task_details(
             views=role_queue,
             baseline_bindings=baseline_bindings,
         )
-        history, continuation_receipt = _continuation_history(
+        history, _ = _continuation_history(
             native.sidecar,
             task,
             ContinuationScope(
@@ -2194,6 +2270,7 @@ def _read_task_details(
             ),
             artifacts,
             baseline_bindings=baseline_bindings,
+            role_queue=role_queue,
         )
         timeline = tuple(
             sorted(
@@ -2278,28 +2355,6 @@ def _read_task_details(
             }
         )
     )
-    if continuation_receipt is not None:
-        assert view.execution is not None
-        view = view.model_copy(
-            update={
-                "execution": view.execution.model_copy(
-                    update={
-                        "policy_id": continuation_receipt.policy_sha256,
-                        "receipt_uri": (
-                            native.sidecar
-                            / "state"
-                            / "continuations"
-                            / task.id
-                            / (
-                                "receipt.json"
-                                if continuation_receipt.schema_version == "v1"
-                                else f"receipt-{continuation_receipt.request.run_id}.json"
-                            )
-                        ).as_uri(),
-                    }
-                )
-            }
-        )
     return view
 
 

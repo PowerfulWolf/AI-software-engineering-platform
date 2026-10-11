@@ -386,6 +386,8 @@ def test_task_read_snapshot_wires_all_three_real_projections(
     assert view.task_id == fixture.task.id
     assert any(entry.id.startswith("baseline_") for entry in view.timeline)
     assert any(entry.id.startswith("interruption_") for entry in view.timeline)
+    assert view.execution is not None
+    assert view.execution.receipt_uri is None and view.execution.policy_id is None
     assert calls == [(fixture.store.root, fixture.task.id)]
     assert reads.read(native, base, dispatch_override=dispatch) is view
     fresh, native, base, dispatch = _read_snapshot_fixture(fixture, monkeypatch)
