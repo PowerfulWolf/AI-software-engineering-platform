@@ -78,6 +78,9 @@
 - [Recovery admission facts](recovery-admission-facts.md): local typed facts from a complete
   authorization gate, final fresh Plan/facts comparison and unchanged custom validation paths.
 
+- [Recovery facts window](recovery-facts-window.md): two complete modern terminal observations
+  under the existing Worker lock, fresh final stop and unchanged exact approvals.
+
 - [`engineering-authority.md`](engineering-authority.md): versioned engineering policy, trusted
   Product/Engineering duties, exact nonterminal wait investigations and resolutions.
 

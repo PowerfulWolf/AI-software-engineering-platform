@@ -137,6 +137,13 @@ PYTHONPATH=src python -m pytest -q -m 'not mysql' \
 See the task's `verification.md` for the actual six-read red, individual green runs,
 typed checks, exact helper cleanup and the timing interpretation boundary.
 
+`tests/recovery/test_window_task_builder.py` additionally composes the real modern fixture,
+Git capture, exact FileRecoveryStore authorization and AuthorizedRecoveryTaskBuilder. A
+standard build retains four complete Native inspections with eight fresh source reads;
+it does not publish a Task. Removing the real stop record after pure Task derivation must
+make the final authorization window reject while Plan/authorization bytes stay unchanged.
+This module uses the same mysql marker and local empty autouse override described above.
+
 存量数据处置：no Schema, SQL, journal, approval, Task, artifact, snapshot or workspace
 migration. Preserve exact Requirement identity, failed evidence and retained files.
 This performance repair neither approves nor restarts a delivery. Deploy or revert only

@@ -102,3 +102,33 @@ not be described as new full-chain acceptance for those modes.
 
 The implementation is not deployed by this worker. Root owns core-index registration,
 integration and additional real authorization-service/builder crossing tests.
+
+## Root integration validation
+
+The integration branch contains the previous stronger authorization-gate compatibility
+repair and this window together. Root added `tests/recovery/test_window_task_builder.py`:
+
+```sh
+PYTHONPATH=src python -m pytest -q -s --tb=short \
+  tests/recovery/test_window_task_builder.py
+```
+
+Result: **2 passed, 75.03 seconds**. Both use the complete modern fixture and actual Git
+capture, FileRecoveryStore, authorization service and Task builder. The success observes
+eight fresh full sources across four Native inspections. The negative removes the real
+stop after successful pure derivation; the final gate rejects, both durable approval/Plan
+bytes remain identical, and no Task record is published. Each finally emitted owned
+processes zero and 13 test tables empty before both locks were released. No production
+database or Host was accessed by these tests.
+
+The selected stronger Service/class Native validation and standard builder regressions
+passed together on the integrated code: **7 passed, 18 deselected, 4.79 seconds**.
+Root's new file passed Ruff check/format and strict Mypy. A read-only independent reviewer
+approved the two combination tests without rerunning or connecting to MySQL. These counts
+overlap prior regressions and are not an independent aggregate or full-suite result.
+
+The running old production Operation cannot load this repair. Its real `DISPATCH_COMMITTED`
+milestone does not imply a Task row or Coder invocation: seed and additional Context occur
+before `DispatchTaskMaterializer.materialize`. Existing controlled stop drains the whole
+admitted Operation; it is not preparation cancellation. Do not force-kill it to load the
+patch, manufacture stop facts, or repeat its approval. Deploy at a genuine idle boundary.

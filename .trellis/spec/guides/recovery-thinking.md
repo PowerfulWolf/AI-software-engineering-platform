@@ -208,3 +208,16 @@ execution-baseline.md 的 accepted artifact order 与 repeated baseline 验证�
   和真实生产配置；没有观察到生产扩展时，不能宣称现有需求曾被越权放行。
 
 执行契约和新增六个拒绝回归见 `../core/recovery-admission-facts.md`。
+
+### 恢复派发与服务收尾是不同边界（2026-10-12）
+
+- `DISPATCH_COMMITTED` 证明派发已提交；恢复 seed 和额外 Context 完成之后才物化 SQL Task。
+  Task 行不存在与已提交 dispatch 不矛盾，也不能把准备阶段显示为 Coder 正在开发。
+- 服务受控停止等待已接纳 Operation 全部完成和持久化；`resume` 只解除 drain，不取消当前
+  preparation。没有协作式取消/可验证停止边界时，不通过重启强行加载性能修复。
+- 已存在 plan/authorization/task/dispatch 可以按原精确身份重放，不意味着任意中断现场都
+  可继续。seed 应用后的 dirty 现场若尚无 seed receipt，不能推断为已验证完成或直接重置。
+- 同步完整观察窗口只减少原嵌套读取：保留两轮完整 source/target/terminal、末轮新鲜停止和
+  工作区核验及旧 Worker 锁；不要宣称旧重复 stop/capture/inventory 的调用数量都未减少。
+
+实际 modern 窗口、旧 wrapper 兼容和组合增量的范围见 `../core/recovery-facts-window.md`。
