@@ -28,6 +28,308 @@ let refreshQueued = false;
 let requestedRuntimeStatus = false;
 let operations = [];
 let operationsAvailable = false;
+let consoleOperationSummaryContractVersion = null;
+const operationSummaryPages = new Map();
+const operationDetailCache = new Map();
+const operationHistoryPages = new Map();
+let operationSummaryReadRevision = 0;
+let operationReadOwnerGeneration = 0;
+let operationHistoryRevision = 0;
+let operationDetailReadyScope = null;
+let operationDetailReadyInventory = null;
+let currentOperationSources = [];
+let operationDetailReadFlight = null;
+const operationDetailMaximumBytes = 32 * 1024 * 1024;
+const operationDetailMaximumCount = 8;
+const operationSummaryMode = () => consoleOperationSummaryContractVersion === "v0.1";
+const operationProject = value => value?.intent?.project_id ?? value?.project_id ?? null;
+const operationAction = value => value?.intent?.action ?? value?.action ?? null;
+const operationSummaryScopeKey = (projectId, deliveryId) => JSON.stringify([consoleTeamId, projectId, deliveryId]);
+const operationReadOwnerSignature = () => JSON.stringify([operationReadOwnerGeneration,
+  snapshot?.team_id, consoleTeamId, currentProjectId(), selectionIntentRevision]);
+const operationWriteOwnerSignature = () => JSON.stringify([operationReadOwnerSignature(),
+  consoleAvailable, consoleDeliveryReady, consoleOperationContractVersion, consoleSupportedActions,
+  consoleOperationSummaryContractVersion]);
+function operationReadingRecords() {
+  if (!operationSummaryMode()) return operations;
+  const records = new Map();
+  for (const state of operationSummaryPages.values()) {
+    if (state.page.team_id !== consoleTeamId || consoleTeamId !== snapshot?.team_id) continue;
+    for (const item of [...state.page.items, ...state.page.active]) records.set(item.operation_id, item);
+  }
+  for (const item of currentOperationSources) if (item.team_id === consoleTeamId && !records.has(item.operation_id)) records.set(item.operation_id, item);
+  // Loaded details can enhance reading only while their current summary matches.
+  return [...records.values()].filter(item => !operationProject(item) || operationProject(item) === currentProjectId())
+    .map(item => operations.find(value =>
+    value.operation_id === item.operation_id && value.operation_sha256 === item.operation_sha256) || item);
+}
+function clearOperationReadScope() {
+  operationReadOwnerGeneration++;
+  operationSummaryReadRevision++;
+  operationDetailReadyScope = null;
+  operationDetailReadyInventory = null;
+  currentOperationSources = [];
+  operationDetailCache.clear();
+  operationSummaryPages.clear();
+  operationHistoryPages.clear();
+  operations = [];
+  operationsAvailable = false;
+}
+function selectedOperationScope() {
+  const request = selectedPreparationRequest();
+  return request && request.project_id === currentProjectId()
+    ? {projectId: request.project_id, deliveryId: request.id, checkpoint: request.checkpoint_sha256} : null;
+}
+const selectedOperationScopeKey = scope => scope && JSON.stringify([snapshot?.team_id, scope.projectId,
+  scope.deliveryId, scope.checkpoint, selectionIntentRevision]);
+async function loadCurrentOperationDetails(signal) {
+  const scope = selectedOperationScope();
+  if (!operationSummaryMode() || !scope) return;
+  const key = selectedOperationScopeKey(scope);
+  if (operationDetailReadFlight?.key === key) return operationDetailReadFlight.promise;
+  const revision = ++operationSummaryReadRevision;
+  const currentScope = () => revision === operationSummaryReadRevision && selectedOperationScopeKey(selectedOperationScope()) === key;
+  const promise = (async () => {
+    const priorScope = operationDetailReadyScope;
+    operationDetailReadyScope = null;
+    const current = await readOperationSummaryPage(scope.projectId, scope.deliveryId, {signal});
+    if (!currentScope()) throw new Error("所选需求已变化，请核对当前页面。");
+    if (priorScope === key && operationDetailReadyInventory === current.inventory_sha256 &&
+        currentOperationSources.every(item => operationDetailCache.get(item.operation_id)?.value.operation_sha256 === item.operation_sha256)) {
+      operationDetailReadyScope = key;
+      return;
+    }
+    currentOperationSources = [];
+    operationDetailCache.clear();
+    operations = [];
+    const latest = new Map(), taskIds = new Set(currentRequestTasks(requestById(scope.deliveryId))
+      .flatMap(task => [task.task_id, task.id]));
+    const observe = items => {
+      for (const item of items) {
+        const currentCheckpoint = item.result_checkpoint_sha256 === scope.checkpoint || item.intent_checkpoint_sha256 === scope.checkpoint;
+        if (item.task_id && !taskIds.has(item.task_id)) continue;
+        if (!currentCheckpoint && !["QUEUED", "RUNNING"].includes(item.status) && !item.task_id) continue;
+        if (!latest.has(item.action)) latest.set(item.action, item);
+        if (item.approval_kind && currentCheckpoint && !latest.has("current-approval")) latest.set("current-approval", item);
+      }
+    };
+    observe([...current.active, ...current.items]);
+    let cursor = current.next_cursor, seen = new Set();
+    while (cursor) {
+      if (seen.has(cursor)) throw new Error("历史操作分页无法完整核验。");
+      seen.add(cursor);
+      const older = await readOperationSummaryPage(scope.projectId, scope.deliveryId, {signal, cursor, publish: false});
+      if (!currentScope()) throw new Error("所选需求已变化，请核对当前页面。");
+      if (older.inventory_sha256 !== current.inventory_sha256) throw new Error("操作记录已有更新，请重新核对。");
+      observe(older.items);
+      cursor = older.next_cursor;
+    }
+    const sources = [...new Map([...latest.values()].map(item => [item.operation_id, item])).values()];
+    if (sources.length > operationDetailMaximumCount) throw new Error("当前待核对的完整操作较多，请由平台核对记录关联。");
+    currentOperationSources = sources;
+    for (const item of sources) {
+      await readFullOperation(item, {signal, fresh: true});
+      if (!currentScope()) throw new Error("所选需求已变化，请核对当前页面。");
+    }
+    if (revision !== operationSummaryReadRevision || selectedOperationScopeKey(selectedOperationScope()) !== key)
+      throw new Error("所选需求已变化，请核对当前页面。");
+    if (!sources.every(item => operationDetailCache.get(item.operation_id)?.value.operation_sha256 === item.operation_sha256))
+      throw new Error("当前完整方案超过页面读取预算，请由平台拆分核对入口。");
+    operationDetailReadyScope = key;
+    operationDetailReadyInventory = current.inventory_sha256;
+  })();
+  operationDetailReadFlight = {key, promise};
+  try { await promise; }
+  finally { if (operationDetailReadFlight?.promise === promise) operationDetailReadFlight = null; }
+}
+function verifiedOperationSummaryPage(value, projectId, deliveryId) {
+  const sha = field => typeof field === "string" && /^[a-f0-9]{64}$/.test(field);
+  const nullableText = (field, maximum) => field == null || typeof field === "string" && field.length <= maximum;
+  const check = item => item && /^operation_[a-f0-9]{32}$/.test(item.operation_id || "") &&
+    item.team_id === consoleTeamId && nullableText(item.project_id, 128) &&
+    nullableText(item.delivery_id, 128) && (!projectId || item.project_id === projectId) &&
+    (!deliveryId || item.delivery_id === deliveryId) &&
+    typeof item.action === "string" && /^[A-Z][A-Z0-9_]{0,99}$/.test(item.action) &&
+    ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"].includes(item.status) &&
+    Number.isInteger(item.sequence) && item.sequence > 0 && sha(item.operation_sha256) &&
+    typeof item.requested_at === "string" && Number.isFinite(Date.parse(item.requested_at)) &&
+    typeof item.updated_at === "string" && Number.isFinite(Date.parse(item.updated_at)) &&
+    item.has_details === true && ["intent", "result", "patch", "approval", "execution_baseline_plan"]
+      .every(field => !Object.hasOwn(item, field)) &&
+    ["error_summary", "summary", "next_step"].every(field => nullableText(item[field], 512)) &&
+    ["error_code", "approval_kind", "baseline_purpose"].every(field => nullableText(item[field], 64)) &&
+    ["result_stage", "task_id", "work_item_id"].every(field => nullableText(item[field], 128)) &&
+    (item.has_baseline_binding == null || typeof item.has_baseline_binding === "boolean") &&
+    (item.submitted_approval_kind == null || ["plan", "scope", "repair"].includes(item.submitted_approval_kind)) &&
+    ["result_checkpoint_sha256", "intent_checkpoint_sha256", "approval_plan_sha256", "baseline_plan_sha256",
+      "submitted_approval_sha256", "intent_plan_sha256"].every(field => item[field] == null || sha(item[field]));
+  if (!value || value.schema_version !== "v0.1" || value.team_id !== consoleTeamId ||
+      (value.scope?.project_id ?? null) !== projectId || (value.scope?.delivery_id ?? null) !== deliveryId ||
+      !sha(value.inventory_sha256) || !Array.isArray(value.items) || value.items.length > 50 ||
+      !Array.isArray(value.active) || value.active.length > 64 || value.active_complete !== true ||
+      !Number.isInteger(value.total_count) || value.total_count < value.items.length ||
+      !nullableText(value.next_cursor, 4096) || value.next_cursor != null && !/^[A-Za-z0-9_-]+$/.test(value.next_cursor) ||
+      ![...value.items, ...value.active].every(check) ||
+      !value.active.every(item => ["QUEUED", "RUNNING"].includes(item.status)) ||
+      new Set(value.items.map(item => item.operation_id)).size !== value.items.length ||
+      new Set(value.active.map(item => item.operation_id)).size !== value.active.length ||
+      new TextEncoder().encode(JSON.stringify(value)).byteLength > 256 * 1024)
+    throw new Error("交付操作摘要无法完整核验，请重新读取。");
+  return value;
+}
+async function readOperationSummaryPage(projectId, deliveryId, {signal, cursor = null, publish = true} = {}) {
+  const owner = operationReadOwnerSignature();
+  const assertOwner = () => {
+    if (owner !== operationReadOwnerSignature())
+      throw new Error("当前团队或页面已变化，请重新读取当前操作记录。");
+  };
+  const key = operationSummaryScopeKey(projectId, deliveryId);
+  const previous = operationSummaryPages.get(key);
+  const query = new URLSearchParams({page_size: "25"});
+  if (projectId) query.set("project_id", projectId);
+  if (deliveryId) query.set("delivery_id", deliveryId);
+  if (cursor) query.set("cursor", cursor);
+  const response = await fetch("/api/v1/operation-summaries?" + query, {cache: "no-store", signal,
+    headers: !cursor && previous?.etag ? {"If-None-Match": previous.etag} : {}});
+  assertOwner();
+  if (response.status === 304) {
+    if (cursor || !previous || operationSummaryPages.get(key) !== previous)
+      throw new Error("交付操作摘要尚未读取，不能复用旧确认。");
+    return verifiedOperationSummaryPage(previous.page, projectId, deliveryId);
+  }
+  if (response.status === 409) throw new Error("历史记录已有更新，请重新读取后继续翻页。");
+  if (!response.ok) throw new Error("交付操作摘要暂时无法读取。");
+  const body = await response.json();
+  assertOwner();
+  const value = verifiedOperationSummaryPage(body, projectId, deliveryId);
+  if (publish) {
+    if (previous && previous.page.inventory_sha256 !== value.inventory_sha256)
+      operationDetailReadyScope = null;
+    operationSummaryPages.set(key, {page: value, etag: response.headers?.get("ETag") || null});
+    while (operationSummaryPages.size > 3) operationSummaryPages.delete(operationSummaryPages.keys().next().value);
+    const history = operationHistoryPages.get(key);
+    if (history && !history.inventory) {
+      history.items = value.items;
+      history.inventory = value.inventory_sha256;
+      history.next = value.next_cursor || null;
+      history.total = value.total_count;
+    } else if (history && history.inventory !== value.inventory_sha256) {
+      history.changed = true;
+      history.next = null;
+    }
+  }
+  return value;
+}
+function cacheFullOperation(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  if (bytes > 16 * 1024 * 1024) throw new Error("完整操作记录超出读取预算。");
+  operationDetailCache.delete(value.operation_id);
+  operationDetailCache.set(value.operation_id, {value, bytes});
+  let retained = [...operationDetailCache.values()].reduce((total, item) => total + item.bytes, 0);
+  while (operationDetailCache.size > operationDetailMaximumCount || retained > operationDetailMaximumBytes) {
+    const oldest = operationDetailCache.keys().next().value;
+    retained -= operationDetailCache.get(oldest).bytes;
+    operationDetailCache.delete(oldest);
+  }
+  operations = [...operationDetailCache.values()].map(item => item.value)
+    .filter(item => currentOperationSources.some(source => source.operation_id === item.operation_id));
+  if (operationSummaryMode() && !currentOperationSources.every(item =>
+      operationDetailCache.get(item.operation_id)?.value.operation_sha256 === item.operation_sha256))
+    operationDetailReadyScope = null;
+  return value;
+}
+async function readFullOperation(source, {signal, fresh = false} = {}) {
+  const owner = operationReadOwnerSignature();
+  const assertOwner = () => {
+    if (owner !== operationReadOwnerSignature()) throw new Error("当前团队或页面已变化，本次完整记录不再使用。");
+  };
+  const cached = operationDetailCache.get(source.operation_id)?.value;
+  if (!fresh && cached?.operation_sha256 === source.operation_sha256) return cached;
+  const response = await fetch("/api/v1/operations/" + encodeURIComponent(source.operation_id), {cache: "no-store", signal});
+  assertOwner();
+  if (!response.ok) throw invalidateOperationAuthority("完整操作记录暂时无法读取，请重新核对。");
+  const value = await response.json();
+  assertOwner();
+  if (!value || value.operation_id !== source.operation_id || value.team_id !== source.team_id ||
+      operationSummaryMode() && source.team_id !== consoleTeamId ||
+      value.operation_sha256 !== source.operation_sha256 || operationProject(value) !== operationProject(source) ||
+      operationTarget(value) !== operationTarget(source) || operationAction(value) !== operationAction(source) ||
+      value.status !== source.status || value.sequence !== source.sequence || !value.intent ||
+      operationSummaryMode() && ![...operationReadingRecords(), ...[...operationHistoryPages.values()].flatMap(item => item.items)]
+        .some(item => item.operation_id === source.operation_id && item.operation_sha256 === source.operation_sha256))
+    throw invalidateOperationAuthority("操作记录已有变化，请重新读取并核对当前方案。");
+  return cacheFullOperation(value);
+}
+function invalidateOperationAuthority(message) {
+  operationsAvailable = false;
+  operationDetailReadyScope = null;
+  nativeRuleReviews.clear();
+  nativeRuleReviewsRevision++;
+  if (typeof document.getElementById === "function") {
+    syncDeliveryControls();
+    render({preserveComposer: true, incremental: true});
+  }
+  return new Error(message);
+}
+function operationHistoryPage(projectId, deliveryId) {
+  const key = operationSummaryScopeKey(projectId, deliveryId);
+  let state = operationHistoryPages.get(key);
+  if (!state) {
+    const current = operationSummaryPages.get(key)?.page;
+    state = {items: current?.items || [], inventory: current?.inventory_sha256 || null,
+      next: current?.next_cursor || null, total: current?.total_count || 0, changed: false, loading: false,
+      back: [], pageNumber: 1};
+    operationHistoryPages.set(key, state);
+    while (operationHistoryPages.size > 2) operationHistoryPages.delete(operationHistoryPages.keys().next().value);
+  }
+  return state;
+}
+async function loadMoreOperationHistory(projectId, deliveryId, signal) {
+  const state = operationHistoryPage(projectId, deliveryId);
+  if (state.loading || state.changed || !state.next) return state;
+  state.loading = true;
+  try {
+    const value = await readOperationSummaryPage(projectId, deliveryId, {signal, cursor: state.next, publish: false});
+    if (state.inventory !== value.inventory_sha256) throw new Error("历史记录已有更新，请重新读取。");
+    state.back.push({items: state.items, next: state.next, pageNumber: state.pageNumber});
+    if (state.back.length > 4) state.back.shift();
+    state.items = value.items;
+    state.pageNumber++;
+    state.next = value.next_cursor || null;
+    state.total = value.total_count;
+    return state;
+  } catch (error) {
+    state.changed = true;
+    throw error;
+  } finally { state.loading = false; }
+}
+async function recheckOperationWriteFacts(intent) {
+  if (!operationSummaryMode()) return;
+  const owner = operationWriteOwnerSignature();
+  const projectId = currentProjectId(), revision = selectionIntentRevision;
+  const request = intent.delivery_id && requestById(intent.delivery_id);
+  const requestSignature = JSON.stringify(request || null);
+  const taskSignature = JSON.stringify(request ? currentRequestTasks(request) : []);
+  const sources = [...currentOperationSources];
+  const sourceSignature = JSON.stringify(sources.map(item => [item.operation_id, item.operation_sha256]));
+  const assertCurrent = () => {
+    const current = intent.delivery_id && requestById(intent.delivery_id);
+    if (owner !== operationWriteOwnerSignature() || revision !== selectionIntentRevision || projectId !== currentProjectId() ||
+        requestSignature !== JSON.stringify(current || null) ||
+        taskSignature !== JSON.stringify(current ? currentRequestTasks(current) : []) ||
+        sourceSignature !== JSON.stringify(currentOperationSources.map(item => [item.operation_id, item.operation_sha256])) ||
+        !canControlCurrentTeam()) throw new Error("当前团队、需求或完整方案已有变化，请重新核对并确认。");
+  };
+  const summary = await readOperationSummaryPage(intent.project_id || projectId, intent.delivery_id || null);
+  assertCurrent();
+  if (intent.delivery_id && summary.active.some(item => operationTarget(item) === intent.delivery_id))
+    throw new Error("已有操作正在处理，请等待当前结果；本次确认没有提交。");
+  for (const source of sources) {
+    await readFullOperation(source, {fresh: true});
+    assertCurrent();
+  }
+  assertCurrent();
+}
 let recoveryPreparationObservation = null;
 let recoveryPreparationFlight = null;
 let recoveryPreparationTargetKey = null;
@@ -130,7 +432,7 @@ function operationRenderFact(operation) {
     return [operation.operation_id, operation.operation_sha256];
   return operation;
 }
-function operationRenderFacts(values = operations) {
+function operationRenderFacts(values = operationReadingRecords()) {
   return values.map(operationRenderFact);
 }
 function viewBlock(node, key, facts) {
@@ -188,11 +490,11 @@ function renderView(container, key, facts, build, incremental) {
 }
 function pollingControlFacts() {
   return [consoleAvailable, consoleTeamId, consoleDeliveryReady, consoleOperationContractVersion,
-    consoleSupportedActions, operationsAvailable, teamReadIssue,
+    consoleSupportedActions, consoleOperationSummaryContractVersion, operationsAvailable, operationDetailReadyScope, teamReadIssue,
     snapshot?.team_id, currentProjectId(), projectSwitchPending()];
 }
 function pollingContentFacts() {
-  const common = [page, pollingControlFacts(), administrationNotice, !snapshot && teamReadIssue];
+  const common = [page, pollingControlFacts(), administrationNotice, !snapshot && teamReadIssue, operationHistoryRevision];
   if (page === "settings") return [...common, administrationAvailable, settingsSnapshot,
     settingsSection, configurationApplyInFlight, configurationApplyResult];
   if (page === "status") return [...common, administrationAvailable, runtimeStatusSnapshot,
@@ -213,9 +515,9 @@ function pollingDetailFacts() {
   const parent = selected?.kind === "task" && item ? taskParentRequest(item) : null;
   const request = selected?.kind === "request" ? item : parent;
   const tasks = request ? requestTasks(request) : [];
-  return [page, selected, item, parent, tasks, snapshot?.agents, pollingControlFacts(),
+  return [page, selected, item, parent, tasks, snapshot?.agents, pollingControlFacts(), operationHistoryRevision,
     operationRenderFacts(item ? operations.filter(operation => operationTarget(operation) === item.id ||
-      (parent && operationTarget(operation) === parent.id && operation.intent.project_id === parent.project_id)) : []),
+      (parent && operationTarget(operation) === parent.id && operationProject(operation) === parent.project_id)) : []),
     page === "requests" && Boolean(snapshot?.requests.length), nativeRuleReviewsRevision, recoveryPreparationDisplayFacts()];
 }
 function recoveryPreparationDisplayFacts() {
@@ -232,14 +534,14 @@ function currentRecoveryPreparationScope() {
   if (!request || projectSwitchPending() || request.project_id !== currentProjectId()) return null;
   // Saved Operation facts may still be read during an outage; they cannot authorize a command.
   const operation = operations.find(value => operationTarget(value) === request.id &&
-    value.intent.project_id === request.project_id && ["QUEUED", "RUNNING"].includes(value.status));
+    operationProject(value) === request.project_id && ["QUEUED", "RUNNING"].includes(value.status));
   if (!operation || operation.status !== "RUNNING" || operation.team_id !== snapshot?.team_id ||
-      operation.intent.action !== "CONTINUE_DELIVERY" ||
-      !/^[a-f0-9]{64}$/.test(operation.intent.approved_plan_sha256 || "") ||
-      !/^[a-f0-9]{64}$/.test(operation.intent.expected_checkpoint_sha256 || "")) return null;
+      operationAction(operation) !== "CONTINUE_DELIVERY" ||
+      !/^[a-f0-9]{64}$/.test(operation.intent?.approved_plan_sha256 || "") ||
+      !/^[a-f0-9]{64}$/.test(operation.intent?.expected_checkpoint_sha256 || "")) return null;
   return {operation_id: operation.operation_id, team_id: operation.team_id, project_id: request.project_id,
-    delivery_id: request.id, expected_checkpoint_sha256: operation.intent.expected_checkpoint_sha256,
-    approved_plan_sha256: operation.intent.approved_plan_sha256};
+    delivery_id: request.id, expected_checkpoint_sha256: operation.intent?.expected_checkpoint_sha256,
+    approved_plan_sha256: operation.intent?.approved_plan_sha256};
 }
 const preparationScopeKey = scope => scope && JSON.stringify(preparationScopeFields.map(field => scope[field]));
 const samePreparationScope = (left, right) => Boolean(left && right &&
@@ -658,33 +960,33 @@ const badge = (status) =>
             ? "" : "current"),
   );
 const operationTarget = (operation) =>
-  operation.intent.delivery_id || operation.result?.delivery_id || null;
+  operation.intent?.delivery_id || operation.delivery_id || operation.result?.delivery_id || null;
 const operationRequest = (operation) => {
   const target = operationTarget(operation);
   return target && snapshot?.requests.find(request => request.id === target &&
-    request.project_id === operation.intent.project_id) || null;
+    request.project_id === operationProject(operation)) || null;
 };
 const currentProjectId = () => snapshot?.selected_project_id || null;
 const projectSwitchPending = () =>
   requestedProjectId !== null && requestedProjectId !== currentProjectId();
 const activeOperation = (deliveryId, projectId = null) =>
-  operationsAvailable ? operations.find(
+  operationsAvailable ? operationReadingRecords().find(
     (operation) =>
       operationTarget(operation) === deliveryId &&
-      (!projectId || operation.intent.project_id === projectId) &&
+      (!projectId || operationProject(operation) === projectId) &&
       ["QUEUED", "RUNNING"].includes(operation.status),
   ) : undefined;
 const latestOperation = (deliveryId) =>
-  [...operations]
+  [...operationReadingRecords()]
     .filter((operation) => operationTarget(operation) === deliveryId)
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0] ||
   null;
 const operationNeedsHumanAttention = (operation) =>
   operation?.status === "SUCCEEDED" &&
-  (["WAITING_HUMAN", "BLOCKED", "FAILED"].includes(operation.result?.stage) ||
+  (["WAITING_HUMAN", "BLOCKED", "FAILED"].includes(operation.result?.stage ?? operation.result_stage) ||
     ["NEEDS_AUTHORIZATION", "PLATFORM_ATTENTION", "WAITING_PREREQUISITES", "BUDGET_EXHAUSTED"]
       .includes(operation.result?.engineering_wait_handling?.status)) &&
-  !operation.result?.approval;
+  !operation.result?.approval && !operation.approval_kind;
 const isSourceRevisionDrift = (operation) =>
   operation?.status === "FAILED" &&
   (operation.error_code === "SOURCE_REVISION_DRIFT" ||
@@ -701,23 +1003,23 @@ const latestApproval = (deliveryId, checkpoint, projectId = null) => {
           const approval = operation.result?.approval;
           if (
             operationTarget(operation) !== deliveryId ||
-            (projectId !== null && operation.intent.project_id !== projectId) ||
+            (projectId !== null && operationProject(operation) !== projectId) ||
             operation.status !== "SUCCEEDED" ||
             !approval ||
             (operation.result.delivery_id === deliveryId
               ? operation.result.checkpoint_sha256
-              : operation.intent.expected_checkpoint_sha256) !== checkpoint
+              : operation.intent?.expected_checkpoint_sha256) !== checkpoint
           )
             return false;
-          return !operations.some((candidate) => {
+          return !operationReadingRecords().some((candidate) => {
             const submittedApproval =
-              candidate.intent.approved_plan_sha256 ||
-              candidate.intent.approved_scope_sha256 ||
-              candidate.intent.approved_repair_sha256;
+              candidate.intent?.approved_plan_sha256 ||
+              candidate.intent?.approved_scope_sha256 ||
+              candidate.intent?.approved_repair_sha256 || candidate.submitted_approval_sha256;
             return (
               operationTarget(candidate) === deliveryId &&
-              (projectId === null || candidate.intent.project_id === projectId) &&
-              candidate.intent.action === "CONTINUE_DELIVERY" &&
+              (projectId === null || operationProject(candidate) === projectId) &&
+              operationAction(candidate) === "CONTINUE_DELIVERY" &&
               submittedApproval === approval.plan_sha256 &&
               candidate.updated_at.localeCompare(operation.updated_at) > 0
             );
@@ -744,6 +1046,12 @@ function deliveryControlUnavailableReason() {
     title: "交付操作记录读取失败",
     reason: "平台暂时无法读取已保存的交付操作记录，因此不能确认当前恢复方案与审批状态。",
     next_action: "请由 ASE 平台维护者检查并修复操作记录读取；恢复后刷新当前需求，再核对恢复方案。不要重复准备方案或重建需求。",
+  };
+  if (operationSummaryMode() && selectedOperationScope() &&
+      operationDetailReadyScope !== selectedOperationScopeKey(selectedOperationScope())) return {
+    title: "正在核对当前操作记录",
+    reason: "平台正在读取当前需求的完整处理方案，暂不能使用此前的确认。",
+    next_action: "请等待完整方案读取完成，再核对所列内容；原需求和开发进度保留。",
   };
   if (consoleDeliveryReady !== true) return {
     title: "交付运行时尚未就绪",
@@ -1080,7 +1388,7 @@ function sameEngineeringWaitIntent(intent, bound) {
 function latestEngineeringWaitOperation(request, step, actions = ["INSPECT_DELIVERY_WAIT", "HANDLE_DELIVERY_WAIT"]) {
   const bound = engineeringWaitIntent(request, step);
   return [...operations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    .find(item => actions.includes(item.intent.action) &&
+    .find(item => actions.includes(operationAction(item)) &&
       sameEngineeringWaitIntent(item.intent, bound));
 }
 function matchingEngineeringWaitProof(proof, request, step) {
@@ -1096,7 +1404,7 @@ function matchingEngineeringWaitProof(proof, request, step) {
   return proof;
 }
 function engineeringWaitHandlingFromOperation(operation, request, step) {
-  const handling = operation?.status === "SUCCEEDED" && operation.intent.action === "HANDLE_DELIVERY_WAIT"
+  const handling = operation?.status === "SUCCEEDED" && operationAction(operation) === "HANDLE_DELIVERY_WAIT"
     ? operation.result?.engineering_wait_handling : null;
   const proof = handling && matchingEngineeringWaitProof(handling.investigation, request, step);
   if (!handling || !proof || operation.result.checkpoint_sha256 !== request.checkpoint_sha256 ||
@@ -1131,7 +1439,7 @@ function sameEngineeringWaitProofFacts(left, right) {
 function engineeringWaitProof(request, step) {
   const operation = latestEngineeringWaitOperation(request, step);
   if (operation?.status !== "SUCCEEDED" || operation.result?.checkpoint_sha256 !== request.checkpoint_sha256) return null;
-  return operation.intent.action === "HANDLE_DELIVERY_WAIT" ? engineeringWaitHandlingFromOperation(operation, request, step)?.investigation || null
+  return operationAction(operation) === "HANDLE_DELIVERY_WAIT" ? engineeringWaitHandlingFromOperation(operation, request, step)?.investigation || null
     : matchingEngineeringWaitProof(operation.result?.engineering_wait_investigation, request, step);
 }
 function engineeringWaitDecision(request, step, proof) {
@@ -1149,7 +1457,7 @@ function engineeringWaitDecision(request, step, proof) {
       engineeringResolutionLabels[handling.resolution.resolution_kind] && matchesKnowledge(handling.resolution) &&
       matchesRejected(handling.resolution)) return handling.resolution;
   return operations.find(item => item.status === "SUCCEEDED" &&
-    item.intent.action === "RESOLVE_DELIVERY_WAIT" && sameEngineeringWaitIntent(item.intent, bound) &&
+    operationAction(item) === "RESOLVE_DELIVERY_WAIT" && sameEngineeringWaitIntent(item.intent, bound) &&
     item.result?.engineering_wait_resolution?.proof_sha256 === proof.proof_sha256 &&
     matchesKnowledge(item.result.engineering_wait_resolution) &&
     matchesRejected(item.result.engineering_wait_resolution))?.result.engineering_wait_resolution || null;
@@ -1158,7 +1466,7 @@ function engineeringWaitCanResolve(request, step, proof) {
   const handling = engineeringWaitHandling(request, step);
   const bound = engineeringWaitIntent(request, step);
   const lastHandling = [...operations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    .find(item => item.intent.action === "HANDLE_DELIVERY_WAIT" && sameEngineeringWaitIntent(item.intent, bound));
+    .find(item => operationAction(item) === "HANDLE_DELIVERY_WAIT" && sameEngineeringWaitIntent(item.intent, bound));
   const permission = !lastHandling || engineeringWaitHandlingFromOperation(lastHandling, request, step)?.manual_resolution_allowed === true;
   return proof && !proof.missing?.length && !engineeringWaitDecision(request, step, proof) &&
     permission &&
@@ -1269,7 +1577,7 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
 }
 function engineeringWaitCurrentFacts(request, step, proof, handling, decision, active) {
   const bound = engineeringWaitIntent(request, step);
-  const activeHandling = active?.intent.action === "HANDLE_DELIVERY_WAIT" && sameEngineeringWaitIntent(active.intent, bound);
+  const activeHandling = operationAction(active) === "HANDLE_DELIVERY_WAIT" && sameEngineeringWaitIntent(active.intent, bound);
   const missing = proof?.missing || [];
   const unavailable = missing.some(item => ["CHECKPOINT_UNAVAILABLE", "CHECKPOINT_DRIFT"].includes(item));
   const saved = proof && [proof.interruption_receipt_sha256, proof.process_stop_sha256, proof.workspace_inventory_sha256]
@@ -1649,7 +1957,7 @@ function engineeringBaselinePauseBox(request, task, step) {
 }
 function matchingEngineeringResumeOperation(request, bound) {
   const operation = activeOperation(request.id, request.project_id);
-  if (!operation || operation.intent.action !== "RESUME_EXECUTION_BASELINE" || !bound) return null;
+  if (!operation || operationAction(operation) !== "RESUME_EXECUTION_BASELINE" || !bound) return null;
   // The requirement journal can advance after acceptance; Task/work/baseline and
   // disposition identities must remain exact. An unrelated operation proves nothing.
   const {expected_checkpoint_sha256: _checkpoint, ...identity} = bound;
@@ -1682,8 +1990,8 @@ function engineeringBaselinePlan(request, task, step, purpose = "source_rebind")
       plan.facts?.task?.id !== bound.task_id || plan.facts.task_revision !== bound.expected_task_revision ||
       plan.facts.work_item_id !== bound.expected_work_item_id ||
       plan.dirty_capture?.source_revision !== bound.expected_source_revision ||
-      (!["completed_output_rescue", "stopped_provider_retry"].includes(purpose) && plan.target_base_ref !== operation.intent.target_base_ref) ||
-      plan.input_mode !== operation.intent.input_mode ||
+      (!["completed_output_rescue", "stopped_provider_retry"].includes(purpose) && plan.target_base_ref !== operation.intent?.target_base_ref) ||
+      plan.input_mode !== operation.intent?.input_mode ||
       !["preserve_draft", "coder_reapply"].includes(plan.input_mode)) return null;
   if (purpose === "completed_output_rescue" && !matchingCompletedOutputRescuePlan(plan, bound, operation)) return null;
   if (purpose === "stopped_provider_retry" && !matchingStoppedProviderRetryPlan(plan, bound, operation)) return null;
@@ -1734,7 +2042,7 @@ function matchingStoppedProviderRetryPlan(plan, bound, operation, sameSource = t
     reservation.stopped_provider_failure_sha256 === proof.proof_sha256 && !plan.facts.completed_output &&
     !plan.facts.legacy_containment && !plan.facts.implementation_artifact_id &&
     (!sameSource || !plan.facts.native_rule_change && plan.target_base_ref === base &&
-      plan.prepared_source_revision === bound.expected_source_revision && operation.intent.target_base_ref == null) &&
+      plan.prepared_source_revision === bound.expected_source_revision && operation.intent?.target_base_ref == null) &&
     (!sameSource || plan.input_mode === "preserve_draft" && !plan.conflicted);
 }
 function engineeringStoppedProviderRetryFacts(request, task, step) {
@@ -1843,7 +2151,7 @@ function matchingCompletedOutputRescuePlan(plan, bound, operation) {
     reservation?.retry_cause === "completed_output_unavailable" && reservation.completed_output_sha256 === proof.proof_sha256 &&
     !plan.facts.legacy_containment && !plan.facts.native_rule_change && !plan.facts.implementation_artifact_id &&
     plan.target_base_ref === base && plan.prepared_source_revision === bound.expected_source_revision &&
-    plan.input_mode === "preserve_draft" && !plan.conflicted && operation.intent.target_base_ref == null;
+    plan.input_mode === "preserve_draft" && !plan.conflicted && operation.intent?.target_base_ref == null;
 }
 function engineeringCompletedOutputRescueFacts(request, task, step) {
   const bound = engineeringBaselineFacts(request, task, step);
@@ -1966,9 +2274,9 @@ function engineeringBaselineProposalOperation(bound, purpose = "source_rebind") 
   if (!operationsAvailable || !bound) return null;
   return [...operations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .find(item => item.intent?.action === "PROPOSE_EXECUTION_BASELINE" &&
-      (item.intent.purpose || "source_rebind") === purpose && sameEngineeringWaitIntent(item.intent, bound) &&
-      (purpose !== "legacy_workspace_rescue" || item.intent.target_base_ref === bound.expected_source_revision &&
-        item.intent.input_mode === "preserve_draft"));
+      (item.intent?.purpose || "source_rebind") === purpose && sameEngineeringWaitIntent(item.intent, bound) &&
+      (purpose !== "legacy_workspace_rescue" || item.intent?.target_base_ref === bound.expected_source_revision &&
+        item.intent?.input_mode === "preserve_draft"));
 }
 function legacyRescueFailureNotice(operation) {
   if (!operation || !["FAILED", "INTERRUPTED"].includes(operation.status)) return null;
@@ -2001,9 +2309,9 @@ function engineeringLegacyRescueFailure(request, task, step, rescue) {
 }
 function engineeringLegacyRescueExecuted(request, task, plan) {
   return plan && operations.some(item => item.status === "SUCCEEDED" &&
-    item.intent.action === "EXECUTE_EXECUTION_BASELINE" && item.intent.project_id === request.project_id &&
-    item.intent.delivery_id === request.id && item.intent.task_id === task.task_id &&
-    item.intent.expected_plan_sha256 === plan.plan_sha256);
+    operationAction(item) === "EXECUTE_EXECUTION_BASELINE" && operationProject(item) === request.project_id &&
+    item.intent?.delivery_id === request.id && item.intent?.task_id === task.task_id &&
+    item.intent?.expected_plan_sha256 === plan.plan_sha256);
 }
 async function submitEngineeringLegacyRescueOperation(intent, originalRescue) {
   const request = requestById(intent.delivery_id);
@@ -2087,7 +2395,7 @@ function appendEngineeringLegacyRescue(target, request, task, step, proof, handl
   if (executed) {
     panel.append(viewBlock(el("p", "恢复工程决定已保存。旧执行历史仍保留，是否继续与最终验收以新的执行记录为准。", "muted"), "rescue-executed", plan.plan_sha256));
   } else if (active) {
-    panel.append(viewBlock(el("p", active.intent.purpose === "legacy_workspace_rescue"
+    panel.append(viewBlock(el("p", active.intent?.purpose === "legacy_workspace_rescue"
       ? "平台正在检查恢复前提并封存当前草稿，请等待本次处理结果。"
       : "当前操作尚未结束，恢复方案不会同时启动另一次执行。", "muted"), "rescue-active", active));
   } else if (failure) {
@@ -2247,9 +2555,9 @@ function appendEngineeringBaseline(target, request, task, step) {
   const paused = step.wait_disposition?.facts.classification === "EXECUTION_BASELINE_PAUSED";
   const active = activeOperation(request.id, request.project_id);
   const executed = plan && operations.some(item => item.status === "SUCCEEDED" &&
-    item.intent.action === "EXECUTE_EXECUTION_BASELINE" && item.intent.task_id === task.task_id &&
-    item.intent.project_id === request.project_id &&
-    item.intent.delivery_id === request.id && item.intent.expected_plan_sha256 === plan.plan_sha256);
+    operationAction(item) === "EXECUTE_EXECUTION_BASELINE" && item.intent?.task_id === task.task_id &&
+    operationProject(item) === request.project_id &&
+    item.intent?.delivery_id === request.id && item.intent?.expected_plan_sha256 === plan.plan_sha256);
   const fold = viewGroup(paused || plan && !executed
     ? el("section", undefined, "engineering-baseline-panel engineering-baseline-pending")
     : engineeringDetails("可选工程操作 · 更新原分支基线", step.work_item_id + ":baseline"),
@@ -2387,12 +2695,12 @@ function deliveryPhase(item, node = null) {
     QUEUED: "实现", DELIVERING: "实现", VERIFY_QA: "候选测试", VERIFY_REVIEW: "候选评审", INTEGRATING: "联合验收"}[status] || label(status);
 }
 function operationPurpose(operation) {
-  if (operation.intent.action === "EXECUTE_EXECUTION_BASELINE" && operation.intent.continuation_mode === "pause")
+  if (operationAction(operation) === "EXECUTE_EXECUTION_BASELINE" && operation.intent?.continuation_mode === "pause")
     return "保存精确工程决定及完整开发进度，更新所批准的代码和规范输入，交付保持暂停；此操作不启动 Coder。";
-  if (operation.intent.purpose === "legacy_workspace_rescue")
+  if ((operation.intent?.purpose || operation.baseline_purpose) === "legacy_workspace_rescue")
     return "检查本机执行与恢复前提，封存同一需求的完整合法草稿，准备工程恢复方案。";
-  if (operation.intent.action === "EXECUTE_EXECUTION_BASELINE" &&
-      (operation.intent.confirm_legacy_containment === true || operation.intent.confirm_local_execution_stopped === true))
+  if (operationAction(operation) === "EXECUTE_EXECUTION_BASELINE" &&
+      (operation.intent?.confirm_legacy_containment === true || operation.intent?.confirm_local_execution_stopped === true))
     return "按精确工程决定保留进度继续同一需求，保留旧执行未知结果和完整历史。";
   return {
     PRODUCT_REPLY: "记录产品回复并继续梳理需求。",
@@ -2401,21 +2709,21 @@ function operationPurpose(operation) {
     RESUME_EXECUTION_BASELINE: "按明确继续决定释放当前保留进度的暂停，使用已预留身份接续原需求。",
     RECOVER_DESIGN: "处理本次技术设计恢复。",
     RECHECK_DESIGN: "核对保留的设计问题与产品需求。",
-  }[operation.intent.action] || null;
+  }[operationAction(operation)] || null;
 }
 function operationActionLabel(operation) {
-  if (operation.intent.action === "EXECUTE_EXECUTION_BASELINE" && operation.intent.continuation_mode === "pause")
-    return operation.intent.confirm_legacy_containment || operation.intent.confirm_local_execution_stopped
+  if (operationAction(operation) === "EXECUTE_EXECUTION_BASELINE" && operation.intent?.continuation_mode === "pause")
+    return operation.intent?.confirm_legacy_containment || operation.intent?.confirm_local_execution_stopped
       ? "批准保留进度，保持暂停" : "批准更新基线，保持暂停";
-  if (operation.intent.purpose === "legacy_workspace_rescue") return "准备保留进度的恢复方案";
-  if (operation.intent.action === "EXECUTE_EXECUTION_BASELINE" &&
-      (operation.intent.confirm_legacy_containment === true || operation.intent.confirm_local_execution_stopped === true))
+  if ((operation.intent?.purpose || operation.baseline_purpose) === "legacy_workspace_rescue") return "准备保留进度的恢复方案";
+  if (operationAction(operation) === "EXECUTE_EXECUTION_BASELINE" &&
+      (operation.intent?.confirm_legacy_containment === true || operation.intent?.confirm_local_execution_stopped === true))
     return "批准保留进度并继续原需求";
-  return label(operation.intent.action);
+  return label(operationAction(operation));
 }
 function currentEngineeringRescueAdvice(operation, request) {
   const handling = operation.result?.engineering_wait_handling;
-  if (!request || request.project_id !== operation.intent.project_id || !handling) return null;
+  if (!request || request.project_id !== operationProject(operation) || !handling) return null;
   const current = engineeringWaitSteps(request).find(({task, step}) =>
     engineeringWaitHandling(request, step)?.handling_sha256 === handling.handling_sha256 &&
     engineeringLegacyRescueFacts(request, task, step));
@@ -2432,8 +2740,8 @@ function currentEngineeringRescueAdvice(operation, request) {
     : "当前服务尚不支持保留进度的恢复方案，请在服务空闲时更新并重启 Web Console，再刷新页面；原需求和草稿保留。");
 }
 function recordedOperationOutcome(operation) {
-  if (operation.status !== "SUCCEEDED" || !deliveryOperationActions.has(operation.intent.action)) return null;
-  const stage = operation.result?.stage;
+  if (operation.status !== "SUCCEEDED" || !deliveryOperationActions.has(operationAction(operation))) return null;
+  const stage = operation.result?.stage ?? operation.result_stage;
   const outcomes = {
     BLOCKED: "当次交付已阻塞", FAILED: "当次交付失败", WAITING_HUMAN: "当次交付等待处理",
     WAITING_DEPENDENCY: "当次交付等待依赖", WAITING_PRODUCT_REPLY: "当次需求等待补充",
@@ -2447,8 +2755,8 @@ function recordedOperationOutcome(operation) {
     className: ["BLOCKED", "FAILED"].includes(stage) || stage.startsWith("WAITING_") ? "error" : ""};
 }
 function currentOperationProgress(operation, request) {
-  if (!request || operation.status !== "RUNNING" || !deliveryOperationActions.has(operation.intent.action) ||
-      operationTarget(operation) !== request.id || operation.intent.project_id !== request.project_id ||
+  if (!request || operation.status !== "RUNNING" || !deliveryOperationActions.has(operationAction(operation)) ||
+      operationTarget(operation) !== request.id || operationProject(operation) !== request.project_id ||
       activeOperation(request.id, request.project_id)?.operation_id !== operation.operation_id) return null;
   const node = requestNodeExecution(request);
   const execution = request.execution;
@@ -2533,8 +2841,8 @@ function preparingTaskExecution(task) {
       ["WAITING", "STOPPED", "INTERRUPTED"].includes(task.execution?.state)) return false;
   const request = requestById(task.request_id);
   const operation = request && activeOperation(request.id, request.project_id);
-  return Boolean(operation?.status === "RUNNING" && operation.intent.project_id === request.project_id &&
-    deliveryOperationActions.has(operation.intent.action));
+  return Boolean(operation?.status === "RUNNING" && operationProject(operation) === request.project_id &&
+    deliveryOperationActions.has(operationAction(operation)));
 }
 function waitingRequestTask(request) {
   if (["DONE", "CLOSED"].includes(request.stage)) return null;
@@ -2696,16 +3004,16 @@ function observedApprovedRecoveryOperation(request, operation) {
   if (!teamReadIssue || !operationsAvailable || projectSwitchPending() ||
       currentProjectId() !== request.project_id || !snapshot?.team_id ||
       consoleTeamId !== snapshot.team_id || operation?.team_id !== snapshot.team_id ||
-      operation.status !== "RUNNING" || operation.intent.action !== "CONTINUE_DELIVERY" ||
-      operation.intent.project_id !== request.project_id || operationTarget(operation) !== request.id ||
+      operation.status !== "RUNNING" || operationAction(operation) !== "CONTINUE_DELIVERY" ||
+      operationProject(operation) !== request.project_id || operationTarget(operation) !== request.id ||
       activeOperation(request.id, request.project_id)?.operation_id !== operation.operation_id ||
-      !/^[a-f0-9]{64}$/.test(operation.intent.approved_plan_sha256 || "")) return false;
+      !/^[a-f0-9]{64}$/.test(operation.intent?.approved_plan_sha256 || "")) return false;
   // Observe only the currently accepted exact request; this never restores control authority.
   return operations.some(source => source.team_id === operation.team_id && source.status === "SUCCEEDED" &&
-    source.intent.project_id === request.project_id && operationTarget(source) === request.id &&
-    source.result?.approval?.plan_sha256 === operation.intent.approved_plan_sha256 &&
+    operationProject(source) === request.project_id && operationTarget(source) === request.id &&
+    source.result?.approval?.plan_sha256 === operation.intent?.approved_plan_sha256 &&
     (source.result.delivery_id === request.id ? source.result.checkpoint_sha256
-      : source.intent.expected_checkpoint_sha256) === operation.intent.expected_checkpoint_sha256);
+      : source.intent?.expected_checkpoint_sha256) === operation.intent?.expected_checkpoint_sha256);
 }
 function requestNodeExecution(request) {
   if (request.stage === "DONE") return {state: "done", label: "已完成", status: "DONE"};
@@ -2713,8 +3021,8 @@ function requestNodeExecution(request) {
   const execution = request.execution;
   const tasks = currentRequestTasks(request);
   const active = activeOperation(request.id, request.project_id);
-  const operation = active && active.intent.project_id === request.project_id &&
-    deliveryOperationActions.has(active.intent.action) ? active : null;
+  const operation = active && operationProject(active) === request.project_id &&
+    deliveryOperationActions.has(operationAction(active)) ? active : null;
   const waiting = tasks.find(task => waitingExecutionStep(task));
   const expired = tasks.find(task => !task.terminal &&
     (interruptedExecution(task) || task.role_queue?.some(interruptedStep)));
@@ -2729,7 +3037,7 @@ function requestNodeExecution(request) {
     return {state: "blocked", label: "已确认的知识 · 待继续", status: "KNOWLEDGE_APPROVED"};
   const decision = requestRecoveryDecision(request);
   if (decision) return decision;
-  if (operation?.status === "RUNNING" && operation.intent.action === "CONTINUE_DELIVERY" &&
+  if (operation?.status === "RUNNING" && operationAction(operation) === "CONTINUE_DELIVERY" &&
       (canControlCurrentTeam() || observedApprovedRecoveryOperation(request, operation)) &&
       currentProjectId() === request.project_id &&
       !childBlocker && !waiting && !expired && !tasks.some(task => !task.terminal) &&
@@ -2785,8 +3093,8 @@ function requestNodeExecution(request) {
   if (tasks.some(task => !task.terminal))
     return engineeringExecutionCheck();
   const failed = latestOperation(request.id);
-  if (!operation && ["FAILED", "INTERRUPTED"].includes(failed?.status) && deliveryOperationActions.has(failed.intent.action) &&
-      (!failed.intent.project_id || failed.intent.project_id === request.project_id))
+  if (!operation && ["FAILED", "INTERRUPTED"].includes(failed?.status) && deliveryOperationActions.has(operationAction(failed)) &&
+      (!operationProject(failed) || operationProject(failed) === request.project_id))
     return {state: "blocked", label: failed.status === "INTERRUPTED" ? "操作已中断" : "已阻塞",
       status: failed.status === "INTERRUPTED" ? "EXECUTION_INTERRUPTED" : request.stage,
       reason: failed.error_summary, operationInterrupted: failed.status === "INTERRUPTED",
@@ -2862,7 +3170,7 @@ function requestPresentation(request) {
     };
   const running = activeOperation(request.id);
   const deliveryOperation =
-    running && deliveryOperationActions.has(running.intent.action)
+    running && deliveryOperationActions.has(operationAction(running))
       ? running
       : null;
   const activeTask = activeRequestTask(request);
@@ -2873,11 +3181,11 @@ function requestPresentation(request) {
       blocker: blockedTask.blocker, nextAction: blockedTask.next_action};
   if (deliveryOperation || activeTask) {
     const operationStage =
-      deliveryOperation?.intent.action === "PRODUCT_REPLY"
+      operationAction(deliveryOperation) === "PRODUCT_REPLY"
         ? "PRODUCT_DISCOVERY"
-        : deliveryOperation?.intent.action === "PRODUCT_APPROVAL"
+        : operationAction(deliveryOperation) === "PRODUCT_APPROVAL"
           ? "DESIGNING"
-          : ["RECOVER_DESIGN", "RECHECK_DESIGN"].includes(deliveryOperation?.intent.action)
+          : ["RECOVER_DESIGN", "RECHECK_DESIGN"].includes(operationAction(deliveryOperation))
             ? "DESIGNING"
           : "DELIVERING";
     return {
@@ -2934,7 +3242,7 @@ function requestPresentation(request) {
     failedDesignOperation?.status === "FAILED" &&
     operationTarget(failedDesignOperation) === request.id &&
     ["PRODUCT_APPROVAL", "CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(
-      failedDesignOperation.intent.action,
+      operationAction(failedDesignOperation),
     )
   )
     return {
@@ -2995,8 +3303,8 @@ function canResumeUpstreamStage(request) {
       request.execution?.reason_code === "EXECUTION_CLAIM_EXPIRED") return false;
   const operation = latestOperation(request.id);
   if (!operation) return true;
-  if ((operation.intent.project_id && operation.intent.project_id !== request.project_id) ||
-      !deliveryOperationActions.has(operation.intent.action) || isSourceRevisionDrift(operation)) return false;
+  if ((operationProject(operation) && operationProject(operation) !== request.project_id) ||
+      !deliveryOperationActions.has(operationAction(operation)) || isSourceRevisionDrift(operation)) return false;
   return operation.status === "SUCCEEDED" && !operationNeedsHumanAttention(operation) ||
     operation.status === "INTERRUPTED" && operation.error_code === "HOST_INTERRUPTED";
 }
@@ -3013,9 +3321,9 @@ function canRetryDesign(request) {
     request.execution?.reason_code !== "EXECUTION_CLAIM_EXPIRED" &&
     operation?.status === "FAILED" &&
     !isSourceRevisionDrift(operation) &&
-    (!operation.intent.project_id || operation.intent.project_id === request.project_id) &&
+    (!operationProject(operation) || operationProject(operation) === request.project_id) &&
     operationTarget(operation) === request.id &&
-    ["PRODUCT_APPROVAL", "CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(operation.intent.action) &&
+    ["PRODUCT_APPROVAL", "CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(operationAction(operation)) &&
     !activeOperation(request.id)
   );
 }
@@ -4482,7 +4790,7 @@ function observeOperationNotices() {
   const observation = currentOperationNoticeObservation();
   if (!observation) return;
   const currentIds = new Set();
-  for (const operation of operations) {
+  for (const operation of operationReadingRecords()) {
     if (operation.team_id && operation.team_id !== observation.teamId) continue;
     currentIds.add(operation.operation_id);
     if (["QUEUED", "RUNNING"].includes(operation.status) ||
@@ -4533,7 +4841,20 @@ async function notificationJump(notice) {
   }
 }
 function operationNoticeFor(operation) {
-  const context = operation.intent.project_id
+  if (!operation.intent) {
+    const target = operationRequest(operation);
+    const active = ["QUEUED", "RUNNING"].includes(operation.status);
+    const attention = operationNeedsHumanAttention(operation);
+    if (!active && !attention && !["FAILED", "INTERRUPTED"].includes(operation.status)) return null;
+    return {key: operationNoticeKey(operation), operationId: operation.operation_id,
+      state: active ? "ACTIVE" : attention ? "ACTION_REQUIRED" : operation.status,
+      kind: active ? "info" : attention ? "warning" : "error",
+      title: `${operationProject(operation) ? projectName() : "团队"} · ${operationActionLabel(operation)} · ${label(operation.status)}`,
+      message: humanizeBlockingText(operation.error_summary || operation.summary ||
+        (active ? "平台正在处理已接收的操作，执行结果以需求详情为准。" : "请打开需求查看完整处理说明。")),
+      target: target?.id || null, jumpLabel: target ? "打开需求工作区" : null};
+  }
+  const context = operationProject(operation)
     ? projectName() : "团队";
   const targetId = operationTarget(operation);
   const request = operationRequest(operation);
@@ -4546,7 +4867,7 @@ function operationNoticeFor(operation) {
     request &&
     operation.result.checkpoint_sha256 === request.checkpoint_sha256 &&
     approvedKnowledge(request);
-  const rescueFailure = operation.intent.action === "PROPOSE_EXECUTION_BASELINE" && operation.intent.purpose === "legacy_workspace_rescue"
+  const rescueFailure = operationAction(operation) === "PROPOSE_EXECUTION_BASELINE" && operation.intent?.purpose === "legacy_workspace_rescue"
     ? legacyRescueFailureNotice(operation) : null;
   if (["QUEUED", "RUNNING"].includes(operation.status))
     return {
@@ -4557,26 +4878,26 @@ function operationNoticeFor(operation) {
       title: `${context} · ${operationActionLabel(operation)} · ${label(operation.status)}`,
       message:
         operation.status === "QUEUED"
-          ? operation.intent.action === "HANDLE_DELIVERY_WAIT"
+          ? operationAction(operation) === "HANDLE_DELIVERY_WAIT"
             ? "处理中断的操作已接收，等待平台执行。关闭弹窗不会改变当前等待。"
             : "操作已安全接收，正在等待 Manager 执行。关闭弹窗不会中断任务。"
           : progress
             ? [progress.title, progress.reason, progress.responsibility && "处理方 · " + progress.responsibility,
               progress.nextAction && "下一步 · " + progress.nextAction, "关闭弹窗不会改变交付状态。"].filter(Boolean).join("\n")
-          : operation.intent.action === "HANDLE_DELIVERY_WAIT"
+          : operationAction(operation) === "HANDLE_DELIVERY_WAIT"
             ? "平台正在处理中断。只有已核实、且现有授权允许的路径才会继续；当前等待与验收结果不会由提示覆盖。"
-          : operation.intent.action === "INSPECT_DELIVERY_WAIT"
+          : operationAction(operation) === "INSPECT_DELIVERY_WAIT"
             ? "工程团队正在核验原执行与现场。调查期间保留原等待状态，调查不会产生验收结论。"
-          : operation.intent.action === "RESOLVE_DELIVERY_WAIT"
+          : operationAction(operation) === "RESOLVE_DELIVERY_WAIT"
             ? "工程团队正在记录精确处理决定并继续原交付。是否恢复及验收通过以新的执行记录为准。"
-          : operation.intent.action === "PROPOSE_EXECUTION_BASELINE"
-            ? operation.intent.purpose === "legacy_workspace_rescue"
+          : operationAction(operation) === "PROPOSE_EXECUTION_BASELINE"
+            ? operation.intent?.purpose === "legacy_workspace_rescue"
               ? "平台正在检查本机执行与恢复前提并封存完整合法草稿；尚未启动下一轮，也未改变旧执行的未知结果。"
               : "工程团队正在核验原分支、完整草稿和目标代码版本，尚未改变交付或验收结论。"
-          : operation.intent.action === "EXECUTE_EXECUTION_BASELINE"
-            ? operation.intent.continuation_mode === "pause"
+          : operationAction(operation) === "EXECUTE_EXECUTION_BASELINE"
+            ? operation.intent?.continuation_mode === "pause"
               ? "平台正在保存精确工程决定和完整开发进度；本次处理完成后仍保持暂停，不会启动 Coder。"
-            : operation.intent.confirm_legacy_containment === true || operation.intent.confirm_local_execution_stopped === true
+            : operation.intent?.confirm_legacy_containment === true || operation.intent?.confirm_local_execution_stopped === true
               ? "平台正在记录工程授权并保留进度继续同一需求；是否恢复和验收通过以新的角色执行记录为准。"
               : "工程团队正在按精确计划更新原需求执行基线，交付进度以之后的角色执行记录为准。"
           : "交付流程正在执行。你可以关闭弹窗或页面，任务会继续运行。",
@@ -4740,6 +5061,7 @@ function buildNotification() {
 async function submitOperation(intent) {
   const ownerProjectId = intent.project_id || null;
   const ownerTeamId = snapshot?.team_id;
+  const owner = operationWriteOwnerSignature();
   try {
     if (!canControlCurrentTeam())
       throw new Error("交付控制状态暂不可用，请刷新后重试。");
@@ -4753,6 +5075,10 @@ async function submitOperation(intent) {
     if ((intent.continuation_mode === "pause" || intent.action === "RESUME_EXECUTION_BASELINE") &&
         !consoleSupportsPausedBaseline())
       throw new Error("本次保留进度暂停或继续请求未被受理，不是原需求新增的阻塞。" + consoleOperationVersionMismatchMessage);
+    await recheckOperationWriteFacts(intent);
+    if (owner !== operationWriteOwnerSignature() || !canControlCurrentTeam() ||
+        !consoleSupportsOperation(intent.action) || activeOperation(intent.delivery_id, intent.project_id))
+      throw new Error("当前操作或控制资格已变化，请重新核对后再提交。");
     const response = await fetch("/api/v1/operations", {
       method: "POST",
       cache: "no-store",
@@ -4767,12 +5093,20 @@ async function submitOperation(intent) {
       const message = payload.error?.message || "操作未被接受。";
       throw new Error(message);
     }
-    operations = [
-      ...operations.filter(
-        (item) => item.operation_id !== payload.operation_id,
-      ),
-      payload,
-    ];
+    if (operationSummaryMode()) {
+      cacheFullOperation(payload);
+      operationDetailReadyScope = null;
+      // The newly accepted exact full record denies duplicate work immediately;
+      // next summary read replaces this temporary reading projection.
+      currentOperationSources = [...currentOperationSources.filter(item => item.operation_id !== payload.operation_id), {
+        operation_id: payload.operation_id, team_id: payload.team_id, project_id: operationProject(payload),
+        delivery_id: operationTarget(payload), action: operationAction(payload), status: payload.status,
+        operation_sha256: payload.operation_sha256, sequence: payload.sequence,
+        requested_at: payload.requested_at, updated_at: payload.updated_at, has_details: true,
+      }].slice(-operationDetailMaximumCount);
+      operations = [...operationDetailCache.values()].map(item => item.value)
+        .filter(item => currentOperationSources.some(source => source.operation_id === item.operation_id));
+    } else operations = [...operations.filter(item => item.operation_id !== payload.operation_id), payload];
     observeSubmittedOperation(payload, ownerTeamId);
     // A newly accepted delivery action supersedes any older page-level
     // administration feedback. Do not reveal that stale dialog after the
@@ -4798,10 +5132,10 @@ function renderOperationStatus() {
   panel.replaceChildren();
   panel.hidden = true;
   observeOperationNotices();
-  const visible = [...operations]
+  const visible = [...operationReadingRecords()]
     .filter((operation) => {
       if (operation.team_id && operation.team_id !== snapshot?.team_id) return false;
-      if (operation.intent.project_id && operation.intent.project_id !== currentProjectId()) return false;
+      if (operationProject(operation) && operationProject(operation) !== currentProjectId()) return false;
       if (
         operation.status === "SUCCEEDED" &&
         !operationNeedsHumanAttention(operation)
@@ -4809,15 +5143,15 @@ function renderOperationStatus() {
         return false;
       if (!operationNeedsHumanAttention(operation) &&
           !["FAILED", "INTERRUPTED"].includes(operation.status)) return true;
-      if (operation.intent.project_id && !operationRequest(operation) &&
+      if (operationProject(operation) && !operationRequest(operation) &&
           !(operationNoticeObservation?.teamId === snapshot?.team_id &&
             operationNoticeObservation.observedIds.has(operation.operation_id))) return false;
       const target = operationTarget(operation);
-      return !operations.some(
+      return !operationReadingRecords().some(
         (candidate) =>
           (!candidate.team_id || candidate.team_id === snapshot?.team_id) &&
-          (target !== null || candidate.intent.action === operation.intent.action) &&
-          candidate.intent.project_id === operation.intent.project_id &&
+          (target !== null || operationAction(candidate) === operationAction(operation)) &&
+          operationProject(candidate) === operationProject(operation) &&
           operationTarget(candidate) === target &&
           candidate.updated_at > operation.updated_at,
       );
@@ -5251,7 +5585,7 @@ function requestOperation(panel, request, discussionSection) {
     discussionFormCaches.delete(identity);
     discussionFormCache = null;
   }
-  const approvingProduct = running?.intent.action === "PRODUCT_APPROVAL";
+  const approvingProduct = operationAction(running) === "PRODUCT_APPROVAL";
   // A terminal browser operation may leave an admitted QA/Reviewer item visible until
   // Manager creates its successor plan. Only a live Console operation suppresses the
   // recovery action; the durable task projection alone must not strand the operator.
@@ -5730,9 +6064,13 @@ function deliveryResult(panel, request) {
   panel.append(section);
 }
 function projectOperationHistory(content) {
+  if (operationSummaryMode()) {
+    renderSummaryOperationHistory(content, currentProjectId(), null);
+    return;
+  }
   const projectId = currentProjectId();
   if (!projectId) return;
-  const records = operations.filter(operation => operation.intent.project_id === projectId &&
+  const records = operations.filter(operation => operationProject(operation) === projectId &&
     (!operation.team_id || operation.team_id === snapshot?.team_id) && !operationRequest(operation))
     .sort((a, b) => Date.parse(a.updated_at) - Date.parse(b.updated_at) || a.operation_id.localeCompare(b.operation_id));
   if (!records.length) return;
@@ -5750,7 +6088,7 @@ function projectOperationHistory(content) {
   for (const record of records) {
     const item = viewBlock(el("li", undefined, "execution-history-entry"), "project-operation:" + record.operation_id, operationRenderFact(record));
     item.append(el("strong", operationActionLabel(record)));
-    if (record.intent.name) item.append(el("p", record.intent.name));
+    if (record.intent?.name) item.append(el("p", record.intent?.name));
     const status = el("p", "操作状态 · ", "muted");
     const commandStatus = badge(record.status);
     if (record.status === "SUCCEEDED") {
@@ -5784,6 +6122,108 @@ function projectOperationHistory(content) {
   }
   fold.append(list);
   content.append(fold);
+}
+function renderSummaryOperationHistory(panel, projectId, deliveryId) {
+  if (!projectId) return;
+  const state = operationHistoryPage(projectId, deliveryId);
+  const fold = viewGroup(el("details", undefined, "request-history-fold"), "summary-operation-history");
+  fold.dataset.key = "operation-history:" + projectId + "/" + (deliveryId || "project");
+  fold.append(el("summary", `操作记录 · 共 ${state.total} 条`),
+    el("p", `第 ${state.pageNumber} 页 · 当前 ${state.items.length} 条。所有历史均可翻页查看；展开单条读取完整处理原因和当次下一步。命令完成不代表需求已交付。`, "muted"));
+  if (!operationsAvailable || state.changed) fold.append(el("p", state.changed
+    ? "记录已有更新，当前页保留供阅读。请返回最新记录再翻页，不能把新旧记录合成当前事实。"
+    : "以下是上次读取的记录，当前操作暂不可用；页面正在重新读取。", "error"));
+  const list = viewGroup(el("ol", undefined, "execution-history"), "summary-history-list");
+  for (const source of state.items) {
+    const item = viewBlock(el("li", undefined, "execution-history-entry"), "summary-history:" + source.operation_id,
+      operationRenderFact(source));
+    item.append(el("strong", operationActionLabel(source)), badge(source.status),
+      el("p", "操作更新 · " + time(source.updated_at), "muted"));
+    if (source.error_summary || source.summary) item.append(el("p", humanizeBlockingText(source.error_summary || source.summary),
+      source.error_summary ? "error" : ""));
+    if (source.next_step) item.append(el("p", "当次下一步（摘要） · " + humanizeBlockingText(source.next_step), "muted"));
+    const details = el("details", undefined, "request-history-fold");
+    details.append(el("summary", "查看完整处理记录"));
+    const body = el("div");
+    details.append(body);
+    let reading = false;
+    const releaseClosedDetail = () => {
+      body.replaceChildren();
+      const cached = operationDetailCache.get(source.operation_id)?.value;
+      if (cached?.team_id === source.team_id && cached.operation_sha256 === source.operation_sha256 &&
+          !currentOperationSources.some(value => value.operation_id === source.operation_id))
+        operationDetailCache.delete(source.operation_id);
+    };
+    details.addEventListener("toggle", async () => {
+      if (!details.open) {
+        releaseClosedDetail();
+        return;
+      }
+      if (reading) return;
+      reading = true;
+      const teamId = snapshot?.team_id, revision = selectionIntentRevision;
+      const currentView = () => details.open && details.isConnected !== false && revision === selectionIntentRevision &&
+        teamId === snapshot?.team_id && projectId === currentProjectId();
+      body.replaceChildren(el("p", "正在读取完整记录…", "muted"));
+      try {
+        const record = await readFullOperation(source, {fresh: true});
+        if (!currentView()) return;
+        body.replaceChildren();
+        const handling = record.result?.engineering_wait_handling;
+        if (record.error_summary) body.append(el("p", humanizeBlockingText(record.error_summary), "error"));
+        if (record.result?.diagnostic) body.append(el("p", "当次原因 · " + humanizeBlockingText(record.result.diagnostic)));
+        if (handling) {
+          body.append(el("p", "当次平台处理 · " + humanizeBlockingText(handling.summary)),
+            el("p", "当次用户操作 · " + humanizeBlockingText(handling.user_action), "muted"));
+          if (handling.recheck_when) body.append(el("p", "当次复查时机 · " + humanizeBlockingText(handling.recheck_when), "muted"));
+        }
+        const proof = record.result?.engineering_wait_investigation || handling?.investigation;
+        if (proof) appendEngineeringInvestigation(body, proof, {historical: true});
+        if (record.result?.next_action) body.append(el("p", "当次下一步 · " + humanizeBlockingText(record.result.next_action)));
+        const approval = record.result?.approval;
+        if (approval) {
+          body.append(el("p", "当次待确认方案 · " + approval.title));
+          for (const fact of [...(approval.facts || []), ...(approval.technical_facts || [])]) body.append(el("p", fact));
+          body.append(el("p", "历史方案仅供阅读；需要审批时，请使用本页上方的当前完整方案。", "muted"));
+        }
+        const technical = engineeringDetails("排障信息（供工程人员使用）", record.operation_id);
+        technical.append(el("p", "操作 · " + record.operation_id, "paths"),
+          el("p", "记录摘要 · " + record.operation_sha256, "paths"));
+        body.append(technical, modelCallDiagnostics(record));
+      } catch (error) {
+        if (currentView()) body.replaceChildren(el("p", error.message || "完整记录暂时无法读取，请重新展开。", "error"));
+      } finally {
+        reading = false;
+        if (!currentView()) releaseClosedDetail();
+      }
+    });
+    item.append(details);
+    list.append(item);
+  }
+  const controls = el("div", undefined, "detail-actions");
+  const redraw = () => { operationHistoryRevision++; render({preserveComposer: true, incremental: true}); };
+  const prior = button("上一页", () => {
+    const previous = state.back.pop();
+    if (previous) Object.assign(state, previous);
+    redraw();
+  }, "secondary");
+  prior.disabled = !state.back.length || state.loading;
+  const next = button("下一页（更早记录）", async () => {
+    try { await loadMoreOperationHistory(projectId, deliveryId); }
+    catch { /* Fixed changed-history message is rendered from state. */ }
+    redraw();
+  }, "secondary");
+  next.disabled = !state.next || state.loading || state.changed;
+  const latest = button("返回最新记录", async () => {
+    try {
+      await readOperationSummaryPage(projectId, deliveryId);
+      operationHistoryPages.delete(operationSummaryScopeKey(projectId, deliveryId));
+    } catch { state.changed = true; }
+    redraw();
+  }, "secondary");
+  controls.append(prior, next, latest);
+  fold.append(list, controls);
+  panel.append(fold);
 }
 function renderRequests(content) {
   content.className = "request-master-panel";
@@ -8797,6 +9237,21 @@ function showDetail(kind, id) {
   selectionIntentRevision++;
   pausedTaskDetailKey = null;
   selected = { kind, id };
+  if (operationSummaryMode()) {
+    operationDetailReadyScope = null;
+    operationDetailReadyInventory = null;
+    currentOperationSources = [];
+    operationDetailCache.clear();
+    operations = [];
+    const revision = selectionIntentRevision;
+    loadCurrentOperationDetails().then(() => {
+      if (revision === selectionIntentRevision) render({preserveComposer: true, incremental: true});
+    }).catch(() => {
+      if (revision !== selectionIntentRevision) return;
+      operationsAvailable = false;
+      render({preserveComposer: true, incremental: true});
+    });
+  }
   if (page === "requests") {
     const request =
       kind === "request"
@@ -8850,7 +9305,7 @@ function deliveryFlow(request) {
   if (
     !failedStageIndexes.size &&
     operation?.status === "FAILED" &&
-    deliveryOperationActions.has(operation.intent.action) &&
+    deliveryOperationActions.has(operationAction(operation)) &&
     !activeOperation(request.id) &&
     requestPresentation(request).group === "blocked" &&
     ["DESIGNING", "PLANNING", "BLOCKED", "FAILED"].includes(request.stage) &&
@@ -8930,7 +9385,7 @@ function managerFlowStatus(request) {
       `flow-manager ${node.state === "running" ? "active" : node.state}`);
   }
   const operation = activeOperation(request.id);
-  if (operation && deliveryOperationActions.has(operation.intent.action)) {
+  if (operation && deliveryOperationActions.has(operationAction(operation))) {
     const state = operation.status === "QUEUED" ? "等待执行" : "处理中";
     const waiting = waitingRequestTask(request);
     const waitingNote = waiting
@@ -8940,7 +9395,7 @@ function managerFlowStatus(request) {
     const childBlocker = operationChildBlocker(request, operation);
     return el(
       "p",
-      `Manager 协调 · ${state}（${label(operation.intent.action)}）${waitingNote || (interruptedRequestTask(request) ? " · 当前角色执行已中断" : childBlocker ? " · 当前角色已阻塞" : "")}`,
+      `Manager 协调 · ${state}（${label(operationAction(operation))}）${waitingNote || (interruptedRequestTask(request) ? " · 当前角色执行已中断" : childBlocker ? " · 当前角色已阻塞" : "")}`,
       "flow-manager active",
     );
   }
@@ -8961,7 +9416,7 @@ function managerFlowStatus(request) {
       ? "等待恢复" : "等待处理"} · ${humanizeBlockingText(request.coordination.draft.summary)}`, "flow-manager blocked");
   const latest = latestOperation(request.id);
   if (latest && ["FAILED", "INTERRUPTED"].includes(latest.status) &&
-      deliveryOperationActions.has(latest.intent.action))
+      deliveryOperationActions.has(operationAction(latest)))
     return el(
       "p",
       `Manager 协调 · 最近操作${latest.status === "FAILED" ? "失败" : "中断"}`,
@@ -9403,8 +9858,12 @@ function appendEngineeringExecutionDetails(target, technical, details) {
   if (details.proof_sha256) technical.append(el("p", "调查摘要 · " + details.proof_sha256, "paths"));
 }
 function requestOperationHistory(panel, request) {
+  if (operationSummaryMode()) {
+    renderSummaryOperationHistory(panel, request.project_id, request.id);
+    return;
+  }
   const records = [...operations].filter(operation => operationTarget(operation) === request.id &&
-    operation.intent.project_id === request.project_id)
+    operationProject(operation) === request.project_id)
     .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.operation_id.localeCompare(b.operation_id));
   if (!records.length) return;
   const fold = viewGroup(el("details", undefined, "request-history-fold"), "operation-history-fold");
@@ -9439,20 +9898,20 @@ function requestOperationHistory(panel, request) {
     }
     status.append(commandStatus);
     item.append(status, el("p", "操作更新 · " + time(record.updated_at), "muted"));
-    if (record.status === "QUEUED") item.append(el("p", record.intent.action === "HANDLE_DELIVERY_WAIT"
+    if (record.status === "QUEUED") item.append(el("p", operationAction(record) === "HANDLE_DELIVERY_WAIT"
       ? "操作已接收，等待平台执行。" : "操作已接收，等待 Manager 处理。", "muted"));
     if (record.error_summary) item.append(el("p", humanizeBlockingText(record.error_summary), "error"));
-    if (record.status === "SUCCEEDED" && deliveryOperationActions.has(record.intent.action) && record.result?.diagnostic)
+    if (record.status === "SUCCEEDED" && deliveryOperationActions.has(operationAction(record)) && record.result?.diagnostic)
       item.append(el("p", "当次原因 · " + humanizeBlockingText(record.result.diagnostic), "error"));
     if (!progress && record.result?.next_action) item.append(el("p", "当次下一步 · " + humanizeBlockingText(record.result.next_action)));
     const technical = engineeringDetails("排障信息（供工程人员使用）", record.operation_id);
     technical.append(el("p", "这些标识用于工程核验，无需产品负责人填写。", "muted"));
     technical.append(el("p", "操作 · " + record.operation_id, "paths"));
     technical.append(el("p", "原始命令状态 · " + record.status, "paths"));
-    if (record.intent.action === "PROPOSE_EXECUTION_BASELINE" && record.intent.purpose === "legacy_workspace_rescue" && record.error_code)
+    if (operationAction(record) === "PROPOSE_EXECUTION_BASELINE" && record.intent?.purpose === "legacy_workspace_rescue" && record.error_code)
       technical.append(el("p", "平台错误编号 · " + record.error_code, "paths"));
-    if (record.intent.expected_checkpoint_sha256)
-      technical.append(el("p", "发起操作时的需求版本摘要 · " + record.intent.expected_checkpoint_sha256, "paths"));
+    if (record.intent?.expected_checkpoint_sha256)
+      technical.append(el("p", "发起操作时的需求版本摘要 · " + record.intent?.expected_checkpoint_sha256, "paths"));
     const handling = record.result?.engineering_wait_handling;
     if (handling) {
       item.append(el("p", "当次平台处理 · " + humanizeBlockingText(handling.summary || "未提供处理说明")),
@@ -10180,6 +10639,13 @@ async function navigatePage(target) {
   administrationNotice = null;
   page = target;
   selected = null;
+  if (operationSummaryMode()) {
+    operationSummaryReadRevision++;
+    operationDetailReadyScope = null;
+    currentOperationSources = [];
+    operationDetailCache.clear();
+    operations = [];
+  }
   composing = false;
   creatingProject = false;
   editingRequirement = null;
@@ -10217,6 +10683,7 @@ async function refreshConsoleInfo(signal) {
       consoleDeliveryReady = null;
       consoleOperationContractVersion = null;
       consoleSupportedActions = null;
+      consoleOperationSummaryContractVersion = null;
       return;
     }
     if (!response.ok) throw new Error("console unavailable");
@@ -10229,6 +10696,7 @@ async function refreshConsoleInfo(signal) {
       throw new Error("invalid console response");
     consoleAvailable = true;
     consoleConnectionFailed = false;
+    if (consoleTeamId && consoleTeamId !== info.team_id) clearOperationReadScope();
     consoleTeamId = info.team_id;
     consoleDeliveryReady = info.delivery_ready;
     const actions = info.supported_actions;
@@ -10238,6 +10706,7 @@ async function refreshConsoleInfo(signal) {
       new Set(actions).size === actions.length;
     consoleOperationContractVersion = validManifest ? info.operation_contract_version : null;
     consoleSupportedActions = validManifest ? [...actions] : null;
+    consoleOperationSummaryContractVersion = info.operation_summary_contract_version === "v0.1" ? "v0.1" : null;
   } catch {
     consoleAvailable = null;
     consoleConnectionFailed = true;
@@ -10245,11 +10714,21 @@ async function refreshConsoleInfo(signal) {
     consoleDeliveryReady = null;
     consoleOperationContractVersion = null;
     consoleSupportedActions = null;
+    consoleOperationSummaryContractVersion = null;
   }
 }
 async function refreshOperations(signal) {
   await refreshConsoleInfo(signal);
   try {
+    if (operationSummaryMode()) {
+      const projectId = activeRefreshProject || currentProjectId();
+      await readOperationSummaryPage(projectId, null, {signal});
+      operationsAvailable = true;
+      // Scope/selection may change while the independent Team read publishes.
+      if (projectId === currentProjectId()) await loadCurrentOperationDetails(signal);
+      syncRecoveryPreparationTarget();
+      return;
+    }
     const response = await fetch("/api/v1/operations", { cache: "no-store", signal });
     if (!response.ok) throw new Error("operations unavailable");
     const values = await response.json();
@@ -10260,6 +10739,7 @@ async function refreshOperations(signal) {
   } catch {
     // Retain the last verified history for reading; it is no longer current authority.
     operationsAvailable = false;
+    operationDetailReadyScope = null;
   }
 }
 async function refreshSettingsSnapshot(signal) {
@@ -10359,9 +10839,9 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
     const replacement = [...operations]
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
       .find(operation => operation.status === "SUCCEEDED" &&
-        operation.intent.action === "UPDATE_REQUIREMENT" &&
-        operation.intent.project_id === currentProjectId() &&
-        operation.intent.delivery_id === sourceSelection.id &&
+        operationAction(operation) === "UPDATE_REQUIREMENT" &&
+        operationProject(operation) === currentProjectId() &&
+        operation.intent?.delivery_id === sourceSelection.id &&
         operation.result?.delivery_id && requestById(operation.result.delivery_id));
     if (!replacement) return false;
     selected = {kind: "request", id: replacement.result.delivery_id};
