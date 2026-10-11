@@ -49,6 +49,9 @@ from ai_software_engineer.manager.completed_output_checkpoint import (
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
+from ai_software_engineer.manager.stopped_provider_checkpoint import (
+    require_stopped_provider_workspace,
+)
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.redaction import source_inspection_scope
@@ -98,7 +101,10 @@ class ExecutionBaselineService:
         input_mode: BaselineInputMode = BaselineInputMode.PRESERVE_DRAFT,
         purpose: BaselinePurpose = BaselinePurpose.SOURCE_REBIND,
     ) -> ExecutionBaselinePlan:
-        if purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+        if purpose in {
+            BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+            BaselinePurpose.STOPPED_PROVIDER_RETRY,
+        }:
             if target_base_ref is not None or input_mode is not BaselineInputMode.PRESERVE_DRAFT:
                 raise ValueError("已结束执行恢复由平台核验原基线, 不能指定目标或重放模式")
         elif target_base_ref is None:
@@ -162,6 +168,10 @@ class ExecutionBaselineService:
                 if facts.completed_output is None or facts.legacy_containment is not None:
                     raise ValueError("原执行不符合已结束且报告未接纳的精确恢复前提, 原现场保留")
                 target_base_ref = expected_base
+            elif purpose is BaselinePurpose.STOPPED_PROVIDER_RETRY:
+                if facts.stopped_provider_failure is None:
+                    raise ValueError("原执行不符合已停止的提供方前提失败恢复条件, 原现场保留")
+                target_base_ref = expected_base
             assert target_base_ref is not None
             dirty = self.git.manager.capture_mutations(
                 worktree, facts.permissions, denied_paths=facts.denied_paths
@@ -181,9 +191,20 @@ class ExecutionBaselineService:
                     facts.permissions,
                     facts.denied_paths,
                 )
+            if facts.stopped_provider_failure is not None:
+                require_stopped_provider_workspace(
+                    facts.stopped_provider_failure,
+                    CapturedMutations.from_capture(dirty),
+                    before,
+                    facts.permissions,
+                    facts.denied_paths,
+                )
             conflicted = False
             preview: BaselineGitPreview | None
-            if purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            if purpose in {
+                BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+                BaselinePurpose.STOPPED_PROVIDER_RETRY,
+            }:
                 preview = BaselineGitPreview(
                     worktree.head_revision,
                     self.git._tree_for_worktree(
@@ -308,6 +329,10 @@ class ExecutionBaselineService:
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("已结束执行恢复需要精确人工工程确认, 不能自动审批")
             authority.require_plan_confirmation(plan)
+        if plan.facts.stopped_provider_failure is not None:
+            if not isinstance(authority, BaselineOperatorAuthorization):
+                raise ValueError("提供方前提失败恢复需要精确人工工程确认, 不能自动审批")
+            authority.require_plan_confirmation(plan)
         task = plan.facts.task
         if (
             authority.task_id != task.id
@@ -409,6 +434,7 @@ class ExecutionBaselineService:
             if plan.purpose in {
                 BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+                BaselinePurpose.STOPPED_PROVIDER_RETRY,
             }:
                 self.git.manager.verify_mutations(
                     plan.dirty_capture.to_capture(),
@@ -427,6 +453,15 @@ class ExecutionBaselineService:
                     assert current.completed_output is not None
                     require_completed_output_workspace(
                         current.completed_output,
+                        plan.dirty_capture,
+                        inventory,
+                        current.permissions,
+                        current.denied_paths,
+                    )
+                elif plan.purpose is BaselinePurpose.STOPPED_PROVIDER_RETRY:
+                    assert current.stopped_provider_failure is not None
+                    require_stopped_provider_workspace(
+                        current.stopped_provider_failure,
                         plan.dirty_capture,
                         inventory,
                         current.permissions,
@@ -484,6 +519,11 @@ class ExecutionBaselineService:
                     current.completed_output.proof_sha256
                     if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
                     and current.completed_output is not None
+                    else None
+                ),
+                stopped_provider_failure_sha256=(
+                    current.stopped_provider_failure.proof_sha256
+                    if current.stopped_provider_failure is not None
                     else None
                 ),
                 scope=current.scope,

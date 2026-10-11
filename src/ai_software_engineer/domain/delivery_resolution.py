@@ -277,6 +277,9 @@ class DeliveryWaitInvestigation(DomainModel):
     original_run_id: RunId | None = None
     invocation_start_sha256: DispositionSha256 | None = None
     invocation_outcome_sha256: DispositionSha256 | None = None
+    provider_failure_code: Literal["AUTHENTICATION_ERROR"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     interruption_receipt_sha256: DispositionSha256 | None = None
     process_stop_sha256: DispositionSha256 | None = None
     workspace_inventory_sha256: DispositionSha256 | None = None
@@ -315,6 +318,14 @@ class DeliveryWaitInvestigation(DomainModel):
             self.checkpoint_sequence,
         ):
             raise ValueError("engineering investigation changed its exact waiting facts")
+        if self.provider_failure_code is not None and (
+            facts.role is not AgentRole.CODER
+            or self.invocation_start_sha256 is None
+            or self.invocation_outcome_sha256 is None
+            or self.original_run_id is None
+            or self.permitted_resolutions
+        ):
+            raise ValueError("提供方前提失败提示只能绑定原 Coder 失败, 不能授予恢复或执行权限")
         ensure_unique(self.missing, "missing engineering proof")
         ensure_unique(self.permitted_resolutions, "permitted engineering resolutions")
         if self.permitted_resolutions and self.missing:

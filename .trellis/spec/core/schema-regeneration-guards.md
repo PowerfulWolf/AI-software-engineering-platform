@@ -18,6 +18,14 @@ engineering-wait-resolution schema, including current knowledge retry guards.
 
 Fresh generation must retain every published allOf guard, including:
 
+- stopped-provider permanent AUTH proof requires failed nonzero native stop and no
+  output; its facts/reservation do not mix refund, receipt or other recovery proof;
+- target-free stopped-provider preparation and every embedded Binding retain human
+  PAUSE/proof gates, while explicit source-rebind retains its own input contracts;
+- exact INSPECT provider-failure hint has start/outcome/Run provenance and no
+  permitted resolution; older canonical engineering wait guards remain sourced
+  from the engineering-wait-resolution schema alongside this additive hint;
+
 - legacy BaselineExecutionReservation requires original Run, invocation start and
   containment; no sealed outcome, receipt, refunded retry or already-applied reservation;
 - ExecuteExecutionBaselineIntent cannot simultaneously confirm reboot containment

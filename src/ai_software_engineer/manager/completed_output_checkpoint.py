@@ -5,7 +5,7 @@ from typing import Literal, Self
 
 from pydantic import model_validator
 
-from ai_software_engineer.agents.models import AgentErrorCode, AgentRunStatus
+from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentRunStatus
 from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import DomainModel
@@ -90,6 +90,19 @@ def validate_completed_output_capture(
     """Pure wire validation; a complete plan must cover its full observed inventory."""
     proof.validate_integrity()
     request, start = proof.outcome.start.request, proof.capture_start
+    validate_stopped_execution_capture(request, start, dirty_capture, inventory, permissions)
+
+
+def validate_stopped_execution_capture(
+    request: AgentRequest,
+    start: ExecutionCaptureStart,
+    dirty_capture: CapturedMutations,
+    inventory: WorkspaceMutationInventory,
+    permissions: AgentPermissions,
+) -> None:
+    """Cover the complete lawful draft after a separately verified stopped execution."""
+    if start.request != request:
+        raise ValueError("完整草稿没有绑定精确原执行")
     if (
         permissions != request.permissions
         or dirty_capture.task_id != request.task_id
@@ -130,6 +143,16 @@ def require_completed_output_workspace(
     """Authorize all observed writes, including ignored noncache source mutations."""
     validate_completed_output_capture(proof, dirty_capture, inventory, permissions)
     request, start = proof.outcome.start.request, proof.capture_start
+    require_stopped_execution_workspace(request, start, inventory, denied_paths)
+
+
+def require_stopped_execution_workspace(
+    request: AgentRequest,
+    start: ExecutionCaptureStart,
+    inventory: WorkspaceMutationInventory,
+    denied_paths: tuple[str, ...],
+) -> None:
+    """Authorize every original invocation mutation after complete body validation."""
     NativeCoderContinuation._authorize_mutations(
         request,
         Path(start.worktree_path),

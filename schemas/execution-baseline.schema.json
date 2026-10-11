@@ -20,7 +20,8 @@
       "enum": [
         "source_rebind",
         "legacy_workspace_rescue",
-        "completed_output_rescue"
+        "completed_output_rescue",
+        "stopped_provider_retry"
       ],
       "title": "BaselinePurpose",
       "type": "string"
@@ -149,6 +150,19 @@
       ],
       "default": null,
       "title": "Completed Output Sha256"
+    },
+    "stopped_provider_failure_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stopped Provider Failure Sha256"
     },
     "scope": {
       "$ref": "#/$defs/EngineeringScope"
@@ -415,6 +429,72 @@
       "else": {
         "properties": {
           "completed_output_sha256": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "purpose"
+        ],
+        "properties": {
+          "purpose": {
+            "const": "stopped_provider_retry"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "stopped_provider_failure_sha256",
+          "continuation_mode"
+        ],
+        "properties": {
+          "input_mode": {
+            "const": "preserve_draft"
+          },
+          "stopped_provider_failure_sha256": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "stopped_provider_failure_sha256"
+        ],
+        "properties": {
+          "stopped_provider_failure_sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "continuation_mode"
+        ],
+        "properties": {
+          "purpose": {
+            "enum": [
+              "source_rebind",
+              "stopped_provider_retry"
+            ]
+          },
+          "continuation_mode": {
+            "const": "pause"
+          },
+          "authority_source": {
+            "const": "engineering_operator_decision"
+          },
+          "completed_output_sha256": {
+            "type": "null"
+          },
+          "legacy_containment_sha256": {
+            "type": "null"
+          },
+          "superseded_implementation_artifact_id": {
             "type": "null"
           }
         }

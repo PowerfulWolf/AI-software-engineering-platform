@@ -35,6 +35,7 @@ def standalone_regenerated(tmp_path_factory: pytest.TempPathFactory) -> dict[str
         "requirement-checkpoint",
         "knowledge-stage-workflow",
         "completed-coder-output-unavailable",
+        "stopped-provider-failure",
     ):
         (schemas / f"{name}.schema.json").unlink()
     command = (sys.executable, str(scripts / "sync-legacy-rescue-schemas.py"))
