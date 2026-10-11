@@ -1,0 +1,21 @@
+{
+  "name": "baseline-consumption-read-scope",
+  "title": "完整基线消费读取复用单次有界源码检查",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "bd06ce6",
+  "worktree": "/Users/zhangjunshuai/workspace/code/ase-baseline-read-scope",
+  "allowlist": [
+    "src/ai_software_engineer/work_queue/baseline.py",
+    "tests/work_queue/test_baseline_consumption_read_scope.py",
+    ".trellis/spec/core/read-memory-lifecycle.md",
+    ".trellis/tasks/10-12-baseline-consumption-read-scope/"
+  ],
+  "constraints": [
+    "Incremental tests only; no production DB/model/service operation",
+    "Fresh SQL and complete typed identity/digest/plan validation on every read",
+    "Only existing bounded pure text/path inspection facts may be reused within a synchronous call",
+    "No cross-request facts/permissions cache, historical rewrite, approval or execution change"
+  ],
+  "rollback": "Revert the source inspection scope while idle; retain all durable records and the same original Requirement/Task."
+}

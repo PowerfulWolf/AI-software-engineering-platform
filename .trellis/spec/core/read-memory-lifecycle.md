@@ -1,5 +1,84 @@
 # Read-side memory lifecycle
 
+## Baseline-consumption-local pure inspection reuse (2026-10-12)
+
+### Scope and signatures
+
+Apply when `effective_step` reads full same-Task execution baseline consumption records for
+recovery investigation, preparation or original invocation source resolution.
+
+```python
+consumptions(queue: MySqlRoleQueue, task_id: str) -> tuple[BaselineQueueConsumption, ...]
+source_inspection_scope() -> ContextManager[None]
+```
+
+### Contracts
+
+- Each synchronous `consumptions` call uses the existing bounded pure inspection scope.
+  Its SQL connection, SELECT and complete `_decode` remain fresh on every call. Validate all
+  rows, complete Plans/captures, indexed identity, canonical SHA, binding and source facts;
+  preserve the existing sequence ordering and exact returned wire payloads.
+- Only exact text/path secret-detection facts may share work across repeated nested Plan and
+  capture validation. The existing scope is bounded to 512 entries / 16 MiB and releases on
+  successful return, query failure or validation rejection. It may nest into an existing
+  synchronous pure inspection scope. It does not retain typed Plans, bindings, rows, SQL facts,
+  authority, claim absence, permission or continuation decisions between calls/requests.
+- Every later read queries and validates again. Changed source text or language-sensitive
+  source path cannot borrow an old clean scan. A complete source secret, changed Plan hash,
+  indexed identity mismatch or row digest mismatch still rejects with the existing error.
+  Fresh execution/workspace fences and original role/approval policies remain independent.
+- Do not widen this scope around model execution to improve a timing number. No new cache,
+  record truncation, forced GC, Schema relaxation or reduced history/secret validation exists.
+
+### Validation matrix / good, base, bad
+
+| Input / lifecycle | Required behavior |
+| --- | --- |
+| One complete Plan repeats the same source in nested captures | Actual full-source parse once during the complete consumption read |
+| Subsequent independent consumption read | Fresh SELECT, fresh source inspection and equal original wire/SHA |
+| Modified secret-bearing source with a correctly rehashed body/row | Original typed contract rejection, new body actually inspected |
+| Changed path, Plan identity, indexed identity or row digest | Original corruption rejection |
+| Return, validation exception or query exception | Inspection ContextVar reset; a later call still works |
+| Returned typed capture discarded by its caller | Weak reference releases; pure inspection facts do not retain models |
+
+Good: share the twenty repeated pure inspections inside one real row decode while independently
+revalidating the next read. Base: an empty SELECT returns the original empty tuple. Bad: reuse
+validated consumption/permission rows across a later SQL observation or omit exact digest checks.
+
+### Incremental tests, measurements, existing data and rollback
+
+`tests/work_queue/test_baseline_consumption_read_scope.py` drives real complete Plan/Binding and
+`_decode` with an isolated SQL port. Before the change, its deterministic complete-source parse
+count was 20 per read; after the change it must be 1, then 2 after the second independent read.
+The test verifies identical wire/SHA, actual fresh queries, source/path and record tamper rejection,
+successful/failed lifetime cleanup and typed-model weak-reference release. Retain baseline
+history and existing generic/source inspection scope regressions; do not assert portable timings.
+
+The 2026-10-12 isolated read-only microbenchmark used an exact previously sealed production Plan
+from one of three existing bindings, without SQL/model access or saving its body. The same
+in-memory full `BaselineQueueConsumption.model_validate` input took 6.812 seconds without the
+scope and 0.319 / 0.316 seconds with it (about 21x less time for this validation). Existing
+`bindings_for_task` already scoped its read and took about 1.6 seconds for three bindings; the
+current Requirement's top-level journal took 0.631 seconds cold / 0.042 seconds warm. These
+measurements identify repeated complete consumption source inspection as a distinct CPU cost;
+they do not establish the final public Operation speedup or a memory leak. Large temporary source
+parsing can leave allocator high-water RSS after release, so retained object lifetime and peak
+physical footprint remain separate measurements.
+
+The follow-up benchmark drove the actual unchanged `_decode` with complete JSON/index/digest
+rows from that same precise sealed Plan and an isolated SQL port. Its unscoped decode took
+8.884 seconds; the repaired `consumptions` took 0.448 / 0.446 seconds on independent reads
+(about 20x). Both retained exact wire/SHA equality and separately executed the query, counted
+1 then 2. No original source bodies, rows or credentials were printed or persisted by the probe.
+
+存量数据处置：no SQL/journal/approval migration or workspace rewrite. Existing Requirement,
+Task, Plan, Binding and consumption bytes remain unchanged; no new requirement or execution
+identity is needed. The service may load the repair through its ordinary idle controlled restart;
+do not interrupt a currently authorized recovery operation merely to load this optimization.
+Rollback removes only the read scope and restores repeated validation cost, preserving every
+durable fact. Prevent recurrence by exercising complete row decoding, counting repeated pure
+work at its actual caller, and testing independent freshness rather than only a scoped store read.
+
 ## Recovery-observation-local history reuse (2026-10-11)
 
 ### Scope and signatures
