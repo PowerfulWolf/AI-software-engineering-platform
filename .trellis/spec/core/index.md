@@ -75,6 +75,9 @@
 - [Recovery record read scope](recovery-record-read-scope.md): fixed complete-byte Plan/Start/
   Context decoding reuse, fresh authority/facts, bounded synchronous ownership and pre-model release.
 
+- [Recovery admission facts](recovery-admission-facts.md): local typed facts from a complete
+  authorization gate, final fresh Plan/facts comparison and unchanged custom validation paths.
+
 - [`engineering-authority.md`](engineering-authority.md): versioned engineering policy, trusted
   Product/Engineering duties, exact nonterminal wait investigations and resolutions.
 

@@ -16,6 +16,9 @@ as internal typed data and remove only that middle redundant inspection.
   or complete facts drift while Task derivation runs.
 - Generic validate-only authorization services remain compatible and cannot invent native
   facts. No Agent, JSON API, persistent token or cross-call authority is added.
+- Preserve trusted service public/protected and native validation extensions at instance,
+  subclass and class level. Standard method detection uses original definition-time function
+  references; public authorization keeps its original complete path.
 - Missing/rejected/tampered authority, changed current source/target/capture, directory
   replacement and Plan drift fail closed. No Task/authorization is overwritten on failure.
 - Public exact approval and actual builder/sealing continue to enforce every retained fence;

@@ -1,6 +1,6 @@
 {
   "name": "recovery-admission-facts",
-  "title": "\u590d\u7528\u540c\u6b65\u6388\u6743\u95e8\u672b\u6b21\u5b8c\u6574\u4e8b\u5b9e\u4ee5\u6d88\u9664 Task \u6d3e\u751f\u4e2d\u7684\u5197\u4f59\u8c03\u67e5",
+  "title": "复用同步授权门末次完整事实以消除 Task 派生中的冗余调查",
   "status": "completed",
   "created_at": "2026-10-12",
   "base_commit": "874f6a6",
@@ -12,7 +12,9 @@
     ".trellis/spec/core/recovery-admission-facts.md",
     "tests/recovery/test_record_read_scope.py",
     "tests/recovery/test_preparation_inspection_scope.py",
-    ".trellis/spec/core/recovery-record-read-scope.md"
+    ".trellis/spec/core/recovery-record-read-scope.md",
+    "src/ai_software_engineer/recovery/current.py",
+    ".trellis/spec/core/index.md"
   ],
   "constraints": [
     "Incremental tests only",
@@ -30,7 +32,7 @@
   ],
   "rollback": "Revert the local authorized-facts seam; existing approval/Task/artifact/store bytes remain unchanged. Deploy or roll back only after existing workers are idle.",
   "completed_at": "2026-10-12",
-  "review": "Root independent review: no remaining blockers after bound-validate guard fix; isolated commit authorized.",
+  "review": "Independent root review including trusted Service/native instance, subclass and class extension guards: no remaining blockers.",
   "verification_results": {
     "pre_review_incremental_suite": "97 passed in 70.51 seconds",
     "git_terminal_regressions": "28 passed in 43.94 seconds",
@@ -40,6 +42,10 @@
     "strict_mypy": "5 files pass",
     "full_suite_run": false,
     "production_access": false,
-    "data_migration": "none"
+    "data_migration": "none",
+    "root_extension_red": "6 failed in 2.71 seconds before the correction",
+    "root_extension_green": "25 passed in 11.70 seconds",
+    "independent_extension_review": "7 passed, 18 deselected in 3.70 seconds",
+    "root_public_fence_integration": "2 passed in 10.47 seconds"
   }
 }

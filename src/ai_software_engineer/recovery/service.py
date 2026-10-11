@@ -130,8 +130,6 @@ class RecoveryAuthorizationService:
 
     def require_current_authorization(self, plan_sha256: str) -> RecoveryPlan:
         """Execution admission must call this, never treat receipt replay as freshness."""
-        if self._native_facts_verifier() is not None:
-            return self.inspect_current_authorization(plan_sha256).plan
         plan = self._approved_plan(plan_sha256)
         self._require_current(plan)
         return plan
@@ -157,7 +155,23 @@ class RecoveryAuthorizationService:
 
     def _native_facts_verifier(self) -> NativeRecoveryFactsVerifier | None:
         # Import lazily: current's native composition imports the production backend.
-        from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
+        from ai_software_engineer.recovery.current import (
+            _STANDARD_NATIVE_VALIDATE,
+            NativeRecoveryFactsVerifier,
+        )
+
+        if type(self) is not RecoveryAuthorizationService:
+            return None
+        for method, standard in (
+            (self.require_current_authorization, _STANDARD_SERVICE_AUTHORIZATION),
+            (self._require_current, _STANDARD_SERVICE_CURRENT),
+        ):
+            if (
+                not isinstance(method, MethodType)
+                or method.__self__ is not self
+                or method.__func__ is not standard
+            ):
+                return None
 
         if not isinstance(self._facts, NativeRecoveryFactsVerifier) or (
             type(self._facts) is not NativeRecoveryFactsVerifier
@@ -167,7 +181,7 @@ class RecoveryAuthorizationService:
         if (
             not isinstance(validate, MethodType)
             or validate.__self__ is not self._facts
-            or validate.__func__ is not NativeRecoveryFactsVerifier.validate
+            or validate.__func__ is not _STANDARD_NATIVE_VALIDATE
         ):
             return None
         return self._facts
@@ -203,3 +217,9 @@ class RecoveryAuthorizationService:
             plan.permissions,
             denied_paths=plan.denied_paths,
         )
+
+
+# Definition-time references preserve trusted public/protected validation extensions.
+# Comparing a bound method to the current class attribute would accept a class override.
+_STANDARD_SERVICE_AUTHORIZATION = RecoveryAuthorizationService.require_current_authorization
+_STANDARD_SERVICE_CURRENT = RecoveryAuthorizationService._require_current

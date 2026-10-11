@@ -244,3 +244,7 @@ class NativeRecoveryFactsVerifier:
             plan.capture.to_capture(), plan.permissions, denied_paths=original.denied_paths
         )
         return NativeRecoveryFacts(original, target, profile, baseline)
+
+
+# Capture the original delegate before trusted composition can extend validation.
+_STANDARD_NATIVE_VALIDATE = NativeRecoveryFactsVerifier.validate

@@ -216,6 +216,87 @@ def test_instance_stronger_validate_preserves_original_calls_and_rejection(
     assert calls == 3 and f.reads == {"facts": 8, "capture": 1}
 
 
+@pytest.mark.parametrize(
+    "extension",
+    ["instance-public", "instance-protected", "subclass-public", "class-public", "class-protected"],
+)
+def test_service_extension_keeps_original_authorization_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extension: str
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    service = f.builder._authorization
+    require_authorization = RecoveryAuthorizationService.require_current_authorization
+    require_current = RecoveryAuthorizationService._require_current
+    calls = 0
+
+    def stronger_authorization(owner: RecoveryAuthorizationService, sha: str) -> RecoveryPlan:
+        nonlocal calls
+        calls += 1
+        require_authorization(owner, sha)
+        raise RecoveryRejected("stronger service authorization rejected")
+
+    def stronger_current(owner: RecoveryAuthorizationService, plan: RecoveryPlan) -> None:
+        nonlocal calls
+        calls += 1
+        require_current(owner, plan)
+        raise RecoveryRejected("stronger service authorization rejected")
+
+    if extension == "instance-public":
+        monkeypatch.setattr(
+            service, "require_current_authorization", MethodType(stronger_authorization, service)
+        )
+    elif extension == "instance-protected":
+        monkeypatch.setattr(service, "_require_current", MethodType(stronger_current, service))
+    elif extension == "subclass-public":
+
+        class StrongerService(RecoveryAuthorizationService):
+            def require_current_authorization(self, plan_sha256: str) -> RecoveryPlan:
+                return stronger_authorization(self, plan_sha256)
+
+        service = StrongerService(
+            f.store, facts=f.builder._facts, captures=service._captures, human=service._human
+        )
+    elif extension == "class-public":
+        monkeypatch.setattr(
+            RecoveryAuthorizationService, "require_current_authorization", stronger_authorization
+        )
+    else:
+        assert extension == "class-protected"
+        monkeypatch.setattr(RecoveryAuthorizationService, "_require_current", stronger_current)
+
+    builder = AuthorizedRecoveryTaskBuilder(service, f.builder._facts)
+    before = {path.name: path.read_bytes() for path in f.store._root.glob("*.json")}
+    with pytest.raises(RecoveryRejected, match="stronger service authorization rejected"):
+        builder.build(f.plan.plan_sha256)
+    assert calls == 1
+    with pytest.raises(RecoveryRejected, match="stronger service authorization rejected"):
+        service.require_current_authorization(f.plan.plan_sha256)
+    assert calls == 2
+    assert {path.name: path.read_bytes() for path in f.store._root.glob("*.json")} == before
+
+
+def test_class_stronger_native_validate_keeps_original_authorization_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    original = NativeRecoveryFactsVerifier.validate
+    calls = 0
+
+    def stronger(owner: NativeRecoveryFactsVerifier, plan: RecoveryPlan) -> None:
+        nonlocal calls
+        calls += 1
+        original(owner, plan)
+        raise RecoveryRejected("stronger class native validation rejected")
+
+    monkeypatch.setattr(NativeRecoveryFactsVerifier, "validate", stronger)
+    with pytest.raises(RecoveryRejected, match="stronger class native validation rejected"):
+        f.builder.build(f.plan.plan_sha256)
+    assert calls == 1
+    with pytest.raises(RecoveryRejected, match="stronger class native validation rejected"):
+        f.builder._authorization.require_current_authorization(f.plan.plan_sha256)
+    assert calls == 2
+
+
 def test_capture_mutation_is_rejected_by_the_same_gate_facts_after(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
