@@ -67,7 +67,11 @@ from ai_software_engineer.domain.artifact import (
     ImplementationReportArtifact,
     validate_artifact_payload,
 )
-from ai_software_engineer.domain.coder_work import validate_coder_slice_output
+from ai_software_engineer.domain.coder_work import (
+    CoderSliceRejected,
+    CoderSliceRejectionCode,
+    validate_coder_slice_output,
+)
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.git import (
     CandidateCommitError,
@@ -115,6 +119,25 @@ class CodexProcessNotStarted(CodexCliError):
         super().__init__("Codex CLI process was not started")
 
 
+_CODER_SLICE_REJECTION_SUMMARIES = {
+    CoderSliceRejectionCode.INPUT_CONTRACT: "当前开发切片不满足执行前提。未接纳本次报告",
+    CoderSliceRejectionCode.TASK_BINDING: "本次报告不属于当前开发切片。未接纳本次报告",
+    CoderSliceRejectionCode.PARTIAL_CANDIDATE: (
+        "本轮仍有后续步骤。只能保存开发进度。完整候选未接纳"
+    ),
+    CoderSliceRejectionCode.OUTPUT_KIND: "当前开发切片只能提交实施报告或开发进度。未接纳本次报告",
+    CoderSliceRejectionCode.SOURCE_REVISION: "开发进度没有绑定当前代码基线。未接纳本次报告",
+    CoderSliceRejectionCode.STEP_PARTITION: (
+        "开发进度未完整列出已完成和待完成步骤。未接纳本次报告"
+    ),
+    CoderSliceRejectionCode.PRIOR_COMPLETION: "开发进度不能撤回此前已完成的步骤",
+    CoderSliceRejectionCode.UNSELECTED_COMPLETION: (
+        "本轮仅能完成选定步骤。后续步骤必须保留为待完成"
+    ),
+    CoderSliceRejectionCode.DEFERRED_STEPS: "开发进度遗漏了后续待完成步骤。未接纳本次报告",
+}
+
+
 class _CodexOutputContractError(ValueError):
     """Safe classification of private provider output rejected at a known boundary."""
 
@@ -126,6 +149,7 @@ class _CodexOutputContractError(ValueError):
         validation_type: str | None = None,
         path: str | None = None,
         validation_rule: str | None = None,
+        slice_rejection_code: CoderSliceRejectionCode | None = None,
     ) -> None:
         super().__init__("Codex CLI output contract failed")
         encoded = raw_output.encode()
@@ -135,6 +159,7 @@ class _CodexOutputContractError(ValueError):
         self.validation_type = _safe_diagnostic_token(validation_type)
         self.path = _safe_diagnostic_path(path)
         self.validation_rule = _safe_diagnostic_token(validation_rule)
+        self.slice_rejection_code = slice_rejection_code
 
     def diagnostic(self) -> str:
         facts = [
@@ -148,6 +173,8 @@ class _CodexOutputContractError(ValueError):
             facts.append(f"path={self.path}")
         if self.validation_rule is not None:
             facts.append(f"validation_rule={self.validation_rule}")
+        if self.slice_rejection_code is not None:
+            facts.append("说明=" + _CODER_SLICE_REJECTION_SUMMARIES[self.slice_rejection_code])
         return "; ".join(facts)
 
 
@@ -887,6 +914,13 @@ class CodexCliAgentAdapter:
                 self._validate_git_result(request, initial_head, artifact)
         except WorkspacePolicyError:
             raise
+        except CoderSliceRejected as error:
+            raise _CodexOutputContractError(
+                "WORK_SLICE",
+                raw_output,
+                validation_rule=error.code.value,
+                slice_rejection_code=error.code,
+            ) from error
         except ValueError as error:
             raise _CodexOutputContractError("GIT_CONTRACT", raw_output) from error
         try:
@@ -1240,7 +1274,8 @@ def _compile_prompt(
     role_instruction = {
         AgentRole.ORCHESTRATOR: "Produce only the plan Artifact; do not modify the repository.",
         AgentRole.CODER: (
-            "Implement the approved plan in this isolated worktree and run allowed tests. "
+            "Implement the approved plan in this isolated worktree, following the assigned "
+            "work_slice when supplied, and run allowed tests. "
             + _coder_python_tooling_instruction(manager_coder_tooling)
             + "Do not "
             "run git add or git commit because linked-worktree Git metadata is outside your "

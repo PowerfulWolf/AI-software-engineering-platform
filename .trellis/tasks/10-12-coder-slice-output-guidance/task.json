@@ -1,0 +1,25 @@
+{
+  "name": "coder-slice-output-guidance",
+  "title": "对齐 Coder 切片输出指导与确定性门禁诊断",
+  "status": "in_progress",
+  "implementation_status": "complete",
+  "review_status": "pending_independent_review",
+  "created_at": "2026-10-12",
+  "base_commit": "770c02e",
+  "allowlist": [
+    "src/ai_software_engineer/agents/openai_compatible.py",
+    "src/ai_software_engineer/agents/codex_cli.py",
+    "src/ai_software_engineer/domain/coder_work.py",
+    "tests/agents/test_coder_slice_output_guidance.py",
+    "tests/planning/test_execution_window.py",
+    ".trellis/spec/core/coder-slice-output-guidance.md",
+    ".trellis/tasks/10-12-coder-slice-output-guidance/"
+  ],
+  "constraints": [
+    "Incremental tests only; no MySQL, models, production service or SQL",
+    "Isolated maintenance worktree; no original Coder worktree changes",
+    "No Schema, public wire, proof, queue or UI changes",
+    "Preserve gates; never manufacture progress, candidate or verifier verdict"
+  ],
+  "rollback": "Revert this isolated code/spec/test commit, preserve all historical outputs, failures, drafts and approvals."
+}
