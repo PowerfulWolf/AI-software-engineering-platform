@@ -71,6 +71,7 @@ RESULT_REPLAY_REJECTED_CLASSIFICATIONS: frozenset[str] = frozenset(
         "PLATFORM_BUG",
         "REQUIREMENT_AMBIGUITY",
         "BUDGET_EXHAUSTED",
+        "NONTRANSIENT_INFRA",
     }
 )
 
@@ -615,6 +616,9 @@ class DeliveryWaitHandling(DomainModel):
     collection_failure: DeliveryWaitCollectionFailure | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    budget_settlement_sha256: DispositionSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     handled_at: AwareDatetime
     handling_sha256: DispositionSha256
 
@@ -640,6 +644,14 @@ class DeliveryWaitHandling(DomainModel):
             raise ValueError("platform handling changed its exact waiting facts")
         if (self.status == "RESOLVED") != (self.resolution is not None):
             raise ValueError("resolved handling requires its sealed resolution")
+        if self.budget_settlement_sha256 is not None and (
+            self.status != "BUDGET_EXHAUSTED"
+            or self.resolution is not None
+            or self.collection_failed
+            or self.collection_failure is not None
+            or proof.permitted_resolutions
+        ):
+            raise ValueError("budget settlement cannot authorize further execution")
         if self.collection_failure is not None and (
             not self.collection_failed
             or self.status != "PLATFORM_ATTENTION"

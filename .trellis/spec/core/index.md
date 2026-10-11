@@ -38,8 +38,12 @@
 
 ## Files
 
+- [`native-cli-unknown-failure.md`](native-cli-unknown-failure.md): trusted native diagnostics and nontransient unknown exits.
+- [`nontransient-delivery-routing.md`](nontransient-delivery-routing.md): ordinary work budgets for permanent and unknown failures, unchanged retry accounting.
+
 - [`baseline-context-projection.md`](baseline-context-projection.md): versioned preserve-draft
   reading projections, complete-store verification and unchanged full reapply input.
+- [`stopped-budget-settlement.md`](stopped-budget-settlement.md): exact stopped exhausted legacy wait settlement, atomic terminal event/queue closure and unchanged recovery approvals.
 
 - [`dynamic-credential-source.md`](dynamic-credential-source.md): exact AST provenance for
   runtime-generated negative security test input, unchanged generic secret detection and full captures.

@@ -9,6 +9,7 @@ from typing import cast
 
 from pydantic import TypeAdapter
 
+from ai_software_engineer.domain.stopped_budget_settlement import StoppedFailureBudgetSettlement
 from ai_software_engineer.manager.dispatch import ContinuationDispatchRecord, RecoveryDispatchRecord
 from ai_software_engineer.recovery.records import RecoveryInvocationRecord, RecoverySeedRecord
 from ai_software_engineer.recovery.restart_records import PreExecutionRestartPlan
@@ -16,6 +17,7 @@ from ai_software_engineer.web_console.models import ConsoleOperation
 
 root = Path(__file__).resolve().parents[1] / "schemas"
 schemas = {
+    "stopped-failure-budget-settlement": StoppedFailureBudgetSettlement.model_json_schema(),
     "pre-execution-restart": PreExecutionRestartPlan.model_json_schema(),
     "console-operation": ConsoleOperation.model_json_schema(),
     "recovery-execution": TypeAdapter(

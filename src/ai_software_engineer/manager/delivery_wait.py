@@ -84,6 +84,7 @@ from ai_software_engineer.manager.rejected_output_checkpoint import (
     read_rejected_checkpoint,
     verify_rejected_workspace,
 )
+from ai_software_engineer.manager.stopped_budget_settlement import StoppedBudgetSettlementService
 from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationCheckpoint,
     VerifierPreparationIntent,
@@ -197,6 +198,7 @@ class DeliveryWaitService:
         knowledge_requirement_id: str | None = None,
         knowledge_retry: Callable[[str], KnowledgePreparationRetryEvidence | None] | None = None,
         clock: Callable[[], datetime] | None = None,
+        budget_settlement: StoppedBudgetSettlementService | None = None,
     ) -> None:
         self.repository, self.queue, self.sidecar_state = repository, queue, sidecar_state
         self.scope = scope
@@ -210,6 +212,7 @@ class DeliveryWaitService:
             knowledge_retry,
         )
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.budget_settlement = budget_settlement
         self.records = KnowledgeRecordStore(sidecar_state / "delivery-waits")
 
     def inspect(self, command: InspectDeliveryWait) -> DeliveryWaitInvestigation:
@@ -235,6 +238,15 @@ class DeliveryWaitService:
     def handle(self, command: HandleDeliveryWait) -> DeliveryWaitHandling:
         """Collect once and use frozen policy; requesting handling adds no authority."""
         self._reject_baseline_pause(command.work_item_id)
+        if self.budget_settlement is not None:
+            replay_guard = WorkerExecutionGuard()
+            with replay_guard.task_scope(
+                self.sidecar_state / "queue-worker-locks",
+                self.queue.get(command.work_item_id).task_id,
+            ):
+                replay = self.budget_settlement.replay(command, replay_guard)
+                if replay is not None:
+                    return replay
         binding_key = digest(command.to_wire())
         resolved = self.records.find("wait-handling-resolutions", binding_key, DeliveryWaitHandling)
         if resolved is not None:
@@ -301,6 +313,12 @@ class DeliveryWaitService:
                     ):
                         collector_failed = True
                 proof = self._collect(item, step, task, guard=guard)
+                if not collector_failed and self.budget_settlement is not None:
+                    settled = self.budget_settlement.try_settle(
+                        command, task, item, step, proof, guard
+                    )
+                    if settled is not None:
+                        return settled
         except QueueLeaseLost:
             proof = self._proof(
                 item, step, task, missing=(DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN,)
