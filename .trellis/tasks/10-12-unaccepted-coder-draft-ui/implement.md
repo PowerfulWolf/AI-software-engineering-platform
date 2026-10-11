@@ -1,0 +1,5 @@
+# 实现
+
+修改app.js恢复matcher/capability/currentplan/submitcallback/sourcepanel/copyreport，保持已有DOM分组与textContent。Python和JS增加固定中文native原因映射，使用实际shipped JS parity测试。
+
+已完成增量红绿、Ruff/format/strictMypy、JS语法与独立审查。实现树不运行生产HTTP写命令，不操作原Coder现场。集成时必须把summary兼容修复的严格operationResult gate保留，新fixture补真实Project/delivery绑定而不能放宽gate。

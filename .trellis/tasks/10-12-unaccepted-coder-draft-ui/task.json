@@ -1,0 +1,17 @@
+{
+  "name": "unaccepted-coder-draft-ui",
+  "title": "同一需求未接纳开发报告的可读恢复入口",
+  "status": "in_progress",
+  "created_at": "2026-10-12",
+  "base_commit": "770c02e85e4bafa01fcef3d69e1d409869848251",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "src/ai_software_engineer/team_view/blocker_text.py",
+    "tests/team_view/engineering-wait.test.cjs",
+    "tests/team_view/test_blocker_text.py",
+    ".trellis/spec/core/unaccepted-coder-draft-ui.md",
+    ".trellis/tasks/10-12-unaccepted-coder-draft-ui/"
+  ],
+  "constraints": ["Incremental tests only", "No production mutation or history rewrite", "No verdict or automatic approval"],
+  "rollback": "Controlled stop before rollback; retain compatible readers for new proof reasons and all immutable history."
+}

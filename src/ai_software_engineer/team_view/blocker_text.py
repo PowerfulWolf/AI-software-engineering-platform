@@ -120,6 +120,28 @@ def _repository_blocker(text: str) -> str | None:
     return f"代码仓库 {repository} 已阻塞；请检查该仓库的交付检查点。"
 
 
+def _coder_output_diagnostic(detail: str) -> str | None:
+    if not detail.startswith("Codex CLI returned invalid structured output;"):
+        return None
+    if re.search(r"(?:^|;\s*)cause=GIT_CONTRACT(?:;|$)", detail):
+        return "开发报告未通过代码与工作区校验，具体旧校验子因未保存，不能据此认定开发完成"
+    if not re.search(r"(?:^|;\s*)cause=WORK_SLICE(?:;|$)", detail):
+        return None
+    rule = re.search(r"(?:^|;\s*)validation_rule=([A-Z_]+)(?:;|$)", detail)
+    reasons = {
+        "PARTIAL_CANDIDATE": "本轮仍有后续步骤，只能保存开发进度，完整候选未接纳",
+        "UNSELECTED_COMPLETION": "本轮报告把未选定的后续步骤记为完成，平台未接纳报告",
+        "DEFERRED_STEPS": "开发进度遗漏了后续待完成步骤，平台未接纳报告",
+        "STEP_PARTITION": "开发进度未完整列出已完成和待完成步骤，平台未接纳报告",
+        "PRIOR_COMPLETION": "开发进度撤回了此前已完成的步骤，平台未接纳报告",
+        "SOURCE_REVISION": "开发报告未绑定当前代码基线，平台未接纳报告",
+        "TASK_BINDING": "开发报告不属于当前任务切片，平台未接纳报告",
+        "OUTPUT_KIND": "本轮报告类型不符合开发切片约定，平台未接纳报告",
+        "INPUT_CONTRACT": "当前开发切片不满足执行前提，平台未接纳报告",
+    }
+    return reasons.get(rule[1] if rule else "", "开发报告不符合本轮步骤约定，平台未接纳报告")
+
+
 def _role_failure(text: str) -> str | None:
     match = _ROLE_FAILURE.fullmatch(text)
     if match is None:
@@ -127,7 +149,9 @@ def _role_failure(text: str) -> str | None:
     role, attempt, detail = match.group("role"), match.group("attempt"), match.group("detail")
     run_id = re.search(r"\brun_[0-9a-z]+\b", detail)
     digests = re.findall(r"\b[0-9a-f]{64}\b", detail)
-    if detail.startswith("工程执行已中断。草稿已保留。"):
+    if output_reason := _coder_output_diagnostic(detail):
+        reason = output_reason
+    elif detail.startswith("工程执行已中断。草稿已保留。"):
         reason = "工程执行中断，草稿已保留，由工程团队核对并处理"
     elif "candidate review prompt exceeds its configured Context budget" in detail:
         reason = "候选验证上下文超过配置预算，平台在模型调用前安全停止"

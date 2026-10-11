@@ -108,6 +108,90 @@ def test_historical_designer_rejection_is_localized_without_inventing_the_cause(
     assert "路径" not in localized
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "expected"),
+    (
+        (
+            "cause=WORK_SLICE;validation_rule=PARTIAL_CANDIDATE",
+            "本轮仍有后续步骤，只能保存开发进度，完整候选未接纳",
+        ),
+        (
+            "cause=WORK_SLICE;validation_rule=UNSELECTED_COMPLETION",
+            "本轮报告把未选定的后续步骤记为完成，平台未接纳报告",
+        ),
+        (
+            "cause=WORK_SLICE;validation_rule=DEFERRED_STEPS",
+            "开发进度遗漏了后续待完成步骤，平台未接纳报告",
+        ),
+        (
+            "cause=WORK_SLICE;validation_rule=STEP_PARTITION",
+            "开发进度未完整列出已完成和待完成步骤，平台未接纳报告",
+        ),
+        (
+            "cause=WORK_SLICE;validation_rule=PRIOR_COMPLETION",
+            "开发进度撤回了此前已完成的步骤，平台未接纳报告",
+        ),
+        (
+            "cause=WORK_SLICE;validation_rule=SOURCE_REVISION",
+            "开发报告未绑定当前代码基线，平台未接纳报告",
+        ),
+        (
+            "cause=WORK_SLICE;validation_rule=TASK_BINDING",
+            "开发报告不属于当前任务切片，平台未接纳报告",
+        ),
+        (
+            "cause=WORK_SLICE;validation_rule=OUTPUT_KIND",
+            "本轮报告类型不符合开发切片约定，平台未接纳报告",
+        ),
+        (
+            "cause=WORK_SLICE;validation_rule=INPUT_CONTRACT",
+            "当前开发切片不满足执行前提，平台未接纳报告",
+        ),
+        (
+            "cause=WORK_SLICE;validation_rule=FUTURE_UNKNOWN",
+            "开发报告不符合本轮步骤约定，平台未接纳报告",
+        ),
+        (
+            "cause=GIT_CONTRACT",
+            "开发报告未通过代码与工作区校验，具体旧校验子因未保存，不能据此认定开发完成",
+        ),
+    ),
+)
+def test_coder_output_read_side_diagnostic_has_fixed_chinese_and_browser_parity(
+    diagnostic: str, expected: str
+) -> None:
+    original = (
+        "INVALID_OUTPUT: Coder failed at attempt 1: "
+        f"Codex CLI returned invalid structured output; {diagnostic}; "
+        "output_sha256=" + "a" * 64 + "; output_bytes=10529; run_original"
+    )
+    localized = localize_blocking_text(original)
+    assert expected in localized
+    assert "执行记录 run_original" in localized
+    assert "证据摘要 " + "a" * 64 in localized
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for browser wording parity")
+    app = Path(__file__).parents[2] / "src/ai_software_engineer/team_view/app.js"
+    script = r"""
+const fs = require("node:fs"), vm = require("node:vm");
+const context = vm.createContext({document: {getElementById: () => ({addEventListener() {}})}});
+const source = fs.readFileSync(process.argv[1], "utf8");
+vm.runInContext(source.slice(0, source.indexOf('for (const target of ["team"')), context);
+context.messages = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(vm.runInContext("messages.map(humanizeBlockingText)", context)));
+"""
+    result = subprocess.run(
+        (node, "-e", script, str(app)),
+        input=json.dumps([original]),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    assert json.loads(result.stdout) == [localized]
+
+
 def test_localizes_stable_recovery_and_manager_blockers() -> None:
     assert localize_blocking_text("A child delivery or integration requires recovery.") == (
         "子交付或联合集成需要恢复。"
