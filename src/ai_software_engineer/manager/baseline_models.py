@@ -317,6 +317,22 @@ class ExecutionBaselinePlan(DomainModel):
             survey = self.facts.legacy_containment.local_execution_survey
             if survey is not None and survey.worktree_path != self.dirty_capture.worktree_path:
                 raise ValueError("本机调查与恢复方案封存的工作区不同")
+        elif self.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            if (
+                self.facts.completed_output is None
+                or self.facts.legacy_containment is not None
+                or self.facts.native_rule_change is not None
+                or self.facts.source_native_rules_sha256 != self.facts.target_native_rules_sha256
+                or self.facts.implementation_artifact_id is not None
+                or self.target_base_ref != expected_base
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.prepared_source_revision != self.dirty_capture.source_revision
+                or self.prepared_dirty_patch != self.dirty_capture.patch
+                or self.conflicted
+            ):
+                raise ValueError(
+                    "已结束执行恢复必须使用原基线和完整合法草稿, 不能更换规范或执行模式"
+                )
         elif self.target_base_ref == expected_base or self.facts.legacy_containment is not None:
             raise ValueError(
                 "source rebind must select a different base without legacy containment"
@@ -375,6 +391,11 @@ class BaselineOperatorAuthorization(DomainModel):
         return self
 
     def require_plan_confirmation(self, plan: ExecutionBaselinePlan) -> None:
+        if (
+            plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+            and self.continuation_mode is not BaselineContinuationMode.PAUSE
+        ):
+            raise ValueError("已结束执行恢复批准后必须保持暂停, 再明确继续原需求")
         change = plan.facts.native_rule_change
         expected = change.change_sha256 if change is not None else None
         if self.approved_native_rule_change_sha256 != expected:

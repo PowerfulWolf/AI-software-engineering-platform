@@ -62,7 +62,7 @@ class BaselineFactCollector(Protocol):
     revision and remaining budget. Target rules cannot expand Task permissions.
     """
 
-    def collect(self, target_base_ref: str) -> BaselineExecutionFacts: ...
+    def collect(self, target_base_ref: str | None) -> BaselineExecutionFacts: ...
 
     def source_worktree(self, facts: BaselineExecutionFacts) -> WorktreeRef: ...
 
@@ -93,11 +93,16 @@ class ExecutionBaselineService:
 
     def propose(
         self,
-        target_base_ref: str,
+        target_base_ref: str | None,
         *,
         input_mode: BaselineInputMode = BaselineInputMode.PRESERVE_DRAFT,
         purpose: BaselinePurpose = BaselinePurpose.SOURCE_REBIND,
     ) -> ExecutionBaselinePlan:
+        if purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            if target_base_ref is not None or input_mode is not BaselineInputMode.PRESERVE_DRAFT:
+                raise ValueError("已结束执行恢复由平台核验原基线, 不能指定目标或重放模式")
+        elif target_base_ref is None:
+            raise ValueError("执行基线准备缺少精确目标版本")
         with source_inspection_scope(), self.store.execution_lock(), self.facts.execution_scope():
             facts = self.facts.collect(target_base_ref)
             self._require_facts(facts)
@@ -153,6 +158,11 @@ class ExecutionBaselineService:
             expected_base = (
                 binding.execution_base_ref if binding is not None else facts.task.base_ref
             )
+            if purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+                if facts.completed_output is None or facts.legacy_containment is not None:
+                    raise ValueError("原执行不符合已结束且报告未接纳的精确恢复前提, 原现场保留")
+                target_base_ref = expected_base
+            assert target_base_ref is not None
             dirty = self.git.manager.capture_mutations(
                 worktree, facts.permissions, denied_paths=facts.denied_paths
             )
@@ -173,7 +183,19 @@ class ExecutionBaselineService:
                 )
             conflicted = False
             preview: BaselineGitPreview | None
-            if purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+            if purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+                preview = BaselineGitPreview(
+                    worktree.head_revision,
+                    self.git._tree_for_worktree(
+                        worktree.head_revision,
+                        worktree.path,
+                        facts.permissions,
+                        facts.denied_paths,
+                        worktree,
+                    ),
+                    dirty.patch.decode("utf-8"),
+                )
+            elif purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
                 if (
                     facts.legacy_containment is None
                     or input_mode is not BaselineInputMode.PRESERVE_DRAFT
@@ -282,6 +304,10 @@ class ExecutionBaselineService:
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("旧执行救援需要精确人工工程确认, 不能自动审批")
             authority.require_plan_confirmation(plan)
+        if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            if not isinstance(authority, BaselineOperatorAuthorization):
+                raise ValueError("已结束执行恢复需要精确人工工程确认, 不能自动审批")
+            authority.require_plan_confirmation(plan)
         task = plan.facts.task
         if (
             authority.task_id != task.id
@@ -380,7 +406,10 @@ class ExecutionBaselineService:
                 authority_sha,
             ):
                 raise ValueError("baseline operation start changed; preserve all existing state")
-            if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+            if plan.purpose in {
+                BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
+                BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+            }:
                 self.git.manager.verify_mutations(
                     plan.dirty_capture.to_capture(),
                     current.permissions,
@@ -394,7 +423,19 @@ class ExecutionBaselineService:
                 inventory = capture_mutation_inventory(Path(plan.dirty_capture.worktree_path))
                 if inventory != plan.before_inventory:
                     raise ValueError("救援方案封存后现场已变化, 请重新准备方案; 原文件保留")
-                require_complete_legacy_inventory(self.git.manager, plan.dirty_capture, inventory)
+                if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+                    assert current.completed_output is not None
+                    require_completed_output_workspace(
+                        current.completed_output,
+                        plan.dirty_capture,
+                        inventory,
+                        current.permissions,
+                        current.denied_paths,
+                    )
+                else:
+                    require_complete_legacy_inventory(
+                        self.git.manager, plan.dirty_capture, inventory
+                    )
                 reference, after_inventory = (
                     plan.dirty_capture.to_capture().worktree,
                     inventory.sha256,
@@ -437,6 +478,12 @@ class ExecutionBaselineService:
                 legacy_containment_sha256=(
                     current.legacy_containment.containment_sha256
                     if current.legacy_containment is not None
+                    else None
+                ),
+                completed_output_sha256=(
+                    current.completed_output.proof_sha256
+                    if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+                    and current.completed_output is not None
                     else None
                 ),
                 scope=current.scope,

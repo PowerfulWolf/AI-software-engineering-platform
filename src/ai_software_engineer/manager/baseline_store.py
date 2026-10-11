@@ -218,6 +218,17 @@ class FileExecutionBaselineStore:
     ) -> None:
         if binding.purpose != plan.purpose:
             raise ValueError("工程绑定与批准方案的处置目的不同")
+        if binding.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            proof = plan.facts.completed_output
+            if proof is None or binding.completed_output_sha256 != proof.proof_sha256:
+                raise ValueError("已结束执行恢复绑定缺少对应的完整原执行证据")
+            authority = self.records.get(
+                "baseline-authorities", plan.plan_sha256, BaselineOperatorAuthorization
+            )
+            authority.validate_integrity()
+            authority.require_plan_confirmation(plan)
+            if authority.authorization_sha256 != binding.authority_sha256:
+                raise ValueError("已结束执行恢复没有对应的精确人工工程确认")
         if binding.purpose is not BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
             if binding.legacy_containment_sha256 is not None:
                 raise ValueError("普通基线绑定不能冒充旧执行救援")
@@ -272,6 +283,11 @@ class FileExecutionBaselineStore:
                 "平台按人工工程决定保留了完整当前草稿, 代码基线和需求分支保持。"
                 "原调用结果仍是未知; 这些草稿是新执行的工程输入, 不是原调用进度或候选通过证明。\n"
                 if binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                else (
+                    "平台按精确人工工程决定保留完整合法草稿, 原代码基线和需求分支保持。"
+                    "原执行已结束, 但报告内容仍未知; 保留草稿不是已接纳产出或候选通过证明。\n"
+                )
+                if binding.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
                 else (
                     "平台已按精确工程授权在同一需求分支更新代码执行基线。"
                     "原需求范围与验收保持有效。\n"

@@ -1,5 +1,48 @@
 # Local Web Console Contract
 
+## Completed output recovery and accepted continuation preparation (2026-10-11)
+
+Console operation contract version 5 adds the `completed_output_rescue` purpose to
+the existing `PROPOSE_EXECUTION_BASELINE` action. Client sends current
+project/delivery/task/intent/revision/work/source/checkpoint identities and
+`input_mode=preserve_draft`; it omits `target_base_ref`. Server-side typed validation
+rejects an explicit target or `coder_reapply`, derives the original trusted base
+under current Task/queue fences, and accepts only the exact completed-but-unaccepted
+proof described in [completed-coder-output-unavailable.md](completed-coder-output-unavailable.md).
+Existing source update and legacy purposes still require their exact target;
+version 4 clients preserve prior baseline and pause behavior.
+
+`engineeringCompletedOutputRescueFacts` excludes current typed receipts, other
+retry causes, usable permitted resolutions, knowledge/rejected/legacy routes and
+exhausted budget. Unknown facts can offer a visible platform check without claiming
+recovery eligibility. Current exact plan validation binds original run, task/work,
+source, proof/reservation, native completed stop and unchanged target. Preparation
+has no approval or execution side effect. Approved execution requires exact plan
+digest and `continuation_mode=pause`; explicit later RESUME uses the existing gate.
+
+`matchingEngineeringResumeOperation(request, bound)` checks the current active
+RESUME against exact project/requirement, Task intent/revision, WorkItem, source,
+baseline and disposition; the requirement journal checkpoint may advance after
+acceptance. Only a matching operation changes the two paused/unstarted panels to
+“平台正在准备继续原需求 / 本轮主执行尚未开始”. It never declares a Coder/model
+run, and a foreign or historical operation cannot override queue facts. Task detail
+offers “打开所属需求” only when the current owning requirement shares its Project.
+
+Current plan and copied report explain completed stop separately from unknown
+report content, ordinary work cost, full preserved progress and independent QA/Review.
+Earlier inconclusive investigation stays labeled as original history. Do not repeat
+a HANDLE action when an exact current recovery plan already supplies the usable
+authorization path. Unsupported version/read outage/stale callback remains fail closed.
+
+Validation: `test_completed_output_rescue.py`, new public Host parameter in
+`test_production_execution_baseline.py`, fresh Schema regeneration tests,
+`engineering-wait.test.cjs` and `browser/completed-output-rescue.test.cjs` exercise
+positive/negative exact bindings, typed alternate routes, wrong authority, PAUSE,
+replay, unknown output, unchanged bytes and actual visible DOM.
+No migration or direct stock-row repair: load while idle, refresh the original
+requirement, prepare/check, approve exact PAUSE, then explicitly RESUME. New-purpose
+records require compatible readers on rollback; never delete history or reopen old work.
+
 Console Team-read admission and diagnostic-object lifetime follow
 [`read-memory-lifecycle.md`](read-memory-lifecycle.md), including fixed
 `503 TEAM_READ_IN_PROGRESS`, worker-owned release and unchanged read-only facts.

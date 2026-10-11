@@ -33,6 +33,7 @@ class BaselineInputMode(StrEnum):
 class BaselinePurpose(StrEnum):
     SOURCE_REBIND = "source_rebind"
     LEGACY_WORKSPACE_RESCUE = "legacy_workspace_rescue"
+    COMPLETED_OUTPUT_RESCUE = "completed_output_rescue"
 
 
 class BaselineContinuationMode(StrEnum):
@@ -69,6 +70,9 @@ class ExecutionBaselineBinding(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     legacy_containment_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    completed_output_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     scope: EngineeringScope
@@ -127,6 +131,19 @@ class ExecutionBaselineBinding(DomainModel):
                 raise ValueError(
                     "legacy rescue must preserve the exact source under human authority"
                 )
+        elif self.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            if (
+                self.execution_base_ref != self.prior_execution_base_ref
+                or self.execution_source_revision != self.prior_source_revision
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.continuation_mode is not BaselineContinuationMode.PAUSE
+                or self.authority_source != "engineering_operator_decision"
+                or self.completed_output_sha256 is None
+                or self.legacy_containment_sha256 is not None
+                or self.superseded_implementation_artifact_id is not None
+                or self.before_inventory_sha256 != self.after_inventory_sha256
+            ):
+                raise ValueError("已结束执行恢复必须保留原基线和现场, 精确批准后保持暂停")
         elif (
             self.execution_base_ref == self.prior_execution_base_ref
             or self.legacy_containment_sha256 is not None
@@ -134,6 +151,11 @@ class ExecutionBaselineBinding(DomainModel):
             raise ValueError(
                 "source rebind must change its execution base without legacy containment"
             )
+        if (
+            self.purpose is not BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+            and self.completed_output_sha256 is not None
+        ):
+            raise ValueError("已结束执行恢复证据只能用于对应的精确恢复绑定")
         if (
             self.input_mode is BaselineInputMode.CODER_REAPPLY
             and self.execution_source_revision != self.execution_base_ref

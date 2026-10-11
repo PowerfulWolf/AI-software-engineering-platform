@@ -2033,3 +2033,206 @@ test("pause shows its saved source without a proposal and refreshes the exact ve
   assert.equal(h.run("submitted[0].expected_source_revision"), "e".repeat(40));
   assert.equal(h.run("submitted[0].expected_execution_baseline_sha256"), digest("9"));
 });
+
+function completedRescueFixture(h) {
+  baselineFixture(h);
+  h.run('consoleOperationContractVersion = 5');
+  h.step.wait_disposition.facts.classification = 'TRANSIENT_INFRA';
+  h.task.retry_budget = {work_remaining: 2};
+}
+function completedRescuePlan(h) {
+  const request = {task_id: h.task.task_id, run_id: 'run_original', role: 'coder', source_revision: 'c'.repeat(40)};
+  const start = {request, work_item_id: h.step.work_item_id, lease_id: 'lease_original', checkpoint_sequence: 4, start_sha256: digest('1')};
+  const proof = {kind: 'completed_coder_output_unavailable', output_content_status: 'unknown', proof_sha256: digest('2'),
+    outcome: {start, result: {status: 'FAILED', artifact: null, error: {code: 'WORK_INTERRUPTED', transient: false}}},
+    capture_start: {request, start_sha256: digest('3'), task_revision: 4, worktree_path: '/workspace/current'},
+    capture_stop: {task_id: request.task_id, run_id: request.run_id, capture_start_sha256: digest('3'), output_present: true,
+      cause: null, original_error_code: null, process_stop: {kind: 'completed', returncode: 0}}};
+  const plan = {purpose: 'completed_output_rescue', plan_sha256: digest('e'), target_base_ref: 'c'.repeat(40),
+    prepared_source_revision: 'c'.repeat(40), input_mode: 'preserve_draft', conflicted: false,
+    dirty_capture: {source_revision: 'c'.repeat(40), worktree_path: '/workspace/current'},
+    facts: {task: {id: h.task.task_id, branch_name: 'ai/feature/original', base_ref: 'c'.repeat(40)}, task_revision: 4,
+      work_item_id: h.step.work_item_id, completed_output: proof,
+      continuation: {retry_cause: 'completed_output_unavailable', completed_output_sha256: digest('2')}}};
+  h.context.rescuePlan = plan;
+  h.run(`operations = [{operation_id: 'completed_proposal', status: 'SUCCEEDED', updated_at: '2026-10-11T00:00:00Z',
+    intent: {...engineeringBaselineFacts(data.request, data.task, data.step), action: 'PROPOSE_EXECUTION_BASELINE',
+      purpose: 'completed_output_rescue', input_mode: 'preserve_draft'},
+    result: {checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: rescuePlan}}]`);
+  return plan;
+}
+
+test('completed output preparation is visible, target-free and promises only a platform check', async () => {
+  const h = harness(); completedRescueFixture(h);
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  const visible = visibleDescend(box).map(node => node.textContent).join(' ');
+  assert.match(visible, /平台将核验/);
+  const prepare = visibleDescend(box).find(node => node.tagName === 'BUTTON' && node.textContent === '准备保留进度的恢复方案');
+  assert.ok(prepare);
+  await prepare.events.click();
+  const intent = h.run('submitted[0]');
+  assert.equal(intent.purpose, 'completed_output_rescue');
+  assert.equal(Object.hasOwn(intent, 'target_base_ref'), false);
+  assert.equal(intent.input_mode, 'preserve_draft');
+});
+
+test('completed output plan states unknown report separately and approves exact PAUSE', async () => {
+  const h = harness(); completedRescueFixture(h); const plan = completedRescuePlan(h);
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  const visible = visibleDescend(box).map(node => node.textContent).join(' ');
+  assert.match(visible, /原执行已结束/); assert.match(visible, /报告内容仍未知/);
+  assert.match(visible, /消耗 1 次.*开发额度/); assert.match(visible, /独立 QA 和 Review/);
+  await control(box, '批准保留进度，保持暂停').events.click();
+  assert.equal(h.run('submitted[0].expected_plan_sha256'), plan.plan_sha256);
+  assert.equal(h.run('submitted[0].continuation_mode'), 'pause');
+});
+
+test('completed output approval and prepare callbacks reject stale purpose, facts and capability', async () => {
+  for (const mutation of [
+    'rescuePlan.facts.completed_output.output_content_status = "accepted"',
+    'rescuePlan.facts.completed_output.outcome.result.status = "SUCCEEDED"',
+    'rescuePlan.facts.completed_output.capture_stop.process_stop.kind = "terminated"',
+    'rescuePlan.facts.work_item_id = "work_other"',
+    'rescuePlan.target_base_ref = "e".repeat(40)',
+    'consoleOperationContractVersion = 4',
+  ]) {
+    const h = harness(); completedRescueFixture(h); completedRescuePlan(h);
+    const prior = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+    const approve = control(prior, '批准保留进度，保持暂停'); assert.ok(approve);
+    h.run(mutation); await approve.events.click(); assert.equal(h.run('submitted.length'), 0, mutation);
+    const current = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+    assert.equal(control(current, '批准保留进度，保持暂停'), undefined, mutation);
+  }
+});
+
+for (const mode of ['paused', 'pending']) test(`exact active RESUME shows preparation for ${mode} instead of asking to click`, () => {
+  const h = harness(); let bound;
+  if (mode === 'paused') {
+    baselineFixture(h); Object.assign(h.step.wait_disposition.facts, {classification: 'EXECUTION_BASELINE_PAUSED', execution_baseline_sha256: digest('8')});
+    h.step.wait_disposition.action = 'RESUME_EXECUTION_BASELINE';
+    bound = h.run('engineeringBaselinePauseFacts(data.request, data.task, data.step)');
+  } else { pendingContinuationFixture(h); bound = h.run('engineeringAuthorizedContinuationIntent(data.request, data.step)'); }
+  h.context.resumeBound = bound;
+  h.run(`operations = [{operation_id: 'resume_current', status: 'RUNNING', updated_at: '2026-10-11T00:00:00Z', intent: {...resumeBound, action: 'RESUME_EXECUTION_BASELINE'}}]`);
+  const expression = mode === 'paused' ? 'engineeringBaselinePauseBox(data.request, data.task, data.step)' : 'engineeringAuthorizedContinuationBox(data.request, data.task, data.step)';
+  let box = h.run(expression); assert.match(text(box), /正在准备继续/); assert.match(text(box), /主执行尚未开始/);
+  assert.doesNotMatch(text(box), /交付暂停|点击下面按钮|点击“继续原需求”/);
+  h.run('operations[0].intent.expected_work_item_id = "work_other"');
+  box = h.run(expression); assert.doesNotMatch(text(box), /平台正在准备继续/);
+  assert.match(text(box), mode === 'paused' ? /交付暂停/ : /点击下面按钮/);
+});
+
+test('confirmed timeout and provider routes cannot offer necessarily rejected completed-output preparation', () => {
+  for (const cause of ['local_execution_limit', 'provider_transient']) {
+    const h = harness(); completedRescueFixture(h);
+    const proof = investigation(h); proof.retry_cause = cause;
+    proof.source_revision = h.step.wait_disposition.facts.source_revision;
+    proof.interruption_receipt_sha256 = digest('8');
+    const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+    assert.equal(control(box, '准备保留进度的恢复方案'), undefined, cause);
+    assert.ok(control(box, '继续原交付'), 'the original permitted checkpoint route remains');
+  }
+});
+
+test('completed-output checks cannot replace a typed result-replay route or exhausted budget', () => {
+  for (const input of [
+    {permitted_resolutions: ['REPLAY_RECORDED_RESULT'], missing: []},
+    {permitted_resolutions: [], missing: ['BUDGET_EXHAUSTED']},
+  ]) {
+    const h = harness(); completedRescueFixture(h); Object.assign(investigation(h), input,
+      {source_revision: h.step.wait_disposition.facts.source_revision});
+    const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+    assert.equal(control(box, '准备保留进度的恢复方案'), undefined);
+  }
+});
+
+test('copied current completed-output report separates prepared recovery from original inconclusive history', async () => {
+  const h = harness(); completedRescueFixture(h);
+  const old = handling(h, 'PLATFORM_ATTENTION', ['OUTCOME_UNKNOWN', 'STOP_UNRECORDED', 'CHECKPOINT_UNAVAILABLE']);
+  old.source_revision = old.investigation.source_revision = h.step.wait_disposition.facts.source_revision;
+  old.investigation.original_run_id = 'run_original';
+  const oldOperation = h.run('operations[0]'); completedRescuePlan(h); h.context.oldOperation = oldOperation;
+  h.run('operations.push(oldOperation); globalThis.copied = []; navigator = {clipboard: {writeText: async report => copied.push(report)}}');
+  await h.run('copyEngineeringWaitReport(data.request, handling)');
+  const report = h.run('copied[0]');
+  assert.match(report, /当前恢复结论 · 原执行已核验结束/);
+  assert.match(report, /报告内容仍未知/);
+  assert.match(report, /原调查记录事项/);
+  assert.match(report, /批准后预留 1 次普通开发执行/);
+  assert.match(report, /批准保留进度，保持暂停/);
+  assert.match(report, /当前完整恢复方案已准备，无需重复调查/);
+});
+
+test('exact completed plan supersedes a fully matching old unknown-stop investigation for visible PAUSE approval', async () => {
+  const h = harness(); completedRescueFixture(h);
+  const old = handling(h, 'PLATFORM_ATTENTION', ['OUTCOME_UNKNOWN', 'STOP_UNRECORDED', 'CHECKPOINT_UNAVAILABLE']);
+  old.source_revision = old.investigation.source_revision = h.step.wait_disposition.facts.source_revision;
+  old.investigation.original_run_id = 'run_original';
+  const oldOperation = h.run('operations[0]');
+  const oldBox = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  const oldPrepare = control(oldBox, '准备保留进度的恢复方案'); assert.ok(oldPrepare);
+  const plan = completedRescuePlan(h); h.context.oldOperation = oldOperation;
+  h.run('operations.push(oldOperation)');
+  assert.ok(h.run('engineeringLegacyRescueFacts(data.request, data.task, data.step)'));
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  const approve = visibleDescend(box).find(node => node.tagName === 'BUTTON' && node.textContent === '批准保留进度，保持暂停');
+  assert.ok(approve, 'current exact plan remains actionable despite historical missing-stop facts');
+  assert.equal(control(box, '准备保留进度的恢复方案'), undefined, 'the completed plan does not ask to prepare a legacy rescue');
+  assert.doesNotMatch(text(box), /旧执行没有留下完整结果、结束和现场记录/);
+  await oldPrepare.events.click();
+  assert.equal(h.run('submitted.length'), 0, 'old unknown-stop prepare callback cannot replace a current exact completed plan');
+  await approve.events.click();
+  assert.equal(h.run('submitted[0].expected_plan_sha256'), plan.plan_sha256);
+  assert.equal(h.run('submitted[0].continuation_mode'), 'pause');
+
+  const stale = harness(); completedRescueFixture(stale);
+  const staleOld = handling(stale, 'PLATFORM_ATTENTION', ['OUTCOME_UNKNOWN', 'STOP_UNRECORDED', 'CHECKPOINT_UNAVAILABLE']);
+  staleOld.source_revision = staleOld.investigation.source_revision = stale.step.wait_disposition.facts.source_revision;
+  staleOld.investigation.original_run_id = 'run_original';
+  const staleOperation = stale.run('operations[0]'); completedRescuePlan(stale); stale.context.oldOperation = staleOperation;
+  stale.run('operations.push(oldOperation)');
+  const prior = stale.run('engineeringWaitBox(data.request, data.task, data.step)');
+  const priorApproval = control(prior, '批准保留进度，保持暂停'); assert.ok(priorApproval);
+  stale.run('rescuePlan.facts.completed_output.capture_stop.run_id = "run_foreign"');
+  await priorApproval.events.click();
+  assert.equal(stale.run('submitted.length'), 0, 'historical investigation cannot make a stale completed plan approvable');
+  const current = stale.run('engineeringWaitBox(data.request, data.task, data.step)');
+  assert.equal(control(current, '批准保留进度，保持暂停'), undefined);
+  assert.ok(control(current, '准备保留进度的恢复方案'), 'unverified current plan falls back to the explicit unknown-stop recovery route');
+});
+
+test('incremental reconciliation replaces old unknown-stop advice and controls with the exact completed plan, then restores truthful fallback', async () => {
+  const h = harness(); completedRescueFixture(h);
+  const old = handling(h, 'PLATFORM_ATTENTION', ['OUTCOME_UNKNOWN', 'STOP_UNRECORDED', 'CHECKPOINT_UNAVAILABLE']);
+  old.source_revision = old.investigation.source_revision = h.step.wait_disposition.facts.source_revision;
+  old.investigation.original_run_id = 'run_original';
+  const oldOperation = h.run('operations[0]');
+  const retained = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  const oldHandle = control(retained, '平台修复后重新处理'); assert.ok(oldHandle);
+  assert.match(text(retained), /旧执行没有留下完整结果、结束和现场记录/);
+  h.context.retained = retained;
+  const plan = completedRescuePlan(h); h.context.oldOperation = oldOperation;
+  h.run('operations.push(oldOperation); reconcileViewChildren(retained, engineeringWaitBox(data.request, data.task, data.step))');
+  const approve = control(retained, '批准保留进度，保持暂停'); assert.ok(approve);
+  assert.equal(control(retained, '平台修复后重新处理'), undefined);
+  assert.equal(control(retained, '准备保留进度的恢复方案'), undefined);
+  assert.doesNotMatch(text(retained), /旧执行没有留下完整结果、结束和现场记录/);
+  assert.match(text(retained), /当次调查/);
+  assert.match(text(retained), /当前原因与操作以页面上方为准/);
+  await oldHandle.events.click();
+  assert.equal(h.run('submitted.length'), 0, 'detached old HANDLE cannot replace the current exact plan');
+  await control(retained, '重新检查状态').events.click();
+  assert.equal(h.run('submitted[0].action'), 'INSPECT_DELIVERY_WAIT', 'read-only inspection is still permitted');
+  await approve.events.click();
+  assert.equal(h.run('submitted[1].expected_plan_sha256'), plan.plan_sha256);
+  assert.equal(h.run('submitted[1].continuation_mode'), 'pause');
+
+  h.run('rescuePlan.facts.completed_output.capture_stop.run_id = "run_foreign"; reconcileViewChildren(retained, engineeringWaitBox(data.request, data.task, data.step))');
+  assert.equal(control(retained, '批准保留进度，保持暂停'), undefined);
+  assert.ok(control(retained, '平台修复后重新处理'));
+  assert.ok(control(retained, '准备保留进度的恢复方案'));
+  assert.match(text(retained), /旧执行没有留下完整结果、结束和现场记录/);
+  assert.doesNotMatch(text(retained), /这是该次调查保存的结果/);
+  await approve.events.click();
+  assert.equal(h.run('submitted.length'), 2, 'retained new-plan approval cannot survive proof invalidation');
+});

@@ -73,6 +73,7 @@ class Prepared:
 
     def collect(self, command: BaselineProposeCommand | None = None) -> None:
         self.collector.bind_proposal(command or self.command)
+        assert self.command.target_base_ref is not None
         with self.collector.execution_scope():
             self.collector._collect_proposal_facts(
                 self.native.repository.get(self.native.task.id),
@@ -240,6 +241,7 @@ def test_capture_rejection_keeps_the_original_stop_and_source(prepared: Prepared
 def test_proposal_requires_the_existing_real_task_lock_and_idle_fence(prepared: Prepared) -> None:
     f = prepared
     f.collector.bind_proposal(f.command)
+    assert f.command.target_base_ref is not None
     with pytest.raises(ValueError, match="屏障"):
         f.collector._collect_proposal_facts(
             f.native.repository.get(f.native.task.id),

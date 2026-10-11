@@ -62,6 +62,7 @@ from ai_software_engineer.manager.baseline_models import (
 from ai_software_engineer.manager.baseline_native_rules import build_native_rule_change
 from ai_software_engineer.manager.completed_output_checkpoint import (
     CompletedCoderOutputUnavailableProof,
+    require_completed_output_workspace,
 )
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.manager.delivery_preflight import (
@@ -115,8 +116,22 @@ class BaselineProposeCommand(DomainModel):
     expected_task_revision: int = Field(ge=1)
     expected_work_item_id: NonEmptyStr
     expected_source_revision: FullGitRevision
-    target_base_ref: FullGitRevision
+    target_base_ref: FullGitRevision | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     input_mode: BaselineInputMode = BaselineInputMode.PRESERVE_DRAFT
+
+    @model_validator(mode="after")
+    def distinct_preparation(self) -> Self:
+        if self.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            if (
+                self.target_base_ref is not None
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+            ):
+                raise ValueError("已结束执行恢复由平台核验并固定原基线, 不能指定目标或重放模式")
+        elif self.target_base_ref is None:
+            raise ValueError("基线更新或旧执行救援需要精确目标版本")
+        return self
 
     def require_current(
         self, task: Task, revision: int, work_item_id: str, source_revision: str
@@ -155,7 +170,9 @@ class BaselineProposeCommand(DomainModel):
             self.expected_task_revision,
             self.expected_work_item_id,
             self.expected_source_revision,
-            self.target_base_ref,
+            plan.target_base_ref
+            if self.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+            else self.target_base_ref,
             self.input_mode,
             self.purpose,
         ):
@@ -397,13 +414,17 @@ class ProductionBaselineFactCollector:
         if (
             command.delivery_id != self.requirement_id
             or command.purpose is not self.purpose
-            or command.target_base_ref != target_base_ref
+            or (
+                command.purpose is not BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+                and command.target_base_ref != target_base_ref
+            )
         ):
             raise ValueError("工程执行基线事实已变化, 请刷新后重新调查")
         item = self.queue.get(step.work_item.id)
         disposition = item.wait_disposition
         if (
-            self.purpose is not BaselinePurpose.SOURCE_REBIND
+            self.purpose
+            not in {BaselinePurpose.SOURCE_REBIND, BaselinePurpose.COMPLETED_OUTPUT_RESCUE}
             or item.status not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
             or disposition is None
             or disposition.facts.classification not in {"EXECUTION_UNCERTAIN", "PLATFORM_BUG"}
@@ -540,6 +561,35 @@ class ProductionBaselineFactCollector:
                 self._verify_legacy_observation(
                     containment, worktree_root=Path(plan.dirty_capture.worktree_path)
                 )
+            elif plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+                task = self.repository.get(plan.facts.task.id)
+                item = self.queue.get(plan.facts.work_item_id)
+                if (
+                    self._completed_output(task, item, self.queue.step(item.id))
+                    != plan.facts.completed_output
+                ):
+                    raise ValueError("已结束执行的原核验事实发生变化, 恢复尚未安排")
+                self.git.verify_mutations(
+                    plan.dirty_capture.to_capture(),
+                    plan.facts.permissions,
+                    denied_paths=plan.facts.denied_paths,
+                )
+                self.git.verify_mutations(
+                    plan.complete_capture.to_capture(),
+                    plan.facts.permissions,
+                    denied_paths=plan.facts.denied_paths,
+                )
+                inventory = capture_mutation_inventory(Path(plan.dirty_capture.worktree_path))
+                if inventory != plan.before_inventory:
+                    raise ValueError("恢复封存后工作现场已变化, 保留文件并重新检查方案")
+                assert plan.facts.completed_output is not None
+                require_completed_output_workspace(
+                    plan.facts.completed_output,
+                    plan.dirty_capture,
+                    inventory,
+                    plan.facts.permissions,
+                    plan.facts.denied_paths,
+                )
 
         consume_baseline(
             self.queue,
@@ -628,7 +678,7 @@ class ProductionBaselineFactCollector:
             return True
         return False
 
-    def collect(self, target_base_ref: str) -> BaselineExecutionFacts:
+    def collect(self, target_base_ref: str | None) -> BaselineExecutionFacts:
         if not self._scope_held:
             raise ValueError("执行基线调查缺少真实停机锁和队列屏障")
         task = self.repository.get(self.allocation.task_id)
@@ -682,6 +732,14 @@ class ProductionBaselineFactCollector:
         source = self.inputs.current(task, implementation=implementation, progress=progress)
         if step.boundary.source_revision != source.source_revision:
             raise ValueError("Coder 队列源版本与当前已接纳输入不一致")
+        if self.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            if target_base_ref is not None and target_base_ref != source.execution_base_ref:
+                raise ValueError("已结束执行恢复不能更换当前代码基线")
+            target_base_ref = source.execution_base_ref
+            if implementation is not None:
+                raise ValueError("已有接纳候选不能改为未接纳执行恢复")
+        elif target_base_ref is None:
+            raise ValueError("执行基线调查缺少精确目标版本")
         self._collect_proposal_facts(task, revision, step, source.source_revision, target_base_ref)
         if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE and (
             target_base_ref != source.execution_base_ref or implementation is not None
@@ -729,6 +787,8 @@ class ProductionBaselineFactCollector:
             if not any(receipt.original_work_item_id == item.id for receipt in receipts)
             else None
         )
+        if self.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE and completed_output is None:
+            raise ValueError("原执行不符合已结束且报告未接纳的精确恢复前提, 原状态和现场保留")
         reservation = self._reservation(
             task, item, receipts, legacy=legacy, completed_output=completed_output
         )

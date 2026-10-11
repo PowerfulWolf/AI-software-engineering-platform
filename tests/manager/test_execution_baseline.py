@@ -44,7 +44,7 @@ class Collector:
     facts: BaselineExecutionFacts
     worktree: WorktreeRef
 
-    def collect(self, target_base_ref: str) -> BaselineExecutionFacts:
+    def collect(self, target_base_ref: str | None) -> BaselineExecutionFacts:
         del target_base_ref
         return self.facts
 

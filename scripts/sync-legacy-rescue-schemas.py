@@ -68,6 +68,7 @@ UPDATED = {
     "ResumeExecutionBaselineIntent",
     "RoleQueueView",
     "CompletedCoderOutputUnavailableProof",
+    "ProposeExecutionBaselineIntent",
 }
 
 
@@ -94,7 +95,8 @@ def main() -> None:
         schema = model.model_json_schema()
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
         schema["$id"] = f"https://ai-software-engineer.local/schemas/{filename}.schema.json"
-        guards(schema)
+        for node in (schema, *schema.get("$defs", {}).values()):
+            guards(node)
         (ROOT / f"{filename}.schema.json").write_text(
             json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=model is TeamSnapshot) + "\n"
         )
@@ -165,13 +167,14 @@ def main() -> None:
         queue_path.write_text(
             json.dumps(queue_document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         )
-    # Keep generated shape parity and the completed-output wire gate. Older
-    # standalone models have no handwritten legacy compatibility gates.
+    # Standalone envelopes embed the same guarded contracts as public operations.
+    # Preserve their cross-field gates during this final generated rewrite too.
     for filename, model in standalone:
         schema = model.model_json_schema()
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
         schema["$id"] = f"https://ai-software-engineer.local/schemas/{filename}.schema.json"
-        guards(schema)
+        for node in (schema, *schema.get("$defs", {}).values()):
+            guards(node)
         (ROOT / f"{filename}.schema.json").write_text(
             json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=model is TeamSnapshot) + "\n"
         )
@@ -193,7 +196,26 @@ def refs(value: object) -> set[str]:
 
 def guards(node: dict[str, object]) -> None:
     title = node.get("title")
-    if title == "LegacyExecutionContainment":
+    if title == "ProposeExecutionBaselineIntent":
+        node["allOf"] = [
+            {
+                "if": {
+                    "required": ["purpose"],
+                    "properties": {"purpose": {"const": "completed_output_rescue"}},
+                },
+                "then": {
+                    "properties": {
+                        "target_base_ref": {"type": "null"},
+                        "input_mode": {"const": "preserve_draft"},
+                    }
+                },
+                "else": {
+                    "required": ["target_base_ref"],
+                    "properties": {"target_base_ref": {"type": "string"}},
+                },
+            }
+        ]
+    elif title == "LegacyExecutionContainment":
         node["allOf"] = [
             {
                 "if": {
@@ -437,6 +459,54 @@ def guards(node: dict[str, object]) -> None:
                 "then": {"required": required, "properties": properties},
             }
         ]
+
+    if title in {"ExecutionBaselinePlan", "ExecutionBaselineBinding"}:
+        existing = node.get("allOf", [])
+        assert isinstance(existing, list)
+        gate = {
+            "if": {
+                "required": ["purpose"],
+                "properties": {"purpose": {"const": "completed_output_rescue"}},
+            },
+            "then": {
+                "properties": (
+                    {
+                        "input_mode": {"const": "preserve_draft"},
+                        "conflicted": {"const": False},
+                        "facts": {
+                            "required": ["completed_output"],
+                            "properties": {
+                                "completed_output": {"type": "object"},
+                                "legacy_containment": {"type": "null"},
+                                "native_rule_change": {"type": "null"},
+                                "implementation_artifact_id": {"type": "null"},
+                            },
+                        },
+                    }
+                    if title == "ExecutionBaselinePlan"
+                    else {
+                        "input_mode": {"const": "preserve_draft"},
+                        "continuation_mode": {"const": "pause"},
+                        "authority_source": {"const": "engineering_operator_decision"},
+                        "completed_output_sha256": {"type": "string"},
+                        "legacy_containment_sha256": {"type": "null"},
+                        "superseded_implementation_artifact_id": {"type": "null"},
+                    }
+                ),
+                **(
+                    {"required": ["completed_output_sha256", "continuation_mode"]}
+                    if title == "ExecutionBaselineBinding"
+                    else {}
+                ),
+            },
+            **(
+                {"else": {"properties": {"completed_output_sha256": {"type": "null"}}}}
+                if title == "ExecutionBaselineBinding"
+                else {}
+            ),
+        }
+        if gate not in existing:
+            node["allOf"] = [*existing, gate]
 
 
 if __name__ == "__main__":

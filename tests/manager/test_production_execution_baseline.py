@@ -53,6 +53,7 @@ from ai_software_engineer.domain.engineering_authority import LocalOperatorPrinc
 from ai_software_engineer.domain.execution_baseline import (
     BaselineContinuationMode,
     BaselineInputMode,
+    BaselinePurpose,
 )
 from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
@@ -111,16 +112,35 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _ReportTempla
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    ("mode", "reject_after_baseline", "native_pause", "capture_pending", "completed_output"),
+    (
+        "mode",
+        "reject_after_baseline",
+        "native_pause",
+        "capture_pending",
+        "completed_output",
+        "same_base",
+    ),
     [
-        (BaselineInputMode.PRESERVE_DRAFT, False, False, False, False),
-        (BaselineInputMode.CODER_REAPPLY, False, False, False, False),
-        (BaselineInputMode.PRESERVE_DRAFT, True, False, False, False),
+        (BaselineInputMode.PRESERVE_DRAFT, False, False, False, False, False),
+        (BaselineInputMode.CODER_REAPPLY, False, False, False, False, False),
+        (BaselineInputMode.PRESERVE_DRAFT, True, False, False, False, False),
         pytest.param(
-            BaselineInputMode.PRESERVE_DRAFT, False, True, False, False, id="pause_native_epoch"
+            BaselineInputMode.PRESERVE_DRAFT,
+            False,
+            True,
+            False,
+            False,
+            False,
+            id="pause_native_epoch",
         ),
         pytest.param(
-            BaselineInputMode.PRESERVE_DRAFT, False, True, True, False, id="pause_missing_receipt"
+            BaselineInputMode.PRESERVE_DRAFT,
+            False,
+            True,
+            True,
+            False,
+            False,
+            id="pause_missing_receipt",
         ),
         pytest.param(
             BaselineInputMode.PRESERVE_DRAFT,
@@ -128,7 +148,17 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _ReportTempla
             True,
             True,
             True,
+            False,
             id="completed_output_unavailable_pause_resume",
+        ),
+        pytest.param(
+            BaselineInputMode.PRESERVE_DRAFT,
+            False,
+            False,
+            True,
+            True,
+            True,
+            id="completed_output_same_base_pause_resume",
         ),
     ],
 )
@@ -141,6 +171,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     native_pause: bool,
     capture_pending: bool,
     completed_output: bool,
+    same_base: bool,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -373,7 +404,10 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                     consultation.binding.context_manifest_id
                 )
                 validate_native_rule_epoch_context(knowledge_parent, expected_epoch)
-            assert (cwd / "tooling.txt").read_text() == "fixed platform baseline\n"
+            if same_base:
+                assert not (cwd / "tooling.txt").exists()
+            else:
+                assert (cwd / "tooling.txt").read_text() == "fixed platform baseline\n"
             if request.role is AgentRole.CODER:
                 policy.authorize_write("hello.txt")
                 with pytest.raises(WorkspacePolicyError):
@@ -646,13 +680,16 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         assert not host.work_queue.claims_for_work_item(current_item.id)
     assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
 
-    # A main checkout upgrade cannot rewrite the original preparation/product approval.
-    (repository / "tooling.txt").write_text("fixed platform baseline\n")
-    if mode is BaselineInputMode.CODER_REAPPLY:
-        (repository / "hello.txt").write_text("upstream greeting\n")
-    _git("add", "hello.txt", "tooling.txt", cwd=repository)
-    _git("commit", "-m", "upgrade source baseline", cwd=repository)
-    execution_base = _git_output("rev-parse", "HEAD", cwd=repository)
+    if same_base:
+        execution_base = approved_source
+    else:
+        # A main checkout upgrade cannot rewrite the original preparation/product approval.
+        (repository / "tooling.txt").write_text("fixed platform baseline\n")
+        if mode is BaselineInputMode.CODER_REAPPLY:
+            (repository / "hello.txt").write_text("upstream greeting\n")
+        _git("add", "hello.txt", "tooling.txt", cwd=repository)
+        _git("commit", "-m", "upgrade source baseline", cwd=repository)
+        execution_base = _git_output("rev-parse", "HEAD", cwd=repository)
     command = BaselineProposeCommand(
         delivery_id=public_delivery_id,
         task_id=frozen_task.id,
@@ -660,7 +697,10 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         expected_task_revision=frozen_revision,
         expected_work_item_id=current_item.id,
         expected_source_revision=approved_source,
-        target_base_ref=execution_base,
+        target_base_ref=None if same_base else execution_base,
+        purpose=BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+        if same_base
+        else BaselinePurpose.SOURCE_REBIND,
     )
     if capture_pending:
         unrelated = (
@@ -704,17 +744,22 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         assert host.work_queue.get(current_item.id) == current_item
         assert len(calls) == 1
 
-    # A complete immutable rule delta is inspectable but cannot be silently adopted.
-    (repository / "AGENTS.md").write_text("Approved greeting conventions for every role.\n")
-    if native_pause:
-        (repository / "README.md").write_text("Approved updated greeting project instructions.\n")
-        (repository / "CONTRIBUTING.md").unlink()
-    _git("add", "-A", cwd=repository)
-    _git("commit", "-m", "changed native rules", cwd=repository)
-    unsafe_target = _git_output("rev-parse", "HEAD", cwd=repository)
-    native_plan = host.propose_execution_baseline(
-        command.model_copy(update={"target_base_ref": unsafe_target}), project_id="project_test"
-    )
+    if same_base:
+        native_plan = host.propose_execution_baseline(command, project_id="project_test")
+    else:
+        # A complete immutable rule delta is inspectable but cannot be silently adopted.
+        (repository / "AGENTS.md").write_text("Approved greeting conventions for every role.\n")
+        if native_pause:
+            (repository / "README.md").write_text(
+                "Approved updated greeting project instructions.\n"
+            )
+            (repository / "CONTRIBUTING.md").unlink()
+        _git("add", "-A", cwd=repository)
+        _git("commit", "-m", "changed native rules", cwd=repository)
+        unsafe_target = _git_output("rev-parse", "HEAD", cwd=repository)
+        native_plan = host.propose_execution_baseline(
+            command.model_copy(update={"target_base_ref": unsafe_target}), project_id="project_test"
+        )
     original_receipts = receipt_store.receipts_for_task(pending.task_id)
     if completed_output:
         assert original_receipts == ()
@@ -738,39 +783,41 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             assert tasks.get(frozen_task.id) == frozen_task
             assert tasks.current_revision(frozen_task.id) == frozen_revision
         assert len(calls) == 1
-    assert native_plan.facts.native_rule_change is not None
-    native_digest = native_plan.facts.native_rule_change.change_sha256
-    native_execute = BaselineExecuteCommand(
-        delivery_id=public_delivery_id,
-        task_id=frozen_task.id,
-        expected_plan_sha256=native_plan.plan_sha256,
-        reference="missing-native-rule-decision",
-        continuation_mode=BaselineContinuationMode.PAUSE,
-    )
-    before_head = _git_output("rev-parse", "HEAD", cwd=original_worktree)
-    for approved_digest in (None, "0" * 64):
-        with pytest.raises(ValueError, match="项目规范"):
-            host.execute_execution_baseline(
-                native_execute.model_copy(
-                    update={"approved_native_rule_change_sha256": approved_digest}
-                ),
-                project_id="project_test",
-            )
-    assert len(calls) == 1
-    assert host.work_queue.get(current_item.id) == current_item
-    assert _git_output("rev-parse", "HEAD", cwd=original_worktree) == before_head
-    if native_pause:
-        execution_base = unsafe_target
-        command = command.model_copy(update={"target_base_ref": execution_base})
-        assert {
-            (delta.path, delta.change) for delta in native_plan.facts.native_rule_change.changes
-        } == {
-            ("AGENTS.md", "added"),
-            ("CONTRIBUTING.md", "deleted"),
-            ("README.md", "modified"),
-        }
-    else:
-        _git("reset", "--hard", execution_base, cwd=repository)
+    native_digest = None
+    if not same_base:
+        assert native_plan.facts.native_rule_change is not None
+        native_digest = native_plan.facts.native_rule_change.change_sha256
+        native_execute = BaselineExecuteCommand(
+            delivery_id=public_delivery_id,
+            task_id=frozen_task.id,
+            expected_plan_sha256=native_plan.plan_sha256,
+            reference="missing-native-rule-decision",
+            continuation_mode=BaselineContinuationMode.PAUSE,
+        )
+        before_head = _git_output("rev-parse", "HEAD", cwd=original_worktree)
+        for approved_digest in (None, "0" * 64):
+            with pytest.raises(ValueError, match="项目规范"):
+                host.execute_execution_baseline(
+                    native_execute.model_copy(
+                        update={"approved_native_rule_change_sha256": approved_digest}
+                    ),
+                    project_id="project_test",
+                )
+        assert len(calls) == 1
+        assert host.work_queue.get(current_item.id) == current_item
+        assert _git_output("rev-parse", "HEAD", cwd=original_worktree) == before_head
+        if native_pause:
+            execution_base = unsafe_target
+            command = command.model_copy(update={"target_base_ref": execution_base})
+            assert {
+                (delta.path, delta.change) for delta in native_plan.facts.native_rule_change.changes
+            } == {
+                ("AGENTS.md", "added"),
+                ("CONTRIBUTING.md", "deleted"),
+                ("README.md", "modified"),
+            }
+        else:
+            _git("reset", "--hard", execution_base, cwd=repository)
 
     preserve = host.propose_execution_baseline(command, project_id="project_test")
     if mode is BaselineInputMode.CODER_REAPPLY:
@@ -806,10 +853,22 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         expected_plan_sha256=plan.plan_sha256,
         reference="exact-engineering-baseline-decision",
         continuation_mode=BaselineContinuationMode.PAUSE
-        if native_pause
+        if native_pause or same_base
         else BaselineContinuationMode.RESUME,
         approved_native_rule_change_sha256=native_digest if native_pause else None,
     )
+    if same_base:
+        assert plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+        assert plan.target_base_ref == plan.prepared_source_revision == approved_source
+        assert plan.facts.native_rule_change is None
+        assert plan.facts.legacy_containment is None
+        assert "target_base_ref" not in command.to_wire()
+        with pytest.raises(ValueError, match="暂停"):
+            host.execute_execution_baseline(
+                execute.model_copy(update={"continuation_mode": BaselineContinuationMode.RESUME}),
+                project_id="project_test",
+            )
+        assert len(calls) == 1
     with pytest.raises(ValueError, match="职责权限"):
         product_only.execute_execution_baseline(execute, project_id="project_test")
     assert len(calls) == 1
@@ -825,6 +884,11 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     # Keep the native Supervisor paused while publication commits the same-item overlay.
     binding = host.execute_execution_baseline(execute, project_id="project_test")
     expected_binding = binding.binding_sha256
+    if same_base:
+        assert plan.facts.completed_output is not None
+        assert binding.completed_output_sha256 == plan.facts.completed_output.proof_sha256
+        assert binding.execution_source_revision == binding.execution_base_ref == approved_source
+        assert binding.native_rule_epoch_sha256 is None
     if native_pause:
         assert binding.native_rule_epoch_sha256 is not None
         store = FileExecutionBaselineStore(
@@ -848,7 +912,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         if item.status is not WorkItemStatus.CLOSED
     )
     assert rebound_item.status is (
-        WorkItemStatus.WAITING_HUMAN if native_pause else WorkItemStatus.READY
+        WorkItemStatus.WAITING_HUMAN if native_pause or same_base else WorkItemStatus.READY
     )
     if capture_pending:
         assert host.work_queue.get(current_item.id).status is WorkItemStatus.CLOSED
@@ -867,7 +931,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     )
     assert len(calls) == 1
     paused = False
-    if native_pause:
+    if native_pause or same_base:
         assert rebound_item.wait_disposition is not None
         assert host.execute_execution_baseline(execute, project_id="project_test") == binding
         service.resume(ResumeProjectDelivery(delivery_id=public_delivery_id))
@@ -1043,9 +1107,13 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     assert (
         _git_output("diff", "--name-only", execution_base, candidate, cwd=repository) == "hello.txt"
     )
-    assert (
-        _git_output("show", f"{candidate}:tooling.txt", cwd=repository) == "fixed platform baseline"
-    )
+    if same_base:
+        assert _git_output("ls-tree", "--name-only", candidate, "tooling.txt", cwd=repository) == ""
+    else:
+        assert (
+            _git_output("show", f"{candidate}:tooling.txt", cwd=repository)
+            == "fixed platform baseline"
+        )
     assert _git_output("rev-parse", "HEAD", cwd=repository) == execution_base
     assert not (repository / ".ase").exists()
     assert receipt_store.receipts_for_task(frozen_task.id) == original_receipts

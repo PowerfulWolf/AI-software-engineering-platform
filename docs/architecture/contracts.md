@@ -1069,3 +1069,28 @@ command evidence, outer run manifest seal or controlled verification receipt ret
 Nested/thread-owned scopes preserve this boundary; save failure keeps uncertainty and
 prevents service READY. Scope, signatures, error matrix, bounds, tests and existing-data
 treatment are defined in [owned-session-stop](../../.trellis/spec/core/owned-session-stop.md).
+
+### Same-base recovery for completed native Coder output
+
+`BaselinePurpose.COMPLETED_OUTPUT_RESCUE` is separate from SOURCE_REBIND and
+LEGACY_WORKSPACE_RESCUE. Public `PROPOSE_EXECUTION_BASELINE` sends the original
+requirement/task/checkpoint/intent/work/source identities and preserve mode without
+`target_base_ref`; trusted collection freezes the current execution base under the
+existing Task lock and idle queue fence. Only the exact
+`CompletedCoderOutputUnavailableProof` is eligible. Original FAILED/WORK_INTERRUPTED
+outcome and unknown report content remain immutable.
+
+Plan preserves the same Task, source, branch, complete legal draft and native-rule
+input. Binding adds optional `completed_output_sha256`, inherits the prior native-rule
+epoch, and requires exact human engineering PAUSE. A separate exact RESUME releases
+one newly reserved ordinary-work identity; new Run/Context/claim and independent
+QA/Review remain mandatory. SOURCE_REBIND still needs a different target; no receipt,
+containment, verdict, refund or permission is synthesized. Absent optional fields
+and default purpose remain excluded from old canonical wire and digests.
+
+Console contract version 5 advertises this purpose. Preparation promises a platform
+check; only a valid current plan establishes safe preserved progress. Known other
+wait routes retain their own controls. Exact active RESUME means continuation is
+being prepared, not that a role model started. Task detail links to its same-Project
+owning requirement. Full validation, Schema gates and stock-data handling are in
+[completed-coder-output-unavailable.md](../../.trellis/spec/core/completed-coder-output-unavailable.md).

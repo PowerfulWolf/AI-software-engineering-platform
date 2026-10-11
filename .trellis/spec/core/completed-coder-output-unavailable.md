@@ -11,7 +11,7 @@ legacy unknown execution, a candidate or a verdict.
 ```python
 CompletedCoderOutputUnavailableProof.create(...) -> CompletedCoderOutputUnavailableProof
 CompletedCoderOutputUnavailableProof.validate_integrity() -> None
-ProductionBaselineFactCollector.collect(target_base_ref: str) -> BaselineExecutionFacts
+ProductionBaselineFactCollector.collect(target_base_ref: str | None) -> BaselineExecutionFacts
 validate_completed_output_capture(proof, dirty_capture, inventory, permissions) -> None
 require_completed_output_workspace(proof, dirty_capture, inventory, permissions, denied_paths) -> None
 ExecutionBaselineService.propose(target_base_ref, input_mode, purpose) -> ExecutionBaselinePlan
@@ -53,11 +53,48 @@ The Plan model also performs pure noncache coverage and capture-after body versu
 kind/SHA/mode/size/deletion checks. It reads no current filesystem during historical decoding;
 the service separately performs current workspace authorization and freshness checks.
 
-Use ordinary SOURCE_REBIND: target differs from previous execution base. Engineering principal
-approves exact immutable plan/facts/captures, optionally PAUSE; SQL consumption produces an exact
-paused successor and charges one ordinary work attempt atomically. Explicit latest-bound RESUME
+Two distinct purposes use this exact proof. Ordinary SOURCE_REBIND still requires a target
+different from the previous execution base and preserves its existing continuation modes.
+`COMPLETED_OUTPUT_RESCUE` handles the same code base without requiring a user to enter a SHA:
+`BaselineProposeCommand` forbids a target and `coder_reapply` for this purpose. Under the Task
+lock and idle SQL fence, collector resolves the trusted current input's execution base; service
+independently derives the same base from the current validated binding/Task. Recollection accepts
+only that exact base. Missing completed proof rejects without changing original state or history.
+
+Same-base Plan requires the exact completed proof, complete legal inventory/captures, no accepted
+implementation, native-rule change or legacy containment, unchanged HEAD and dirty patch, and a
+nonconflicted preserve mode. Execution validates files without rebase/reset. Binding carries
+optional `completed_output_sha256` only for this purpose, inherits the previous native-rule epoch
+and source artifact lineage, and requires same base/source, identical before/after inventory,
+exact human engineering authority and PAUSE. The store checks the proof digest and the saved exact
+authority when reopening. None/default fields remain excluded from canonical historical wire.
+
+SQL consumption rechecks the real original completed proof, both legal captures, stable inventory
+and frozen write policy before atomically charging one ordinary work attempt and creating a
+paused successor. Exact consumption replay does not reserve again. Explicit latest-bound RESUME
 rechecks source/inventory/frozen identity and releases only that successor. New Run/Context/claim
-must pass normal production gates and independent QA/Review.
+must pass normal production gates and independent QA/Review. No HANDLE operation is rebranded or
+relaxed into this capability.
+
+Console contract version 5 advertises this preparation; version 4 retains all prior pause/source
+update behavior. A visible target-free entry says the platform will check, not that any FAILED run
+is recoverable. Typed known timeout/provider receipts, permitted result/continuation routes,
+knowledge/rejected/legacy proofs and exhausted budgets keep their own routes without a necessarily
+rejected new entry. The current sealed plan separately explains stopped execution and unknown report
+content, normal work cost, exact PAUSE and subsequent independent validation. Exact bound active
+RESUME uses preparation copy (“主执行尚未开始”), never a claimed model execution or an unrelated
+operation. Task detail opens only a current owning requirement in the same Project.
+
+A current exact completed-output plan takes precedence over an older precisely matched HANDLE
+investigation that recorded unknown outcome/stop/checkpoint. The old investigation remains
+history; it cannot hide PAUSE approval, create a second legacy rescue panel or authorize an old
+legacy callback. Changed proof/scope still removes the new approval. Published standalone
+envelopes, including queue release, apply the same purpose/proof/PAUSE cross-field gates to
+their embedded Binding definitions as the direct Binding and Console operation schemas; fresh
+regeneration must preserve both completed-output and legacy containment gates.
+Incremental proof/action rendering includes the exact current plan digest in its view signature;
+preparation and invalidation update the existing DOM without reload. Detached old HANDLE/RESOLVE
+callbacks cannot replace the current exact plan; read-only INSPECT remains available.
 
 ## Validation matrix
 
@@ -75,6 +112,13 @@ must pass normal production gates and independent QA/Review.
 | Exhausted frozen work budget | No successor, no refund |
 | Old wire with no completed fields | Identical canonical dumps/digests and normal routes |
 | Exact execute/release replay | No duplicate attempt, binding or role execution |
+| Same-base purpose with user target or Coder reapply | Reject; backend alone freezes current base |
+| Same-base human approval with resume mode / automatic policy | Reject; first save exact PAUSE |
+| Previous accepted native-rule epoch | Inherit exact digest/context lineage, do not clear rules |
+| Other typed usable wait route | Keep original route; no new completed-output prepare button |
+| Exact bound active RESUME | Show continuation preparation; unrelated Task/work/digest cannot override pause |
+| Exact new completed plan + matching older unknown-stop investigation | Current PAUSE remains visible; history and old callbacks cannot replace the plan |
+| Embedded completed Binding in published/fresh standalone schema | Reject resume, missing proof, reapply, policy authority or proof under another purpose |
 
 Good: preserve unknown result, capture full legal source, approve a new target, pause and explicitly
 release a fresh ordinary-work Coder. Base: existing timeout/transient/uninvoked/legacy behavior and

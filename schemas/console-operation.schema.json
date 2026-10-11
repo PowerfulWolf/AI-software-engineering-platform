@@ -745,7 +745,8 @@
     "BaselinePurpose": {
       "enum": [
         "source_rebind",
-        "legacy_workspace_rescue"
+        "legacy_workspace_rescue",
+        "completed_output_rescue"
       ],
       "title": "BaselinePurpose",
       "type": "string"
@@ -4163,6 +4164,19 @@
           "default": null,
           "title": "Legacy Containment Sha256"
         },
+        "completed_output_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed Output Sha256"
+        },
         "scope": {
           "$ref": "#/$defs/EngineeringScope"
         },
@@ -4385,6 +4399,51 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "completed_output_rescue"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "completed_output_sha256": {
+                "type": "string"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "completed_output_sha256",
+              "continuation_mode"
+            ]
+          },
+          "else": {
+            "properties": {
+              "completed_output_sha256": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -4506,6 +4565,47 @@
                 "properties": {
                   "legacy_containment": {
                     "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "completed_output_rescue"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "conflicted": {
+                "const": false
+              },
+              "facts": {
+                "required": [
+                  "completed_output"
+                ],
+                "properties": {
+                  "completed_output": {
+                    "type": "object"
+                  },
+                  "legacy_containment": {
+                    "type": "null"
+                  },
+                  "native_rule_change": {
+                    "type": "null"
+                  },
+                  "implementation_artifact_id": {
+                    "type": "null"
                   }
                 }
               }
@@ -6072,9 +6172,17 @@
           "type": "string"
         },
         "target_base_ref": {
-          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
-          "title": "Target Base Ref",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Base Ref"
         },
         "input_mode": {
           "$ref": "#/$defs/BaselineInputMode",
@@ -6104,12 +6212,45 @@
         "expected_task_revision",
         "expected_work_item_id",
         "expected_source_revision",
-        "target_base_ref",
         "project_id",
         "expected_checkpoint_sha256"
       ],
       "title": "ProposeExecutionBaselineIntent",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "completed_output_rescue"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target_base_ref": {
+                "type": "null"
+              },
+              "input_mode": {
+                "const": "preserve_draft"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "target_base_ref"
+            ],
+            "properties": {
+              "target_base_ref": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
     },
     "ProviderRouteKind": {
       "enum": [

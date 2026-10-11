@@ -1005,7 +1005,8 @@
     "BaselinePurpose": {
       "enum": [
         "source_rebind",
-        "legacy_workspace_rescue"
+        "legacy_workspace_rescue",
+        "completed_output_rescue"
       ],
       "title": "BaselinePurpose",
       "type": "string"
@@ -2248,6 +2249,19 @@
           "default": null,
           "title": "Legacy Containment Sha256"
         },
+        "completed_output_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed Output Sha256"
+        },
         "scope": {
           "$ref": "#/$defs/EngineeringScope"
         },
@@ -2467,6 +2481,51 @@
               },
               "legacy_containment_sha256": {
                 "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "completed_output_rescue"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "completed_output_sha256": {
+                "type": "string"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "completed_output_sha256",
+              "continuation_mode"
+            ]
+          },
+          "else": {
+            "properties": {
+              "completed_output_sha256": {
+                "type": "null"
               }
             }
           }
@@ -5652,6 +5711,47 @@
             "properties": {
               "legacy_containment": {
                 "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "purpose"
+        ],
+        "properties": {
+          "purpose": {
+            "const": "completed_output_rescue"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input_mode": {
+            "const": "preserve_draft"
+          },
+          "conflicted": {
+            "const": false
+          },
+          "facts": {
+            "required": [
+              "completed_output"
+            ],
+            "properties": {
+              "completed_output": {
+                "type": "object"
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "native_rule_change": {
+                "type": "null"
+              },
+              "implementation_artifact_id": {
+                "type": "null"
               }
             }
           }

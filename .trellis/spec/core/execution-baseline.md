@@ -459,8 +459,10 @@ complete inventory, all mutations and full draft fingerprints. Consumed rejected
 decisions may retire only their exact old artifact IDs from current execution reads;
 raw publication receipts remain and current-run publication always prevents this capability.
 
-Existing SOURCE_REBIND, exact engineering approval, durable PAUSE and explicit latest-bound
-RESUME apply. Old absent fields preserve canonical hashes. Full signatures, validation
+Existing SOURCE_REBIND still changes its target. Separate `completed_output_rescue` freezes
+the current trusted base without user SHA entry, preserves HEAD and complete draft, and
+requires exact human PAUSE before explicit latest-bound RESUME. Neither route changes original
+unknown output or normal-work accounting. Old absent fields preserve canonical hashes. Full signatures, validation
 matrix and stock-data handling are in
 [`completed-coder-output-unavailable.md`](completed-coder-output-unavailable.md).
 

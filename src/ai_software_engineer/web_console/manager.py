@@ -368,6 +368,9 @@ class ManagerConsoleAdapter:
                         next_action=(
                             preparation.next_action
                             if preparation is not None
+                            else "原执行已核验结束, 报告内容仍未知。完整合法进度已封存; "
+                            "请核对精确恢复方案, 批准后保持暂停, 再明确继续原需求。"
+                            if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
                             else "旧改动与目标代码存在冲突, 请提出明确的 Coder 适配计划。"
                             if plan.conflicted
                             else "工程基线计划已封存, 工程人员可决定在原分支继续。"

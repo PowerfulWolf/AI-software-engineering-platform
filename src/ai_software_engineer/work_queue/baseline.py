@@ -88,6 +88,17 @@ class BaselineQueueConsumption(DomainModel):
                 or self.binding.before_inventory_sha256 != self.binding.after_inventory_sha256
             ):
                 raise ValueError("旧执行救援消费必须保留现场并使用独立下一工作身份")
+        if self.plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            proof = self.plan.facts.completed_output
+            reservation = self.plan.facts.continuation
+            if (
+                proof is None
+                or reservation is None
+                or reservation.retry_cause != "completed_output_unavailable"
+                or self.binding.completed_output_sha256 != proof.proof_sha256
+                or self.next_work_item_id == self.work_item_id
+            ):
+                raise ValueError("已结束执行恢复消费必须绑定原证据并使用独立下一工作身份")
         return self
 
 

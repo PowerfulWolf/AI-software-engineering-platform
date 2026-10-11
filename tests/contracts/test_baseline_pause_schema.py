@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import BaseModel
@@ -32,4 +33,17 @@ def test_standalone_schema_matches_runtime_wire_shape(
     schema = json.loads(path.read_text())
     assert schema.pop("$schema") == "https://json-schema.org/draft/2020-12/schema"
     assert schema.pop("$id") == f"https://ai-software-engineer.local/schemas/{filename}.schema.json"
-    assert schema == model.model_json_schema()
+    generated = model.model_json_schema()
+    # Cross-field gates are handwritten because Pydantic validators do not emit
+    # them. Keep strict generated shape parity while testing those gates in the
+    # independent published/fresh-regeneration semantic contract tests.
+    generated_definitions = generated.get("$defs", {})
+    published_definitions = schema.get("$defs", {})
+    assert published_definitions.keys() == generated_definitions.keys()
+    node_pairs = [(schema, generated)] + [
+        (published_definitions[name], expected) for name, expected in generated_definitions.items()
+    ]
+    for published, expected in node_pairs:
+        if "allOf" not in expected:
+            cast(dict[str, object], published).pop("allOf", None)
+    assert schema == generated
