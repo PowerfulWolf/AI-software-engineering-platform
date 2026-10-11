@@ -325,7 +325,13 @@ class AcceptedArtifactStore:
             *admission.legacy_artifacts,
             *(record.receipt for record in self.queue.accepted(self.task_id)),
         )
-        return {item.artifact_id: item.sha256 for item in receipts}
+        rejected = self.queue.rejected_output_artifact_ids(self.task_id)
+        # A publication receipt may precede the final semantic checkpoint gate.
+        # Only the exact consumed rejection decision excludes that publication;
+        # its legal supersedes ancestors and immutable bytes remain available.
+        return {
+            item.artifact_id: item.sha256 for item in receipts if item.artifact_id not in rejected
+        }
 
     def get(self, artifact_id: str) -> Artifact:
         artifact = self.delegate.get(artifact_id)

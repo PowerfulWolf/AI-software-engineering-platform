@@ -112,6 +112,13 @@ class ConfiguredDeliveryRouteAdapterFactory:
             registered_verifier=self._registered_verifier,
         )
 
+    def wrap_initial_workspace_admission(
+        self,
+        wrapper: Callable[[InitialWorkspaceAdmission | None], InitialWorkspaceAdmission],
+    ) -> ConfiguredDeliveryRouteAdapterFactory:
+        """Compose a trusted conditional admission without weakening the fallback."""
+        return self.with_initial_workspace_admission(wrapper(self._initial_admission))
+
     def with_verification_evidence(
         self, provider: VerificationEvidenceProvider
     ) -> ConfiguredDeliveryRouteAdapterFactory:

@@ -1505,6 +1505,49 @@ class ProductionProjectDeliveryBackend:
                 selected_adapters = selected_adapters.with_interruption_control(
                     interruption_control
                 )
+            from ai_software_engineer.agents.workspace_admission import (
+                ConditionalWorkspaceAdmission,
+                InitialWorkspaceAdmission,
+            )
+            from ai_software_engineer.git import GitWorktreeManager
+            from ai_software_engineer.manager.rejected_output_checkpoint import (
+                RejectedCoderOutputAdmission,
+            )
+
+            def rejected_output_claim() -> QueueClaim:
+                worker_guard.check()
+                assert worker_guard.lease is not None
+                return worker_guard.lease.claim
+
+            def wrap_rejected_output_admission(
+                delegate: InitialWorkspaceAdmission | None,
+            ) -> InitialWorkspaceAdmission:
+                admission = RejectedCoderOutputAdmission(
+                    state=facts.workspace.directory("state"),
+                    git=GitWorktreeManager(
+                        facts.workspace.repository_root,
+                        Path(self._config.platform_root).expanduser().resolve()
+                        / "worktrees"
+                        / dispatch.repository_id,
+                        branch_names={dispatch.task_id: dispatch.task.branch_name},
+                    ),
+                    task_reader=current_task,
+                    claim_reader=rejected_output_claim,
+                    retry_reader=queue.rejected_output_retry,
+                )
+                return ConditionalWorkspaceAdmission(
+                    lambda request: (
+                        admission
+                        if request.role is AgentRole.CODER
+                        and queue.rejected_output_retry(rejected_output_claim().work_item.id)
+                        is not None
+                        else delegate
+                    )
+                )
+
+            selected_adapters = selected_adapters.wrap_initial_workspace_admission(
+                wrap_rejected_output_admission
+            )
         adapter = DispatchDeliveryAgentAdapter(
             dispatch=dispatch,
             definitions=definitions,
@@ -1607,6 +1650,28 @@ class ProductionProjectDeliveryBackend:
 
         def claimed_context() -> ContextSource:
             claim = knowledge_claim()
+            rejected = queue.rejected_output_retry(claim.work_item.id)
+            rejected_context = (
+                {
+                    "rejected_output": {
+                        "checkpoint_sha256": rejected.checkpoint_sha256,
+                        "rejection_code": rejected.rejection_code,
+                        "previous_run_id": rejected.previous_run_id,
+                        "rejected_artifact_id": rejected.rejected_artifact_id,
+                        "previous_expected_sequence": rejected.expected_sequence,
+                        "previous_reported_sequence": rejected.reported_sequence,
+                        "next_progress_sequence": claim.work_item.attempt,
+                        "instruction": (
+                            "原进度报告的轮次编号与原执行不符, 不能接纳为 checkpoint。"
+                            "完整合法开发草稿已核验并保留, 请继续原需求; "
+                            "重新生成报告时 checkpoint_sequence 必须等于当前 request.attempt。"
+                            "旧报告及其测试声明不是本次执行或验收通过的证明。"
+                        ),
+                    }
+                }
+                if rejected is not None
+                else {}
+            )
             return ContextSource(
                 source_id="execution.claim",
                 uri=f"claim://{claim.lease.id}",
@@ -1620,6 +1685,7 @@ class ProductionProjectDeliveryBackend:
                         "role": claim.work_item.role.value,
                         "attempt": claim.work_item.attempt,
                         "checkpoint_sequence": claim.work_item.checkpoint_sequence,
+                        **rejected_context,
                     },
                     sort_keys=True,
                     separators=(",", ":"),

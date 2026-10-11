@@ -10,6 +10,7 @@ from ai_software_engineer.agents.fallback import (
     RouteAttemptOutcome,
 )
 from ai_software_engineer.agents.models import AgentRequest
+from ai_software_engineer.artifacts import artifact_digest
 from ai_software_engineer.domain import AgentRole, WorkItemStatus
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.engineering_authority import EngineeringScope
@@ -18,6 +19,10 @@ from ai_software_engineer.git import GitWorktreeManager, WorktreeCaptureRejected
 from ai_software_engineer.git.mutation import MutationInventoryRejected
 from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.manager.rejected_output_checkpoint import (
+    capture_rejected_checkpoint,
+    supported_rejected_progress,
+)
 from ai_software_engineer.orchestration.capture_reconciliation import (
     reconcile_capture,
     validate_capture_stop,
@@ -135,6 +140,39 @@ class DeliveryWaitFactCollector:
             outcome.validate_integrity()
             if outcome.start != start:
                 raise ContinuationRejected("原执行结果与启动记录不一致")
+            disposition = self.queue.get(step.work_item.id).wait_disposition
+            if (
+                disposition is not None
+                and disposition.facts.classification in {"PLATFORM_BUG", "INVALID_OUTPUT"}
+                and supported_rejected_progress(outcome)
+            ):
+                artifact = outcome.result.artifact
+                assert artifact is not None
+                self._validate_rejected_publications(task, start, outcome)
+                observation = self._capture_observation(task, step, start, historical, guard)
+                if observation is not None:
+                    capture_start, capture_stop = observation
+
+                    def validate_rejected_inputs() -> None:
+                        self._validate_capture_inputs(task, step, start, start.request)
+                        self._validate_rejected_publications(task, start, outcome)
+                        if (
+                            self._capture_observation(task, step, start, historical, guard)
+                            != observation
+                        ):
+                            raise ContinuationRejected("封存期间原执行的停止与权限记录已变化")
+
+                    capture_rejected_checkpoint(
+                        state=self.state,
+                        task=task,
+                        step=step,
+                        outcome=outcome,
+                        start=capture_start,
+                        stop=capture_stop,
+                        git=self.git,
+                        validate_inputs=validate_rejected_inputs,
+                    )
+                    self._require_current(task, step)
             return
         if self.routes.is_dir():
             routes = FileModelRouteAttemptStore(self.routes, read_only=True).list_for_run(
@@ -260,6 +298,28 @@ class DeliveryWaitFactCollector:
             ),
         )
         return capture_start, capture_stop
+
+    def _validate_rejected_publications(
+        self, task: Task, start: DeliveryInvocationStart, outcome: DeliveryInvocationOutcome
+    ) -> None:
+        artifact = outcome.result.artifact
+        assert artifact is not None
+        if (
+            self.queue.get(start.work_item_id).dispatch_sequence
+            != self.queue.original_claim(start.lease_id).work_item.dispatch_sequence
+        ):
+            raise ContinuationRejected("被拒产出的原领取派发身份已变化")
+        for accepted in self.queue.accepted(task.id):
+            if accepted.checkpoint_sequence >= start.checkpoint_sequence and (
+                accepted.work_item_id != start.work_item_id
+                or accepted.lease_id != start.lease_id
+                or accepted.run_id != start.request.run_id
+                or accepted.context_manifest_id != start.request.context_manifest_id
+                or accepted.source_revision != start.request.source_revision
+                or accepted.receipt.artifact_id != artifact.artifact_id
+                or accepted.receipt.sha256 != artifact_digest(artifact)
+            ):
+                raise ContinuationRejected("被拒产出之后已有独立交付结果, 不能作为开发草稿重试")
 
     def _validate_capture_inputs(
         self,

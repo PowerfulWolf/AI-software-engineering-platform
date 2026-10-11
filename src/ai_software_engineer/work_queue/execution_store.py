@@ -25,6 +25,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
     DeliveryResolutionKind,
     KnowledgePreparationRetryEvidence,
+    RejectedCoderOutputEvidence,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringCapability
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
@@ -115,6 +116,18 @@ class AcceptedRoleArtifact(DomainModel):
     receipt: QueueArtifactReceipt
 
 
+class _RejectedOutputResolutionDetail(DomainModel):
+    resolution_sha256: Sha256
+    next_work_item_id: WorkItemId
+    resolution: DeliveryResolution
+    budget_refund: Literal[False]
+
+
+class _RejectedOutputResolutionEvent(DomainModel):
+    work_item: QueuedWorkItem
+    detail: _RejectedOutputResolutionDetail
+
+
 @dataclass(frozen=True)
 class WorkforceFacts:
     assignments: tuple[RoleAssignment, ...] = ()
@@ -162,6 +175,85 @@ def read_queue_workforce(cursor: DictCursor, now: datetime) -> WorkforceFacts:
 
 
 class MySqlRoleQueue(MySqlPersistentWorkQueue):
+    def _rejected_output_decisions(self, task_id: str) -> tuple[DeliveryResolution, ...]:
+        """Only consumed decisions retire an exact rejected publication from execution."""
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            connection.cursor(DictCursor) as cursor,
+        ):
+            cursor.execute(
+                "SELECT e.payload_json FROM work_queue_events e JOIN work_queue_items i "
+                "ON e.work_item_id=i.id WHERE i.task_id=%s "
+                "AND e.event_type='WAIT_RESOLVED' "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(e.payload_json,"
+                "'$.detail.resolution.resolution_kind'))=%s "
+                "ORDER BY e.sequence LIMIT 513",
+                (task_id, DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT.value),
+            )
+            rows = cursor.fetchall()
+        if len(rows) > 512:
+            raise QueueCorruption("被拒产出恢复历史超过有界读取上限")
+        decisions = []
+        for row in rows:
+            try:
+                payload = _RejectedOutputResolutionEvent.model_validate_json(
+                    str(row["payload_json"])
+                )
+                decision = payload.detail.resolution
+                decision.validate_integrity()
+            except (ValidationError, ValueError) as error:
+                raise QueueCorruption("被拒产出恢复历史未通过完整契约校验") from error
+            if (
+                decision.task_id != task_id
+                or decision.work_item_id != payload.work_item.id
+                or payload.work_item.status is not WorkItemStatus.CLOSED
+                or payload.detail.resolution_sha256 != decision.resolution_sha256
+                or payload.detail.next_work_item_id != "work_" + decision.resolution_sha256
+                or payload.detail.budget_refund
+                or decision.resolution_kind
+                is not DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT
+            ):
+                raise QueueCorruption("被拒产出恢复决定改变了已消费的原工作项")
+            decisions.append(decision)
+        return tuple(decisions)
+
+    def rejected_output_retry(self, work_item_id: str) -> RejectedCoderOutputEvidence | None:
+        current = self.get(work_item_id)
+        matches = tuple(
+            decision
+            for decision in self._rejected_output_decisions(current.task_id)
+            if current.id == "work_" + decision.resolution_sha256
+        )
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise QueueCorruption("被拒产出续跑缺少唯一已消费的决定")
+        decision = matches[0]
+        evidence = decision.rejected_output
+        assert evidence is not None
+        parent = self.get(evidence.work_item_id)
+        step, parent_step = self.step(current.id), self.step(parent.id)
+        if (
+            current.parent_work_item_id != parent.id
+            or current.task_id != evidence.task_id
+            or current.repository_id != evidence.scope.repository_id
+            or current.repository_scopes != parent.repository_scopes
+            or current.role is not AgentRole.CODER
+            or current.attempt != evidence.original_attempt + 1
+            or current.checkpoint_sequence != evidence.checkpoint_sequence
+            or step.boundary.source_revision != evidence.source_revision
+            or step.allocation_sha256 != parent_step.allocation_sha256
+        ):
+            raise QueueCorruption("被拒产出续跑决定不属于当前工作项与原源码")
+        return evidence
+
+    def rejected_output_artifact_ids(self, task_id: str) -> frozenset[str]:
+        return frozenset(
+            decision.rejected_output.rejected_artifact_id
+            for decision in self._rejected_output_decisions(task_id)
+            if decision.rejected_output is not None
+        )
+
     def pending_baseline_release(
         self,
         binding: ExecutionBaselineBinding,
@@ -526,6 +618,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 DeliveryResolutionKind.REVERIFY_CANDIDATE,
                 DeliveryResolutionKind.RETRY_VERIFIER_PREPARATION,
                 DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION,
+                DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,
             }:
                 if current.role not in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER):
                     raise QueueConflict("wait does not belong to a delivery role")
@@ -621,6 +714,92 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     )
                     if cursor.fetchone() is not None:
                         raise QueueConflict("原任务仍有活跃领取, 不能开始知识准备续跑")
+                    updated_task = Task.model_validate(
+                        {**task.to_wire(), "attempts": task.attempts + 1}
+                    )
+                elif (
+                    resolution.resolution_kind is DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT
+                ):
+                    from ai_software_engineer.knowledge.preparation_retry import (
+                        claim_identity_sha256,
+                    )
+
+                    rejected = resolution.rejected_output
+                    if (
+                        rejected is None
+                        or current.role is not AgentRole.CODER
+                        or task.status is not TaskStatus.IMPLEMENTING
+                        or disposition.facts.classification
+                        not in {"PLATFORM_BUG", "INVALID_OUTPUT"}
+                        or rejected.task_id != task.id
+                        or rejected.work_item_id != current.id
+                        or rejected.original_attempt != task.attempts
+                        or rejected.original_attempt != current.attempt
+                        or rejected.original_dispatch_sequence != current.dispatch_sequence
+                        or rejected.checkpoint_sequence != current.checkpoint_sequence
+                        or rejected.source_revision != step.boundary.source_revision
+                        or rejected.scope.repository_id != current.repository_id
+                        or rejected.scope.repository_root != task.repository
+                        or (
+                            task.engineering_policy is not None
+                            and rejected.scope != task.engineering_policy.scope
+                        )
+                        or task.work_budget_exhausted
+                        or task.attempts >= task.max_attempts
+                    ):
+                        raise QueueConflict("被拒产出续跑缺少当前精确开发记录与剩余工作额度")
+                    rejected_claim = self.original_claim(rejected.original_lease_id)
+                    if (
+                        claim_identity_sha256(rejected_claim) != rejected.original_claim_sha256
+                        or rejected_claim.work_item.id != current.id
+                    ):
+                        raise QueueConflict("被拒产出续跑改变了原真实领取身份")
+                    cursor.execute(
+                        "SELECT lease_id FROM work_queue_claims WHERE task_id=%s "
+                        "AND state='ACTIVE' FOR UPDATE",
+                        (task.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("原开发任务仍有活跃领取, 不能恢复被拒产出")
+                    cursor.execute(
+                        "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+                        "WHERE task_id=%s FOR UPDATE",
+                        (task.id,),
+                    )
+                    publications = tuple(
+                        _decode(row, AcceptedRoleArtifact) for row in cursor.fetchall()
+                    )
+                    if any(
+                        publication.checkpoint_sequence >= current.checkpoint_sequence
+                        and (
+                            publication.work_item_id != current.id
+                            or publication.lease_id != rejected.original_lease_id
+                            or publication.dispatch_sequence != current.dispatch_sequence
+                            or publication.run_id != rejected.previous_run_id
+                            or publication.context_manifest_id
+                            != rejected.previous_context_manifest_id
+                            or publication.source_revision != rejected.source_revision
+                            or publication.receipt.artifact_id != rejected.rejected_artifact_id
+                            or publication.receipt.sha256 != rejected.rejected_artifact_sha256
+                        )
+                        for publication in publications
+                    ):
+                        raise QueueConflict("原开发之后已有独立发布结果, 不能恢复被拒草稿")
+                    cursor.execute(
+                        "SELECT event_id FROM state_events WHERE task_id=%s AND "
+                        "JSON_CONTAINS(JSON_EXTRACT(payload_json,'$.artifact_ids'),"
+                        "JSON_QUOTE(%s)) LIMIT 1",
+                        (task.id, rejected.rejected_artifact_id),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("原产出已被交付 checkpoint 采纳, 不能作为被拒草稿重试")
+                    cursor.execute(
+                        "SELECT sequence FROM work_queue_events WHERE work_item_id=%s "
+                        "AND event_type='COMPLETED' LIMIT 1",
+                        (current.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("原开发结果已经完成推进, 不能作为被拒草稿重试")
                     updated_task = Task.model_validate(
                         {**task.to_wire(), "attempts": task.attempts + 1}
                     )

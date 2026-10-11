@@ -63,7 +63,13 @@ from ai_software_engineer.work_queue.execution_store import (
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
 from ai_software_engineer.work_queue.ports import QueueConflict
 from tests.agents.test_openai_compatible import _coder_request
-from tests.domain.factories import make_implementation_artifact, make_qa_artifact, make_task
+from tests.domain.factories import (
+    make_coder_progress_artifact,
+    make_implementation_artifact,
+    make_plan_artifact,
+    make_qa_artifact,
+    make_task,
+)
 from tests.work_queue.test_worker_mysql import (
     ALLOCATION_SHA,
     REPOSITORY_ID,
@@ -172,7 +178,13 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
     now = datetime.now(UTC)
     policy = DeliveryRetryPolicy()
     original = make_task()
-    role = getattr(request, "param", AgentRole.CODER)
+    variant = getattr(request, "param", AgentRole.CODER)
+    role = variant[0] if isinstance(variant, tuple) else variant
+    classification: Literal["PLATFORM_BUG", "EXECUTION_UNCERTAIN"] = (
+        "PLATFORM_BUG"
+        if isinstance(variant, tuple) and variant[1] == "PLATFORM_BUG"
+        else "EXECUTION_UNCERTAIN"
+    )
     assert role in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)
     role = cast(Literal[AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER], role)
     assert original.constraints is not None
@@ -250,6 +262,29 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
             step,
         )
         claim = claim_step(queue, step)
+        if classification == "PLATFORM_BUG":
+            store = FileArtifactStore(tmp_path / "artifacts")
+            store.put(
+                seal_artifact(
+                    make_plan_artifact().model_copy(update={"task_id": task.id}), validated_at=now
+                )
+            )
+            progress = make_coder_progress_artifact()
+            progress = progress.model_copy(
+                update={
+                    "task_id": task.id,
+                    "source_revision": SOURCE,
+                    "context_manifest_id": "ctx_" + "c" * 64,
+                    "producer": progress.producer.model_copy(
+                        update={
+                            "agent_id": claim.assignment.agent_id,
+                            "run_id": "run_wait_original",
+                        }
+                    ),
+                    "content": progress.content.model_copy(update={"checkpoint_sequence": 9}),
+                }
+            )
+            queue.accept_artifact(claim, TOKEN, store, seal_artifact(progress, validated_at=now))
         if role is AgentRole.QA:
             store = FileArtifactStore(tmp_path / "artifacts")
             implementation = make_implementation_artifact()
@@ -294,7 +329,7 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
                 task_id=task.id,
                 work_item_id=item.id,
                 role=item.role,
-                classification="EXECUTION_UNCERTAIN",
+                classification=classification,
                 source_revision=SOURCE,
                 task_intent_sha256=task_intent_sha256(task),
                 checkpoint_sequence=revision,

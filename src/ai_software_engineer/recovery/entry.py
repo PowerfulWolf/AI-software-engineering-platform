@@ -26,6 +26,8 @@ from ai_software_engineer.domain import (
     TeamRole,
 )
 from ai_software_engineer.domain.branch import BranchName, available_successor_branch
+from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.delivery_disposition import DeliveryDisposition
 from ai_software_engineer.domain.engineering_authority import (
     EngineeringScope,
     LocalOperatorPrincipal,
@@ -38,6 +40,7 @@ from ai_software_engineer.knowledge.gaps import (
     KnowledgeGap,
     KnowledgeGapRaised,
 )
+from ai_software_engineer.manager.delivery import DeliveryFailureSnapshot
 from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
 from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
 from ai_software_engineer.manager.mysql_dispatch_authority import (
@@ -104,9 +107,19 @@ from ai_software_engineer.runtime_workspace import FileTeamWorkforceStore
 from ai_software_engineer.store import MySqlTaskRepository, TaskNotFound
 from ai_software_engineer.store.mysql_repository import _decode_task, open_mysql_connection
 from ai_software_engineer.team_workspace import TeamWorkspace, _read_regular, _reject_symlinks
+from ai_software_engineer.work_queue.ports import DeliveryQueuePending
+from ai_software_engineer.work_queue.worker import DeliveryWaiting
 
 if TYPE_CHECKING:
     from ai_software_engineer.recovery.interruption import RecoveryInterruptionService
+
+
+@dataclass(frozen=True)
+class NativeRecoveryPending:
+    """A committed queue wait with the approved Task's actual nonterminal facts."""
+
+    snapshot: DeliveryFailureSnapshot
+    disposition: DeliveryDisposition | None = None
 
 
 @dataclass(frozen=True)
@@ -115,7 +128,7 @@ class NativeRecoveryExecution:
 
     plan: RecoveryPlan
     dispatch: RecoveryDispatchRecord
-    delivery: RetryResult | KnowledgeGap
+    delivery: RetryResult | KnowledgeGap | NativeRecoveryPending
 
 
 def _require_seed_recovery_route(config: ProductionConfig) -> ProviderRouteConfig:
@@ -583,13 +596,15 @@ class NativeRecoveryEntry:
             store.get_invocation(plan.plan_sha256)
         except RecoveryRecordMissing:
             try:
-                delivery: RetryResult | KnowledgeGap = self.execute(path)
+                delivery: RetryResult | KnowledgeGap | NativeRecoveryPending = self.execute(path)
             except KnowledgeGapRaised as error:
                 delivery = self._knowledge_wait(store, plan)
                 if delivery != error.gap:
                     raise RecoveryRejected(
                         "recovery knowledge wait differs from durable gap"
                     ) from error
+            except DeliveryQueuePending as pending:
+                delivery = self._pending_execution(store, plan, pending)
         else:
             task = read_recovery_task(self.config, self.environment, store, plan)
             if task is not None and task.status in {
@@ -694,7 +709,7 @@ class NativeRecoveryEntry:
                 )
             )
             try:
-                result: RetryResult | KnowledgeGap = self._execute(
+                result: RetryResult | KnowledgeGap | NativeRecoveryPending = self._execute(
                     store,
                     plan,
                     lambda seed: factory,
@@ -707,12 +722,104 @@ class NativeRecoveryEntry:
                     raise RecoveryRejected(
                         "replacement knowledge wait differs from durable gap"
                     ) from error
+            except DeliveryQueuePending as pending:
+                result = self._pending_execution(store, plan, pending)
             return NativeRecoveryExecution(plan, self._dispatch_for(store, plan), result)
+
+    def _pending_execution(
+        self,
+        store: FileRecoveryStore,
+        plan: RecoveryPlan,
+        pending: DeliveryQueuePending,
+    ) -> NativeRecoveryPending:
+        """Read back a fresh approved recovery or interruption without a second execution.
+
+        Ordinary same-Task execution-baseline continuation has its own admission.
+        An unestablished source binding here is rejected rather than inferred.
+        """
+        authorization = store.get_authorization(plan.plan_sha256)
+        if not authorization.decision.approved:
+            raise RecoveryRejected("恢复等待缺少对当前精确计划的批准, 已停止接纳。")
+        dispatch = self._dispatch_for(store, plan)
+        plan.validate_integrity()
+        dispatch.validate_integrity()
+        snapshot = self.backend._delivery_snapshot(dispatch.task_id)
+        if (
+            dispatch.recovery_plan_sha256 != plan.plan_sha256
+            or dispatch.task_id != plan.new_task_id
+            or dispatch.repository_id != plan.source.scope.repository_id
+            or snapshot.task.repository != plan.source.scope.repository_root
+            or not task_matches_dispatch(snapshot.task, dispatch.task)
+            or snapshot.task.status in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}
+        ):
+            raise RecoveryRejected(
+                "恢复等待的任务记录与已批准的任务不一致, 已停止接纳; 原任务和现场保留。"
+            )
+        disposition = pending.disposition if isinstance(pending, DeliveryWaiting) else None
+        if disposition is not None:
+            facts = disposition.facts
+            role_states = {
+                AgentRole.ORCHESTRATOR: {TaskStatus.NEW, TaskStatus.PLANNING},
+                AgentRole.CODER: {
+                    TaskStatus.IMPLEMENTING,
+                    TaskStatus.CONTINUE_REQUIRED,
+                    TaskStatus.QUEUED,
+                },
+                AgentRole.QA: {TaskStatus.QA},
+                AgentRole.REVIEWER: {TaskStatus.REVIEW},
+            }
+            if (
+                facts.task_id != snapshot.task.id
+                or facts.work_item_id is None
+                or facts.task_intent_sha256 != task_intent_sha256(snapshot.task)
+                or facts.checkpoint_sequence > snapshot.task_revision
+                or snapshot.task.status not in role_states[facts.role]
+                or facts.source_revision != (snapshot.candidate_revision or snapshot.task.base_ref)
+            ):
+                raise RecoveryRejected(
+                    "恢复等待的原因记录与当前任务阶段或代码版本不一致, "
+                    "已停止接纳; 原任务和现场保留。"
+                )
+        return NativeRecoveryPending(snapshot, disposition)
 
     def pending_knowledge_wait(self, path: Path) -> NativeRecoveryExecution | None:
         """Adopt only a current queue wait belonging to the approved recovery allocation."""
         store, plan = self.open_plan(path)
         return self._pending_knowledge_wait(store, plan)
+
+    def pending_execution_wait(self, path: Path) -> NativeRecoveryExecution | None:
+        """Reattach an already-approved recovery's durable wait without executing it."""
+        from ai_software_engineer.recovery.pending_wait import read_pending_recovery_wait
+
+        store, plan = self.open_plan(path)
+        authorization = store.get_authorization(plan.plan_sha256)
+        sealed = store.get_task_record(plan.plan_sha256)
+        sealed.validate_binding(plan, authorization)
+        invocation = store.get_invocation(plan.plan_sha256)
+        invocation.validate_integrity()
+        seed = store.get_seed(plan.plan_sha256)
+        dispatch = self._dispatch_for(store, plan)
+        dispatch.validate_integrity()
+        if (
+            not authorization.decision.approved
+            or dispatch.task != sealed.task
+            or dispatch.task_id != plan.new_task_id
+            or dispatch.repository_id != plan.source.scope.repository_id
+            or dispatch.recovery_plan_sha256 != plan.plan_sha256
+            or dispatch.recovery_task_record_sha256 != sealed.record_sha256
+            or seed.dispatch_sha256 != dispatch.dispatch_sha256
+            or invocation.recovery_plan_sha256 != plan.plan_sha256
+            or invocation.seed_record_sha256 != seed.record_sha256
+        ):
+            raise RecoveryRejected("恢复等待缺少匹配的精确批准、任务或原执行记录。")
+        waiting = read_pending_recovery_wait(
+            dsn=self.config.require_mysql_dsn(self.environment), plan=plan, dispatch=dispatch
+        )
+        if waiting is None:
+            return None
+        return NativeRecoveryExecution(
+            plan, dispatch, NativeRecoveryPending(waiting.snapshot, waiting.disposition)
+        )
 
     def _pending_knowledge_wait(
         self,

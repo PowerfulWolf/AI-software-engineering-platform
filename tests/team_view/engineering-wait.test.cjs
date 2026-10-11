@@ -137,6 +137,98 @@ function knowledgePreparation(h, role = "coder", manual = true) {
   return result;
 }
 
+function rejectedCoderOutput(h) {
+  const proof = investigation(h);
+  h.step.wait_disposition.facts.classification = "PLATFORM_BUG";
+  Object.assign(proof, {permitted_resolutions: ["RETRY_REJECTED_CODER_OUTPUT"],
+    original_run_id: "run_rejected", invocation_start_sha256: digest("1"),
+    invocation_outcome_sha256: digest("2"), process_stop_sha256: digest("3"),
+    workspace_inventory_sha256: digest("4")});
+  proof.rejected_output = {scope: {team_id: "team_current", project_id: h.request.project_id,
+    repository_id: "repository_current", repository_root: "/workspace/repository"},
+    requirement_id: h.task.id, task_id: h.task.task_id, work_item_id: h.step.work_item_id,
+    original_lease_id: "lease_original", original_claim_sha256: digest("5"), original_attempt: 4,
+    original_dispatch_sequence: 0, checkpoint_sequence: proof.checkpoint_sequence,
+    previous_run_id: proof.original_run_id, previous_context_manifest_id: "ctx_" + digest("9"),
+    source_revision: proof.source_revision, invocation_start_sha256: proof.invocation_start_sha256,
+    invocation_outcome_sha256: proof.invocation_outcome_sha256, rejected_artifact_id: "art_rejected",
+    rejected_artifact_sha256: digest("6"), rejection_code: "PROGRESS_SEQUENCE_MISMATCH",
+    expected_sequence: 4, reported_sequence: 9, process_stop_sha256: proof.process_stop_sha256,
+    capture_sha256: digest("7"), workspace_inventory_sha256: proof.workspace_inventory_sha256,
+    checkpoint_sha256: digest("8"), budget_source: "frozen_work_attempt"};
+  return proof;
+}
+
+test("stopped rejected progress has a distinct visible continuation and complete explanation", async () => {
+  const h = harness();
+  rejectedCoderOutput(h);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.match(text(box), /报告未被接纳/);
+  assert.match(text(box), /完整开发文件/);
+  assert.match(text(box), /消耗 1 次剩余开发额度/);
+  assert.match(text(box), /仍需独立 QA 和 Review/);
+  assert.equal(control(box, "使用已保存结果继续"), undefined);
+  await control(box, "保留进度并重新提交开发报告").events.click();
+  assert.equal(h.run("submitted[0].resolution_kind"), "RETRY_REJECTED_CODER_OUTPUT");
+  assert.equal(h.run("submitted[0].proof_sha256"), digest("e"));
+  assert.equal(Object.hasOwn(h.run("submitted[0]"), "process_stopped"), false);
+});
+
+test("rejected progress decision requires complete current evidence and revokes stale callbacks", async () => {
+  for (const mutation of [
+    'delete proof.rejected_output',
+    'delete proof.rejected_output.original_lease_id',
+    'proof.rejected_output.original_lease_id = " "',
+    'delete proof.rejected_output.original_dispatch_sequence',
+    'proof.rejected_output.original_dispatch_sequence = -1',
+    'proof.rejected_output.original_dispatch_sequence = "0"',
+    'delete proof.rejected_output.previous_context_manifest_id',
+    'proof.rejected_output.previous_context_manifest_id = "ctx_invalid"',
+    'delete proof.rejected_output.rejected_artifact_id',
+    'proof.rejected_output.rejected_artifact_id = "artifact_foreign"',
+    'proof.rejected_output.scope.project_id = "project_foreign"',
+    'proof.rejected_output.requirement_id = "delivery_foreign"',
+    'proof.rejected_output.task_id = "task_foreign"',
+    'proof.rejected_output.work_item_id = "work_foreign"',
+    'proof.rejected_output.previous_run_id = "run_foreign"',
+    'proof.rejected_output.source_revision = "foreign"',
+    'proof.rejected_output.checkpoint_sequence++',
+    'proof.rejected_output.invocation_outcome_sha256 = "0".repeat(64)',
+    'proof.rejected_output.process_stop_sha256 = "0".repeat(64)',
+    'proof.rejected_output.workspace_inventory_sha256 = "0".repeat(64)',
+    'proof.rejected_output.capture_sha256 = "invalid"',
+    'proof.rejected_output.rejection_code = "POLICY_VIOLATION"',
+    'proof.rejected_output.expected_sequence = 9',
+    'proof.rejected_output.reported_sequence = 4',
+    'proof.retry_cause = "provider_transient"',
+  ]) {
+    const h = harness();
+    rejectedCoderOutput(h);
+    const prior = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    h.run(mutation);
+    const current = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.equal(control(current, "保留进度并重新提交开发报告"), undefined, mutation);
+    assert.doesNotMatch(text(current), /检查已通过，可按以下方案继续/, mutation);
+    await control(prior, "保留进度并重新提交开发报告").events.click();
+    assert.equal(h.run("submitted.length"), 0, mutation);
+  }
+});
+
+test("rejected output decisions cannot match another saved capture and remain visible in history", () => {
+  const h = harness();
+  const proof = rejectedCoderOutput(h);
+  h.context.resolution = {kind: "delivery_wait_resolution", resolution_kind: "RETRY_REJECTED_CODER_OUTPUT",
+    proof_sha256: proof.proof_sha256, rejected_output: structuredClone(proof.rejected_output)};
+  h.run(`operations.push({status: "SUCCEEDED", intent: {...engineeringWaitIntent(data.request, data.step),
+    action: "RESOLVE_DELIVERY_WAIT"}, result: {engineering_wait_resolution: resolution}})`);
+  assert.ok(h.run("engineeringWaitDecision(data.request, data.step, proof)"));
+  h.run('resolution.rejected_output.checkpoint_sha256 = "f".repeat(64)');
+  assert.equal(h.run("engineeringWaitDecision(data.request, data.step, proof)"), null);
+  h.run('globalThis.historyTarget = document.createElement("li"); globalThis.technical = document.createElement("details"); appendEngineeringExecutionDetails(historyTarget, technical, resolution)');
+  assert.match(text(h.context.historyTarget), /报告未被接纳/);
+  assert.match(text(h.context.historyTarget), /原错误报告和处理记录保留/);
+});
+
 for (const role of ["coder", "qa", "reviewer"]) test(`${role} knowledge preparation exposes its exact finite window and authorized decision`, async () => {
   const h = harness();
   knowledgePreparation(h, role);

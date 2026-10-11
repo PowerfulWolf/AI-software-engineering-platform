@@ -3108,3 +3108,105 @@ that plan. The historical terminal Task and workspace remain; an internal recove
 clean authorized target, then still requires independent QA and Review. If anything changes,
 prepare a new plan rather than reusing an old approval. Rollback while idle must retain readers
 for the new optional snapshot/baseline fields once such records have been published.
+
+## Scenario: 已批准恢复的队列等待与存量需求 cursor 接回（2026-10-11）
+
+### 1. Scope / Trigger
+
+`run_prepared_allocation` may commit a released `DeliveryWaiting` before returning to
+`_finish_coder_recovery`. An uncaught pending exception previously became `MANAGER_FAILURE`,
+leaving the original Delivery on its old terminal Task while the approved recovery Task already
+existed. A later Coder attempt is not necessarily eligible for the first-attempt interruption seam.
+Handle the wait as a typed execution result; adopt existing waits only from durable current facts.
+
+### 2. Signatures
+
+```python
+NativeRecoveryPending(snapshot: DeliveryFailureSnapshot, disposition: DeliveryDisposition | None)
+NativeRecoveryEntry.pending_execution_wait(path: Path) -> NativeRecoveryExecution | None
+read_pending_recovery_wait(*, dsn: str, plan: RecoveryPlan,
+                          dispatch: RecoveryDispatchRecord) -> PendingRecoveryWait | None
+UnifiedProjectEntryService.adopt_recovery_pending(plan, dispatch, snapshot, *, at)
+    -> ProjectDeliveryResult
+```
+
+The reader opens `START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY` and SELECTs only
+`tasks`, `state_events`, `work_queue_items`, `work_queue_admissions`, `work_queue_steps`,
+`work_queue_claims`.
+It never initializes a queue, claims work, executes a model/command, writes SQL, or changes artifacts.
+It validates contiguous event revisions, indexed event identity and Task identity, the stage chain
+from the sealed NEW Task, and the final event status against the Task. Candidate revision comes
+only from the latest durable `candidate_ready`/`candidate_recovered` event in that same snapshot.
+Stored-wait adoption must never call backend `_delivery_snapshot`: its writable repository
+constructor initializes schema and violates this read-only contract.
+
+### 3. Contracts
+
+- Fresh recovery execution and explicitly approved interruption catch only `DeliveryQueuePending`.
+  Read the exact dispatch's real nonterminal snapshot, retain a typed `DeliveryWaiting.disposition`,
+  then attach the approved recovery Task and record its actual revision/status/candidate.
+- Bare scheduling waits use controlled Chinese guidance, never arbitrary exception text. Structured
+  waits retain controlled reason/next action and a bounded, redacted `safe_diagnostic(detail)`.
+- For stored admitted recovery, require the exact approved plan/authorization, validated sealed Task,
+  original invocation/seed lineage and matching dispatch before any wait adoption. Explicitly bind
+  invocation plan digest to the approved plan and invocation seed digest to the validated seed.
+  The original invocation is not a new execution authorization and is never replayed.
+- Try stored typed waits for admitted IMPLEMENTING, QA and REVIEW before legacy recovery handling.
+  Only IMPLEMENTING without such a wait may enter the first-attempt interruption proposal.
+- The SQL reader requires one non-CLOSED queue item, typed WAITING_HUMAN/WAITING_DEPENDENCY,
+  indexed columns equal to payload, exact allocation/role/attempt/Task intent/checkpoint and
+  disposition source equal to the immutable current `RoleRunBoundary.source_revision`.
+  This supports a real execution baseline source without inferring it from the original Task base.
+- No Task claim may remain ACTIVE, and the current wait must have a RELEASED/EXPIRED claim with
+  a recorded end. This establishes released scheduling ownership, not proof of process termination;
+  the later engineering handling seam still verifies the actual stop and retained workspace.
+- `adopt_recovery_pending` requires the current Delivery's exact plan/dispatch/Task, frozen Task
+  intent and nondecreasing revision. It appends only a DELIVERING/RUN_DELIVERY cursor; it does not
+  reset Task, advance attempts, consume/refund budget, approve anything, or accept a role verdict.
+
+### 4. Validation & Error Matrix
+
+| Facts | Result |
+| --- | --- |
+| Exact fresh queue wait | Attach recovery Task and actual nonterminal cursor; preserve wait guidance |
+| Existing attempt 4, approved recovery, unique released typed wait in IMPLEMENTING/QA/REVIEW | Attach same Task before legacy recovery handling; no execution |
+| No Task / CLOSED or RUNNING item / untyped historical wait | No adoption; preserve existing recovery gates |
+| Missing approval/sealed Task/seed/invocation or changed dispatch lineage | Reject before SQL wait collection; no cursor write |
+| Ambiguous queue / raw-payload drift / wrong intent/source/role/checkpoint | Reject; original Task/files/history remain |
+| ACTIVE ownership or missing released claim/end record | Reject; no inferred stop or retry |
+| Task/event revision gaps, foreign indexed identity, broken stage chain or final status mismatch | Reject in the same read-only transaction; no backend repository initialization |
+| Backward revision / terminal snapshot | Reject; do not move the Delivery cursor backwards |
+| Unrecognized implementation exception | Propagate; never disguise it as a queue wait |
+
+### 5. Good / Base / Bad Cases
+
+Good: the original blocked cursor remains in history; the approved recovery Task at attempt 4 and
+revision 8 is attached, with its real WAITING_DEPENDENCY and original report preserved. The next
+normal Continue or engineering Handle operation operates on that same Task. Base: completed
+recovery and KnowledgeGap paths retain their existing contracts. Bad: invent a pending exception,
+rerun a consumed invocation, force a new terminal state, or rely on a reader projection as a durable
+cursor repair. A released lease alone must never authorize resuming an uncertain live process.
+
+### 6. Tests Required
+
+`tests/recovery/test_pending_execution.py` asserts raw/typed wait handling, Chinese guidance,
+candidate-source binding, diagnostic redaction, exact approval/plan/dispatch/intent checks,
+terminal/backward snapshot rejection, idempotent adoption, normal Continue and unknown errors.
+`tests/recovery/test_pending_wait.py` asserts the former attempt-1 gate rejects attempt-4 before
+the fix, then validates actual approved recovery records and SELECT-only current wait collection:
+unique released ownership, original/baseline source, missing records, ambiguous/foreign/drifted
+queue facts, active claims, event revision/identity/stage drift, explicit invocation plan/seed
+digest binding, QA/Review waits, no duplicate execution, no backend snapshot/DDL and no SQL writes.
+
+### 7. Wrong vs Correct / Stored Data and Rollback
+
+Wrong: catch every exception as success, return the old terminal cursor, manually change SQL,
+or call `run_delivery` again just to obtain a current status. Correct: only recognize the typed wait,
+read actual durable facts and append the exact original Delivery's successor cursor once.
+
+No database/schema migration or historical record rewrite is needed. After loading the fix, use
+Continue on the original Requirement; when its existing approved recovery has the exact current
+released wait, the controller attaches it before the first-attempt interruption gate. Then inspect
+or handle that original typed wait through the public entry. Missing facts remain refused, without
+new requirements, synthetic receipts or additional approval consumption. Rollback while idle must
+retain the appended cursor and all original dispatch/invocation/Task/queue records.

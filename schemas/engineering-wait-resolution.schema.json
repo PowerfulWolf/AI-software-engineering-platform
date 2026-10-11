@@ -478,6 +478,17 @@
             }
           ],
           "default": null
+        },
+        "rejected_output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedCoderOutputEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -722,6 +733,35 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "resolution_kind"
+            ],
+            "properties": {
+              "resolution_kind": {
+                "const": "RETRY_REJECTED_CODER_OUTPUT"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "rejected_output"
+            ],
+            "properties": {
+              "rejected_output": {
+                "type": "object"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "rejected_output": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -732,7 +772,8 @@
         "RESUME_UNINVOKED",
         "REVERIFY_CANDIDATE",
         "RETRY_VERIFIER_PREPARATION",
-        "RETRY_KNOWLEDGE_PREPARATION"
+        "RETRY_KNOWLEDGE_PREPARATION",
+        "RETRY_REJECTED_CODER_OUTPUT"
       ],
       "title": "DeliveryResolutionKind",
       "type": "string"
@@ -1233,6 +1274,17 @@
           ],
           "default": null
         },
+        "rejected_output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedCoderOutputEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "retry_cause": {
           "anyOf": [
             {
@@ -1429,6 +1481,109 @@
                         "items": {
                           "pattern": "^knowledge-preparation://[a-f0-9]{64}$"
                         }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "permitted_resolutions"
+            ],
+            "properties": {
+              "permitted_resolutions": {
+                "contains": {
+                  "const": "RETRY_REJECTED_CODER_OUTPUT"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "rejected_output"
+            ],
+            "properties": {
+              "rejected_output": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "rejected_output"
+            ],
+            "properties": {
+              "rejected_output": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "invocation_start_sha256",
+              "invocation_outcome_sha256",
+              "process_stop_sha256",
+              "workspace_inventory_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "invocation_start_sha256": {
+                "type": "string"
+              },
+              "invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "process_stop_sha256": {
+                "type": "string"
+              },
+              "workspace_inventory_sha256": {
+                "type": "string"
+              },
+              "retry_cause": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "maxItems": 1,
+                "items": {
+                  "const": "RETRY_REJECTED_CODER_OUTPUT"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "role": {
+                        "const": "coder"
+                      },
+                      "classification": {
+                        "enum": [
+                          "PLATFORM_BUG",
+                          "INVALID_OUTPUT"
+                        ]
                       }
                     }
                   }
@@ -2219,6 +2374,158 @@
         "xhigh"
       ],
       "type": "string"
+    },
+    "RejectedCoderOutputEvidence": {
+      "additionalProperties": false,
+      "description": "A stopped rejected progress report, never an interruption or a candidate.",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "original_lease_id": {
+          "minLength": 1,
+          "title": "Original Lease Id",
+          "type": "string"
+        },
+        "original_claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Original Claim Sha256",
+          "type": "string"
+        },
+        "original_attempt": {
+          "minimum": 1,
+          "title": "Original Attempt",
+          "type": "integer"
+        },
+        "original_dispatch_sequence": {
+          "minimum": 0,
+          "title": "Original Dispatch Sequence",
+          "type": "integer"
+        },
+        "checkpoint_sequence": {
+          "minimum": 1,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "previous_run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Previous Run Id",
+          "type": "string"
+        },
+        "previous_context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Previous Context Manifest Id",
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "invocation_start_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Start Sha256",
+          "type": "string"
+        },
+        "invocation_outcome_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Outcome Sha256",
+          "type": "string"
+        },
+        "rejected_artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Rejected Artifact Id",
+          "type": "string"
+        },
+        "rejected_artifact_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Rejected Artifact Sha256",
+          "type": "string"
+        },
+        "rejection_code": {
+          "const": "PROGRESS_SEQUENCE_MISMATCH",
+          "default": "PROGRESS_SEQUENCE_MISMATCH",
+          "title": "Rejection Code",
+          "type": "string"
+        },
+        "expected_sequence": {
+          "minimum": 1,
+          "title": "Expected Sequence",
+          "type": "integer"
+        },
+        "reported_sequence": {
+          "minimum": 1,
+          "title": "Reported Sequence",
+          "type": "integer"
+        },
+        "process_stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Process Stop Sha256",
+          "type": "string"
+        },
+        "capture_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capture Sha256",
+          "type": "string"
+        },
+        "workspace_inventory_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Workspace Inventory Sha256",
+          "type": "string"
+        },
+        "checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        },
+        "budget_source": {
+          "const": "frozen_work_attempt",
+          "default": "frozen_work_attempt",
+          "title": "Budget Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "requirement_id",
+        "task_id",
+        "work_item_id",
+        "original_lease_id",
+        "original_claim_sha256",
+        "original_attempt",
+        "original_dispatch_sequence",
+        "checkpoint_sequence",
+        "previous_run_id",
+        "previous_context_manifest_id",
+        "source_revision",
+        "invocation_start_sha256",
+        "invocation_outcome_sha256",
+        "rejected_artifact_id",
+        "rejected_artifact_sha256",
+        "expected_sequence",
+        "reported_sequence",
+        "process_stop_sha256",
+        "capture_sha256",
+        "workspace_inventory_sha256",
+        "checkpoint_sha256"
+      ],
+      "title": "RejectedCoderOutputEvidence",
+      "type": "object"
     },
     "RoleAssignment": {
       "additionalProperties": false,

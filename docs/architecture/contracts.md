@@ -1030,3 +1030,22 @@ enters both role Context and knowledge consultation. Original preparation/Produc
 Task base/scope/permissions, past failures and verdicts stay immutable. Full executable contract,
 wire schemas, negative tests and existing-data instructions are in
 [execution-baseline](../../.trellis/spec/core/execution-baseline.md).
+
+### Completed Coder output rejected before checkpoint adoption
+
+`RejectedCoderOutputCheckpoint` preserves the exact original invocation/outcome, real
+completed process stop, claim, full before/after workspace inventory and complete legal
+mutation bodies. It handles only a `coder-progress.checkpoint_sequence` differing from
+its original request attempt. `DeliveryWaitInvestigation.rejected_output` and
+`DeliveryResolution.rejected_output` carry the exact compact evidence; omitted `None`
+keeps historical wire/digests unchanged. The decision kind is
+`RETRY_REJECTED_CODER_OUTPUT`, with no interruption cause or transient refund.
+
+A publication receipt does not prove that a delivery StateEvent adopted an artifact.
+The exact idle queue decision verifies no actual checkpoint adoption or completed role
+advance, consumes one remaining frozen work attempt and creates a new claimed Run in
+the same Task/branch/worktree. Only the rejected artifact ID is excluded from subsequent
+execution reads; original files, publication receipts, outcomes and valid ancestors remain
+immutable. New output still needs normal candidate, independent QA and Review gates.
+See [rejected-coder-output](../../.trellis/spec/core/rejected-coder-output.md) for exact
+signatures, error matrix, Schema contracts and existing-data rollout.

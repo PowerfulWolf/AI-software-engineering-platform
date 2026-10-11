@@ -115,3 +115,5 @@
   registered verification and claimed preparation before model invocation.
 - [`execution-baseline.md`](execution-baseline.md): same-Task source rebinding, complete retained
   patches, exact engineering decisions and historical source/queue accounting.
+
+- [`rejected-coder-output.md`](rejected-coder-output.md): complete legal draft preservation and same-Task exact retry for stopped rejected Coder progress, with no result rewrite or transient refund.

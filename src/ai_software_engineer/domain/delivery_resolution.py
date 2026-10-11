@@ -36,6 +36,7 @@ class DeliveryResolutionKind(StrEnum):
     REVERIFY_CANDIDATE = "REVERIFY_CANDIDATE"
     RETRY_VERIFIER_PREPARATION = "RETRY_VERIFIER_PREPARATION"
     RETRY_KNOWLEDGE_PREPARATION = "RETRY_KNOWLEDGE_PREPARATION"
+    RETRY_REJECTED_CODER_OUTPUT = "RETRY_REJECTED_CODER_OUTPUT"
 
 
 class DeliveryProofMissing(StrEnum):
@@ -202,6 +203,44 @@ class KnowledgePreparationRetryEvidence(DomainModel):
         return self
 
 
+class RejectedCoderOutputEvidence(DomainModel):
+    """A stopped rejected progress report, never an interruption or a candidate."""
+
+    scope: EngineeringScope
+    requirement_id: NonEmptyStr
+    task_id: TaskId
+    work_item_id: NonEmptyStr
+    original_lease_id: NonEmptyStr
+    original_claim_sha256: DispositionSha256
+    original_attempt: Annotated[StrictInt, Field(ge=1)]
+    original_dispatch_sequence: Annotated[StrictInt, Field(ge=0)]
+    checkpoint_sequence: Annotated[StrictInt, Field(ge=1)]
+    previous_run_id: RunId
+    previous_context_manifest_id: ContextId
+    source_revision: NonEmptyStr
+    invocation_start_sha256: DispositionSha256
+    invocation_outcome_sha256: DispositionSha256
+    rejected_artifact_id: ArtifactId
+    rejected_artifact_sha256: DispositionSha256
+    rejection_code: Literal["PROGRESS_SEQUENCE_MISMATCH"] = "PROGRESS_SEQUENCE_MISMATCH"
+    expected_sequence: Annotated[StrictInt, Field(ge=1)]
+    reported_sequence: Annotated[StrictInt, Field(ge=1)]
+    process_stop_sha256: DispositionSha256
+    capture_sha256: DispositionSha256
+    workspace_inventory_sha256: DispositionSha256
+    checkpoint_sha256: DispositionSha256
+    budget_source: Literal["frozen_work_attempt"] = "frozen_work_attempt"
+
+    @model_validator(mode="after")
+    def require_real_rejection(self) -> Self:
+        if (
+            self.expected_sequence != self.original_attempt
+            or self.reported_sequence == self.expected_sequence
+        ):
+            raise ValueError("rejected progress proof requires a real run sequence mismatch")
+        return self
+
+
 class InspectDeliveryWait(DomainModel):
     work_item_id: NonEmptyStr
     expected_disposition_sha256: DispositionSha256
@@ -247,6 +286,9 @@ class DeliveryWaitInvestigation(DomainModel):
     verification_retry: VerificationRetryEvidence | None = None
     verifier_preparation: VerifierPreparationEvidence | None = None
     knowledge_preparation: KnowledgePreparationRetryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    rejected_output: RejectedCoderOutputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     retry_cause: ContinuationCause | None = None
@@ -334,6 +376,34 @@ class DeliveryWaitInvestigation(DomainModel):
             or self.verifier_preparation is not None
         ):
             raise ValueError("knowledge preparation proof changed its exact pre-model facts")
+        if (
+            DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT in self.permitted_resolutions
+            and self.rejected_output is None
+        ):
+            raise ValueError("rejected Coder retry requires its exact stopped checkpoint")
+        rejected = self.rejected_output
+        if rejected is not None and (
+            rejected.task_id != self.task_id
+            or rejected.work_item_id != self.work_item_id
+            or facts.role is not AgentRole.CODER
+            or facts.classification not in {"PLATFORM_BUG", "INVALID_OUTPUT"}
+            or rejected.source_revision != self.source_revision
+            or rejected.checkpoint_sequence != self.checkpoint_sequence
+            or rejected.previous_run_id != self.original_run_id
+            or rejected.invocation_start_sha256 != self.invocation_start_sha256
+            or rejected.invocation_outcome_sha256 != self.invocation_outcome_sha256
+            or rejected.process_stop_sha256 != self.process_stop_sha256
+            or rejected.workspace_inventory_sha256 != self.workspace_inventory_sha256
+            or self.retry_cause is not None
+            or self.interruption_receipt_sha256 is not None
+            or self.original_authority is not None
+            or self.knowledge_preparation is not None
+            or self.verification_retry is not None
+            or self.verifier_preparation is not None
+            or self.permitted_resolutions
+            not in ((), (DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,))
+        ):
+            raise ValueError("rejected Coder proof changed its exact stopped execution")
         return self
 
     def recompute_sha256(self) -> str:
@@ -390,6 +460,9 @@ class DeliveryResolution(DomainModel):
         exclude_if=lambda value: value is None,
     )
     knowledge_preparation: KnowledgePreparationRetryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    rejected_output: RejectedCoderOutputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
 
@@ -462,6 +535,17 @@ class DeliveryResolution(DomainModel):
             or self.knowledge_preparation.checkpoint_sequence != self.expected_checkpoint_sequence
         ):
             raise ValueError("knowledge preparation decision changed its exact task or source")
+        if (self.resolution_kind is DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT) != (
+            self.rejected_output is not None
+        ):
+            raise ValueError("only rejected Coder retry uses its independent checkpoint")
+        if self.rejected_output is not None and (
+            self.rejected_output.task_id != self.task_id
+            or self.rejected_output.work_item_id != self.work_item_id
+            or self.rejected_output.source_revision != self.expected_source_revision
+            or self.rejected_output.checkpoint_sequence != self.expected_checkpoint_sequence
+        ):
+            raise ValueError("rejected Coder decision changed its exact task or source")
         return self
 
     def recompute_sha256(self) -> str:
@@ -568,6 +652,7 @@ class DeliveryWaitHandling(DomainModel):
                 or decision.task_snapshot_sha256 != proof.task_snapshot_sha256
                 or decision.step_sha256 != proof.step_sha256
                 or decision.knowledge_preparation != proof.knowledge_preparation
+                or decision.rejected_output != proof.rejected_output
                 or (
                     decision.task_id,
                     decision.work_item_id,

@@ -1,0 +1,19 @@
+{
+  "name": "recovery-pending-outcome",
+  "title": "恢复执行等待保持可操作的类型和原因",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-11",
+  "allowlist": [
+    "src/ai_software_engineer/recovery/native.py",
+    "src/ai_software_engineer/manager/production_backend.py",
+    "tests/recovery",
+    ".trellis/spec/core/delivery-recovery.md",
+    ".trellis/tasks/10-11-recovery-pending-outcome",
+    "src/ai_software_engineer/recovery/entry.py",
+    "src/ai_software_engineer/recovery/resume.py",
+    "src/ai_software_engineer/recovery/pending_wait.py",
+    "src/ai_software_engineer/manager/delivery.py"
+  ],
+  "completed_at": "2026-10-11"
+}

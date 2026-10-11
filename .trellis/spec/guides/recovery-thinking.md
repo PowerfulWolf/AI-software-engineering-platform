@@ -136,3 +136,19 @@ execution-baseline.md 的 accepted artifact order 与 repeated baseline 验证�
 释放。授权已落盘但 SQL 尚未提交的恢复重放必须重新核验现场；已提交重放不能重复启动。
 项目原生规则采用完整不可变 Git epoch，并同步进入 prompt 与知识查询，不能以路径/hash 清单
 代替可阅读的精确增改删正文，也不能静默重编译 hard/structured policy。
+
+### 模型成功、产物发布和交付采纳分别验证（2026-10-11）
+
+- Schema是否只要求正整数，却没有把progress序号绑定到当前request.attempt？不要混淆Task revision、
+  queue checkpoint和run attempt；动态Schema/prompt与live接纳同时约束。
+- 新语义门能否使旧sealed outcome读不出来？新接纳校验不能加强全局旧模型validator而破坏摘要历史。
+- ArtifactStore/AcceptedRoleArtifact publication是不是发生在最终StateEvent之前？查实际消费事件，
+  不能只凭“accepted”类名认定进度已接纳。已拒绝的精确ID不得在下一轮latest选择中复活；合法祖先仍保留。
+- 已停止且有完整被拒产出与未知中断不同。保留原completed stop和原JSON，独立封存完整合法现场，
+  按正常工作额度产生新Run，不纠正旧JSON、伪造timeout或refund transient。
+- 恢复首次执行的typed wait是否写回了原需求游标？只有reader发现live successor不能代替写侧挂接。
+  通过精确已批准dispatch+真实当前wait接回，不能重复_execute来重新得到一次异常。
+- Conditional admission无exact消费决定时是否仍返回None/原delegate，让默认dirty门生效？
+  一旦选中专用capability，后续读不到决定应拒绝，不能变成non-null no-op dirty许可。
+
+具体契约与负例见 `../core/rejected-coder-output.md`；每轮处理必须覆盖完整ignored inventory和既有历史。

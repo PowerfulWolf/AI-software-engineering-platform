@@ -19,6 +19,7 @@ from ai_software_engineer.domain.engineering_authority import (
     EngineeringCapability,
     EngineeringPolicy,
 )
+from ai_software_engineer.manager.rejected_output_checkpoint import RejectedCoderOutputCheckpoint
 
 schema = TypeAdapter(
     Annotated[EngineeringPolicy | EngineeringAdmission, Field(discriminator="kind")]
@@ -140,6 +141,17 @@ resolution_schema["$defs"]["DeliveryResolution"]["allOf"] = [
         },
         "else": {"properties": {"knowledge_preparation": {"type": "null"}}},
     },
+    {
+        "if": {
+            "required": ["resolution_kind"],
+            "properties": {"resolution_kind": {"const": "RETRY_REJECTED_CODER_OUTPUT"}},
+        },
+        "then": {
+            "required": ["rejected_output"],
+            "properties": {"rejected_output": {"type": "object"}},
+        },
+        "else": {"properties": {"rejected_output": {"type": "null"}}},
+    },
 ]
 resolution_schema["$defs"]["DeliveryWaitHandling"]["allOf"] = [
     {
@@ -256,6 +268,72 @@ resolution_schema["$defs"]["KnowledgePreparationRetryEvidence"]["allOf"] = [
         }
     }
 ]
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] += [
+    {
+        "if": {
+            "required": ["permitted_resolutions"],
+            "properties": {
+                "permitted_resolutions": {"contains": {"const": "RETRY_REJECTED_CODER_OUTPUT"}}
+            },
+        },
+        "then": {
+            "required": ["rejected_output"],
+            "properties": {"rejected_output": {"type": "object"}},
+        },
+    },
+    {
+        "if": {
+            "required": ["rejected_output"],
+            "properties": {"rejected_output": {"type": "object"}},
+        },
+        "then": {
+            "required": [
+                "original_run_id",
+                "invocation_start_sha256",
+                "invocation_outcome_sha256",
+                "process_stop_sha256",
+                "workspace_inventory_sha256",
+            ],
+            "properties": {
+                **{
+                    name: {"type": "string"}
+                    for name in (
+                        "original_run_id",
+                        "invocation_start_sha256",
+                        "invocation_outcome_sha256",
+                        "process_stop_sha256",
+                        "workspace_inventory_sha256",
+                    )
+                },
+                **{
+                    name: {"type": "null"}
+                    for name in (
+                        "retry_cause",
+                        "interruption_receipt_sha256",
+                        "original_authority",
+                        "knowledge_preparation",
+                        "verification_retry",
+                        "verifier_preparation",
+                    )
+                },
+                "permitted_resolutions": {
+                    "maxItems": 1,
+                    "items": {"const": "RETRY_REJECTED_CODER_OUTPUT"},
+                },
+                "disposition": {
+                    "properties": {
+                        "facts": {
+                            "properties": {
+                                "role": {"const": "coder"},
+                                "classification": {"enum": ["PLATFORM_BUG", "INVALID_OUTPUT"]},
+                            }
+                        }
+                    }
+                },
+            },
+        },
+    },
+]
 resolution_schema["$defs"]["VerifierPreparationEvidence"]["allOf"] = [
     {
         "if": {"properties": {"native_execution_state": {"const": "FINISHED"}}},
@@ -294,6 +372,51 @@ resolution_schema["$defs"]["VerifierPreparationEvidence"]["allOf"] = [
 (
     Path(__file__).resolve().parents[1] / "schemas/engineering-wait-resolution.schema.json"
 ).write_text(json.dumps(resolution_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+checkpoint_schema = RejectedCoderOutputCheckpoint.model_json_schema()
+checkpoint_schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+checkpoint_schema["$id"] = (
+    "https://ai-software-engineer.local/schemas/rejected-coder-output-checkpoint.schema.json"
+)
+checkpoint_schema["allOf"] = [
+    {
+        "properties": {
+            "capture_stop": {
+                "properties": {
+                    "output_present": {"const": True},
+                    "cause": {"type": "null"},
+                    "original_error_code": {"type": "null"},
+                    "process_stop": {
+                        "properties": {"kind": {"const": "completed"}, "returncode": {"const": 0}}
+                    },
+                }
+            },
+            "outcome": {
+                "properties": {
+                    "start": {
+                        "properties": {"request": {"properties": {"role": {"const": "coder"}}}}
+                    },
+                    "result": {
+                        "properties": {
+                            "status": {"const": "SUCCEEDED"},
+                            "artifact": {"properties": {"kind": {"const": "coder-progress"}}},
+                        }
+                    },
+                }
+            },
+            "capture": {
+                "properties": {
+                    "index_diff_sha256": {
+                        "const": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    }
+                }
+            },
+        }
+    }
+]
+(
+    Path(__file__).resolve().parents[1] / "schemas/rejected-coder-output-checkpoint.schema.json"
+).write_text(json.dumps(checkpoint_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 # EngineeringPolicy is embedded in Task/dispatch/recovery wire contracts. Keep
 # every copy's capability enum synchronized without erasing their hand-written

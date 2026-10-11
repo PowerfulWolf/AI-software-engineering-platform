@@ -20,6 +20,7 @@ from ai_software_engineer.domain.prerequisite_repair import (
     PrerequisiteRepairPlan,
     PrerequisiteRepairRequest,
 )
+from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
     DeliveryId,
@@ -946,6 +947,31 @@ class UnifiedProjectEntryService:
         )
         return ProjectDeliveryResult(checkpoint=checkpoint)
 
+    def adopt_recovery_pending(
+        self,
+        plan: RecoveryPlan,
+        dispatch: RecoveryDispatchRecord,
+        snapshot: DeliveryFailureSnapshot,
+        *,
+        at: datetime,
+    ) -> ProjectDeliveryResult:
+        """Record a committed recovery wait without dispatching or executing again."""
+        plan.validate_integrity()
+        dispatch.validate_integrity()
+        store, current = self._current(plan.source.scope.delivery_id)
+        if (
+            current.stage is not DeliveryStage.DELIVERING
+            or current.dispatch_commit_id != dispatch.id
+            or current.dispatch_commit_sha256 != dispatch.dispatch_sha256
+            or current.task_id != dispatch.task_id
+            or dispatch.recovery_plan_sha256 != plan.plan_sha256
+            or dispatch.task_id != plan.new_task_id
+            or not task_matches_dispatch(snapshot.task, dispatch.task)
+            or snapshot.task.status in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}
+        ):
+            raise DeliveryCommandRejected("pending recovery does not match active Delivery")
+        return self._adopt_pending_snapshot(store, current, snapshot, product=None, at=at)
+
     def accept_verification(
         self,
         plan: CandidateVerificationPlan,
@@ -1189,35 +1215,9 @@ class UnifiedProjectEntryService:
         try:
             delivery = self._backend.run_delivery(current)
         except DeliveryBackendPending as pending:
-            snapshot = pending.snapshot
-            if (
-                snapshot.task.id != current.task_id
-                or snapshot.task.repository != current.repository_root
-            ):
-                raise DeliveryCommandRejected(
-                    "pending snapshot does not match delivery"
-                ) from pending
-            if snapshot.task_revision < (current.task_revision or 0):
-                raise DeliveryCommandRejected(
-                    "pending snapshot revision moved backwards"
-                ) from pending
-            if (current.task_revision, current.task_status, current.candidate_revision) == (
-                snapshot.task_revision,
-                snapshot.task.status,
-                snapshot.candidate_revision,
-            ):
-                return ProjectDeliveryResult(checkpoint=current, product=product)
-            checkpoint = self._next(
-                store,
-                current,
-                stage=DeliveryStage.DELIVERING,
-                next_action=DeliveryNextAction.RUN_DELIVERY,
-                task_revision=snapshot.task_revision,
-                task_status=snapshot.task.status,
-                candidate_revision=snapshot.candidate_revision,
-                at=max(at, snapshot.task.updated_at),
+            return self._adopt_pending_snapshot(
+                store, current, pending.snapshot, product=product, at=at
             )
-            return ProjectDeliveryResult(checkpoint=checkpoint, product=product)
         except DeliveryQueuePending:
             return ProjectDeliveryResult(checkpoint=current, product=product)
         except DeliveryBackendFailure as error:
@@ -1285,6 +1285,40 @@ class UnifiedProjectEntryService:
             product=product,
             delivery=delivery,
         )
+
+    def _adopt_pending_snapshot(
+        self,
+        store: FileProjectDeliveryCheckpointStore,
+        current: ProjectDeliveryCheckpoint,
+        snapshot: DeliveryFailureSnapshot,
+        *,
+        product: ProductDiscoveryResult | None,
+        at: datetime,
+    ) -> ProjectDeliveryResult:
+        if (
+            snapshot.task.id != current.task_id
+            or snapshot.task.repository != current.repository_root
+        ):
+            raise DeliveryCommandRejected("pending snapshot does not match delivery")
+        if snapshot.task_revision < (current.task_revision or 0):
+            raise DeliveryCommandRejected("pending snapshot revision moved backwards")
+        if (current.task_revision, current.task_status, current.candidate_revision) == (
+            snapshot.task_revision,
+            snapshot.task.status,
+            snapshot.candidate_revision,
+        ):
+            return ProjectDeliveryResult(checkpoint=current, product=product)
+        checkpoint = self._next(
+            store,
+            current,
+            stage=DeliveryStage.DELIVERING,
+            next_action=DeliveryNextAction.RUN_DELIVERY,
+            task_revision=snapshot.task_revision,
+            task_status=snapshot.task.status,
+            candidate_revision=snapshot.candidate_revision,
+            at=max(at, snapshot.task.updated_at),
+        )
+        return ProjectDeliveryResult(checkpoint=checkpoint, product=product)
 
     def _checkpoint_product(
         self,

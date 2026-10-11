@@ -51,6 +51,7 @@ from ai_software_engineer.recovery.context import approved_parent_context
 from ai_software_engineer.recovery.entry import (
     NativeRecoveryEntry,
     NativeRecoveryExecution,
+    NativeRecoveryPending,
     read_recovery_task,
 )
 from ai_software_engineer.recovery.interruption import RecoveryInterruptionService
@@ -883,6 +884,17 @@ class DeliveryResumeController:
             admitted = False
         else:
             admitted = True
+        if (
+            admitted
+            and interrupted is not None
+            and interrupted.status in {TaskStatus.IMPLEMENTING, TaskStatus.QA, TaskStatus.REVIEW}
+        ):
+            try:
+                waiting_execution = self._recovery.pending_execution_wait(path)
+                if waiting_execution is not None:
+                    return self._finish_coder_recovery(waiting_execution)
+            except RecoveryRejected as error:
+                return self._recovery_human_gate(current, str(error))
         if admitted and interrupted is not None and interrupted.status is TaskStatus.IMPLEMENTING:
             try:
                 proposal = RecoveryInterruptionService(self._recovery, store, plan).propose()
@@ -932,6 +944,31 @@ class DeliveryResumeController:
                 DeliveryResumeOutcome.CONTINUED,
                 started,
                 next_action=_checkpoint_next_action(started.checkpoint),
+            )
+        if isinstance(execution.delivery, NativeRecoveryPending):
+            pending = execution.delivery
+            result = self._entry.adopt_recovery_pending(
+                execution.plan,
+                execution.dispatch,
+                pending.snapshot,
+                at=pending.snapshot.task.updated_at,
+            )
+            if pending.disposition is not None:
+                guidance = f"{pending.disposition.reason} {pending.disposition.next_action}"
+                if pending.disposition.detail:
+                    guidance += " 具体原因: " + safe_diagnostic(pending.disposition.detail)
+                return self._result(
+                    DeliveryResumeOutcome.WAITING_HUMAN,
+                    result,
+                    next_action=guidance,
+                )
+            return self._result(
+                DeliveryResumeOutcome.CONTINUED,
+                result,
+                next_action=(
+                    "恢复任务已接回原需求, 当前等待调度。已有进度和批准保留; "
+                    "请等待可用执行资源后点击“继续交付”, 无需重新建立需求或重复批准。"
+                ),
             )
         if isinstance(execution.delivery, KnowledgeGap):
             return self._result(

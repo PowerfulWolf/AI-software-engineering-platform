@@ -2,6 +2,70 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { ui, operation } = require("./fixture.cjs");
 
+test("rejected completed Coder output exposes its preserved-work plan and revokes stale evidence", async t => {
+  const h = await ui(t);
+  const request = h.team.requests[0];
+  request.stage = "DELIVERING";
+  request.scopes = [{root: "/fixture", selected_paths: ["."], delivery_id: "delivery_rejected"}];
+  request.execution = {state: "WAITING", responsibility: "engineering", reason_code: "EXECUTION_UNCERTAIN",
+    reason: "本轮开发报告未通过校验，交付暂停。", next_action: "由平台保留进度并核验续跑条件。"};
+  const sha = value => value.repeat(64);
+  const facts = {task_id: "task_rejected", work_item_id: "work_rejected", role: "coder", classification: "PLATFORM_BUG",
+    task_intent_sha256: sha("b"), source_revision: "c".repeat(40), checkpoint_sequence: 8};
+  const step = {work_item_id: facts.work_item_id, role: "coder", status: "WAITING_DEPENDENCY",
+    wait_disposition_sha256: sha("d"), wait_disposition: {facts, responsibility: "engineering",
+      reason: request.execution.reason, next_action: request.execution.next_action}};
+  const task = {id: "delivery_rejected", task_id: facts.task_id, request_id: request.id,
+    project_id: request.project_id, title: request.title, status: "IMPLEMENTING", terminal: false,
+    scope: request.scopes[0], last_activity: "2026-10-11T08:00:00Z", execution: request.execution,
+    assignments: [], documents: [], timeline: [], runs: [], role_queue: [step]};
+  h.team.tasks.push(task);
+  const proof = {kind: "delivery_wait_investigation", ...facts, disposition_sha256: step.wait_disposition_sha256,
+    proof_sha256: sha("e"), inspected_at: "2026-10-11T08:10:00Z", missing: [],
+    permitted_resolutions: ["RETRY_REJECTED_CODER_OUTPUT"], original_run_id: "run_rejected",
+    invocation_start_sha256: sha("1"), invocation_outcome_sha256: sha("2"), process_stop_sha256: sha("3"),
+    workspace_inventory_sha256: sha("4"), next_action: "已核验原执行结束和完整现场，重新提交开发报告。"};
+  proof.rejected_output = {scope: {team_id: h.team.team_id, project_id: request.project_id,
+    repository_id: "repository_fixture", repository_root: "/fixture"}, requirement_id: task.id,
+    task_id: facts.task_id, work_item_id: facts.work_item_id, source_revision: facts.source_revision,
+    checkpoint_sequence: 8, original_attempt: 4, expected_sequence: 4, reported_sequence: 9,
+    previous_run_id: proof.original_run_id, original_claim_sha256: sha("5"),
+    original_lease_id: "lease_original", original_dispatch_sequence: 0,
+    previous_context_manifest_id: "ctx_" + sha("9"),
+    invocation_start_sha256: proof.invocation_start_sha256, invocation_outcome_sha256: proof.invocation_outcome_sha256,
+    rejected_artifact_id: "art_rejected", rejected_artifact_sha256: sha("6"),
+    rejection_code: "PROGRESS_SEQUENCE_MISMATCH", process_stop_sha256: proof.process_stop_sha256,
+    capture_sha256: sha("7"), workspace_inventory_sha256: proof.workspace_inventory_sha256,
+    checkpoint_sha256: sha("8"), budget_source: "frozen_work_attempt"};
+  const inspection = operation("SUCCEEDED", {operation_id: "operation_rejected_inspect",
+    intent: {action: "INSPECT_DELIVERY_WAIT", delivery_id: request.id, project_id: request.project_id,
+      expected_checkpoint_sha256: request.checkpoint_sha256, work_item_id: step.work_item_id,
+      expected_disposition_sha256: step.wait_disposition_sha256, expected_task_intent_sha256: facts.task_intent_sha256,
+      expected_source_revision: facts.source_revision, expected_checkpoint_sequence: 8},
+    result: {checkpoint_sha256: request.checkpoint_sha256, engineering_wait_investigation: proof}});
+  h.state.operations.push(inspection);
+  let writes = 0;
+  h.page.on("request", req => {if (req.method() !== "GET") writes++;});
+  await h.tick();
+  await h.requests();
+  await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  for (let count = 0; count < 3 && await h.page.locator("#notification").isVisible(); count++) await h.close();
+  const panel = h.page.locator('#detail section.engineering-wait-panel[data-key="engineering:work_rejected"]');
+  assert.equal(await panel.isVisible(), true);
+  const resume = panel.getByRole("button", {name: "保留进度并重新提交开发报告", exact: true});
+  assert.equal(await resume.isVisible(), true);
+  assert.match(await panel.innerText(), /报告未被接纳/);
+  assert.match(await panel.innerText(), /完整开发文件/);
+  assert.match(await panel.innerText(), /仍需独立 QA 和 Review/);
+  assert.equal(await panel.getByRole("button", {name: "使用已保存结果继续", exact: true}).count(), 0);
+  await resume.evaluate(node => {window.oldRejectedResume = node;});
+  proof.rejected_output.invocation_outcome_sha256 = sha("f");
+  await h.tick();
+  assert.equal(await panel.getByRole("button", {name: "保留进度并重新提交开发报告", exact: true}).count(), 0);
+  await h.page.evaluate(() => window.oldRejectedResume.click());
+  assert.equal(writes, 0, "a retained callback cannot submit changed rejection evidence");
+});
+
 test("engineering wait investigation and decision use exact proof without hiding the durable wait", async (t) => {
   const h = await ui(t);
   const request = h.team.requests[0];

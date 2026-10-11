@@ -1,0 +1,13 @@
+{
+  "task_id": "task_recovery_8ca06fa0aec236ab940597ad1482bfc8",
+  "original_attempt": 4,
+  "worktree_path": "/Users/zhangjunshuai/workspace/code/.ase/worktrees/repository_c78e1680f621ff06c808aa9559666412444fbd7b/task_recovery_8ca06fa0aec236ab940597ad1482bfc8/coder-attempt-01",
+  "inventory_before_maintenance_sha256": "d14dbe071f165ee415d3162861c07bb98c07d365eba1a9f387761ced99dbf034",
+  "immutable_file_sha256": {
+    "/Users/zhangjunshuai/workspace/code/.ase/projects/project_ai-project_034252eb3595/repositories/repository_c78e1680f621ff06c808aa9559666412444fbd7b/state/invocations/invocation-starts-d5971f4f01ae708f7ad67d1ccaefaf3f61855cdef1cd668bd29b0d3d9574216f.json": "4d55849c5ac20fd6544135a75aac35e7aa90964225522bc14698dcdf7d7072a6",
+    "/Users/zhangjunshuai/workspace/code/.ase/projects/project_ai-project_034252eb3595/repositories/repository_c78e1680f621ff06c808aa9559666412444fbd7b/state/invocations/invocation-outcomes-d5971f4f01ae708f7ad67d1ccaefaf3f61855cdef1cd668bd29b0d3d9574216f.json": "82c887318a1f3ce37eddac31115929c2835eeabe0698bed7d759301c86737c9a",
+    "/Users/zhangjunshuai/workspace/code/.ase/projects/project_ai-project_034252eb3595/repositories/repository_c78e1680f621ff06c808aa9559666412444fbd7b/artifacts/art_coder_42479ee20e471e903336aa3db579b4f4.json": "6f35e73c3233c2a477239d6a67074113e4c1c7e688eff9c63f33a707c90d9267",
+    "/Users/zhangjunshuai/workspace/code/.ase/projects/project_ai-project_034252eb3595/repositories/repository_c78e1680f621ff06c808aa9559666412444fbd7b/state/continuations/task_recovery_8ca06fa0aec236ab940597ad1482bfc8/capture-start-run_a3a4f9438abe40088c67db5efc50ab4f.json": "bce2b0de2d7ce5d2deea739638b0bd3b0fcd4e7956a2218cf22386479b796680",
+    "/Users/zhangjunshuai/workspace/code/.ase/projects/project_ai-project_034252eb3595/repositories/repository_c78e1680f621ff06c808aa9559666412444fbd7b/state/continuations/task_recovery_8ca06fa0aec236ab940597ad1482bfc8/capture-stop-run_a3a4f9438abe40088c67db5efc50ab4f.json": "31f6b94b600c2d1bae1d48825af1d0496e5045e7cc7bd91d35af6f2ba4b4d052"
+  }
+}

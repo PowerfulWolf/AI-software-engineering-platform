@@ -34,6 +34,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     InspectDeliveryWait,
     KnowledgePreparationRetryEvidence,
     OriginalInvocationAuthority,
+    RejectedCoderOutputEvidence,
     ResolveDeliveryWait,
     VerificationRetryEvidence,
     VerifierPreparationEvidence,
@@ -78,6 +79,10 @@ from ai_software_engineer.manager.engineering_authority import (
     EngineeringAuthority,
     EngineeringAuthorityRejected,
     EngineeringRejectionKind,
+)
+from ai_software_engineer.manager.rejected_output_checkpoint import (
+    read_rejected_checkpoint,
+    verify_rejected_workspace,
 )
 from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationCheckpoint,
@@ -697,6 +702,12 @@ class DeliveryWaitService:
                         is DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION
                         else None
                     ),
+                    rejected_output=(
+                        proof.rejected_output
+                        if command.resolution_kind
+                        is DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT
+                        else None
+                    ),
                 )
                 resolution = resolution.model_copy(
                     update={"resolution_sha256": resolution.recompute_sha256()}
@@ -795,10 +806,36 @@ class DeliveryWaitService:
         verification_retry = None
         verifier_preparation = None
         knowledge_preparation = None
+        rejected_output = None
         original_authority = None
         inventory: WorkspaceMutationInventory | None = None
         observed_stop: ExecutionCaptureStop | None = None
-        if outcome is not None and not reverify and not rejected_outcome:
+        rejected_checkpoint = (
+            read_rejected_checkpoint(self.sidecar_state, item.id) if rejected_outcome else None
+        )
+        if rejected_checkpoint is not None:
+            if (
+                outcome != rejected_checkpoint.outcome
+                or rejected_checkpoint.task_snapshot_sha256 != digest(task.to_wire())
+                or rejected_checkpoint.step_sha256 != record_digest(step)
+                or rejected_checkpoint.capture_start.task_revision
+                != self.repository.current_revision(task.id)
+                or rejected_checkpoint.evidence.scope != self.scope
+            ):
+                raise DeliveryWaitRejected("被拒产出的保留现场记录不再绑定当前工程等待")
+            observed_stop = rejected_checkpoint.capture_stop
+            try:
+                verify_rejected_workspace(rejected_checkpoint, self.git, task)
+                self._original_authority(item, rejected_checkpoint.outcome.start)
+                inventory = rejected_checkpoint.inventory_after
+                rejected_output = rejected_checkpoint.evidence
+                if task.work_budget_exhausted or task.attempts >= task.max_attempts:
+                    missing.append(DeliveryProofMissing.BUDGET_EXHAUSTED)
+                else:
+                    permitted = (DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,)
+            except (ContinuationRejected, GitWorkspaceError, ValueError, OSError, QueueError):
+                missing.append(DeliveryProofMissing.CHECKPOINT_DRIFT)
+        elif outcome is not None and not reverify and not rejected_outcome:
             # This decision never makes another model call. Worker uses the
             # sealed original request/result and normal artifact/verdict guards.
             assert start is not None
@@ -975,6 +1012,7 @@ class DeliveryWaitService:
             verification_retry=verification_retry,
             verifier_preparation=verifier_preparation,
             knowledge_preparation=knowledge_preparation,
+            rejected_output=rejected_output,
             observed_stop=observed_stop,
         )
 
@@ -1451,6 +1489,7 @@ class DeliveryWaitService:
         verification_retry: VerificationRetryEvidence | None = None,
         verifier_preparation: VerifierPreparationEvidence | None = None,
         knowledge_preparation: KnowledgePreparationRetryEvidence | None = None,
+        rejected_output: RejectedCoderOutputEvidence | None = None,
         observed_stop: ExecutionCaptureStop | None = None,
     ) -> DeliveryWaitInvestigation:
         assert item.wait_disposition is not None
@@ -1497,6 +1536,7 @@ class DeliveryWaitService:
             verification_retry=verification_retry,
             verifier_preparation=verifier_preparation,
             knowledge_preparation=knowledge_preparation,
+            rejected_output=rejected_output,
             retry_cause=receipt.cause
             if receipt
             else observed_stop.cause
@@ -1505,7 +1545,10 @@ class DeliveryWaitService:
             permitted_resolutions=permitted,
             missing=missing,
             next_action=(
-                f"知识准备原执行已结束, 主角色尚未开始。可使用一次剩余工作额度, "
+                "原开发执行已结束, 进度报告的轮次编号不符合本次执行; 完整合法草稿已保留。"
+                "可使用一次原授权工作额度, 由新的开发执行继续原需求并重新生成正确报告。"
+                if permitted == (DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,)
+                else f"知识准备原执行已结束, 主角色尚未开始。可使用一次剩余工作额度, "
                 f"把下次准备窗口扩大到 {knowledge_preparation.next_timeout_seconds} 秒, "
                 "重新领取原任务继续; 原知识记录和执行历史保留。"
                 if permitted == (DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION,)
