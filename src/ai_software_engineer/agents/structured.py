@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +38,18 @@ from ai_software_engineer.agents.openai_compatible import (
     UrllibHttpTransport,
 )
 from ai_software_engineer.agents.structured_execution import run_structured_command
+from ai_software_engineer.agents.structured_observation import (
+    StructuredCallIdentity,
+    StructuredExecutionAdmission,
+    StructuredHttpRoundTripReceipt,
+    StructuredObservationRejected,
+    admit_structured_execution,
+    current_structured_execution_observer,
+    observation_digest,
+    record_structured_http_completion,
+    structured_call_identity,
+    structured_request_digest,
+)
 from ai_software_engineer.config.codex_proxy import (
     codex_cli_proxy_key_environment,
     codex_cli_proxy_overrides,
@@ -188,22 +202,48 @@ class FallbackStructuredModelClient:
         invocation_id = uuid4().hex
         for index, (route_index, route) in enumerate(candidates):
             started_at, started = datetime.now(UTC), time.monotonic()
+            identity = (
+                StructuredCallIdentity(
+                    invocation_id=invocation_id,
+                    route_index=route_index,
+                    provider=route.provider,
+                    model=route.model,
+                    reasoning_effort=route.reasoning_effort,
+                    route_kind=route.route_kind,
+                    connection_mode=route.connection_mode,
+                    role=self._role,
+                    phase=current_call_phase(),
+                    request_sha256=structured_request_digest(
+                        instructions=instructions,
+                        input_payload=input_payload,
+                        output_schema=output_schema,
+                        timeout_seconds=timeout_seconds,
+                        image_sha256s=tuple(
+                            hashlib.sha256(path.read_bytes()).hexdigest()
+                            for path in _verified_images(input_images)
+                        ),
+                    ),
+                )
+                if current_structured_execution_observer() is not None
+                else None
+            )
             try:
-                if input_images:
-                    result = route.client.complete(
-                        instructions=instructions,
-                        input_payload=input_payload,
-                        output_schema=output_schema,
-                        timeout_seconds=timeout_seconds,
-                        input_images=input_images,
-                    )
-                else:
-                    result = route.client.complete(
-                        instructions=instructions,
-                        input_payload=input_payload,
-                        output_schema=output_schema,
-                        timeout_seconds=timeout_seconds,
-                    )
+                with structured_call_identity(identity) if identity is not None else nullcontext():
+                    if input_images:
+                        result = route.client.complete(
+                            instructions=instructions,
+                            input_payload=input_payload,
+                            output_schema=output_schema,
+                            timeout_seconds=timeout_seconds,
+                            input_images=input_images,
+                        )
+                    else:
+                        result = route.client.complete(
+                            instructions=instructions,
+                            input_payload=input_payload,
+                            output_schema=output_schema,
+                            timeout_seconds=timeout_seconds,
+                        )
             except StructuredModelError as error:
                 record_model_call(
                     ModelCallDiagnostic(
@@ -492,6 +532,17 @@ class ResponsesStructuredModelClient:
                 }
             },
         }
+        request_bytes = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
+        admission = admit_structured_execution(
+            execution_kind="http",
+            transport_request_sha256=observation_digest(
+                {
+                    "endpoint": self._endpoint,
+                    "body_sha256": hashlib.sha256(request_bytes).hexdigest(),
+                }
+            ),
+            timeout_seconds=timeout_seconds,
+        )
         try:
             response = self._transport.post(
                 self._endpoint,
@@ -500,21 +551,24 @@ class ResponsesStructuredModelClient:
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 },
-                json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode(),
+                request_bytes,
                 float(timeout_seconds),
             )
         except TimeoutError as error:
+            _record_http_round_trip(admission, error_kind="timeout")
             raise StructuredModelError(
                 AgentErrorCode.TIMEOUT,
                 "Responses structured request timed out",
                 transient=True,
             ) from error
         except OSError as error:
+            _record_http_round_trip(admission, error_kind="os_error")
             raise StructuredModelError(
                 AgentErrorCode.PROVIDER_UNAVAILABLE,
                 "Responses structured provider is unavailable",
                 transient=True,
             ) from error
+        _record_http_round_trip(admission, response=response)
         if not 200 <= response.status_code < 300:
             code, transient = _http_failure(response)
             raise StructuredModelError(
@@ -550,6 +604,32 @@ class ResponsesStructuredModelClient:
             request_id=safe_request_id(response.request_id, secret=self._api_key),
             correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
         )
+
+
+def _record_http_round_trip(
+    admission: StructuredExecutionAdmission | None,
+    *,
+    response: HttpResponse | None = None,
+    error_kind: Literal["timeout", "os_error"] | None = None,
+) -> None:
+    if admission is None:
+        return
+    try:
+        receipt = StructuredHttpRoundTripReceipt.create(
+            admission=admission,
+            completed_at=datetime.now(UTC),
+            outcome="returned" if response is not None else "transport_error",
+            http_status=response.status_code if response is not None else None,
+            response_body_sha256=(
+                hashlib.sha256(response.body).hexdigest() if response is not None else None
+            ),
+            error_kind=error_kind,
+        )
+        record_structured_http_completion(receipt)
+    except StructuredObservationRejected:
+        raise
+    except Exception as error:
+        raise StructuredObservationRejected("结构化请求回执不一致; 暂停后续执行") from error
 
 
 def _allows_fallback(error: StructuredModelError) -> bool:

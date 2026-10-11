@@ -16,7 +16,7 @@ from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -80,6 +80,7 @@ from ai_software_engineer.git.mutation import (
 from ai_software_engineer.owned_processes import (
     OwnedProcessesUncertain,
     OwnedProcessKind,
+    OwnedProcessObservation,
     observe_owned_process,
 )
 from ai_software_engineer.redaction import redact_text
@@ -95,6 +96,16 @@ class CodexCliConfigurationError(AgentConfigurationError, CodexCliError):
 
 class CodexExecutionUnconfirmed(CodexCliError):
     """The owned runner cannot establish that its process session stopped."""
+
+
+class CodexProcessNotStarted(CodexCliError):
+    """A known owned-runner startup failure happened before Popen succeeded."""
+
+    def __init__(
+        self, failure_kind: Literal["input_preparation_failed", "process_spawn_failed"]
+    ) -> None:
+        self.failure_kind = failure_kind
+        super().__init__("Codex CLI process was not started")
 
 
 class _CodexOutputContractError(ValueError):
@@ -211,6 +222,11 @@ class SubprocessCodexCommandRunner:
 
         check_owner()
         started = time.monotonic()
+        process: subprocess.Popen[str] | None = None
+        failure_kind: Literal["input_preparation_failed", "process_spawn_failed"] = (
+            "input_preparation_failed"
+        )
+        setup_error: OSError | None = None
         # The child inherits the Task lock. Even if the host is killed, another
         # Worker cannot reuse this worktree while the executor still owns it.
         try:
@@ -223,6 +239,7 @@ class SubprocessCodexCommandRunner:
                 prompt.write(stdin.encode("utf-8"))
                 prompt.seek(0)
                 check_owner()
+                failure_kind = "process_spawn_failed"
                 process = subprocess.Popen(
                     argv,
                     cwd=cwd,
@@ -235,9 +252,14 @@ class SubprocessCodexCommandRunner:
                     start_new_session=True,
                     pass_fds=guard.inherited_fds if guard is not None else (),
                 )
-                ownership = observe_owned_process(process, kind=self._process_kind)
         except OSError as error:
-            raise CodexCliError("Codex CLI process could not start") from error
+            if process is None:
+                raise CodexProcessNotStarted(failure_kind) from error
+            # A prompt-close failure after Popen is a real execution. Route it
+            # through the same owned cleanup below, never a not-started fact.
+            setup_error = error
+        assert process is not None
+        ownership: OwnedProcessObservation | None = None
 
         def stop() -> tuple[str, str]:
             try:
@@ -291,6 +313,7 @@ class SubprocessCodexCommandRunner:
             return None
 
         observed = False
+        setup_completed = False
 
         def publish(result: CodexInvocationResult) -> CodexInvocationResult:
             nonlocal observed
@@ -310,6 +333,12 @@ class SubprocessCodexCommandRunner:
             return result
 
         try:
+            if setup_error is not None:
+                raise setup_error
+            # Registration may fail after the child exists. The common cleanup
+            # must still stop that exact process and publish actual stop facts.
+            ownership = observe_owned_process(process, kind=self._process_kind)
+            setup_completed = True
             while True:
                 check_owner()
                 if time.monotonic() - started >= timeout_seconds:
@@ -343,7 +372,7 @@ class SubprocessCodexCommandRunner:
             if ownership is not None:
                 ownership.uncertain()
             raise
-        except BaseException:
+        except BaseException as error:
             try:
                 stdout, stderr = stop()
             except BaseException:
@@ -359,6 +388,8 @@ class SubprocessCodexCommandRunner:
                 )
             elif proof is None and ownership is not None:
                 ownership.uncertain()
+            if not setup_completed:
+                raise CodexExecutionUnconfirmed("原执行进程初始化记录异常; 暂停后续执行") from error
             raise
 
     def run_observed(
@@ -1798,5 +1829,6 @@ __all__ = [
     "CodexCliError",
     "CodexCommandRunner",
     "CodexInvocationResult",
+    "CodexProcessNotStarted",
     "SubprocessCodexCommandRunner",
 ]

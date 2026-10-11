@@ -1,0 +1,17 @@
+{
+  "name": "structured-execution-observation",
+  "title": "结构化模型调用可信启动和收尾观察",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-11",
+  "allowlist": [
+    "src/ai_software_engineer/agents/structured_observation.py",
+    "src/ai_software_engineer/agents/structured_execution.py",
+    "src/ai_software_engineer/agents/structured.py",
+    "src/ai_software_engineer/agents/codex_cli.py",
+    "tests/agents/test_structured_observation.py",
+    "schemas/structured-execution-observation.schema.json",
+    ".trellis/spec/core/structured-execution-observation.md",
+    ".trellis/tasks/10-11-structured-execution-observation"
+  ]
+}

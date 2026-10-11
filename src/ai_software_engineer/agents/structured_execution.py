@@ -1,15 +1,28 @@
 """Preserve the structured CLI seam while enforcing owned Manager cancellation."""
 
+import hashlib
 import subprocess
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ai_software_engineer.agents.codex_cli import (
     CodexCliError,
     CodexExecutionUnconfirmed,
+    CodexInvocationResult,
+    CodexProcessNotStarted,
     SubprocessCodexCommandRunner,
 )
 from ai_software_engineer.agents.execution import current_execution_guard
+from ai_software_engineer.agents.structured_observation import (
+    StructuredNativeNotStartedReceipt,
+    StructuredNativeStopReceipt,
+    StructuredObservationRejected,
+    admit_structured_execution,
+    observation_digest,
+    record_structured_native_not_started,
+    record_structured_native_stop,
+)
 
 
 def run_structured_command(
@@ -26,16 +39,73 @@ def run_structured_command(
     guard = current_execution_guard()
     if not capture_output or not text:
         raise ValueError("structured commands require captured text output")
+    admission = admit_structured_execution(
+        execution_kind="native",
+        transport_request_sha256=observation_digest(
+            {
+                "argv": argv,
+                "cwd": str(cwd),
+                "stdin_sha256": hashlib.sha256(input.encode()).hexdigest(),
+            }
+        ),
+        timeout_seconds=timeout,
+    )
+
+    stop_recorded = False
+
+    def observed(result: CodexInvocationResult) -> None:
+        nonlocal stop_recorded
+        if admission is None:
+            return
+        stop = result.process_stop
+        if stop is None:
+            raise CodexExecutionUnconfirmed("结构化执行缺少实际进程停止记录")
+        try:
+            if stop.returncode != result.returncode or (
+                result.timed_out != (stop.kind == "local_execution_limit")
+            ):
+                raise ValueError("structured runner stop differs from process result")
+            receipt = StructuredNativeStopReceipt.create(
+                admission=admission,
+                process_stop=stop,
+                stdout_sha256=hashlib.sha256(result.stdout.encode()).hexdigest(),
+                stderr_sha256=hashlib.sha256(result.stderr.encode()).hexdigest(),
+            )
+            record_structured_native_stop(receipt)
+            stop_recorded = True
+        except StructuredObservationRejected:
+            raise
+        except Exception as error:
+            raise StructuredObservationRejected("结构化执行停止事实不一致; 暂停后续执行") from error
+
     try:
-        result = SubprocessCodexCommandRunner(guard, process_kind="structured").run(
-            argv,
-            cwd=cwd,
-            environment=env,
-            stdin=input,
-            timeout_seconds=timeout,
-        )
+        runner = SubprocessCodexCommandRunner(guard, process_kind="structured")
+        if admission is None:
+            result = runner.run(
+                argv, cwd=cwd, environment=env, stdin=input, timeout_seconds=timeout
+            )
+        else:
+            result = runner.run_observed(
+                argv,
+                cwd=cwd,
+                environment=env,
+                stdin=input,
+                timeout_seconds=timeout,
+                observer=observed,
+            )
+            if not stop_recorded:
+                raise CodexExecutionUnconfirmed("结构化执行未保存实际进程停止记录")
     except CodexExecutionUnconfirmed:
         raise
+    except CodexProcessNotStarted as error:
+        if admission is not None:
+            receipt = StructuredNativeNotStartedReceipt.create(
+                admission=admission,
+                failure_kind=error.failure_kind,
+                failed_at=datetime.now(UTC),
+            )
+            record_structured_native_not_started(receipt)
+        raise OSError("owned Codex process was not started") from error
     except CodexCliError as error:
         raise OSError("owned Codex process could not start") from error
     if result.timed_out:
