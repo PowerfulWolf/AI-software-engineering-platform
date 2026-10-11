@@ -1,0 +1,310 @@
+{
+  "observed_on": "2026-10-11",
+  "method": "Separate fresh read-only subprocesses, sequential old then new, cProfile; no HTTP/Host/write-side constructors. One sample per revision; live machine and facts can change.",
+  "results": [
+    {
+      "source_root": "/Users/zhangjunshuai/workspace/code/AI-software-engineering-platform",
+      "elapsed_seconds": 7.112,
+      "requests": 2,
+      "tasks": 25,
+      "hotspots": [
+        {
+          "file": "reader.py",
+          "line": 327,
+          "function": "snapshot",
+          "calls": 1,
+          "seconds": 0.0244,
+          "cumulative_seconds": 7.1118
+        },
+        {
+          "file": "reader.py",
+          "line": 337,
+          "function": "_snapshot",
+          "calls": 1,
+          "seconds": 0.0007,
+          "cumulative_seconds": 7.0873
+        },
+        {
+          "file": "reader.py",
+          "line": 289,
+          "function": "read",
+          "calls": 40,
+          "seconds": 0.0024,
+          "cumulative_seconds": 3.9579
+        },
+        {
+          "file": "reader.py",
+          "line": 1981,
+          "function": "_read_task_details",
+          "calls": 29,
+          "seconds": 0.0025,
+          "cumulative_seconds": 3.9538
+        },
+        {
+          "file": "engineering_history.py",
+          "line": 167,
+          "function": "engineering_history",
+          "calls": 28,
+          "seconds": 0.0007,
+          "cumulative_seconds": 3.0069
+        },
+        {
+          "file": "engineering_history.py",
+          "line": 187,
+          "function": "_engineering_history",
+          "calls": 28,
+          "seconds": 0.0071,
+          "cumulative_seconds": 3.0059
+        },
+        {
+          "file": "reader.py",
+          "line": 192,
+          "function": "history",
+          "calls": 13,
+          "seconds": 0,
+          "cumulative_seconds": 2.5003
+        },
+        {
+          "file": "store.py",
+          "line": 66,
+          "function": "<genexpr>",
+          "calls": 249,
+          "seconds": 0.0002,
+          "cumulative_seconds": 2.5002
+        },
+        {
+          "file": "store.py",
+          "line": 65,
+          "function": "history",
+          "calls": 8,
+          "seconds": 0,
+          "cumulative_seconds": 2.5002
+        },
+        {
+          "file": "store.py",
+          "line": 68,
+          "function": "_validated_history",
+          "calls": 249,
+          "seconds": 0.0034,
+          "cumulative_seconds": 1.9921
+        },
+        {
+          "file": "baseline_snapshot.py",
+          "line": 22,
+          "function": "bindings_for_task",
+          "calls": 6,
+          "seconds": 0,
+          "cumulative_seconds": 1.7942
+        },
+        {
+          "file": "reader.py",
+          "line": 874,
+          "function": "_retired_requirement_ids",
+          "calls": 3,
+          "seconds": 0,
+          "cumulative_seconds": 1.6522
+        },
+        {
+          "file": "retirement.py",
+          "line": 141,
+          "function": "retired_delivery_ids",
+          "calls": 3,
+          "seconds": 0,
+          "cumulative_seconds": 1.652
+        },
+        {
+          "file": "reader.py",
+          "line": 197,
+          "function": "current",
+          "calls": 6,
+          "seconds": 0,
+          "cumulative_seconds": 1.6516
+        },
+        {
+          "file": "models.py",
+          "line": 606,
+          "function": "validate_integrity",
+          "calls": 246,
+          "seconds": 0.0005,
+          "cumulative_seconds": 0.781
+        },
+        {
+          "file": "reader.py",
+          "line": 1139,
+          "function": "_continuation_history",
+          "calls": 28,
+          "seconds": 0.0001,
+          "cumulative_seconds": 0.39
+        },
+        {
+          "file": "store.py",
+          "line": 132,
+          "function": "_validate_successor",
+          "calls": 241,
+          "seconds": 0.0018,
+          "cumulative_seconds": 0.3258
+        },
+        {
+          "file": "reader.py",
+          "line": 1741,
+          "function": "_read_verifications",
+          "calls": 1,
+          "seconds": 0.0004,
+          "cumulative_seconds": 0.301
+        }
+      ]
+    },
+    {
+      "source_root": "/Users/zhangjunshuai/workspace/code/ase-team-read-performance",
+      "elapsed_seconds": 8.058,
+      "requests": 2,
+      "tasks": 25,
+      "hotspots": [
+        {
+          "file": "reader.py",
+          "line": 330,
+          "function": "snapshot",
+          "calls": 1,
+          "seconds": 0.0298,
+          "cumulative_seconds": 8.0581
+        },
+        {
+          "file": "reader.py",
+          "line": 340,
+          "function": "_snapshot",
+          "calls": 1,
+          "seconds": 0.0007,
+          "cumulative_seconds": 8.0283
+        },
+        {
+          "file": "reader.py",
+          "line": 291,
+          "function": "read",
+          "calls": 40,
+          "seconds": 0.0021,
+          "cumulative_seconds": 3.9835
+        },
+        {
+          "file": "reader.py",
+          "line": 1984,
+          "function": "_read_task_details",
+          "calls": 29,
+          "seconds": 0.002,
+          "cumulative_seconds": 3.9795
+        },
+        {
+          "file": "reader.py",
+          "line": 193,
+          "function": "history",
+          "calls": 13,
+          "seconds": 0,
+          "cumulative_seconds": 3.2795
+        },
+        {
+          "file": "store.py",
+          "line": 65,
+          "function": "history",
+          "calls": 8,
+          "seconds": 0.0001,
+          "cumulative_seconds": 3.2795
+        },
+        {
+          "file": "store.py",
+          "line": 66,
+          "function": "<genexpr>",
+          "calls": 249,
+          "seconds": 0.0003,
+          "cumulative_seconds": 3.2794
+        },
+        {
+          "file": "engineering_history.py",
+          "line": 269,
+          "function": "engineering_history",
+          "calls": 28,
+          "seconds": 0.0003,
+          "cumulative_seconds": 3.0133
+        },
+        {
+          "file": "engineering_history.py",
+          "line": 291,
+          "function": "_engineering_history",
+          "calls": 28,
+          "seconds": 0.0016,
+          "cumulative_seconds": 3.0128
+        },
+        {
+          "file": "store.py",
+          "line": 68,
+          "function": "_validated_history",
+          "calls": 249,
+          "seconds": 0.0046,
+          "cumulative_seconds": 2.6218
+        },
+        {
+          "file": "baseline_snapshot.py",
+          "line": 22,
+          "function": "bindings_for_task",
+          "calls": 6,
+          "seconds": 0,
+          "cumulative_seconds": 2.3659
+        },
+        {
+          "file": "reader.py",
+          "line": 877,
+          "function": "_retired_requirement_ids",
+          "calls": 3,
+          "seconds": 0,
+          "cumulative_seconds": 2.2955
+        },
+        {
+          "file": "retirement.py",
+          "line": 141,
+          "function": "retired_delivery_ids",
+          "calls": 3,
+          "seconds": 0,
+          "cumulative_seconds": 2.2952
+        },
+        {
+          "file": "reader.py",
+          "line": 198,
+          "function": "current",
+          "calls": 6,
+          "seconds": 0,
+          "cumulative_seconds": 2.2946
+        },
+        {
+          "file": "models.py",
+          "line": 606,
+          "function": "validate_integrity",
+          "calls": 246,
+          "seconds": 0.0006,
+          "cumulative_seconds": 0.9967
+        },
+        {
+          "file": "store.py",
+          "line": 132,
+          "function": "_validate_successor",
+          "calls": 241,
+          "seconds": 0.0024,
+          "cumulative_seconds": 0.4462
+        },
+        {
+          "file": "reader.py",
+          "line": 1744,
+          "function": "_read_verifications",
+          "calls": 1,
+          "seconds": 0.0006,
+          "cumulative_seconds": 0.4307
+        },
+        {
+          "file": "reader.py",
+          "line": 1834,
+          "function": "_verification_view",
+          "calls": 22,
+          "seconds": 0.001,
+          "cumulative_seconds": 0.4234
+        }
+      ]
+    }
+  ]
+}

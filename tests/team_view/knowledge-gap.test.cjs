@@ -40,7 +40,7 @@ function harness(fetcher) {
     AbortController, structuredClone, supportedActions,
   });
   const source = fs.readFileSync(path.join(__dirname, "../../src/ai_software_engineer/team_view/app.js"), "utf8");
-  const scheduledInitialization = "\nrefresh();\nsetInterval(() => {refresh(); void refreshRecoveryPreparationProgress();}, 5000);\n";
+  const scheduledInitialization = "\nrefresh();\nsetInterval(() => {void refreshRecoveryPreparationProgress();}, 5000);\n";
   assert.ok(source.endsWith(scheduledInitialization), "known scheduled initialization changed");
   vm.runInContext(source.slice(0, -scheduledInitialization.length), context);
   vm.runInContext(`

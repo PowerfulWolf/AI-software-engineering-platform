@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-Applies to `team_view/app.js` Project pickers, Knowledge Project tabs, manual refresh and five-second
+Applies to `team_view/app.js` Project pickers, Knowledge Project tabs, manual refresh and completion-based
 polling. Navigation is an explicit user intent; polling is a replaceable read. Both share one refresh
 pipeline, but must not share a busy-means-discard policy. See [web-console.md](web-console.md) for
 delivery readiness and [live-team-view.md](live-team-view.md) for read-only Project isolation.
@@ -12,6 +12,9 @@ delivery readiness and [live-team-view.md](live-team-view.md) for read-only Proj
 ```javascript
 refresh(projectId, includeRuntimeStatus = false) // Promise<void>; undefined target means poll/refresh
 refreshSnapshot(target, includeRuntimeStatus)    // one bounded snapshot/system read
+scheduleTeamRefresh()                          // one delayed automatic Team observation
+pollTeamSnapshot()                             // consumes that timer and enters refresh
+recordTeamReadOutcome(issue)                    // success resets, busy/timeout backs off
 currentProjectId()                              // authoritative snapshot identity, never intent
 projectSwitchPending()                          // requestedProjectId differs from currentProjectId()
 ```
@@ -23,6 +26,16 @@ HTTP remains `GET /api/v1/team?project_id=<encoded-id>`. No API, Schema, environ
 - `requestedProjectId` retains the latest accepted explicit target; timer calls never overwrite it.
   `refreshFlight` shares one promise. Explicit queued requests are drained immediately after the
   current read settles; ticks during a read are coalesced, not appended to a queue.
+- Automatic Team polling waits five seconds after the complete serial refresh owner settles,
+  including independent auxiliary branches and any explicit latest-intent drains. There is one
+  pending timer and no fixed-clock catch-up read. Starting a manual/navigation refresh cancels
+  that timer; completion schedules exactly one new timer. Consecutive current Team busy/timeout
+  observations delay automatic retries by 10, 20, then at most 30 seconds. A validated Team
+  publication resets five seconds; an auxiliary Operations/Knowledge failure cannot back off a
+  successful Team observation. This is scheduling metadata, never a snapshot or authority cache.
+- Manual refresh and explicit Project navigation bypass the automatic delay. Do not postpone the
+  current owner's latest-intent drain, replace a user click with a timer, or abort shared reads.
+  The independent recovery-preparation lane remains on its existing five-second timer.
 - A→B→C converges to C. Selecting the active read's A cancels queued B. Explicit runtime-status
   requests survive Project selection/coalescing; unchanged polling does not request expensive status.
 - Validate `schema_version`, snapshot collections and exact `selected_project_id === target` before
@@ -51,7 +64,11 @@ HTTP remains `GET /api/v1/team?project_id=<encoded-id>`. No API, Schema, environ
 | B then A while A is held | Keep A; do not read discarded B |
 | Old body resolves/fails after newer selection | No old snapshot publication or misleading old error |
 | Target network failure / wrong Project response | Preserve accepted data; show switch failure; refresh retries target |
-| Old read times out | Release lane and attempt latest explicit target |
+| Old read times out | Release lane and attempt latest explicit target; automatic retries back off |
+| Read lasts eight seconds | No catch-up GET; next automatic Team read begins five seconds after completion |
+| Consecutive busy/timeout, then success | Automatic delay 10→20→30 seconds, bounded; success restores five seconds |
+| Manual refresh/navigation during automatic delay | Start immediately, preserve latest target and exact controls |
+| Slow Team or automatic backoff | Recovery preparation continues independently; no extra Team GET |
 | Knowledge slow after B accepted, then C fails | Visible B identity/assets remain coherent; failure names C |
 | Dirty or busy composer rejects navigation | No read, intent mutation or lost draft |
 
@@ -70,7 +87,12 @@ HTTP remains `GET /api/v1/team?project_id=<encoded-id>`. No API, Schema, environ
 cancellation, late response bodies, wrong Project/network failure and retry, timeout, runtime-status
 coalescing, Knowledge loading/failure identity, and dirty/busy composers. Assert actual selected
 Project, outgoing GET targets/counts, progress text and delivery gate—not just handler invocation.
-Also verify a real localhost click while Refresh is disabled and the Knowledge Project selected tab.
+`browser/polling-scheduler.test.cjs` uses the shipped script and Chrome's controlled clock to assert
+actual GET counts across an eight-second held read, busy retries, retained drafts and independent
+preparation GETs. Other browser fixtures disable only the automatic Team callback and intervals;
+read deadlines and ordinary UI timers still execute. Deterministic fake timer fixtures must distinguish
+Team polling from configuration-success timers with the same delay. Also verify a real localhost
+click while Refresh is disabled and the Knowledge Project selected tab.
 
 ## 7. Wrong vs Correct
 

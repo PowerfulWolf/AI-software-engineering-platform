@@ -21,8 +21,9 @@ from ai_software_engineer.domain.continuation import (
     task_intent_sha256,
 )
 from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
-from ai_software_engineer.domain.model import JsonValue
+from ai_software_engineer.domain.model import DomainModel, JsonValue
 from ai_software_engineer.knowledge.models import KnowledgeError
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryNextAction,
@@ -40,7 +41,10 @@ from ai_software_engineer.orchestration.continuation_store import FileContinuati
 from ai_software_engineer.projection.models import ArtifactHistoryFacts
 from ai_software_engineer.recovery.models import CapturedChanges, digest
 from ai_software_engineer.team_view.baseline_snapshot import BaselineBindingSnapshot
-from ai_software_engineer.team_view.engineering_history import engineering_history
+from ai_software_engineer.team_view.engineering_history import (
+    EngineeringHistorySnapshot,
+    engineering_history,
+)
 from ai_software_engineer.team_view.models import RoleQueueView, ScopeView, TaskView, TeamSnapshot
 from ai_software_engineer.team_view.queue_reader import read_pending_baseline_continuation
 from ai_software_engineer.team_view.reader import (
@@ -54,6 +58,7 @@ from ai_software_engineer.team_view.reader import (
 from ai_software_engineer.web_console.transport import _team_snapshot
 from tests.manager.test_execution_baseline import authorize, setup
 from tests.orchestration.test_continuation_records import make_receipt
+from tests.team_view.test_engineering_history import _handling, _proof, _publish
 
 
 @dataclass(frozen=True)
@@ -388,17 +393,54 @@ def test_task_read_snapshot_wires_all_three_real_projections(
     assert calls == [(fixture.store.root, fixture.task.id)] * 2
 
 
+def test_distinct_task_presentations_read_shared_engineering_prefix_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    proof = _proof(fixture.task)
+    _publish(fixture.sidecar, proof, handling=_handling(proof))
+    reads, native, base, dispatch = _read_snapshot_fixture(fixture, monkeypatch)
+    original = KnowledgeRecordStore._read_name
+    names: list[str] = []
+
+    def counted[T: DomainModel](store: KnowledgeRecordStore, name: str, model: type[T]) -> T | None:
+        if store.root == fixture.sidecar / "state" / "delivery-waits":
+            names.append(name)
+        return original(store, name, model)
+
+    monkeypatch.setattr(KnowledgeRecordStore, "_read_name", counted)
+    saved = {path: path.read_bytes() for path in fixture.sidecar.rglob("*.json")}
+    first = reads.read(native, base, dispatch_override=dispatch)
+    second = reads.read(
+        native,
+        base.model_copy(update={"next_action": "A distinct, exact presentation"}),
+        dispatch_override=dispatch,
+    )
+    assert first is not second
+    assert first.timeline == second.timeline
+    assert any(entry.id.startswith("handling_") for entry in first.timeline)
+    # One list+independent-key read per record, plus the handling's original
+    # proof read for each Task projection. Distinct presentation checks remain.
+    assert sum(name.startswith("wait-investigations-") for name in names) == 4
+    assert sum(name.startswith("wait-handlings-") for name in names) == 2
+    assert saved == {path: path.read_bytes() for path in fixture.sidecar.rglob("*.json")}
+
+
 @pytest.mark.parametrize("failure", [False, True])
 def test_http_read_releases_snapshot_bindings_after_success_or_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: bool
 ) -> None:
     fixture = _fixture(tmp_path)
+    proof = _proof(fixture.task)
+    _publish(fixture.sidecar, proof, handling=_handling(proof))
     references: list[weakref.ReferenceType[BaselineBindingSnapshot]] = []
+    engineering_references: list[weakref.ReferenceType[EngineeringHistorySnapshot]] = []
     projected: list[TaskView] = []
 
     def snapshot(reader: ProductionTeamReader, project_id: str | None) -> TeamSnapshot:
         reads, native, base, dispatch = _read_snapshot_fixture(fixture, monkeypatch)
         references.append(weakref.ref(reads._baselines))
+        engineering_references.append(weakref.ref(reads._engineering))
         view = reads.read(native, base, dispatch_override=dispatch)
         projected.append(view)
         if failure:
@@ -412,5 +454,9 @@ def test_http_read_releases_snapshot_bindings_after_success_or_failure(
     response = asyncio.run(_team_snapshot(reader, None, Lock()))
     assert response.status_code == (503 if failure else 200)
     assert projected and any(entry.id.startswith("baseline_") for entry in projected[0].timeline)
+    assert any(entry.id.startswith("handling_") for entry in projected[0].timeline)
     gc.collect()
     assert references and all(reference() is None for reference in references)
+    assert engineering_references and all(
+        reference() is None for reference in engineering_references
+    )

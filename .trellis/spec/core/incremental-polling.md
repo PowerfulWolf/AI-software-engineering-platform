@@ -1,5 +1,52 @@
 # Console incremental polling
 
+## Team 按完成时间刷新与繁忙退避（2026-10-11）
+
+Scope：`refresh`、`scheduleTeamRefresh`、`pollTeamSnapshot`、`recordTeamReadOutcome`。
+慢 Team 读取与无关辅助记录仍共享原串行 owner；全局 worker 内存保护见
+`read-memory-lifecycle.md`，最新 Project 意图见 `project-navigation.md`。
+
+- 自动 Team 刷新不再使用固定五秒时钟。在完整 `refreshFlight` 结束、所有分支与最新
+  显式目标处理完后，只安排一个五秒 `setTimeout`；读取中不累计 tick，也不在结束后
+  立即补读。手动刷新/Project导航开始时移除原 timer，结束后重新安排一个。
+- 当前 Team 分支的 busy 或 deadline 连续失败使自动等待增加为10、20、30秒，上限30秒；
+  合法 Team 发布恢复正常五秒等待；其他 unavailable 也使用正常等待，不推断后台
+  线程或 Agent 已停止。辅助 Operations/Knowledge 失败不能把已经成功的 Team 当作繁忙。
+- 退避只约束自动观察。用户手动刷新与最新 Project 意图仍立即受理，旧读取 settle 后
+  立即 drain 最后目标，保留原40秒截止、scope fence和共享系统读取串行性。不能为导航
+  取消后台读取、延长事实可信期或复用上一次 snapshot 作为新权限。
+- 恢复准备明细继续独立每五秒观察当前精确操作，保持自身 single flight 与短 deadline；
+  Team 慢/退避不能阻止它，准备 timer也不能顺带发 Team GET。现有旧数据来源提示、
+  门禁、正文DOM、展开、焦点、选区及业务草稿原样保留。
+- 连接文案说明“读取完成后自动更新，繁忙时稍后重试”，不能承诺墙钟每五秒得到最新
+  数据。读取成功、失败或退避都不提交交付操作、审批或恢复执行。
+- Task的 `last_activity` 仍保留原交付记录来源和排序语义，普通详情标“最近交付记录”；
+  历史详情继续标“当次记录更新”。独立最近心跳说明执行存活性，不能为了让时间看起来
+  更新而覆盖业务记录时间。真实新调用/心跳可晚于上次交付checkpoint，二者不是矛盾。
+
+| 场景 | 必须验证 |
+| --- | --- |
+| Team读取持续8秒 | 读取中无第二个GET；全部完成后再等五秒 |
+| busy/timeout连续失败 | 自动等待10→20→30，上限30；控制门禁仍暂停 |
+| 重新成功读取有效Team | 只保留一个五秒timer，同内容成功也恢复原资格 |
+| Team成功、Operations超时 | Team仍为当前观察，自动等待保持五秒 |
+| 手动刷新/导航处于退避 | 立即读取；A→B→C与超时后最新目标语义保持 |
+| Team慢或退避、存在恢复操作 | 准备GET仍独立每五秒；无额外TeamGET |
+| 相同timer delay属于配置提示/Team | 假timer按回调归属区分，不能误触另一用户交互 |
+
+验证使用增量 `readiness.test.cjs`、`knowledge-gap.test.cjs`、`ui.test.cjs` 与真实浏览器
+`browser/polling-scheduler.test.cjs`，并回归 polling-state/preparation-progress/detail-read-freshness/
+recovery-read-contention。浏览器scheduler测试用受控时钟验证真实请求；其他浏览器用例关闭
+自动Team timer以显式tick复现交互，不能让新timeout在后台悄悄运行。
+
+Good：慢读结束后有完整等待期，繁忙时减少抢读但用户仍可切换项目。Base：首次大历史
+仍可能慢，旧数据保持可读并标注来源。Bad：删worker锁、排队多个完整读取、跨请求缓存
+snapshot/权限、把取消HTTP当作worker已停止，或让自动退避吞掉用户导航。
+
+存量数据处置：无Schema/API/SQL/journal或审批变化；不改需求、Task、Operation或开发现场。
+在空闲受控维护边界加载兼容资产并刷新浏览器。回滚资产与规范恢复原自动频率，持久化事实
+不变。根因是固定时钟忽略实际读取成本；之后用真实scheduler请求次数与完成顺序测试守住。
+
 ## Product 讨论草稿与当前提交资格分离（2026-10-10）
 
 Scope：`app.js::requestOperation` 中 Product 讨论表单。暂时无法读取 Team 时，用户仍需
@@ -212,7 +259,8 @@ rewriting history or stopping a role.
 
 Scope: `app.js::refreshSnapshot`, `TeamReadFailure(kind)`, `teamReadIssue`,
 `unavailableTeamName()` and `unavailableTeamMessage()`. The Team wire, 40-second GET deadline,
-serial five-second polling and server worker-owned admission remain unchanged.
+serial refresh and server worker-owned admission remain unchanged; automatic timing follows the
+completion/backoff contract above.
 
 - Non-2xx Team JSON recognizes only fixed `error.code=TEAM_READ_IN_PROGRESS`. Render read-in-progress
   guidance and automatic retry, not a red database-failure diagnosis. Never display server message,
@@ -330,7 +378,7 @@ This frontend optimization does not reduce the full API response or resolve a
 backend read admission wait. Existing records require no migration or hash rewrite;
 rollback only restores the former full-source render comparison.
 
-Applies to the five-second Console read loop in `src/ai_software_engineer/team_view/app.js`.
+Applies to the completion-based Console read loop in `src/ai_software_engineer/team_view/app.js`.
 No API, schema, storage, Task state or authorization contract changes.
 
 ```javascript

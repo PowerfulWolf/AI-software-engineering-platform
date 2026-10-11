@@ -20,6 +20,8 @@ let selectionIntentRevision = 0;
 let pausedTaskDetailKey = null;
 let refreshing = false;
 let refreshFlight = null;
+let teamRefreshTimer = null;
+let teamRefreshDelay = 5000;
 let requestedProjectId = null;
 let activeRefreshProject = null;
 let refreshQueued = false;
@@ -9648,7 +9650,7 @@ function buildDetail(panel = document.getElementById("detail")) {
     if (item.blocker) overview.append(el("p", "当前原因 · " + humanizeBlockingText(item.blocker), "blocker"));
     if (item.next_action) overview.append(el("p", "下一步 · " + humanizeBlockingText(item.next_action)));
   }
-  overview.append(el("p", paths(item.scope), "paths"), el("p", (historicalTask ? "当次记录更新 · " : "最近活动 · ") + time(item.last_activity), "muted"));
+  overview.append(el("p", paths(item.scope), "paths"), el("p", (historicalTask ? "当次记录更新 · " : "最近交付记录 · ") + time(item.last_activity), "muted"));
   const activity = historicalTask ? el("div", undefined, "role-execution-activity") : roleExecutionActivity(item);
   activity.classList.add("task-activity-block");
   viewBlock(activity, "task-activity", [item.status, item.terminal, item.role_queue, item.execution, historicalTask]);
@@ -9951,6 +9953,8 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     }
     return refreshFlight;
   }
+  clearTimeout(teamRefreshTimer);
+  teamRefreshTimer = null;
   // Coalesce explicit navigation, but never queue periodic ticks behind a slow poll.
   // Keep shared Console/Operations reads serial: aborting them would revoke readiness.
   refreshFlight = (async () => {
@@ -9963,7 +9967,24 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     } while (refreshQueued);
   })();
   try { await refreshFlight; }
-  finally { refreshFlight = null; activeRefreshProject = null; }
+  finally {
+    refreshFlight = null;
+    activeRefreshProject = null;
+    scheduleTeamRefresh();
+  }
+}
+function scheduleTeamRefresh() {
+  clearTimeout(teamRefreshTimer);
+  teamRefreshTimer = setTimeout(pollTeamSnapshot, teamRefreshDelay);
+}
+function pollTeamSnapshot() {
+  teamRefreshTimer = null;
+  return refresh();
+}
+function recordTeamReadOutcome(issue) {
+  teamRefreshDelay = ["busy", "timeout"].includes(issue)
+    ? Math.min(teamRefreshDelay === 5000 ? 10000 : teamRefreshDelay * 2, 30000)
+    : 5000;
 }
 function showRefreshProgress() {
   const status = document.getElementById("connection");
@@ -10068,6 +10089,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       const selectedBeforeRefresh = selected;
       snapshot = next;
       teamReadIssue = null;
+      recordTeamReadOutcome(null);
       teamPublished = true;
       if (requestedProjectId === target) requestedProjectId = null;
       if (
@@ -10096,6 +10118,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       if (!superseded() && !teamPublished) {
         teamReadIssue = controller.signal.aborted ? "timeout"
           : error instanceof TeamReadFailure ? error.kind : "unavailable";
+        recordTeamReadOutcome(teamReadIssue);
         // Revoke old Team authority without waiting for independent auxiliary reads.
         renderCurrentFacts();
         syncDeliveryControls();
@@ -10130,7 +10153,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
           : "设置控制台已连接 · 交付运行时尚未就绪") +
         " · 最近读取 " +
         time(snapshot.as_of) +
-        " · 每 5 秒刷新" + (operationsAvailable ? "" : " · 交付操作记录读取失败，保留上次历史；当前操作暂不可用")
+        " · 读取完成后自动更新，繁忙时稍后重试" + (operationsAvailable ? "" : " · 交付操作记录读取失败，保留上次历史；当前操作暂不可用")
       : consoleAvailable === false ? "只读团队记录已连接；当前服务未提供交付控制接口。"
         : "团队记录已更新；交付控制连接暂不可用，当前操作暂停。";
   } catch (error) {
@@ -10170,4 +10193,4 @@ document
   .getElementById("refresh")
   .addEventListener("click", () => refresh(undefined, true));
 refresh();
-setInterval(() => {refresh(); void refreshRecoveryPreparationProgress();}, 5000);
+setInterval(() => {void refreshRecoveryPreparationProgress();}, 5000);

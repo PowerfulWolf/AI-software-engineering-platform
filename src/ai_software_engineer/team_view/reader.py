@@ -104,6 +104,7 @@ from ai_software_engineer.work_queue.models import QueuedWorkItem
 
 from .baseline_snapshot import BaselineBindingSnapshot
 from .blocker_text import localize_blocking_text
+from .engineering_history import EngineeringHistorySnapshot
 from .models import (
     AgentView,
     AssignmentView,
@@ -282,6 +283,7 @@ class _TaskReadSnapshot:
     _branches: _CandidateBranchCache
     _evaluations: _EvaluationEventCache = field(default_factory=_EvaluationEventCache)
     _baselines: BaselineBindingSnapshot = field(default_factory=BaselineBindingSnapshot)
+    _engineering: EngineeringHistorySnapshot = field(default_factory=EngineeringHistorySnapshot)
     _views: dict[tuple[Path, str | None, str, str, str, str | None], TaskView] = field(
         default_factory=dict
     )
@@ -311,6 +313,7 @@ class _TaskReadSnapshot:
                 branch_cache=self._branches,
                 evaluation_events=self._evaluations,
                 baseline_bindings=self._baselines,
+                engineering_history_snapshot=self._engineering,
             )
         return self._views[identity]
 
@@ -1988,6 +1991,7 @@ def _read_task_details(
     branch_cache: _CandidateBranchCache | None = None,
     evaluation_events: _EvaluationEventCache | None = None,
     baseline_bindings: BaselineBindingSnapshot | None = None,
+    engineering_history_snapshot: EngineeringHistorySnapshot | None = None,
 ) -> TaskView:
     cp = native.checkpoint
     if cp.dispatch_commit_id is None and dispatch_override is None:
@@ -2156,6 +2160,7 @@ def _read_task_details(
             cp.delivery_id,
             baseline_bindings=baseline_bindings,
             delivery_requirement_id=base.request_id,
+            history_snapshot=engineering_history_snapshot,
         )
         from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
         from ai_software_engineer.team_view.queue_reader import read_pending_baseline_continuation

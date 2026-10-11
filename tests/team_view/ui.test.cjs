@@ -939,6 +939,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       };
     },
     setTimeout: (fn) => {
+      // Explicit ticks drive Team observations; keep its scheduler out of unrelated UI timers.
+      if (fn.name === "pollTeamSnapshot") return 0;
       scheduledTimeouts.push(fn);
       return scheduledTimeouts.length;
     },
@@ -946,7 +948,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     setInterval: (fn, ms) => {
       interval = { fn: async () => {
         fn();
-        await vm.runInContext("refreshFlight", context);
+        await vm.runInContext("refresh()", context);
       }, ms };
     },
     AbortController,

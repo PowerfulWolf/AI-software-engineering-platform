@@ -66,7 +66,7 @@ const successMessage = "配置已应用，Web Console 已使用保存的运行�
 
 async function browser(options = {}) {
   const nodes = new Map(), timers = new Map(), storage = new Map(), requests = [];
-  let timerId = 0, poll;
+  let timerId = 0, preparationPoll;
   const get = (id) => {
     if (!nodes.has(id)) {
       const node = new Element("div");
@@ -171,7 +171,7 @@ async function browser(options = {}) {
       return id;
     },
     clearTimeout: (id) => timers.delete(id),
-    setInterval: (callback) => { poll = callback; },
+    setInterval: (callback) => { preparationPoll = callback; },
     localStorage: { getItem: (key) => storage.get(key) ?? null,
       setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) },
     location: { href: "http://127.0.0.1:8765/", port: "8765", assign() {} },
@@ -182,10 +182,10 @@ async function browser(options = {}) {
   vm.runInContext(fs.readFileSync(script, "utf8"), context, { filename: script });
   await settled();
   return {
-    state, config, requests, context, get,
+    state, config, requests, context, get, timers,
     content: () => text(get("content")),
     navigate: async (target) => { await get("nav-" + target).events.click(); await settled(); },
-    tick: async () => { await poll(); await settled(); },
+    tick: async () => { await vm.runInContext("refresh()", context); await settled(); },
     click: async (title) => {
       const control = descendants(get("content"))
         .find((node) => node.tag === "button" && node.textContent === title);
@@ -195,8 +195,12 @@ async function browser(options = {}) {
     },
     input: (value) => descendants(get("content"))
       .find((node) => node.tag === "input" && node.value === value),
-    runTimer: async (delay) => {
-      const entry = [...timers].find(([, timer]) => timer.delay === delay);
+    preparationTick: async () => { await preparationPoll(); await settled(); },
+    runTimer: async (delay, callbackName) => {
+      const candidates = [...timers].filter(([, timer]) => timer.delay === delay);
+      const entry = callbackName
+        ? candidates.find(([, timer]) => timer.callback.name === callbackName)
+        : candidates.find(([, timer]) => timer.callback.name !== "pollTeamSnapshot") || candidates[0];
       assert.ok(entry, "Missing timeout of " + delay + " ms");
       timers.delete(entry[0]);
       await entry[1].callback();
@@ -250,9 +254,11 @@ test("validated Team facts publish while independent Operations are still pendin
   assert.equal(ui.get("team").textContent, "Updated team");
   assert.equal(vm.runInContext("refreshing", ui.context), true,
     "the serial refresh still owns the unfinished independent read");
+  assert.equal(teamPollTimers(ui).length, 0, "no automatic timer before auxiliary work settles");
   held.resolve();
   await polling;
   assert.equal(vm.runInContext("refreshing", ui.context), false);
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [5000]);
 });
 
 test("a late exact edit result cannot reopen detail after the user explicitly closes it", async () => {
@@ -1066,4 +1072,143 @@ test("Requests confirmation recovers after its pending POST fails during read di
   assert.equal(stillGatedAfterPostFailure, true, "failed POST must not bypass the disconnected control gate");
   assert.equal(ui.get("composer").children[0], dialog);
   assert.match(text(dialog), /删除操作未被接受|操作失败/);
+});
+
+
+const teamPollTimers = ui => [...ui.timers.values()].filter(timer =>
+  timer.callback.name === "pollTeamSnapshot");
+
+test("automatic Team polling waits five seconds after the entire slow refresh settles", async () => {
+  const options = {ready: true, restart: false, project: true};
+  const ui = await browser(options);
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [5000]);
+  const held = deferred(); let reads = 0;
+  options.teamRead = async (_url, _request, team, response) => {
+    reads++; await held.promise; return response(team);
+  };
+  const reading = ui.runTimer(5000, "pollTeamSnapshot");
+  await settled();
+  assert.equal(reads, 1);
+  assert.equal(teamPollTimers(ui).length, 0, "no overdue automatic tick survives a slow read");
+  const coalesced = ui.tick();
+  held.resolve(); await Promise.all([reading, coalesced]);
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [5000]);
+});
+
+test("busy automatic Team reads back off to thirty seconds and success resets five seconds", async () => {
+  const options = {ready: true, restart: false, project: true};
+  const ui = await browser(options);
+  options.teamRead = async (_url, _request, _team, response) =>
+    response({error: {code: "TEAM_READ_IN_PROGRESS"}}, false);
+  await ui.tick();
+  for (const delay of [10000, 20000, 30000, 30000]) {
+    assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [delay]);
+    assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), false);
+    await ui.runTimer(delay, "pollTeamSnapshot");
+  }
+  options.teamRead = async (_url, _request, team, response) => response(team);
+  await ui.runTimer(30000, "pollTeamSnapshot");
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [5000]);
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), true);
+});
+
+test("a timed out Team observation backs off without delaying an explicit Project intent", async () => {
+  const {ui, options, choose, current} = await projectBrowser();
+  options.teamRead = async (_url, request) => new Promise((_resolve, reject) =>
+    request.signal.addEventListener("abort", () => reject(new Error("fixture timeout")), {once: true}));
+  const reading = ui.tick(); await settled();
+  await ui.runTimer(40000); await reading;
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [10000]);
+  options.teamRead = async (url, _request, team, response) =>
+    response({...team, selected_project_id: projectTarget(url)});
+  await choose("Project B");
+  assert.equal(current(), "project_b");
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [5000]);
+});
+
+test("successful Team data does not back off when independent Operations time out", async () => {
+  const options = {ready: true, restart: false, project: true};
+  const ui = await browser(options);
+  options.operationsRead = async (request) => new Promise((_resolve, reject) =>
+    request.signal.addEventListener("abort", () => reject(new Error("fixture timeout")), {once: true}));
+  const reading = ui.tick(); await settled();
+  await ui.runTimer(40000); await reading;
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [5000]);
+  assert.equal(vm.runInContext("teamReadIssue", ui.context), null);
+});
+
+
+test("manual status refresh bypasses automatic backoff and leaves only one new timer", async () => {
+  const options = {ready: true, restart: false, project: true};
+  const ui = await browser(options);
+  options.teamRead = async (_url, _request, _team, response) =>
+    response({error: {code: "TEAM_READ_IN_PROGRESS"}}, false);
+  await ui.tick();
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [10000]);
+  options.teamRead = async (_url, _request, team, response) => response(team);
+  await ui.navigate("status");
+  const before = ui.requests.filter(item => item.url === "/api/v1/admin/status").length;
+  await ui.get("refresh").events.click();
+  assert.equal(ui.requests.filter(item => item.url === "/api/v1/admin/status").length, before + 1);
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [5000]);
+});
+
+test("independent preparation ticks do not issue Team reads during automatic backoff", async () => {
+  const options = {ready: true, restart: false, project: true};
+  const ui = await browser(options);
+  options.teamRead = async (_url, _request, _team, response) =>
+    response({error: {code: "TEAM_READ_IN_PROGRESS"}}, false);
+  await ui.tick();
+  const before = ui.requests.filter(item => item.url.startsWith("/api/v1/team")).length;
+  vm.runInContext("globalThis.preparationReads = 0; refreshRecoveryPreparationProgress = async () => {preparationReads++;}", ui.context);
+  await ui.preparationTick(); await ui.preparationTick();
+  assert.equal(vm.runInContext("preparationReads", ui.context), 2);
+  assert.equal(ui.requests.filter(item => item.url.startsWith("/api/v1/team")).length, before);
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [10000]);
+});
+
+
+test("consecutive Team deadlines retain the same bounded automatic backoff", async () => {
+  const options = {ready: true, restart: false, project: true};
+  const ui = await browser(options);
+  options.teamRead = async (_url, request) => new Promise((_resolve, reject) =>
+    request.signal.addEventListener("abort", () => reject(new Error("fixture timeout")), {once: true}));
+  let previousDelay = null;
+  for (const delay of [10000, 20000, 30000, 30000]) {
+    const reading = previousDelay === null ? ui.tick()
+      : ui.runTimer(previousDelay, "pollTeamSnapshot");
+    await settled();
+    assert.equal(teamPollTimers(ui).length, 0);
+    await ui.runTimer(40000); await reading;
+    assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [delay]);
+    assert.equal(vm.runInContext("teamReadIssue", ui.context), "timeout");
+    previousDelay = delay;
+  }
+  options.teamRead = async (_url, _request, team, response) => response(team);
+  await ui.get("refresh").events.click();
+  assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [5000]);
+});
+
+test("Task labels its older delivery record separately from the current execution heartbeat", async () => {
+  const ui = await browser({ready: true, restart: false, project: true});
+  vm.runInContext(`snapshot.tasks = [{id: "delivery_current", task_id: "task_current",
+    title: "Current Coder work", project_id: "project_fixture", request_id: "request_current",
+    status: "IMPLEMENTING", terminal: false, last_activity: "2026-10-11T07:30:36Z",
+    scope: {root: "/fixture", selected_paths: ["."]}, assignments: [], documents: [],
+    timeline: [], execution_history: [], runs: [],
+    execution: {state: "RUNNING", responsibility: "team", reason_code: "ROLE_RUNNING",
+      reason: "Coder 正在执行。", next_action: "等待本次执行。"},
+    role_queue: [{work_item_id: "work_current", role: "coder", attempt: 5,
+      status: "RUNNING", lease_liveness: "LEASE_VALID", execution_phase: "ROLE_EXECUTION",
+      heartbeat_at: "2026-10-11T09:20:32Z"}]}];
+    showDetail("task", "delivery_current");`, ui.context);
+  const detail = text(ui.get("detail"));
+  const recorded = vm.runInContext('time("2026-10-11T07:30:36Z")', ui.context);
+  const heartbeat = vm.runInContext('time("2026-10-11T09:20:32Z")', ui.context);
+  assert.ok(detail.includes("最近交付记录 · " + recorded));
+  assert.ok(detail.includes("最近心跳 " + heartbeat));
+  assert.match(detail, /Coder 正在执行/);
+  assert.doesNotMatch(detail, /最近活动 ·/);
+  assert.equal(vm.runInContext('snapshot.tasks[0].last_activity', ui.context), "2026-10-11T07:30:36Z",
+    "a heartbeat is separate liveness evidence and must not replace delivery chronology");
 });

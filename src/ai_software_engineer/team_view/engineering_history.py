@@ -3,7 +3,10 @@
 import hashlib
 import os
 import stat
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.delivery_resolution import (
@@ -17,7 +20,7 @@ from ai_software_engineer.domain.delivery_resolution import (
 from ai_software_engineer.domain.engineering_authority import EngineeringAdmission, EngineeringScope
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.execution_baseline import BaselineContinuationMode, BaselinePurpose
-from ai_software_engineer.domain.model import JsonValue
+from ai_software_engineer.domain.model import DomainModel, JsonValue
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.knowledge.legacy_scope import require_delivery_requirement_scope
 from ai_software_engineer.knowledge.models import KnowledgeError, KnowledgeRunBinding, digest
@@ -40,6 +43,105 @@ from ai_software_engineer.recovery.verification_records import VerificationExecu
 from ai_software_engineer.redaction import redact_text, source_inspection_scope
 
 from .baseline_snapshot import BaselineBindingSnapshot
+
+type _EngineeringRecord = (
+    DeliveryWaitInvestigation
+    | DeliveryResolution
+    | DeliveryWaitHandling
+    | DeliveryPreflightReceipt
+    | VerifierPreparationIntent
+    | VerifierPreparationCheckpoint
+)
+
+
+@dataclass(slots=True, weakref_slot=True)
+class EngineeringHistorySnapshot:
+    """Capture complete typed sidecar ledgers only for one Team read.
+
+    These private facts are inspected without mutation. Task intent, scope,
+    original references and engineering authorization remain projection checks;
+    no successful decision or current execution fact is cached here.
+    """
+
+    _maximum_records: int = 512
+    _maximum_bytes: int = 16 * 1024 * 1024
+    _maximum_prefixes: int = 128
+    _maximum_stores: int = 64
+    _retained_records: int = 0
+    _retained_bytes: int = 0
+    _stores: dict[Path, KnowledgeRecordStore | None] = field(default_factory=dict)
+    _records: dict[tuple[Path, str, type[DomainModel]], tuple[DomainModel, ...]] = field(
+        default_factory=dict
+    )
+    _dispositions: dict[Path, tuple[tuple[Path, EngineeringDispositionRecord], ...]] = field(
+        default_factory=dict
+    )
+
+    def store(self, root: Path) -> KnowledgeRecordStore | None:
+        identity = root.absolute()
+        if identity in self._stores:
+            return self._stores[identity]
+        store = KnowledgeRecordStore(identity, read_only=True) if identity.exists() else None
+        if len(self._stores) < self._maximum_stores:
+            self._stores[identity] = store
+        return store
+
+    def _retain(self, records: tuple[DomainModel, ...]) -> bool:
+        """Bound reuse, never the complete history a caller verifies or receives."""
+        if (
+            len(self._records) + len(self._dispositions) >= self._maximum_prefixes
+            or self._retained_records + len(records) > self._maximum_records
+        ):
+            return False
+        size = 0
+        for record in records:
+            size += len(record.model_dump_json().encode("utf-8"))
+            if self._retained_bytes + size > self._maximum_bytes:
+                return False
+        self._retained_records += len(records)
+        self._retained_bytes += size
+        return True
+
+    def records[T: _EngineeringRecord](
+        self,
+        store: KnowledgeRecordStore,
+        namespace: str,
+        model: type[T],
+        key: Callable[[T], str],
+        changed_message: str,
+    ) -> tuple[T, ...]:
+        identity = (store.root.absolute(), namespace, model)
+        if identity not in self._records:
+            records = store.list(namespace, model)
+            for record in records:
+                record.validate_integrity()
+                if store.get(namespace, key(record), model) != record:
+                    raise ValueError(changed_message)
+            if not self._retain(records):
+                return records
+            self._records[identity] = records
+        return cast(tuple[T, ...], self._records[identity])
+
+    def dispositions(self, sidecar: Path) -> tuple[tuple[Path, EngineeringDispositionRecord], ...]:
+        identity = sidecar.absolute()
+        if identity not in self._dispositions:
+            records: list[tuple[Path, EngineeringDispositionRecord]] = []
+            for root in (identity / "state").glob("*"):
+                if not root.is_dir():
+                    continue
+                for path in root.glob("engineering-disposition-*.json"):
+                    record = EngineeringDispositionRecord.model_validate_json(_read(path))
+                    record.validate_integrity()
+                    if path.name != "engineering-disposition-" + record.record_sha256 + ".json":
+                        raise ValueError(
+                            "terminal engineering record changed its immutable store key"
+                        )
+                    records.append((path, record))
+            result = tuple(records)
+            if not self._retain(tuple(record for _, record in result)):
+                return result
+            self._dispositions[identity] = result
+        return self._dispositions[identity]
 
 
 def _read(path: Path) -> bytes:
@@ -172,6 +274,7 @@ def engineering_history(
     *,
     baseline_bindings: BaselineBindingSnapshot | None = None,
     delivery_requirement_id: str | None = None,
+    history_snapshot: EngineeringHistorySnapshot | None = None,
 ) -> tuple[TimelineEntry, ...]:
     with source_inspection_scope():
         return _engineering_history(
@@ -181,6 +284,7 @@ def engineering_history(
             requirement_id,
             baseline_bindings=baseline_bindings,
             delivery_requirement_id=delivery_requirement_id,
+            history_snapshot=history_snapshot or EngineeringHistorySnapshot(),
         )
 
 
@@ -192,21 +296,22 @@ def _engineering_history(
     *,
     baseline_bindings: BaselineBindingSnapshot | None = None,
     delivery_requirement_id: str | None = None,
+    history_snapshot: EngineeringHistorySnapshot,
 ) -> tuple[TimelineEntry, ...]:
     entries: list[TimelineEntry] = []
     if scope.repository_root != task.repository:
         raise ValueError("engineering history is outside the registered Task repository")
     intent = task_intent_sha256(task)
     waits = sidecar / "state" / "delivery-waits"
-    if waits.exists():
-        records = KnowledgeRecordStore(waits, read_only=True)
-        for proof in records.list("wait-investigations", DeliveryWaitInvestigation):
-            proof.validate_integrity()
-            if (
-                records.get("wait-investigations", proof.proof_sha256, DeliveryWaitInvestigation)
-                != proof
-            ):
-                raise ValueError("engineering investigation changed its immutable store key")
+    records = history_snapshot.store(waits)
+    if records is not None:
+        for proof in history_snapshot.records(
+            records,
+            "wait-investigations",
+            DeliveryWaitInvestigation,
+            lambda proof: proof.proof_sha256,
+            "engineering investigation changed its immutable store key",
+        ):
             if proof.task_id != task.id:
                 continue
             if proof.task_intent_sha256 != intent:
@@ -240,17 +345,13 @@ def _engineering_history(
                     },
                 )
             )
-        for decision in records.list("wait-resolutions", DeliveryResolution):
-            decision.validate_integrity()
-            if (
-                records.get(
-                    "wait-resolutions",
-                    decision.work_item_id + ":" + decision.expected_disposition_sha256,
-                    DeliveryResolution,
-                )
-                != decision
-            ):
-                raise ValueError("engineering resolution changed its immutable store key")
+        for decision in history_snapshot.records(
+            records,
+            "wait-resolutions",
+            DeliveryResolution,
+            lambda decision: decision.work_item_id + ":" + decision.expected_disposition_sha256,
+            "engineering resolution changed its immutable store key",
+        ):
             if decision.task_id != task.id:
                 continue
             if decision.expected_task_intent_sha256 != intent:
@@ -306,10 +407,13 @@ def _engineering_history(
                     },
                 )
             )
-        for handling in records.list("wait-handlings", DeliveryWaitHandling):
-            handling.validate_integrity()
-            if records.get("wait-handlings", handling.record_key, DeliveryWaitHandling) != handling:
-                raise ValueError("platform handling changed its immutable store key")
+        for handling in history_snapshot.records(
+            records,
+            "wait-handlings",
+            DeliveryWaitHandling,
+            lambda handling: handling.record_key,
+            "platform handling changed its immutable store key",
+        ):
             if handling.task_id != task.id:
                 continue
             if handling.task_intent_sha256 != intent:
@@ -374,15 +478,15 @@ def _engineering_history(
                 )
             )
     preflight = sidecar / "state" / "delivery-preflight"
-    if preflight.exists():
-        records = KnowledgeRecordStore(preflight, read_only=True)
-        for receipt in records.list("preflight-receipts", DeliveryPreflightReceipt):
-            receipt.validate_integrity()
-            if (
-                records.get("preflight-receipts", receipt.receipt_sha256, DeliveryPreflightReceipt)
-                != receipt
-            ):
-                raise ValueError("preflight history changed its immutable store key")
+    records = history_snapshot.store(preflight)
+    if records is not None:
+        for receipt in history_snapshot.records(
+            records,
+            "preflight-receipts",
+            DeliveryPreflightReceipt,
+            lambda receipt: receipt.receipt_sha256,
+            "preflight history changed its immutable store key",
+        ):
             if receipt.task_id != task.id:
                 continue
             if (
@@ -413,21 +517,22 @@ def _engineering_history(
                     },
                 )
             )
-        for preparation_intent in records.list(
-            "verifier-preparation-intents", VerifierPreparationIntent
+        for preparation_intent in history_snapshot.records(
+            records,
+            "verifier-preparation-intents",
+            VerifierPreparationIntent,
+            lambda preparation_intent: (
+                f"{preparation_intent.work_item_id}:{preparation_intent.checkpoint_sequence}:"
+                f"{preparation_intent.dispatch_sequence}"
+            ),
+            "preparation intent history changed its immutable store key",
         ):
-            preparation_intent.validate_integrity()
             if preparation_intent.task_id != task.id:
                 continue
             key = (
                 f"{preparation_intent.work_item_id}:{preparation_intent.checkpoint_sequence}:"
                 f"{preparation_intent.dispatch_sequence}"
             )
-            if (
-                records.get("verifier-preparation-intents", key, VerifierPreparationIntent)
-                != preparation_intent
-            ):
-                raise ValueError("preparation intent history changed its immutable store key")
             entries.append(
                 TimelineEntry(
                     id="preparation_intent_" + preparation_intent.intent_sha256,
@@ -450,15 +555,13 @@ def _engineering_history(
                     },
                 )
             )
-        for marker in records.list("verifier-preparations", VerifierPreparationCheckpoint):
-            marker.validate_integrity()
-            if (
-                records.get(
-                    "verifier-preparations", marker.checkpoint_sha256, VerifierPreparationCheckpoint
-                )
-                != marker
-            ):
-                raise ValueError("preparation history changed its immutable store key")
+        for marker in history_snapshot.records(
+            records,
+            "verifier-preparations",
+            VerifierPreparationCheckpoint,
+            lambda marker: marker.checkpoint_sha256,
+            "preparation history changed its immutable store key",
+        ):
             if marker.task_id != task.id:
                 continue
             preparation_intent = records.get(
@@ -786,44 +889,37 @@ def _engineering_history(
                         },
                     )
                 )
-    for root in (sidecar / "state").glob("*"):
-        if not root.is_dir():
+    for path, terminal_record in history_snapshot.dispositions(sidecar):
+        if terminal_record.source_task_id != task.id:
             continue
-        for path in root.glob("engineering-disposition-*.json"):
-            terminal_record = EngineeringDispositionRecord.model_validate_json(_read(path))
-            terminal_record.validate_integrity()
-            if path.name != "engineering-disposition-" + terminal_record.record_sha256 + ".json":
-                raise ValueError("terminal engineering record changed its immutable store key")
-            if terminal_record.source_task_id != task.id:
-                continue
-            if (
-                terminal_record.delivery_id != requirement_id
-                or terminal_record.repository_root != task.repository
-                or terminal_record.disposition.facts.task_intent_sha256 != intent
-                or terminal_record.source_task_status != task.status
-                or terminal_record.source_task_snapshot_sha256 != digest(task.to_wire())
-            ):
-                raise ValueError("terminal engineering history changed source Task facts")
-            entries.append(
-                TimelineEntry(
-                    id="engineering_" + terminal_record.record_sha256,
-                    kind=ProjectionEventKind.EVIDENCE,
-                    occurred_at=terminal_record.recorded_at,
-                    task_id=task.id,
-                    summary=terminal_record.disposition.reason,
-                    source_uri=path.as_uri(),
-                    source_sha256=terminal_record.record_sha256,
-                    details={
-                        "kind": terminal_record.kind,
-                        "rejection_code": terminal_record.rejection_code,
-                        "responsibility": terminal_record.disposition.responsibility.value,
-                        "reason_code": terminal_record.disposition.facts.classification,
-                        "source_task_status": terminal_record.source_task_status.value,
-                        "source_task_snapshot_sha256": terminal_record.source_task_snapshot_sha256,
-                        "next_action": terminal_record.disposition.next_action,
-                    },
-                )
+        if (
+            terminal_record.delivery_id != requirement_id
+            or terminal_record.repository_root != task.repository
+            or terminal_record.disposition.facts.task_intent_sha256 != intent
+            or terminal_record.source_task_status != task.status
+            or terminal_record.source_task_snapshot_sha256 != digest(task.to_wire())
+        ):
+            raise ValueError("terminal engineering history changed source Task facts")
+        entries.append(
+            TimelineEntry(
+                id="engineering_" + terminal_record.record_sha256,
+                kind=ProjectionEventKind.EVIDENCE,
+                occurred_at=terminal_record.recorded_at,
+                task_id=task.id,
+                summary=terminal_record.disposition.reason,
+                source_uri=path.as_uri(),
+                source_sha256=terminal_record.record_sha256,
+                details={
+                    "kind": terminal_record.kind,
+                    "rejection_code": terminal_record.rejection_code,
+                    "responsibility": terminal_record.disposition.responsibility.value,
+                    "reason_code": terminal_record.disposition.facts.classification,
+                    "source_task_status": terminal_record.source_task_status.value,
+                    "source_task_snapshot_sha256": terminal_record.source_task_snapshot_sha256,
+                    "next_action": terminal_record.disposition.next_action,
+                },
             )
+        )
     return tuple(
         entry.model_copy(
             update={

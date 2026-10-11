@@ -37,7 +37,17 @@ async function ui(t, options = {}) {
       qa: {max_transient_failures: 5}, reviewer: {max_transient_failures: 5},
     } };
   // Poll explicitly to keep the race scenarios deterministic. All API traffic is fixtures.
-  await page.addInitScript(() => { window.setInterval = () => 0; });
+  await page.addInitScript(({automaticPolling}) => {
+    if (automaticPolling) return;
+    window.setInterval = () => 0;
+    const originalTimeout = window.setTimeout;
+    window.setTimeout = (callback, delay, ...args) => typeof callback === "function" && callback.name === "pollTeamSnapshot"
+      ? 0 : originalTimeout(callback, delay, ...args);
+  }, {automaticPolling: Boolean(options.automaticPolling)});
+  if (options.automaticPolling) {
+    await page.clock.install({time: new Date("2026-10-11T09:00:00Z")});
+    await page.clock.pauseAt(new Date("2026-10-11T09:00:00Z"));
+  }
   await page.route("http://ui.test/**", async (route) => {
     const url = new URL(route.request().url());
     const pathname = url.pathname;

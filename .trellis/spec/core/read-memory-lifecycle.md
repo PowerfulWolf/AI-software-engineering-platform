@@ -719,3 +719,120 @@ initialization, claims, approvals or source writes. Results are machine/input sp
 heartbeats or appended facts can legitimately change later wire hashes. This optimization is not
 evidence of, or a repair claim for, a continuous hours-long read or gate leak. Successful public
 Team GETs must be considered when interpreting repeated busy responses.
+
+## Snapshot-local engineering ledgers (2026-10-11)
+
+### 1. Scope / trigger
+
+Apply when several native Task histories or exact presentation variants read the same sidecar's
+wait/preflight/disposition ledgers. Each old projection listed and decoded all Tasks' records before
+filtering its own Task. Reuse that complete verified prefix within one Team read, while retaining
+the original per-Task references and engineering authorization checks.
+
+### 2. Signatures
+
+```python
+EngineeringHistorySnapshot.store(root: Path) -> KnowledgeRecordStore | None
+EngineeringHistorySnapshot.records[T: _EngineeringRecord](
+    store: KnowledgeRecordStore, namespace: str, model: type[T],
+    key: Callable[[T], str], changed_message: str,
+) -> tuple[T, ...]
+EngineeringHistorySnapshot.dispositions(
+    sidecar: Path,
+) -> tuple[tuple[Path, EngineeringDispositionRecord], ...]
+engineering_history(
+    sidecar: Path, task: Task, scope: EngineeringScope, requirement_id: str,
+    *, baseline_bindings: BaselineBindingSnapshot | None = None,
+    delivery_requirement_id: str | None = None,
+    history_snapshot: EngineeringHistorySnapshot | None = None,
+) -> tuple[TimelineEntry, ...]
+```
+
+### 3. Contracts
+
+- `_TaskReadSnapshot` owns one fresh `_engineering` helper and passes it explicitly through
+  `_read_task_details`. Standalone `engineering_history` creates its own call-local helper.
+  No helper, result, approval, queue, claim or active execution state survives into another poll
+  through `ProductionTeamReader` or an application-global registry.
+- A store identity is its exact absolute root. A typed ledger identity is `(absolute root,
+  namespace, exact model type)`. A disposition prefix uses the absolute sidecar and retains each
+  original source path. Do not replace `_TaskReadSnapshot`'s exact checkpoint/intake/Team/base/
+  successor-dispatch view key with Task ID.
+- Capturing waits and preflight invokes the full ordinary `KnowledgeRecordStore.list`, then each
+  model's `validate_integrity` and independent `get(derived_immutable_key) == record`. List envelope
+  validation alone does not bind the derived key. Validate foreign records before Task filtering,
+  including preparation-intent keys. Register only a completely successful namespace tuple,
+  including empty. Missing store roots are captured as absent without creating any directory.
+- Dispositions retain the full ordinary directory scan, bounded regular-file/symlink-safe `_read`,
+  typed model, digest and filename checks. No prefix, foreign Task or history tail is truncated.
+- Per-Task projections still check approved intent, repository, exact Team/Project/native or parent
+  Requirement, frozen policy and admission. Resolution and handling references still independently
+  read the original stored proof/resolution; preparation checkpoints still independently read and
+  compare their original claimed intent. Embedded copies and cached facts cannot replace a missing
+  original record. Terminal records still bind status and the complete current Task snapshot digest.
+- Private captured models are inspected without mutation. Returned timeline details and nested
+  lists are fresh projections; modifying them cannot poison another Task or presentation.
+- Reuse has aggregate limits across **all** sidecars, namespaces and dispositions in this helper:
+  512 retained records, 16 MiB summed UTF-8 `model_dump_json` bytes, 128 retained prefixes (including
+  empty) and 64 store identities (including absent). Dispositions consume the same record/byte/
+  prefix allowance. These bound the retained optimization; serialized bytes are not a total Python
+  heap or complete response-size guarantee. Full validation and returned history remain uncapped.
+  At capacity, return the complete freshly validated tuple without registering it, so an uncached
+  prefix is fully reread on the next consumer. Do not raise, crop or make delivery success depend
+  on the optimization budget. Store-identity overflow likewise stops retaining that store handle.
+- Each new snapshot starts empty and validates every historical byte/path/hash/key again. These
+  finite prefixes are read-side facts and never authorize a command, verdict or delivery action.
+
+### 4. Validation & error matrix
+
+| Scenario | Required result |
+| --- | --- |
+| Two Tasks share waits | One complete list/key/integrity pass; separate complete timelines |
+| Different exact presentation base for the same native Task | Separate Task projections, shared ledger validation |
+| Caller modifies returned nested details | Later timeline and private facts unchanged |
+| Same captured prefix, changed Task intent/Project/native Requirement | Original per-Task rejection |
+| Handling remains but independent proof disappears | Reject even with captured proof facts |
+| Foreign body, key or symlink corrupted | Fresh snapshot rejects before filtering it out |
+| Failed namespace capture, then facts repaired | Failure is unregistered; retry fully validates |
+| Empty/absent prefix followed by append | Captured prefix remains finite; next snapshot sees append |
+| Any aggregate capacity reached | Complete uncached fallback; no omitted history or error |
+| Uncached overflow prefix is tampered in the same read scope | Its next consumer rejects corruption |
+| Success or failed HTTP projection completes | Helper and retained models can be released |
+
+### 5. Good / base / bad cases
+
+Good: two Tasks consume the same verified wait prefix and independently resolve their own proof
+references. Base: a very large namespace exceeds the cache budget and retains full direct-read
+behavior. Bad: discard foreign records before integrity checks, cache an authorization result, use
+an embedded proof when its original is absent, or retain typed ledgers on the reader instance.
+
+### 6. Tests required and measured work
+
+`tests/team_view/test_engineering_snapshot.py` exercises actual stores, two Task identities,
+returned-object isolation, failed capture, append/absence, foreign corruption/key/symlink,
+independent proof, native-vs-parent preflight scope, foreign preparation intent and all four
+capacity limits. Two Tasks with six wait records require 18 actual `_read_name` calls with reuse,
+including six independent reference reads; unshared prefixes require 30.
+`tests/team_view/test_baseline_snapshot.py` exercises real `_TaskReadSnapshot → _read_task_details`
+wiring across distinct presentation keys: proof reads fall from 6 to 4 and handling reads from 4
+to 2. Its HTTP success/failure weak-reference cases require both helper lifetimes to end. Keep
+existing complete engineering-history and exact Task-view identity regressions.
+
+On 2026-10-11 a bounded `stat` inventory of the selected sidecar found 29 wait records / 265,545
+bytes and 28 preflight records / 281,036 bytes; no disposition files. This is safely below the
+aggregate reuse budget. Actual latency improvement must be measured separately with a sequential
+read-only fresh-process probe; fixture work counts are not a portable five-second latency promise.
+
+### 7. Wrong vs correct
+
+Wrong: `reader.engineering_cache[task.id] = timeline` survives polls and reuses a previous scope or
+successful decision. Correct: `_TaskReadSnapshot` creates a bounded helper, validates the entire
+typed prefix once, then each Task rebuilds and checks its own timeline and original references.
+
+### Existing data and rollback
+
+No Schema, SQL, Requirement, Task, Operation, approval or file migration is required. No historical
+bytes, candidate, role verdict, queue or retained development work is changed. Load this reader-only
+optimization at an idle controlled service maintenance boundary; refresh the same Project to use
+it. Rollback restores the previous reader and repeated validation cost, without changing facts or
+requiring a replacement Requirement.

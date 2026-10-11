@@ -11,7 +11,8 @@ uv run ase-console
 打开 **http://127.0.0.1:8765**（使用该地址，不使用 localhost 别名）。页面可以创建多目录需求、
 与 Product Agent 讨论和批准、继续中断交付、批准 exact 恢复计划，以及领取 Candidate。
 Ctrl+C 会停止控制台和它的后台 Manager dispatcher；已经提交的 Operation、Delivery、Task
-和 Artifact 仍然持久化。页面每 5 秒读取已提交数据，不要求手工拼装 ProjectionFacts。
+和 Artifact 仍然持久化。页面在本轮读取完成后等待 5 秒再自动更新；平台繁忙或读取超时时会稍后
+重试，并保留上次内容和读取时间。手动刷新与切换 Project 会立即请求更新，不要求手工拼装 ProjectionFacts。
 控制台页面和操作能力绑定本次服务启动。更新平台代码后，等待当前操作及角色执行结束，
 在服务空闲时运行 `./scripts/ase-console-service.sh restart`，再刷新页面；仅刷新无法加载新的
 后台操作。页面遇到版本不匹配会给出中文说明并阻止提交，原需求和已保存进度保留。
@@ -68,7 +69,7 @@ Team 绑定或项目切换导致不可用时，按该处对应提示处理，关
 - 上游岗位未登记为独立 AgentProfile 时，只在需求阶段显示，不生成虚构成员。
 
 刷新失败保留上次画面并标记“旧数据”和成功时间；无变化的刷新不替换 DOM，有变化时保留已展开
-历史/报告，避免阅读中每 5 秒被折叠。
+历史/报告，避免阅读中被自动刷新折叠。
 
 
 数据来源、接口和安全边界见[工作台数据与接口](../architecture/team-console.md)。
