@@ -1135,6 +1135,57 @@ def test_subprocess_capture_retains_trailing_failure_marker(tmp_path: Path) -> N
     assert invocation.stdout.endswith("usage limit reached")
 
 
+@pytest.mark.parametrize(
+    ("stream_case", "expected", "transient"),
+    [
+        ("timestamp_seam", AgentErrorCode.PROVIDER_UNAVAILABLE, False),
+        ("missing_main_auth", AgentErrorCode.PROVIDER_UNAVAILABLE, False),
+        ("complete_tail_auth", AgentErrorCode.AUTHENTICATION_ERROR, False),
+        ("complete_tail_rate", AgentErrorCode.RATE_LIMITED, True),
+        ("exact_limit", AgentErrorCode.PROVIDER_UNAVAILABLE, True),
+    ],
+)
+def test_subprocess_truncated_stderr_keeps_only_complete_tail_provenance(
+    tmp_path: Path, stream_case: str, expected: AgentErrorCode, transient: bool
+) -> None:
+    script = (
+        "import sys\n"
+        "case = sys.argv[1]\n"
+        "if case == 'timestamp_seam':\n"
+        "    header = 'ERROR: 401 Unauthorized\\n'\n"
+        "    text = 'x' * 499_999 + '\\n2026-10-12T00:00:00Z ' + 'y' * 10_000\n"
+        "    text += header + 'z' * (500_000 - len(header))\n"
+        "elif case == 'missing_main_auth':\n"
+        "    text = 'x' * 500_000 + '\\nERROR: HTTP 401 Unauthorized\\n' + 'z' * 500_000\n"
+        "elif case == 'exact_limit':\n"
+        "    header = 'ERROR: connection failed\\n'\n"
+        "    text = header + 'x' * (1_000_000 - len(header))\n"
+        "else:\n"
+        "    diagnostic = 'HTTP 401 Unauthorized' if case == 'complete_tail_auth' "
+        "else 'HTTP 429 Too Many Requests'\n"
+        "    text = 'x' * 1_000_010 + '\\nERROR: ' + diagnostic\n"
+        "sys.stderr.write(text)\n"
+        "sys.exit(1)\n"
+    )
+    observed: list[CodexInvocationResult] = []
+    invocation = SubprocessCodexCommandRunner().run_observed(
+        (sys.executable, "-c", script, stream_case),
+        cwd=tmp_path,
+        environment={},
+        stdin="",
+        timeout_seconds=2,
+        observer=observed.append,
+    )
+    assert codex_cli_module._classify_cli_failure(invocation) == (expected, transient)
+    assert observed == [invocation]
+    assert invocation.stderr_truncated is (stream_case != "exact_limit")
+    assert len(invocation.stderr) == 1_000_000
+    assert invocation.process_stop is not None
+    assert invocation.process_stop.returncode == 1
+    if expected is AgentErrorCode.PROVIDER_UNAVAILABLE and stream_case != "exact_limit":
+        assert "cause=UNKNOWN_EXIT_TRUNCATED" in codex_cli_module._failure_diagnostic(invocation)
+
+
 def test_subprocess_timeout_retains_bounded_partial_capture(tmp_path: Path) -> None:
     invocation = SubprocessCodexCommandRunner().run(
         (

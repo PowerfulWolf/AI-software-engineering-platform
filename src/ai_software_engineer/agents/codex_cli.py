@@ -12,7 +12,7 @@ import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol, cast
@@ -158,6 +158,7 @@ class CodexInvocationResult:
     stderr: str = ""
     timed_out: bool = False
     process_stop: NativeProcessStop | None = None
+    stderr_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +344,8 @@ class SubprocessCodexCommandRunner:
 
         def publish(result: CodexInvocationResult) -> CodexInvocationResult:
             nonlocal observed
+            if output is not None and output.stderr_truncated:
+                result = replace(result, stderr_truncated=True)
             # Cleanup can fail too. Do not clear the Host's live observation or
             # publish a stop until both proven EOF pipes are locally released.
             close_output()
@@ -1783,16 +1786,27 @@ def _classify_cli_failure(
 ) -> tuple[AgentErrorCode, bool]:
     if invocation.returncode < 0:
         return AgentErrorCode.PROVIDER_ERROR, False
-    code = _recognized_cli_failure(invocation) or AgentErrorCode.PROVIDER_UNAVAILABLE
+    recognized = _recognized_cli_failure(invocation)
+    diagnostic = _select_main_cli_failure_diagnostic(
+        invocation.stderr, truncated=invocation.stderr_truncated
+    )
+    if not diagnostic.complete:
+        return recognized or AgentErrorCode.PROVIDER_UNAVAILABLE, False
+    if recognized is None and (
+        invocation.stderr_truncated or len(invocation.stderr) > _STREAM_LIMIT
+    ):
+        # Missing provenance cannot establish a retryable provider failure.
+        return AgentErrorCode.PROVIDER_UNAVAILABLE, False
+    code = recognized or AgentErrorCode.PROVIDER_UNAVAILABLE
     return code, code not in {AgentErrorCode.AUTHENTICATION_ERROR, AgentErrorCode.INVALID_OUTPUT}
 
 
 def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode | None:
-    if invocation.returncode < 0:
+    if invocation.returncode <= 0:
         return None
-    text = invocation.stderr.lower()
-    if "error:" in text:
-        text = text[text.index("error:") :]
+    text = _main_cli_failure_diagnostic(
+        invocation.stderr, truncated=invocation.stderr_truncated
+    ).lower()
     if "invalid_json_schema" in text:
         return AgentErrorCode.INVALID_OUTPUT
     if any(marker in text for marker in ("insufficient_quota", "quota exceeded", "usage limit")):
@@ -1809,13 +1823,146 @@ def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class _MainCliFailureDiagnostic:
+    text: str
+    complete: bool
+
+
+def _main_cli_failure_diagnostic(stderr: str, *, truncated: bool = False) -> str:
+    return _select_main_cli_failure_diagnostic(stderr, truncated=truncated).text
+
+
+def _select_main_cli_failure_diagnostic(
+    stderr: str, *, truncated: bool = False
+) -> _MainCliFailureDiagnostic:
+    """Select native main-error provenance, never background logs or stdout."""
+    # Native stderr is already head/tail bounded by its runner. Keep an explicit
+    # bound for injected runners too, without retaining an additional transcript.
+    start = max(0, len(stderr) - (_STREAM_LIMIT // 2 if truncated else _STREAM_LIMIT))
+    if truncated or (start and stderr[start - 1] not in "\r\n"):
+        # Clipping a component prefix must not manufacture a line-start Error.
+        newline = stderr.find("\n", start)
+        if newline < 0:
+            return _MainCliFailureDiagnostic("", False)
+        start = newline + 1
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", stderr[start:])
+    diagnostic: list[str] = []
+    collecting = False
+    body_characters = 0
+    complete = not truncated and len(stderr) <= _STREAM_LIMIT
+    offset = 0
+    json_end = 0
+    for original_line in text.splitlines(keepends=True):
+        line_start = offset
+        offset += len(original_line)
+        if line_start < json_end:
+            continue
+        line = original_line.rstrip("\r\n")
+        stripped = line.strip()
+        main = re.match(r"^(?:error|fatal)\s*:\s*(.*)$", line, re.IGNORECASE)
+        background = re.match(
+            r"^(?:\d{4}-\d{2}-\d{2}[T ]|(?:mcp|rmcp)(?:::|:|\s)|tool\s+server\b)",
+            stripped,
+            re.IGNORECASE,
+        )
+        if main is not None and not re.match(
+            r"^(?:mcp|rmcp)(?:::|:|\s)|^tool\s+server\b", main[1], re.IGNORECASE
+        ):
+            diagnostic = [line[:64_000]]
+            collecting = len(line) <= 64_000
+            complete = collecting
+            body_characters = len(diagnostic[0])
+            if main[1].startswith("{"):
+                prefix = line[: main.start(1)]
+                body_start = line_start + main.start(1)
+                body = _complete_cli_error_json(text[body_start:], 64_000 - len(prefix))
+                diagnostic = [prefix + (body or "")]
+                complete = body is not None
+                json_end = body_start + len(body or "")
+                collecting = False
+        elif re.fullmatch(
+            r"HTTP(?:/\d(?:\.\d)?)?\s+(?:401|403|408|429|500|502|503|504)(?:\s+[^\n]*)?",
+            line,
+            re.IGNORECASE,
+        ):
+            diagnostic = [line[:64_000]]
+            body_characters = len(diagnostic[0])
+            collecting = len(line) <= 64_000
+            complete = collecting
+        elif collecting and not stripped:
+            continue
+        elif collecting and not background and stripped.startswith("{"):
+            body_start = line_start + len(line) - len(line.lstrip())
+            body = _complete_cli_error_json(text[body_start:], 64_000 - body_characters - 1)
+            if body is not None:
+                diagnostic.append(body)
+                json_end = body_start + len(body)
+            complete = body is not None
+            # A complete JSON body is one diagnostic, never a license to append
+            # another JSON object or unrelated indented component output.
+            collecting = False
+        elif (
+            collecting
+            and not background
+            and stripped
+            and re.match(
+                r"^(?:caused by:|HTTP\b|401\b|403\b|authentication\b|unauthorized\b|"
+                r"(?:please\s+)?sign in\b|missing api key\b)",
+                stripped,
+                re.IGNORECASE,
+            )
+        ):
+            if body_characters + len(line) + 1 > 64_000:
+                collecting = False
+                complete = False
+            else:
+                diagnostic.append(line)
+                body_characters += len(line) + 1
+        else:
+            collecting = False
+    if diagnostic:
+        return _MainCliFailureDiagnostic("\n".join(diagnostic), complete)
+    # Preserve older single-message provider diagnostics. A multi-line log or
+    # transcript is never promoted merely because it contains an auth word.
+    stripped = text.strip()
+    if "\n" not in stripped and re.match(
+        r"^(?:invalid_json_schema\b|insufficient_quota\b|quota exceeded\b|usage limit\b|"
+        r"rate limit\b|too many requests\b|unauthorized\b|authentication failed|"
+        r"(?:please\s+)?sign in\b|login\b|missing api key\b)",
+        stripped,
+        re.IGNORECASE,
+    ):
+        return _MainCliFailureDiagnostic(stripped[:64_000], complete and len(stripped) <= 64_000)
+    return _MainCliFailureDiagnostic("", complete)
+
+
+def _complete_cli_error_json(text: str, limit: int) -> str | None:
+    """Return only one complete, bounded JSON object at a main-error boundary."""
+    if limit <= 0:
+        return None
+    candidate = text[:limit]
+    try:
+        value, end = json.JSONDecoder().raw_decode(candidate)
+    except (ValueError, RecursionError):
+        return None
+    return candidate[:end] if isinstance(value, dict) else None
+
+
 def _failure_diagnostic(invocation: CodexInvocationResult) -> str:
     code = AgentErrorCode.TIMEOUT if invocation.timed_out else _recognized_cli_failure(invocation)
+    complete = _select_main_cli_failure_diagnostic(
+        invocation.stderr, truncated=invocation.stderr_truncated
+    ).complete
     cause = (
         code.value
         if code is not None
         else "INTERRUPTED"
         if invocation.returncode < 0
+        else "UNKNOWN_EXIT_TRUNCATED"
+        if invocation.stderr_truncated or len(invocation.stderr) > _STREAM_LIMIT
+        else "UNKNOWN_EXIT_INCOMPLETE_DIAGNOSTIC"
+        if not complete
         else "UNKNOWN_EXIT"
     )
     return (

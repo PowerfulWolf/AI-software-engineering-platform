@@ -345,6 +345,70 @@ of captured stdout/stderr. Raw output, task prose and secrets are never copied i
 Cause is a heuristic match using the existing quota/rate/auth markers; an unmatched exit is labeled
 UNKNOWN_EXIT rather than asserting provider unavailability. Timeout is labeled TIMEOUT.
 
+##### Native main-error provenance (2026-10-12)
+
+`agents/codex_cli.py::_main_cli_failure_diagnostic(stderr: str, *, truncated: bool = False) -> str`
+and `_select_main_cli_failure_diagnostic(...) -> _MainCliFailureDiagnostic(text, complete)`
+are private native
+non-JSON CLI selector, distinct from structured `--json` transcript parsing. The same stderr mixes
+CLI main errors, rendered prompt/transcript and background MCP/component startup logs. Only the
+last unprefixed line-start `Error:`/`Fatal:` or plain HTTP failure starts a main diagnostic block;
+MCP/RMCP/tool-server starts and timestamp-prefixed logs never start or continue one. Explicit
+HTTP/auth/caused-by continuations may extend that exact block; indentation alone grants no provenance.
+A JSON object inline with the main prefix or immediately after its summary/HTTP header must parse
+completely within the diagnostic bound. `JSONDecoder.raw_decode` supplies the exact end, including
+nested/escaped strings; a second JSON object or later indented output cannot extend it. Unrelated
+prose, a new main error or background boundary ends it. A complete bare single-message
+legacy quota/rate/auth diagnostic remains supported; arbitrary multiline or component text does not.
+
+Selection examines at most the last 1,000,000 characters and retains at most 64,000 diagnostic
+characters; clipping discards the first partial line rather than creating a new `Error:` prefix.
+ANSI CSI controls are removed only for protocol matching. This internal diagnostic is
+never published. `_recognized_cli_failure(CodexInvocationResult) -> AgentErrorCode | None` uses
+only that selected block and cannot recognize a provider failure from a successful or signalled
+execution. Native stdout is not provider error evidence. Existing marker priority remains
+invalid-schema → quota → rate → authentication; HTTP 401/403 and real multiline auth remain
+nonretryable. Complete unknown nonzero exits retain existing PROVIDER_UNAVAILABLE routing while
+safe diagnostics say UNKNOWN_EXIT. Incomplete or over-bound main JSON/root diagnostics retain a
+nontransient error and cannot authorize fallback. This change does not alter fallback order, mutation
+comparison, output/stop validation, local timeout policy or budget accounting.
+
+`CodexInvocationResult.stderr_truncated: bool = False` is an additive private process-seam fact.
+`_BoundedText.truncated` records actual discard, not merely reaching the stream limit;
+`_NativeOutputDrain.stderr_truncated` binds that fact to the published result before the stop
+observer. The retained head/tail text and SHA-256 inputs do not change. Once stderr is truncated,
+the selector reads only the fixed retained tail and discards its first partial line: the head and
+the concatenation seam cannot establish the final main diagnostic. A complete known main error
+wholly in the tail retains its category; unknown truncated exits are nontransient with safe
+`UNKNOWN_EXIT_TRUNCATED` diagnostics. Losing a real AUTH/INVALID_OUTPUT diagnostic to capture or
+selection bounds must never grant transient provider/fallback authority. Stop proofs, local timeout,
+workspace admission/mutation checks and immutable earlier receipts remain unchanged.
+
+| Diagnostic case | Required classification |
+| --- | --- |
+| Timestamp/MCP 401 before/after a main connection error, or component noise alone | no authentication inference; existing unknown nonzero-exit route |
+| Main HTTP 401/403 or multiline/JSON auth with background noise | AUTHENTICATION_ERROR, nonretryable |
+| Main quota/rate/invalid-schema with unrelated auth logs | original main error category |
+| Main JSON after summary/HTTP header; completed JSON followed by another object | classify only the first complete main body; no background injection |
+| Truncated stderr timestamp seam or unknown tail; incomplete/oversize main body | no fabricated main auth; nontransient, no backup route |
+| Genuine complete tail HTTP 401/429 after actual capture truncation | original AUTH/RATE category and retry policy |
+| Signalled run, successful health stdout, arbitrary stdout/model/tool prose | no recognized stderr provider error |
+| Any failed route with new workspace mutations or unknown stop | existing nontransient rejection/preserved scene; no fallback bypass |
+
+Tests: `tests/agents/test_codex_provider_contract.py` covers the block source, bounded diagnostic
+categories, multiline/JSON continuation and component false positives; `test_codex_cli.py` retains
+real Git policy/dirty/secret diagnostics plus actual >1M subprocess head/tail seam tests;
+`test_codex_failed_continuation.py` exercises actual durable fallback with a preserved draft, true
+auth, truncated/incomplete error rejection, changed workspace and unchanged route replay.
+Good: a genuine main transport failure remains eligible under the existing clean-route policy even
+if background MCP startup reports 401. Base: real main auth still stops. Bad: substring scanning
+the whole stderr or treating a successful health call as proof of a historical failed call's cause.
+
+No Schema/SQL/record migration applies. Previously sealed run errors and stream digests stay
+immutable; raw missing stderr cannot be reconstructed from SHA-256 or relabeled from a later probe.
+Root owns exact existing-Task continuation and deploys at an idle controlled maintenance boundary.
+Rollback before new invocations restores the previous selector without removing historical facts.
+
 Capture is bounded to 1,000,000 characters per stream, retaining equal head/tail portions on overflow.
 Hashes identify these captured strings, not an untruncated transcript; truncation is not a substitute
 for full provider evidence. TimeoutExpired partial bytes use UTF-8 replacement decoding. No durable
