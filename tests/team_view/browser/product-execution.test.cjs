@@ -222,3 +222,73 @@ test("claimed role changes update member queues without painting other assignmen
   assert.match(await summary.innerText(), /已排队/);
   assert.doesNotMatch(await summary.innerText(), /尚无执行事实|处理方 · 工程团队/);
 });
+
+test("phase-only updates keep Task activity current without disturbing an expanded report", async t => {
+  const h = await ui(t);
+  const request = h.team.requests[0];
+  Object.assign(request, {stage: "DELIVERING",
+    scopes: [{root: "/fixture", selected_paths: ["src/**"], delivery_id: "native_phase"}]});
+  const task = {id: "native_phase", task_id: "task_phase", project_id: request.project_id,
+    request_id: request.id, title: "K1 自动知识采集首个闭环", status: "IMPLEMENTING", terminal: false,
+    last_activity: "2026-10-11T02:00:00Z", scope: request.scopes[0], assignments: [], timeline: [], runs: [],
+    role_queue: [{role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID", heartbeat_at: "2026-10-11T02:00:00Z"}],
+    documents: [{name: "保留开发报告", source_uri: "artifact://phase-report", sha256: "a".repeat(64),
+      content: "保留正文\n" + "已完成条目与验证证据\n".repeat(30) + "完整正文末尾"}]};
+  h.team.tasks.push(task);
+  const phases = [
+    ["ROLE_KNOWLEDGE_PREPARATION", "准备知识", "Coder 正在准备开发所需知识。"],
+    ["ROLE_RUNNING", "执行中", "Coder 正在执行本轮开发。"],
+    ["ROLE_FINALIZING", "保存结果", "Coder 正在保存并核验本轮结果。"],
+  ];
+  const update = ([reason_code, phase, reason]) => {
+    task.execution = request.execution = {state: "RUNNING", responsibility: "team", reason_code,
+      reason, next_action: `请等待${phase}完成。`, action_required: false};
+  };
+  let writes = 0;
+  h.page.on("request", req => {if (req.method() !== "GET") writes++;});
+  update(phases[0]);
+  await h.tick();
+  await h.page.evaluate(() => showDetail("task", "native_phase"));
+  const detail = h.page.locator(".task-detail-dialog");
+  const report = detail.locator('details[data-key="artifact://phase-report"]');
+  await report.locator(":scope > summary").click();
+  await report.evaluate(node => {window.phaseReport = node;});
+  await detail.evaluate(node => {node.scrollTop = 180; window.phaseScroll = node.scrollTop;});
+  const queue = structuredClone(task.role_queue);
+  for (const phase of phases) {
+    update(phase);
+    await h.tick();
+    assert.deepEqual(task.role_queue, queue, "phase updates do not require a changed queue or heartbeat");
+    assert.match(await detail.locator(".product-execution-summary").innerText(), new RegExp(phase[2]));
+    assert.match(await detail.locator(".role-execution-activity").innerText(), new RegExp(phase[2]));
+    assert.match(await detail.locator(".role-execution-activity").innerText(), new RegExp(phase[1]));
+    assert.equal(await report.evaluate(node => node === window.phaseReport && node.open), true);
+    assert.equal(await detail.evaluate(node => node.scrollTop === window.phaseScroll), true);
+  }
+  const badge = detail.locator(".task-title-row > .badge");
+  const color = () => badge.evaluate(node => getComputedStyle(node).color);
+  assert.equal(await color(), "rgb(36, 79, 167)", "finalizing is still blue execution, not acceptance");
+  for (const width of [1440, 390]) {
+    await h.page.setViewportSize({width, height: 900});
+    await detail.evaluate(node => {node.scrollTop = 0;});
+    assert.equal(await detail.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
+    assert.equal(await h.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    if (process.env.ASE_UI_SCREENSHOT_DIR)
+      await h.page.screenshot({path: process.env.ASE_UI_SCREENSHOT_DIR + `/task-phase-finalizing-${width}.png`});
+  }
+  task.execution = request.execution = {state: "WAITING", responsibility: "engineering",
+    reason: "知识准备已暂停，进度保留。", next_action: "让平台处理知识准备。", action_required: false};
+  task.role_queue[0].status = "WAITING_DEPENDENCY";
+  task.role_queue[0].lease_liveness = "UNKNOWN";
+  await h.tick();
+  assert.equal(await color(), "rgb(198, 40, 40)", "engineering waiting uses red");
+  assert.equal(await detail.locator(".role-execution-activity").innerText(), "");
+  if (process.env.ASE_UI_SCREENSHOT_DIR)
+    await h.page.screenshot({path: process.env.ASE_UI_SCREENSHOT_DIR + "/task-phase-waiting-390.png"});
+  request.stage = "DONE"; task.status = "DONE"; task.terminal = true; task.role_queue = [];
+  task.execution = request.execution = {state: "COMPLETED", responsibility: "team",
+    reason: "交付执行已完成。", next_action: "查看交付结果。", action_required: false};
+  await h.tick();
+  assert.equal(await color(), "rgb(23, 99, 75)", "completion uses green");
+  assert.equal(writes, 0, "phase rendering never mutates delivery facts");
+});

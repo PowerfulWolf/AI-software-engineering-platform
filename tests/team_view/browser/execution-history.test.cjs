@@ -91,6 +91,11 @@ test("sealed succeeded command outcomes keep their actual delivery result after 
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
   await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  // This fixture publishes several distinct attention notices. Acknowledge all
+  // before exercising the history, without bypassing the real modal overlay.
+  for (let index = 0; index < h.state.operations.length && await h.page.locator("#notification").isVisible(); index++)
+    await h.close();
+  assert.equal(await h.page.locator("#notification").isVisible(), false);
   await h.page.locator("#detail .request-history-fold").filter({hasText: "操作记录（完整历史"}).locator(":scope > summary").click();
   for (let index = 0; index < expected.length; index++) {
     const row = h.page.locator("#detail .execution-history-entry").filter({hasText: "outcome_" + index});

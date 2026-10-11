@@ -1,0 +1,19 @@
+{
+  "name": "task-phase-refresh",
+  "title": "任务详情执行阶段刷新与等待颜色一致性",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-11",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "src/ai_software_engineer/team_view/style.css",
+    "tests/team_view/browser/execution-phase.test.cjs",
+    "tests/team_view/browser/product-execution.test.cjs",
+    "tests/team_view/product-execution.test.cjs",
+    "tests/team_view/task-detail.test.cjs",
+    ".trellis/spec/core/knowledge-preparation-phase.md",
+    ".trellis/tasks/10-11-task-phase-refresh"
+  ],
+  "reviewed_by": "root independent of implementation worker",
+  "verified_at": "2026-10-11"
+}

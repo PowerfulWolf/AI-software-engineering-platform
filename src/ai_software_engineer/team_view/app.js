@@ -114,6 +114,17 @@ let nativeRuleReviewsRevision = 0;
 const renderedSurfaces = new WeakMap();
 const renderedBlocks = new WeakMap();
 const detailReadSources = new WeakMap();
+function operationRenderFact(operation) {
+  // The backend seals the complete Operation, including its result. This key
+  // only invalidates rendered DOM; execution and approval use the full facts.
+  if (typeof operation?.operation_id === "string" && /^operation_[a-f0-9]{32}$/.test(operation.operation_id) &&
+      typeof operation.operation_sha256 === "string" && /^[a-f0-9]{64}$/.test(operation.operation_sha256))
+    return [operation.operation_id, operation.operation_sha256];
+  return operation;
+}
+function operationRenderFacts(values = operations) {
+  return values.map(operationRenderFact);
+}
 function viewBlock(node, key, facts) {
   renderedBlocks.set(node, {key, signature: JSON.stringify(facts)});
   return node;
@@ -182,7 +193,7 @@ function pollingContentFacts() {
     knowledgeScope, knowledgeMode, knowledgeDocuments, knowledgeIndexStatus, specDocuments,
     learningProposals, knowledgeLoading, knowledgeError];
   return [...common, snapshot?.team_name, snapshot?.projects, snapshot?.agents, snapshot?.tasks,
-    snapshot?.requests, operations, selected, selectedAgentId, requestFilter, recoveryPreparationDisplayFacts()];
+    snapshot?.requests, operationRenderFacts(), selected, selectedAgentId, requestFilter, recoveryPreparationDisplayFacts()];
 }
 function pollingKnowledgeFacts() {
   return [knowledgeDocuments, knowledgeIndexStatus, specDocuments, learningProposals,
@@ -195,8 +206,8 @@ function pollingDetailFacts() {
   const request = selected?.kind === "request" ? item : parent;
   const tasks = request ? requestTasks(request) : [];
   return [page, selected, item, parent, tasks, snapshot?.agents, pollingControlFacts(),
-    item ? operations.filter(operation => operationTarget(operation) === item.id ||
-      (parent && operationTarget(operation) === parent.id && operation.intent.project_id === parent.project_id)) : [],
+    operationRenderFacts(item ? operations.filter(operation => operationTarget(operation) === item.id ||
+      (parent && operationTarget(operation) === parent.id && operation.intent.project_id === parent.project_id)) : []),
     page === "requests" && Boolean(snapshot?.requests.length), nativeRuleReviewsRevision, recoveryPreparationDisplayFacts()];
 }
 function recoveryPreparationDisplayFacts() {
@@ -5331,7 +5342,7 @@ function projectOperationHistory(content) {
     fold.append(el("p", "操作记录暂时无法读取。以下保留上次读取的记录，不能代表当前执行状态。", "error"));
   const list = viewGroup(el("ol", undefined, "execution-history"), "project-operation-history-list");
   for (const record of records) {
-    const item = viewBlock(el("li", undefined, "execution-history-entry"), "project-operation:" + record.operation_id, record);
+    const item = viewBlock(el("li", undefined, "execution-history-entry"), "project-operation:" + record.operation_id, operationRenderFact(record));
     item.append(el("strong", operationActionLabel(record)));
     if (record.intent.name) item.append(el("p", record.intent.name));
     const status = el("p", "操作状态 · ", "muted");
@@ -8764,7 +8775,7 @@ function roleExecutionActivity(task) {
 
 function modelCallDiagnostics(operation) {
   const details = viewBlock(el("details", undefined, "model-call-diagnostics"),
-    `model-calls:${operation.operation_id}`, operation);
+    `model-calls:${operation.operation_id}`, operationRenderFact(operation));
   details.dataset.key = `model-calls:${operation.operation_id}`;
   details.dataset.operationId = operation.operation_id;
   details.append(el("summary", "查看已完成的阶段调用记录"));
@@ -8996,7 +9007,8 @@ function requestOperationHistory(panel, request) {
   for (const record of records) {
     const progress = currentOperationProgress(record, request);
     const outcome = recordedOperationOutcome(record);
-    const item = viewBlock(el("li", undefined, "execution-history-entry"), "operation:" + record.operation_id, {record, progress});
+    const item = viewBlock(el("li", undefined, "execution-history-entry"), "operation:" + record.operation_id,
+      {record: operationRenderFact(record), progress});
     if (progress) {
       item.append(el("strong", progress.title), el("p", "发起操作 · " + operationActionLabel(record), "muted"));
       if (progress.reason) item.append(el("p", "当前原因 · " + progress.reason));
@@ -9424,7 +9436,7 @@ function buildDetail(panel = document.getElementById("detail")) {
     const titleRow = viewGroup(el("div", undefined, "request-title-row"), "request-title-row");
     titleRow.append(viewBlock(el("p", item.title, "request-detail-title"), "request-heading-title", item.title),
       viewBlock(requestNodeBadge(item), "request-heading-status", [deliveryPhase(item), requestNodeExecution(item)]));
-    masthead.append(viewBlock(top, "request-heading-actions", [item, pollingControlFacts(), operations]), titleRow,
+    masthead.append(viewBlock(top, "request-heading-actions", [item, pollingControlFacts(), operationRenderFacts()]), titleRow,
       detailReadFreshnessSlot());
     panel.append(masthead, requestChapterNavigation(item));
     const current = requestChapter("current");
@@ -9564,7 +9576,7 @@ function buildDetail(panel = document.getElementById("detail")) {
   overview.append(el("p", paths(item.scope), "paths"), el("p", (historicalTask ? "当次记录更新 · " : "最近活动 · ") + time(item.last_activity), "muted"));
   const activity = historicalTask ? el("div", undefined, "role-execution-activity") : roleExecutionActivity(item);
   activity.classList.add("task-activity-block");
-  viewBlock(activity, "task-activity", [item.status, item.terminal, item.role_queue, historicalTask]);
+  viewBlock(activity, "task-activity", [item.status, item.terminal, item.role_queue, item.execution, historicalTask]);
   current.append(overview, activity);
   const preparation = recoveryPreparationSection(taskParentRequest(item));
   if (preparation) current.append(preparation);
@@ -9901,7 +9913,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
   const priorConsoleCapabilities = JSON.stringify([consoleOperationContractVersion, consoleSupportedActions]);
   const priorSettings = JSON.stringify(settingsSnapshot);
   const priorRuntimeStatus = JSON.stringify(runtimeStatusSnapshot);
-  const priorOperations = JSON.stringify(operations);
+  const priorOperations = JSON.stringify(operationRenderFacts());
   const priorOperationsAvailable = operationsAvailable;
   const priorKnowledge = JSON.stringify(pollingKnowledgeFacts());
   const priorTeamReadIssue = teamReadIssue;
@@ -9943,7 +9955,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
     const modalActive = hasOpenComposer();
     const teamReadChanged = priorTeamReadIssue !== teamReadIssue;
     if ((teamReadChanged || !modalActive || (["settings", "status"].includes(page) && systemViewsChanged())) &&
-        (teamChanged || teamReadChanged || priorOperations !== JSON.stringify(operations) ||
+        (teamChanged || teamReadChanged || priorOperations !== JSON.stringify(operationRenderFacts()) ||
           priorKnowledge !== JSON.stringify(pollingKnowledgeFacts()) || systemViewsChanged()))
       render({preserveComposer: Boolean(modalActive && !settingsSaveResult), incremental: true});
   };

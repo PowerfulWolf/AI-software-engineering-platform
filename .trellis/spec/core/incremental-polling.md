@@ -305,6 +305,31 @@ readable history; do not widen authority to compensate for a missing request.
 
 ## Scope and signatures
 
+### Complete operation digest sources (2026-10-11)
+
+Console GETs validate each complete `ConsoleOperation` and its canonical
+`operation_sha256` before publication. A DOM render source may use the valid exact
+`operation_id`/64-hex digest pair instead of repeatedly serializing multi-megabyte
+immutable `result` captures. This optimization applies only to render invalidation;
+retain full operation objects, all visible history, copied reports, exact approval
+signatures and current Project/checkpoint/control gates. A digest never grants
+approval or execution authority and does not replace the full data needed by a
+control. No cross-poll fact cache or backend validation bypass is introduced.
+
+Missing or malformed identity/digest must fall back to complete source facts, so
+legacy data and mutable fixture inputs still invalidate correctly. Changed digests
+refresh their rows and dependent views; identical source pairs retain expanded DOM.
+Where history rows include `{record, progress}`, retain the independent live
+`progress` facts: only the immutable `record` component may use
+this compact source. A RUNNING Operation can move from Design to Planning without
+changing its own digest. Exact `approvalSignature` retains the full original facts.
+Tests must cover heavy payloads, digest changes, missing/invalid fallback and stale
+approval revocation after scope/checkpoint/readiness changes. Measure actual Chrome
+CPU and serialization allocation separately from network bytes and Team-read time.
+This frontend optimization does not reduce the full API response or resolve a
+backend read admission wait. Existing records require no migration or hash rewrite;
+rollback only restores the former full-source render comparison.
+
 Applies to the five-second Console read loop in `src/ai_software_engineer/team_view/app.js`.
 No API, schema, storage, Task state or authorization contract changes.
 

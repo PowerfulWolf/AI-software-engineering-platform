@@ -171,6 +171,10 @@ Scope：`src/ai_software_engineer/team_view/app.js` 的需求操作记录与 ACT
   用户正文引用或未知动态诊断不进行宽泛替换。该提示不授权产品批准技术恢复或改变状态。
 - `requestOperationHistory` 的列表必须为 keyed `viewGroup`，行 `viewBlock` 签名必须包含
   `{record, progress}`。Requirement/Task-only 更新刷新当前行，原封存历史行保留 DOM；
+  `record` 可用当前后端已完整校验的规范 `operation_id` 与 `operation_sha256` 代表，
+  缺失或无效时退回完整 facts；独立 `progress` 仍保留，不能因 Operation 摘要不变漏掉
+  DESIGNING→PLANNING 的当前进度。这里只优化重绘签名，完整正文、审批输入和门禁不变，
+  详见 `incremental-polling.md` 的 Complete operation digest sources。
   排障 details 沿原 operation key 保留展开状态。没有 keyed 列表时行签名不会参与 reconcile。
 - `operation_id`、`intent.expected_checkpoint_sha256` 默认位于折叠的“排障信息（供工程人员
   使用）”，摘要标“发起操作时的需求版本摘要”，不是最新阶段版本或产品需填写的信息。

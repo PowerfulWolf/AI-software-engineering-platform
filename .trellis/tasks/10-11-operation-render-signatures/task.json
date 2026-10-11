@@ -1,0 +1,19 @@
+{
+  "name": "operation-render-signatures",
+  "title": "完整操作历史的前端有界刷新签名",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-11",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/operation-signatures.test.cjs",
+    "tests/team_view/browser/operation-render-signatures.test.cjs",
+    "tests/team_view/browser/execution-history.test.cjs",
+    "tests/team_view/browser/polling-state.test.cjs",
+    ".trellis/spec/core/incremental-polling.md",
+    ".trellis/spec/core/web-console.md",
+    ".trellis/tasks/10-11-operation-render-signatures"
+  ],
+  "reviewed_by": "root independent of implementation worker",
+  "verified_at": "2026-10-11"
+}

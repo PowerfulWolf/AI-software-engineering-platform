@@ -725,6 +725,10 @@ main[data-page="requests"] #detail {
   margin-top: 3px;
   white-space: nowrap;
 }
+.task-title-row > .badge.blocked {
+  color: #c62828;
+  background: #fef2f2;
+}
 .request-chapter-nav {
   position: sticky;
   top: 0;

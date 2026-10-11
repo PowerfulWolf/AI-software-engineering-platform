@@ -79,3 +79,25 @@ Python and DOM tests verify shared text; Schema tests verify exact parity and
 legacy omitted/null field stability. Run incremental suites only. No SQL migration
 or historical fact backfill is allowed. Roll back optional projection/presentation
 while retaining new immutable receipts and the original audit history.
+
+## Task detail incremental invalidation (2026-10-11)
+
+`roleExecutionActivity(item)` consumes `item.execution`, so the `task-activity`
+viewBlock source signature must include that object as well as status, terminal,
+role queue and historical identity. A phase can change while the queue identity
+and heartbeat remain identical. Reusing the activity only from queue facts leaves
+“准备知识” below an already updated “保存结果” summary.
+
+Real browser regression must hold queue/heartbeat constant, update only execution
+through knowledge preparation, role execution and finalizing, and assert that both
+Task explanations change together. Keep a document expanded and verify its exact
+DOM identity, open state and scroll remain intact. Finalizing stays blue and never
+implies candidate admission, QA PASS or delivery completion.
+
+Task heading waiting badges use the same red semantic as Requirement delivery
+waiting; executing remains blue, passed remains green and unknown stays neutral.
+Apply the color to the precise Task heading selector rather than changing every
+generic blocked/unknown badge. Check the actual computed colors and full readable
+layout at desktop and narrow widths. No write request or durable record change is
+needed. Existing details pick up the fix after an idle controlled deployment and
+refresh; do not restart or rebase an active Operation to fix a display.
