@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge.models import KnowledgeError, digest
+from ai_software_engineer.read_record_scope import RecordKind, decode_verified_record
 
 _MAX_BYTES = 20_000_000
 
@@ -100,7 +101,7 @@ class KnowledgeRecordStore:
     def find[T: DomainModel](self, namespace: str, key: str, model: type[T]) -> T | None:
         return self._read_name(self._name(namespace, key), model)
 
-    def _read_name[T: DomainModel](self, name: str, model: type[T]) -> T | None:
+    def _read_payload(self, name: str) -> bytes | None:
         fd = self._open()
         try:
             try:
@@ -113,16 +114,53 @@ class KnowledgeRecordStore:
                 payload = stream.read(_MAX_BYTES + 1)
             if len(payload) > _MAX_BYTES:
                 raise KnowledgeError("STORE_LIMIT")
+            return payload
+        except OSError as error:
+            raise KnowledgeError("STORE_CORRUPT") from error
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _decode_payload[T: DomainModel](payload: bytes, model: type[T]) -> T:
+        try:
             envelope = json.loads(payload)
             if not isinstance(envelope, dict) or set(envelope) != {"record", "sha256"}:
                 raise KnowledgeError("STORE_CORRUPT")
             if envelope["sha256"] != digest(envelope["record"]):
                 raise KnowledgeError("STORE_CORRUPT")
             return model.model_validate(envelope["record"])
-        except (OSError, ValueError) as error:
+        except ValueError as error:
             raise KnowledgeError("STORE_CORRUPT") from error
-        finally:
-            os.close(fd)
+
+    def _read_name[T: DomainModel](self, name: str, model: type[T]) -> T | None:
+        payload = self._read_payload(name)
+        return self._decode_payload(payload, model) if payload is not None else None
+
+    def read_recovery_record[T: DomainModel](
+        self,
+        namespace: str,
+        key: str,
+        model: type[T],
+        *,
+        kind: RecordKind,
+        optional: bool = False,
+    ) -> T | None:
+        """Selected immutable reading callers only; ordinary get/list/writes unchanged."""
+        name = self._name(namespace, key)
+        payload = self._read_payload(name)
+        if payload is None:
+            if optional:
+                return None
+            raise KnowledgeError("RECORD_NOT_FOUND")
+
+        return decode_verified_record(
+            path=self.root / name,
+            kind=kind,
+            model=model,
+            record_key=key,
+            payload=payload,
+            allow_reuse=self._read_only,
+        )
 
     def list[T: DomainModel](
         self, namespace: str, model: type[T], *, limit: int | None = None

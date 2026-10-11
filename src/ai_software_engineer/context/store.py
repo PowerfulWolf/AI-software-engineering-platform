@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import stat
 import tempfile
 from contextlib import suppress
 from pathlib import Path
@@ -19,6 +20,11 @@ from ai_software_engineer.context.ports import (
     ContextStoreError,
 )
 from ai_software_engineer.domain.model import WirePayload
+from ai_software_engineer.read_record_scope import (
+    current_recovery_record_reads,
+    decode_verified_record,
+)
+from ai_software_engineer.team_workspace import _reject_symlinks
 
 _CONTEXT_ID_ADAPTER: Final[TypeAdapter[ContextId]] = TypeAdapter(ContextId)
 
@@ -116,15 +122,42 @@ class FileContextStore:
         path = self._path(context_id)
         if not path.is_file():
             raise ContextNotFound(f"Context manifest not found: {context_id}")
+
+        def decode(content: bytes) -> ContextBundle:
+            try:
+                payload = json.loads(content.decode("utf-8"))
+                context = ContextBundle.model_validate(payload)
+            except (OSError, UnicodeError, json.JSONDecodeError, ValidationError) as error:
+                raise ContextCorruption(f"Context manifest is invalid: {context_id}") from error
+            if context.context_id != context_id:
+                raise ContextCorruption(f"Context manifest ID mismatch: {context_id}")
+            return context
+
+        if not self._read_only or current_recovery_record_reads() is None:
+            try:
+                context = decode(path.read_bytes())
+                _validate_context_identity(context, ContextCorruption)
+                return context
+            except OSError as error:
+                raise ContextCorruption(f"Context manifest is invalid: {context_id}") from error
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            context = ContextBundle.model_validate(payload)
-        except (OSError, UnicodeError, json.JSONDecodeError, ValidationError) as error:
+            _reject_symlinks(path)
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(descriptor, "rb") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise ValueError("Context manifest must be regular data")
+                # This store has no record-size contract. Cache budget overflow
+                # still fully reads/validates existing data without retaining it.
+                content = stream.read()
+            return decode_verified_record(
+                path=path,
+                kind="context",
+                model=ContextBundle,
+                record_key=context_id,
+                payload=content,
+            )
+        except (OSError, ValueError) as error:
             raise ContextCorruption(f"Context manifest is invalid: {context_id}") from error
-        if context.context_id != context_id:
-            raise ContextCorruption(f"Context manifest ID mismatch: {context_id}")
-        _validate_context_identity(context, ContextCorruption)
-        return context
 
     def _path(self, context_id: ContextId) -> Path:
         try:
