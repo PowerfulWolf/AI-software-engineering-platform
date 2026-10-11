@@ -27,8 +27,13 @@ class AuthorizedRecoveryTaskBuilder:
 
     @source_inspection_scope()
     def build(self, plan_sha256: str) -> RecoveryTaskDraft:
-        plan = self._authorization.require_current_authorization(plan_sha256)
-        facts = self._facts.inspect(plan)
+        inspector = self._authorization._task_facts_inspector(self._facts)
+        if inspector is None:
+            plan = self._authorization.require_current_authorization(plan_sha256)
+            facts = self._facts.inspect(plan)
+        else:
+            current = inspector.inspect_current_authorization(plan_sha256)
+            plan, facts = current.plan, current.facts
         original = facts.original
         target_authorization = plan.target_authorization
         if target_authorization is not None:
@@ -106,6 +111,14 @@ class AuthorizedRecoveryTaskBuilder:
             }
         )
         # A draft is deterministic data, not a durable dispatch authorization.
-        if self._authorization.require_current_authorization(plan_sha256) != plan:
+        final_facts = None
+        if inspector is None:
+            final_plan = self._authorization.require_current_authorization(plan_sha256)
+        else:
+            final = inspector.inspect_current_authorization(plan_sha256)
+            final_plan, final_facts = final.plan, final.facts
+        if final_plan != plan:
             raise RecoveryRejected("recovery plan changed while building Task")
+        if final_facts is not None and final_facts != facts:
+            raise RecoveryRejected("recovery facts changed while building Task")
         return RecoveryTaskDraft(plan.plan_sha256, facts, rebound, task)

@@ -1,6 +1,10 @@
 """Policy-bound recovery authorization; deliberately no execution or model port."""
 
-from typing import Protocol, runtime_checkable
+from __future__ import annotations
+
+from dataclasses import dataclass
+from types import MethodType
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -14,6 +18,24 @@ from ai_software_engineer.recovery.models import (
     RecoveryRejected,
     VerifiedRecoveryDecision,
 )
+
+if TYPE_CHECKING:
+    from ai_software_engineer.recovery.current import (
+        NativeRecoveryFacts,
+        NativeRecoveryFactsVerifier,
+    )
+
+
+@dataclass(frozen=True)
+class AuthorizedRecoveryFacts:
+    """Local data after a complete current gate; never durable execution authority."""
+
+    plan: RecoveryPlan
+    facts: NativeRecoveryFacts
+
+
+class _AuthorizedRecoveryFactsInspector(Protocol):
+    def inspect_current_authorization(self, plan_sha256: str) -> AuthorizedRecoveryFacts: ...
 
 
 class RecoveryStore(Protocol):
@@ -108,6 +130,49 @@ class RecoveryAuthorizationService:
 
     def require_current_authorization(self, plan_sha256: str) -> RecoveryPlan:
         """Execution admission must call this, never treat receipt replay as freshness."""
+        if self._native_facts_verifier() is not None:
+            return self.inspect_current_authorization(plan_sha256).plan
+        plan = self._approved_plan(plan_sha256)
+        self._require_current(plan)
+        return plan
+
+    def inspect_current_authorization(self, plan_sha256: str) -> AuthorizedRecoveryFacts:
+        """Return the last full native observation within this synchronous gate only."""
+        verifier = self._native_facts_verifier()
+        if verifier is None:
+            raise RecoveryRejected("recovery verifier cannot return verified native facts")
+        plan = self._approved_plan(plan_sha256)
+        plan.validate_integrity()
+        plan.require_execution_supported()
+        verifier.inspect(plan)
+        self._verify_capture(plan)
+        return AuthorizedRecoveryFacts(plan, verifier.inspect(plan))
+
+    def _task_facts_inspector(
+        self, verifier: NativeRecoveryFactsVerifier
+    ) -> _AuthorizedRecoveryFactsInspector | None:
+        # A different trusted port keeps the complete old builder path. Never accept
+        # caller-supplied facts or skip a custom verifier's stronger validate policy.
+        return self if self._native_facts_verifier() is verifier else None
+
+    def _native_facts_verifier(self) -> NativeRecoveryFactsVerifier | None:
+        # Import lazily: current's native composition imports the production backend.
+        from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
+
+        if not isinstance(self._facts, NativeRecoveryFactsVerifier) or (
+            type(self._facts) is not NativeRecoveryFactsVerifier
+        ):
+            return None
+        validate = self._facts.validate
+        if (
+            not isinstance(validate, MethodType)
+            or validate.__self__ is not self._facts
+            or validate.__func__ is not NativeRecoveryFactsVerifier.validate
+        ):
+            return None
+        return self._facts
+
+    def _approved_plan(self, plan_sha256: str) -> RecoveryPlan:
         plan = self._store.get_plan(plan_sha256)
         receipt = self._store.find_authorization(plan_sha256)
         if receipt is None:
@@ -117,13 +182,16 @@ class RecoveryAuthorizationService:
             raise RecoveryRejected("recovery has no approved human decision")
         if receipt.command.plan_sha256 != plan.plan_sha256:
             raise RecoveryRejected("recovery receipt belongs to another plan")
-        self._require_current(plan)
         return plan
 
     def _require_current(self, plan: RecoveryPlan) -> None:
         plan.validate_integrity()
         plan.require_execution_supported()
         self._facts.validate(plan)
+        self._verify_capture(plan)
+        self._facts.validate(plan)
+
+    def _verify_capture(self, plan: RecoveryPlan) -> None:
         if plan.quarantined_paths:
             if not isinstance(self._captures, LegacyRecoveryCaptureVerifier):
                 raise RecoveryRejected("恢复执行器缺少只读历史补丁审计能力")
@@ -135,4 +203,3 @@ class RecoveryAuthorizationService:
             plan.permissions,
             denied_paths=plan.denied_paths,
         )
-        self._facts.validate(plan)

@@ -89,7 +89,7 @@ admission continues to validate current facts in fresh short inspection scopes.
 | Input or lifecycle | Required behavior |
 | --- | --- |
 | Actual baseline selector, `require_current`, required Context and epoch consumers | Full original bytes reread for every consumer; Plan and Start each decoded once within the scope |
-| Public approve → real authorization → real Task builder → real sealing | All 18 before/after facts observations retained; exact receipt/Task lineage persisted normally |
+| Public approve → real authorization → real Task builder → real sealing | All 16 retained authorization before/after observations run fresh; redundant middle builder inspection removed by recovery-admission-facts; exact receipt/Task lineage persisted normally |
 | Next independent Operation | New full Plan/Start validation, even if bytes and mtime are unchanged |
 | Same-size/same-mtime old Plan/Context corruption | Fresh bytes detect the change and reject; an earlier success cannot mask it |
 | Bad envelope, wrong key, authority model or missing original authority | Reject without registering a weaker validation result or inventing authority |
