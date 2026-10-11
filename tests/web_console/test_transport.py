@@ -243,12 +243,17 @@ def test_team_snapshot_admission_includes_worker_serialization(
             first = asyncio.create_task(client.get("/api/v1/team"))
             try:
                 assert await asyncio.to_thread(entered.wait, 2)
-                second = await asyncio.wait_for(client.get("/api/v1/team"), 2)
-                assert second.status_code == 503
+                second = asyncio.create_task(client.get("/api/v1/team"))
+                await asyncio.sleep(0)
+                rejected = await asyncio.wait_for(
+                    client.get("/api/v1/team?project_id=project_other"), 2
+                )
+                assert rejected.status_code == 503
                 assert reader.project_ids == [None]
             finally:
                 release.set()
                 assert (await asyncio.wait_for(first, 2)).status_code == 200
+                assert (await asyncio.wait_for(second, 2)).status_code == 200
             assert (await client.get("/api/v1/team")).status_code == 200
 
     asyncio.run(exercise())

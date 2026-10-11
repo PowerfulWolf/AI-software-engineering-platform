@@ -438,7 +438,7 @@ def test_progress_http_remains_independent_while_team_reader_is_busy(tmp_path: P
             reading = asyncio.create_task(client.get("/api/v1/team"))
             assert await asyncio.to_thread(reader.entered.wait, 2)
             try:
-                busy = await client.get("/api/v1/team")
+                busy = await client.get("/api/v1/team?project_id=project_other")
                 assert busy.status_code == 503
                 response = await asyncio.wait_for(
                     client.get(f"/api/v1/operations/{submitted.operation_id}/preparation-progress"),

@@ -9,6 +9,7 @@ from _thread import LockType
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, nullcontext
 from contextvars import ContextVar
+from dataclasses import dataclass
 from importlib.resources import files
 from threading import Lock
 from typing import Protocol, runtime_checkable
@@ -273,7 +274,7 @@ def create_console_app(
         for route, (name, content_type) in _ASSETS.items()
     }
     supported_actions = tuple(action.value for action in ConsoleAction)
-    snapshot_gate = Lock()
+    snapshot_gate = _TeamSnapshotReads()
     knowledge_worker = (
         KnowledgeIndexWorker(administration.tick_knowledge_indexes)
         if isinstance(administration, LocalConsoleAdministration)
@@ -1216,7 +1217,131 @@ def _valid_project_id(project_id: str) -> bool:
     return True
 
 
-async def _team_snapshot(reader: TeamReader, project_id: str | None, gate: LockType) -> Response:
+@dataclass(frozen=True, slots=True)
+class _RenderedTeamResponse:
+    body: bytes
+    status_code: int
+    media_type: str | None
+
+    def response(self) -> Response:
+        # The immutable body can be shared; headers and every other mutable
+        # Response field belong to this one HTTP caller.
+        return Response(self.body, status_code=self.status_code, media_type=self.media_type)
+
+
+@dataclass(slots=True, weakref_slot=True)
+class _TeamReadFlight:
+    project_id: str | None
+    task: asyncio.Task[_RenderedTeamResponse] | None = None
+    waiters: int = 0
+    started: bool = False
+    retired: bool = False
+
+
+class _TeamSnapshotReads:
+    """One worker-owned read, with at most two additional same-Project observers."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._active: _TeamReadFlight | None = None
+
+    async def response(self, reader: TeamReader, project_id: str | None) -> Response:
+        with self._lock:
+            flight = self._active
+            joined = flight is not None
+            if flight is None:
+                flight = _TeamReadFlight(project_id)
+                self._active = flight
+            elif (
+                flight.project_id != project_id
+                or flight.waiters >= 2
+                or flight.task is None
+                or flight.task.done()
+            ):
+                return _error(503, "TEAM_READ_IN_PROGRESS", "A Team read is already in progress.")
+            else:
+                flight.waiters += 1
+
+        if not joined:
+            execution = self._execute(reader, flight)
+            try:
+                flight.task = asyncio.create_task(execution)
+            except Exception:
+                execution.close()
+                self._retire_unstarted(flight)
+                return self._unexpected().response()
+            # One fixed callback also covers cancellation before the coroutine
+            # ever starts. It owns no request or exception/traceback payload.
+            flight.task.add_done_callback(lambda done: self._completed(flight, done))
+        assert flight.task is not None
+        try:
+            rendered = await asyncio.shield(flight.task)
+            return rendered.response()
+        finally:
+            if joined:
+                with self._lock:
+                    flight.waiters -= 1
+
+    async def _execute(self, reader: TeamReader, flight: _TeamReadFlight) -> _RenderedTeamResponse:
+        try:
+            return await run_in_threadpool(self._read, reader, flight)
+        except asyncio.CancelledError:
+            self._retire_unstarted(flight)
+            raise
+        except Exception:
+            # Scheduling errors must not enter the future as raw tracebacks.
+            self._retire_unstarted(flight)
+            return self._unexpected()
+
+    def _read(self, reader: TeamReader, flight: _TeamReadFlight) -> _RenderedTeamResponse:
+        with self._lock:
+            if flight.retired:
+                return self._unexpected()
+            flight.started = True
+        try:
+            try:
+                response: Response = JSONResponse(reader.snapshot(flight.project_id).to_wire())
+            except TeamReadError:
+                response = _error(503, "TEAM_UNAVAILABLE", "Team data is temporarily unavailable.")
+            except Exception:
+                return self._unexpected()
+            return _RenderedTeamResponse(
+                bytes(response.body), response.status_code, response.media_type
+            )
+        finally:
+            with self._lock:
+                flight.retired = True
+                if self._active is flight:
+                    # Retire before threadpool notification, so a new request
+                    # cannot join an already completed success or error body.
+                    self._active = None
+
+    def _retire_unstarted(self, flight: _TeamReadFlight) -> None:
+        with self._lock:
+            if not flight.started:
+                flight.retired = True
+                if self._active is flight:
+                    self._active = None
+
+    def _completed(
+        self, flight: _TeamReadFlight, completed: asyncio.Task[_RenderedTeamResponse]
+    ) -> None:
+        self._retire_unstarted(flight)
+        if not completed.cancelled():
+            completed.exception()
+
+    @staticmethod
+    def _unexpected() -> _RenderedTeamResponse:
+        return _RenderedTeamResponse(b"Internal Server Error", 500, "text/plain")
+
+
+async def _team_snapshot(
+    reader: TeamReader, project_id: str | None, gate: LockType | _TeamSnapshotReads
+) -> Response:
+    if isinstance(gate, _TeamSnapshotReads):
+        return await gate.response(reader, project_id)
+
+    # Preserve the existing private direct-read entry used by lifetime tests.
     def read_response() -> Response:
         # A disconnected HTTP caller does not stop its synchronous worker. Keep
         # admission with the actual read, including serialization, rather than

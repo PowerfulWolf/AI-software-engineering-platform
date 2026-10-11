@@ -103,7 +103,9 @@ lifetimes. Read integrity and complete audit history remain mandatory.
 native_acceptance_mapping(AcceptanceMappingDraft) -> AcceptanceDesignMapping
 unstarted_design_rejection(JointCheckpoint) -> JointDesignVerificationRejected | None
 JointJournal.history(delivery_id: str) -> tuple[JointCheckpoint, ...]
-_team_snapshot(reader: TeamReader, project_id: str | None, gate: LockType) -> Response
+_TeamSnapshotReads.response(reader: TeamReader, project_id: str | None) -> Response
+_team_snapshot(reader: TeamReader, project_id: str | None,
+               gate: LockType | _TeamSnapshotReads) -> Response
 GET /api/v1/team?project_id=project_<id>
 ```
 
@@ -119,14 +121,28 @@ GET /api/v1/team?project_id=project_<id>
   outside Python GC traversal. Its traceback's `f_back` chain can retain the caller's complete
   Project journal, even after the request returns and `gc.collect()` runs. Dropping only the
   outer traceback, cloning the aggregate error, increasing RAM or forcing GC is insufficient.
-- `create_console_app` owns one application-local, nonblocking `threading.Lock` for Team reads,
-  shared across Project selections. The actual synchronous worker acquires it and keeps it through
-  `reader.snapshot`, `TeamSnapshot.to_wire` and `JSONResponse.render`. Its `finally` releases it
-  on success, safe read error or unexpected exception. HTTP cancellation is not worker completion.
-- A competing Team GET returns fixed `503 TEAM_READ_IN_PROGRESS` without reading another Project.
-  `TeamReadError` retains fixed `503 TEAM_UNAVAILABLE`; unexpected errors keep the ordinary safe
+- `create_console_app` owns one application-local `_TeamSnapshotReads`, protecting one active
+  flight across Project selections. Actual synchronous worker ownership covers `reader.snapshot`,
+  `TeamSnapshot.to_wire` and `JSONResponse.render`; only its completion retires an entered flight.
+  HTTP cancellation is not worker completion. Keep the legacy private LockType helper compatible
+  for existing direct read-lifetime tests; production application admission uses the coordinator.
+- At most two additional callers with the exact same `project_id` may join the active flight.
+  `None` is distinct from any explicit Project. Additional full-capacity or different-key Team
+  GETs return fixed `503 TEAM_READ_IN_PROGRESS` without queuing another reader. One master async
+  task is shielded separately by each caller; cancellation/timeout detaches its consumer and
+  releases its joined slot exactly once without canceling the master or replenishing owner slots.
+  Cancel/rejoin cycles must not accumulate completed-consumer callbacks on the master.
+- Share only immutable rendered bytes/status/media type. Construct a separate mutable Response
+  per caller, preserving the original observation `as_of` and ordinary security headers. Worker
+  completion removes that exact flight before async publication; do not join completed success or
+  error results. Cleanup must compare flight identity before removing any active successor.
+  Unstarted canceled/unschedulable flights cannot permit a delayed worker to enter the reader.
+  Future results must not retain raw exceptions or diagnostic tracebacks.
+- `TeamReadError` retains fixed `503 TEAM_UNAVAILABLE`; unexpected errors keep the ordinary safe
   500 response. Other Console endpoints remain available. Host/origin checks and security headers
-  precede/cover admission. Do not queue blocked readers or cache snapshots across requests.
+  precede/cover admission. Do not cache completed snapshots across requests. Coordinator ownership
+  adds one rendered body and at most three lightweight consumer references to one active read's
+  peak; response byte size and process/network buffering are not fixed memory bounds.
 - Continue verifying every historical byte/hash/path, predecessor, ownership and current-scope
   distinction. Never truncate history, remove retired audit records, weaken validation or mutate
   durable delivery facts to reduce memory.
@@ -138,11 +154,16 @@ GET /api/v1/team?project_id=project_<id>
 | Valid native mapping | Original typed mapping and validation semantics |
 | Invalid historical inspection levels | Original safe rejection; completed caller scope releases |
 | Native or joint rejection repeated, then discarded | Weak caller-lifetime references die after GC |
-| One Team read held in reader, wire conversion or JSON rendering | Second Project GET returns busy; reader entered once |
+| Team read held in reader, wire conversion or rendering; two same-key joiners | Reader/wire/render once; three independent Responses share immutable body |
+| Different key, None versus explicit key, or third additional caller | Immediate busy; no queued reader |
 | First HTTP caller cancelled while reader still held | Busy admission remains until actual worker finishes |
+| Joined cancellation/timeout, including repeated cancel/rejoin | Slot releases once; master lives; callbacks/caller scopes do not accumulate |
+| Cancellation/scheduling failure before actual worker entry | Exact flight retires; any delayed invocation cannot read |
 | Safe or unexpected read failure | Original safe error; next read succeeds |
-| Subsequent Project GET | New Project facts, never prior snapshot reuse |
+| Worker complete before old async notification; late identity cleanup | Next GET reads fresh facts; successor is retained |
+| Success/failure consumers leave | Snapshot, caller scope and raw exception weakrefs release |
 | Invalid origin during held read | 403 without entering reader |
+| Preparation-progress endpoint during held Team worker | Independent response; different-key Team probe remains busy |
 | Real filesystem replay repeated | Bounded traced allocation after release; unchanged file inventory, SQL calls zero |
 
 ## 5. Good / base / bad
@@ -164,6 +185,11 @@ production-Agent behavior regressions.
 selected Projects, busy/safe/500 errors, origin/security headers, and gates held through wire and
 JSON serialization. Cancellation probes must not await middleware's shielded caller until the
 blocked synchronous worker is released.
+
+`tests/web_console/test_team_snapshot_coalescing.py` verifies bounded same-key sharing, exact-key
+admission, fresh reads after completion, independent Response/body ownership, canceled-slot reuse,
+worker startup/serialization/error lifetime and traceback/callback release. Sharing reduces proven
+simultaneous same-Project busy responses; it does not diagnose a hang or reduce serial read work.
 
 Production diagnosis uses numeric `vmmap -summary` physical footprint (compressed/swapped memory
 included) and bounded isolated `tracemalloc` replay. Do not take heap/core content dumps or flood a
