@@ -23,6 +23,13 @@ RegisteredNativePythonVerifier.observe_verifier_preparation(request, lease_id) -
 observe_verifier_preparation(*, repository_workspace_root, request, lease_id) -> VerifierPreparationObservation
 PreflightInvocationControl(..., prepare_verifier=None, observe_verifier=None)
 PreflightInvocationControl(..., resumed_preparation: Callable[[VerifierPreparationIntent, QueueClaim], bool] | None)
+PreflightInvocationControl(..., prepare_input: Callable[[AgentRequest], None] | None,
+                          discard_prepared_input: Callable[[AgentRequest], None] | None)
+DispatchDeliveryAgentAdapter.prepare_input(request: AgentRequest) -> None
+ModelInputPreparation.prepare_input(request: AgentRequest) -> None
+ModelInputPreparation.discard_prepared_input(request: AgentRequest) -> None
+BoundModelInputBudget.check(request: AgentRequest, content: str) -> None
+NativeCoderContinuation.preview(request: AgentRequest, root: Path) -> str | None
 ```
 
 ## 可信窗口与串行工作
@@ -98,6 +105,47 @@ hash 只保留在技术证据中，不能把英文内部枚举直接展示给产
   命令非零是给独立 QA/Reviewer 评估的证据；不能自动写 FAIL/PASS 或直接判平台故障。
 
 ## 准备与模型调用的顺序
+
+最终 provider input 也属于启动前准备。Context sections 的 token 总和不包含 native wrapper、
+序列化转义、工具提示、完整旧补丁、candidate source package 或 evidence 附件；不能以
+`ContextBudget.used_input_tokens <= max_input_tokens` 推断最终输入可执行。生产顺序固定为
+原 claim/prerequisite → verifier 真实准备及 READY marker → final input prepare →
+`DeliveryInvocationStart` → 当前 route 实际执行。已有 durable start 时直接交原 invocation control
+回放或报告不确定，不能重新编译输入、运行受控测试或以新预算结果覆盖历史。
+
+`BoundModelInputBudget` 读取 request 精确 Context 的 identity 与 section SHA，使用现有
+`estimate_input_tokens` 检查最终序列化字符串。native 编译只进行一次，包含最终随机 launcher
+路径、完整 continuation、完整 source package 和 image 描述；准备结果与私有临时资源一起复用。
+平台实际传给 CLI 的完整 strict output schema 字符串也计入同一预算，schema 文件按原样复用，
+真实执行前复核内容。CLI 内部隐式 system 等材料不可精确观测；此处是共享 estimator 的本地一致
+预算估计，不能冒充供应商实际计费 token 或保证所有隐式输入容量。
+Responses 检查并复用首次完整 UTF-8 body，包含 input、tools、strict output schema 和 image data。
+这是启动前初始输入门禁；后续 Responses tool-loop 新工具结果的动态增长不由此门禁保证。
+不截断必要材料、不放大 Context 预算、不改变 artifact/Context wire。
+
+Fallback 的冻结路由都只能纯读准备输入，不能预先消费 continuation admission、发布 capture start、
+调用 provider 或写 route-attempt。任一路由超限会清理所有已准备资源并停止整个新 invocation；
+成功准备后，真实 route 执行复核 request、原 Context、完整 continuation 和冻结 route list，
+复用精确材料。未使用 route 的资源在成功、失败、异常及 Host 关闭路径统一清理。
+`NativeCoderContinuation.preview` 复用全部 predecessor、claim、source、权限、inventory、预算与
+receipt 校验，但不发布 `ContinuationAdmission`、不修改 `_prepared` 或 `_starts`；实际执行边界
+才调用原 `prepare/started`，且返回 prose 必须与 preview 相等。
+
+| 最终输入准备事实 | 结果 |
+| --- | --- |
+| sections 可装入但 wrapper/完整补丁/附件令最终输入超限 | 启动前 `ContextBudgetExceeded`，零 model start/provider，既有 `BUDGET_EXHAUSTED` 终局，不自动重试 |
+| Task/Context/source/hash、candidate lineage 或读取权限不符 | 原 policy/scope 拒绝；不能改写为预算失败 |
+| QA/Review 原生测试已结束，之后 model input 超限 | 保留 READY + FINISHED preparation receipt，不能宣称测试 NOT_STARTED |
+| durable model start 已存在 | 原 replay/uncertainty，不新建假 stop，不重复准备或模型调用 |
+
+最少验证：native/Responses 初始精确材料复用与 estimator 边界；完整 continuation 超限零 admission/
+capture/model start；真实 Retry engine 预算终局与 durable journal 零 start/outcome；fallback 未用
+资源/中途超限 cleanup；verifier FINISHED marker 与旧 start 的直接回放。
+
+存量数据处置：此门禁只作用于尚无 durable start 的新执行，不修改历史 Task、Operation、审批、
+lease、receipt 或 invocation journal。已经出现 start 无 outcome 的历史不能由本门禁自动恢复，
+仍须原精确工程调查/处置流程；既有 terminal BUDGET 事实不重置或退款。回滚代码提交并在无角色
+执行时重新构造 Host，所有原 immutable facts 保留。
 
 可信 `prepare_verifier` 在真实 guard 下、durable **model invocation start 之前**打开精确 worktree、
 读取当前 accepted artifact/Context、执行 registered capability，并缓存封存的 `VerificationEvidence`。

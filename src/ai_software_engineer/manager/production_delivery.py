@@ -24,6 +24,7 @@ from ai_software_engineer.agents.candidate_binding import BoundCandidateSource
 from ai_software_engineer.agents.continuation import CoderInterruptionControl
 from ai_software_engineer.agents.execution import ExecutionGuard
 from ai_software_engineer.agents.fallback import model_route_root
+from ai_software_engineer.agents.model_input import BoundModelInputBudget, ModelInputPreparation
 from ai_software_engineer.agents.workspace_admission import InitialWorkspaceAdmission
 from ai_software_engineer.config import (
     ModelProviderKind,
@@ -266,6 +267,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 candidate_source=BoundCandidateSource(
                     context_resolver, baseline_verifier=self._baseline_verifier
                 ),
+                input_budget=BoundModelInputBudget(context_resolver),
                 executable=config.codex_executable,
                 proxy_base_url=config.codex_cli_proxy_base_url if proxy else None,
                 proxy_api_key_env=config.codex_cli_proxy_api_key_env if proxy else None,
@@ -294,6 +296,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             reasoning_effort=route.reasoning_effort,
             agent=definition,
             prompt_builder=prompt_builder,
+            input_budget=BoundModelInputBudget(context_resolver),
             initial_workspace_admission=(
                 self._initial_admission if definition.role is AgentRole.CODER else None
             ),
@@ -367,6 +370,36 @@ class DispatchDeliveryAgentAdapter:
         self._verifiers: dict[tuple[AgentRole, int], RoleWorktreeBinding] = {}
         self._adapters: dict[tuple[AgentRole, int, str], AgentAdapter] = {}
         self._prepared_verifier_routes: dict[str, tuple[ProviderRouteConfig, ...]] = {}
+        self._prepared_input_routes: dict[str, tuple[ProviderRouteConfig, ...]] = {}
+        self._prepared_input_requests: dict[str, AgentRequest] = {}
+
+    def prepare_input(self, request: AgentRequest) -> None:
+        """Freeze and budget exact provider material before durable invocation start."""
+        self._require_request_task(request)
+        if request.role is AgentRole.ORCHESTRATOR:
+            return
+        binding = self._binding(request)
+        configured = self._routes_for_request(request)
+        key = (request.role, binding.worktree.attempt, role_verification_digest(request.to_wire()))
+        adapter = self._adapters.get(key)
+        if adapter is None:
+            adapter = self._route_adapter(request.role, binding, configured=configured)
+            self._adapters[key] = adapter
+        if isinstance(adapter, ModelInputPreparation):
+            adapter.prepare_input(request)
+        self._prepared_input_routes[key[2]] = configured
+        self._prepared_input_requests[request.run_id] = request
+
+    def discard_prepared_input(self, request: AgentRequest) -> None:
+        key = role_verification_digest(request.to_wire())
+        for (role, _, identity), adapter in self._adapters.items():
+            if (
+                role is request.role
+                and identity == key
+                and isinstance(adapter, ModelInputPreparation)
+            ):
+                adapter.discard_prepared_input(request)
+        self._prepared_input_requests.pop(request.run_id, None)
 
     def prepare_verifier(self, request: AgentRequest) -> None:
         """Open exact original role workspace and prepare before invocation-start."""
@@ -401,6 +434,12 @@ class DispatchDeliveryAgentAdapter:
         return self._route_adapters.observe_verifier_preparation(request, lease_id)
 
     def run(self, request: AgentRequest) -> AgentResult:
+        try:
+            return self._run(request)
+        finally:
+            self.discard_prepared_input(request)
+
+    def _require_request_task(self, request: AgentRequest) -> None:
         if isinstance(self._dispatch, VerificationReservation):
             if request.role not in (AgentRole.QA, AgentRole.REVIEWER):
                 raise ProductionConfigError(
@@ -413,6 +452,9 @@ class DispatchDeliveryAgentAdapter:
             request_task_id = self._dispatch.task_id
         if request.task_id != request_task_id:
             raise ProductionConfigError("Agent request does not belong to this dispatch Task")
+
+    def _run(self, request: AgentRequest) -> AgentResult:
+        self._require_request_task(request)
         if request.role is AgentRole.ORCHESTRATOR:
             if self._plan_adapter is None:
                 raise ProductionConfigError("candidate verification cannot invoke Orchestrator")
@@ -428,6 +470,8 @@ class DispatchDeliveryAgentAdapter:
 
     def close_clean_worktrees(self) -> None:
         """Remove only clean worktrees; dirty failure evidence stays on disk."""
+        for request in tuple(self._prepared_input_requests.values()):
+            self.discard_prepared_input(request)
         bindings: list[RoleWorktreeBinding] = []
         if self._coder is not None:
             bindings.append(self._coder)
@@ -505,6 +549,11 @@ class DispatchDeliveryAgentAdapter:
 
     def _routes_for_request(self, request: AgentRequest) -> tuple[ProviderRouteConfig, ...]:
         configured = self._ordered_routes(self._definitions[request.role])
+        prepared_input = self._prepared_input_routes.get(
+            role_verification_digest(request.to_wire())
+        )
+        if prepared_input is not None and configured != prepared_input:
+            raise ProductionConfigError("prepared provider input routes changed")
         if request.role not in (AgentRole.QA, AgentRole.REVIEWER):
             return configured
         prepared = self._prepared_verifier_routes.get(role_verification_digest(request.to_wire()))

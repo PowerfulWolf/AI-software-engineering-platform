@@ -187,7 +187,9 @@ class BoundCandidateSource:
         self._resolver = resolver
         self._baseline_verifier = baseline_verifier
 
-    def append(self, request: AgentRequest, root: Path, prompt: str) -> str:
+    def append(
+        self, request: AgentRequest, root: Path, prompt: str, *, enforce_budget: bool = True
+    ) -> str:
         context = self._resolver.get_context(request.context_manifest_id)
         if (
             request.role not in (AgentRole.QA, AgentRole.REVIEWER)
@@ -276,7 +278,7 @@ class BoundCandidateSource:
             task, plans[0], implementations[0], request.source_revision, execution_baseline=baseline
         )
         result = prompt + candidate_review_snapshot(root, scope, request.permissions)
-        if estimate_input_tokens(result) > context.budget.max_input_tokens:
+        if enforce_budget and estimate_input_tokens(result) > context.budget.max_input_tokens:
             raise WorkspacePolicyError(
                 "candidate review prompt exceeds its configured Context budget"
             )

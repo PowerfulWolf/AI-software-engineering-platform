@@ -45,6 +45,8 @@ class PreflightInvocationControl:
         observe_verifier: Callable[[AgentRequest, str], VerifierPreparationObservation]
         | None = None,
         resumed_preparation: Callable[[VerifierPreparationIntent, QueueClaim], bool] | None = None,
+        prepare_input: Callable[[AgentRequest], None] | None = None,
+        discard_prepared_input: Callable[[AgentRequest], None] | None = None,
     ) -> None:
         self.delegate, self.guard, self.task_reader = delegate, guard, task_reader
         self.inspect, self.records, self.failure_control = inspect, records, failure_control
@@ -52,6 +54,7 @@ class PreflightInvocationControl:
             raise ValueError("verifier preparation requires its trusted execution observation")
         self.prepare_verifier, self.observe_verifier = prepare_verifier, observe_verifier
         self.resumed_preparation = resumed_preparation
+        self.prepare_input, self.discard_prepared_input = prepare_input, discard_prepared_input
 
     def prepare(self, request: AgentRequest) -> AgentRequest:
         if self.delegate.has_started(request):
@@ -101,7 +104,16 @@ class PreflightInvocationControl:
             request.role in (AgentRole.QA, AgentRole.REVIEWER) and self.prepare_verifier is not None
         ):
             self._prepare_verifier(request)
-        return self.delegate.prepare(request)
+        try:
+            if self.prepare_input is not None:
+                self.guard.check()
+                self.prepare_input(request)
+                self.guard.check()
+            return self.delegate.prepare(request)
+        except BaseException:
+            if self.discard_prepared_input is not None:
+                self.discard_prepared_input(request)
+            raise
 
     def _prepare_verifier(self, request: AgentRequest) -> None:
         assert self.prepare_verifier is not None and self.observe_verifier is not None

@@ -53,6 +53,23 @@ class CoderInterruptionControl(Protocol):
 
 
 @runtime_checkable
+class CoderContinuationPreview(Protocol):
+    """Read exact continuation prose without publishing or consuming admission."""
+
+    def preview(self, request: AgentRequest, root: Path) -> str | None: ...
+
+
+def continuation_preview(
+    control: CoderInterruptionControl | None, request: AgentRequest, root: Path
+) -> str | None:
+    if control is None:
+        return None
+    if not isinstance(control, CoderContinuationPreview):
+        raise InterruptionAdmissionRejected("continuation has no trusted read-only input preview")
+    return control.preview(request, root)
+
+
+@runtime_checkable
 class NativeStopRecordingControl(Protocol):
     """Optional trusted fact writer, unavailable to the model or request body."""
 
