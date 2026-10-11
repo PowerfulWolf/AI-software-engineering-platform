@@ -105,3 +105,34 @@ settlement success. K1 is **not delivered** at this boundary: it still requires 
 new exact plan approval, a claimed Coder, candidate-bound independent QA and Review,
 and a verifiable final handoff. Preserve the stock audit and all original records if
 subsequent recovery fails; do not reopen the terminal Task or discard its draft.
+
+## Exact successor preparation — 2026-10-12
+
+The original Requirement's proposal Operation
+`operation_8b1b11c81dabbb24469eb9cf8672cdb1` completed successfully. Its recovery
+plan is `5536cf4e59ca28db0213bd719d50860d14e6d4dbba1489a4c583e176b89e077a`.
+The plan retains the complete thirty-file draft, approved solution and original
+write permissions, targets clean revision `176997764f8b0d3a43c0b4daee5ee6424e9aae71`,
+and names successor Task `task_recovery_5536cf4e59ca28db0213bd719d50860d` under
+the same original Requirement. It uses the ordinary complete Git seed path;
+there was no invented patch conflict, partial reapplication, scope expansion or
+new business Requirement.
+
+Under the user's existing engineering delegation, the exact plan digest was
+submitted once in Operation `operation_062c258f7ca2307dc9c75fde02a57c11` at
+`2026-10-11T20:14:08.115216Z`. Public preparation progress sealed
+`AUTHORIZATION_RECORDED` at `20:29:48.464301Z` and `TASK_SEALED` at
+`20:45:09.758661Z`. At the read-only SQL observation `20:46:00.981228Z`, the
+successor Task had not yet been committed to SQL, and there was no current
+WorkItem, active lease or new Coder invocation. A sealed Task draft and an
+execution claim are distinct facts; neither approval nor preparation is K1
+delivery. The Operation was still running without a terminal error.
+
+While that production Operation runs, maintenance remains in isolated worktrees.
+Do not replace its service binary, update the registered source checkout,
+resubmit the approval or rewrite its state to accelerate preparation. The
+independently reviewed idle-dispatch, bounded summary/UI and operation-local
+immutable-decode changes require a safe idle controlled deployment. Runtime
+deployment alone does not authorize a new Task source baseline: any later source
+update must use the original Requirement's explicit current baseline/approval
+flow. Retain this exact approval and all settlement history through that step.
