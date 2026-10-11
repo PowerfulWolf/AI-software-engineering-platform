@@ -51,12 +51,14 @@ function fixture(planReady = false, classification = "TRANSIENT_INFRA") {
     consoleOperationContractVersion = 6; consoleSupportedActions = [...supportedActions];
     operations = [{operation_id: "inspect", status: "SUCCEEDED", updated_at: "2026-10-12T00:00:00Z",
       intent: {...engineeringWaitIntent(data.request, data.step), action: "INSPECT_DELIVERY_WAIT"},
-      result: {checkpoint_sha256: data.request.checkpoint_sha256, engineering_wait_investigation: data.proof}}];
+      result: {project_id: data.request.project_id, delivery_id: data.request.id,
+        checkpoint_sha256: data.request.checkpoint_sha256, engineering_wait_investigation: data.proof}}];
     globalThis.submitted = []; submitOperation = async intent => {submitted.push(intent); return {};};
     renderDetail = () => {}; renderNotification = () => {};`);
   if (planReady) run(`operations.push({operation_id: "prepare", status: "SUCCEEDED", updated_at: "2026-10-12T00:01:00Z",
     intent: {...engineeringBaselineFacts(data.request, data.task, data.step), action: "PROPOSE_EXECUTION_BASELINE", purpose: "stopped_provider_retry", input_mode: "preserve_draft"},
-    result: {checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: data.plan}});`);
+    result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: data.plan}});`);
   return {run, ...data};
 }
 
