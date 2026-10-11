@@ -25,7 +25,8 @@ node --test tests/team_view/operation-summary-reading.test.cjs tests/team_view/r
 PYTHONPATH=src /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/mypy src/ai_software_engineer/web_console/summary_models.py tests/web_console/test_operation_summaries.py
 ```
 
-Python: 25 passed, no MySQL, real models/store/HTTP/schema generation. Node: 83
+Original commit Python: 25 passed; real store/HTTP/schema tests without MySQL or
+models. Original commit Node: 83
 passed, actual app.js/fake HTTP and safe DOM, including zero-POST stale approval
 callback and independently labelled expanded audit. Ruff check/format, strict
 Mypy (two changed files), node --check and git diff --check passed.
@@ -60,3 +61,48 @@ This repair restores lawful history reading and prevents unrelated result author
 it does not establish K1 candidate/QA/Review/Handoff completion, prove memory-leak
 absence, or provide a general resource association service. Independent review
 and safe deployment belong to the parent maintenance workflow.
+
+## Independent review correction: edited draft navigation
+
+Independent review found that UPDATE_REQUIREMENT is a legitimate replacement
+producer: it writes a new draft, retires the exact old ID, and returns the new ID.
+The legacy `ui.test.cjs` refresh-preservation case was red after the initial result
+scope fix because the common result authority gate correctly excluded the new ID,
+but the old edit navigation incorrectly consumed that gate.
+
+The correction separates navigation from delivery authority. It requires a
+successful complete UPDATE, exact original Team/Project/ID/checkpoint and exact
+replacement ID/Project/checkpoint in the current Team snapshot, with the old draft
+absent. Modern summary refresh explicitly reads the exact UPDATE after Team has
+removed the old selection. It preserves page, Project and selection fences across
+awaited reads. `operationResult` remains null; replacement stage, approvals and
+baseline cannot attach to the old draft.
+
+The new Python composition regression uses real Update producer → Operation
+hash-chain → HTTP Team/summary/full GET with the shipped `refreshSnapshot` in a
+Node VM. It verifies Team publishes the replacement first, exact full GET once,
+no full-list polling, zero POST, and no old-draft approval. It separately delays
+the full response while a user changes selection, Project or page and asserts
+zero unintended navigation. The focused legacy UI red is now green.
+
+Final correction incremental results: Python summary file 26 passed / 15.27 s;
+five related Node files 85 passed / 0.48 s; focused legacy UI 1 passed / 0.70 s.
+Strict Mypy passed on the three Python files. The existing preparation fixture
+was brought up to the unchanged JointBackend protocol with the exact typed
+`verify_unstarted_design_rejection` method that raises AssertionError; draft
+mutation must not call that unrelated recovery path. Focused edit/delete/modern
+refresh fixture checks were rerun together: 3 passed / 0.98 s. Ruff check/format,
+both JS syntax checks and diff checks passed. Independent review separately
+reran the modern composition, legacy edit and 85 related Node regressions and
+approved the corrected navigation without widening result authority.
+No production mutation,
+service operation, SQL, real model or full suite was performed.
+
+No stock-data repair is needed: this correction reads existing exact UPDATE
+results and current replacement snapshots without rewriting old Operations,
+checkpoints, retirements or approvals. Deploy through the parent's controlled idle
+maintenance path. Refresh continues to show exact current Requirement identity;
+the correction does not authorize a requirement recreation or delivery approval.
+Rollback reverts this frontend navigation and documentation/test follow-up while
+retaining all durable records. Browser visual QA and production deployment remain
+the parent workflow's responsibility.

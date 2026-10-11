@@ -610,3 +610,94 @@ def test_create_project_may_obtain_new_project_identity_only_from_its_result(
     assert page.items[0].result_scope_relation == "CREATED_RESOURCE"
     assert page.items[0].project_id == page.items[0].result_project_id == "project_created"
     assert page.items[0].result_stage == "CREATED"
+
+
+def test_real_update_producer_snapshot_and_shipped_summary_refresh_select_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+    from typing import cast
+
+    from ai_software_engineer.config import ProductionConfig
+    from ai_software_engineer.multi_directory.service import CreateRequirement
+    from ai_software_engineer.team_view.reader import ProductionTeamReader
+    from ai_software_engineer.web_console import ManagerConsoleAdapter
+    from ai_software_engineer.web_console.manager import TeamConsoleHost
+    from ai_software_engineer.web_console.models import UpdateRequirementIntent
+    from tests.manager.test_requirement_retirement import _service
+    from tests.web_console.test_requirement_deletion_entry import _Host
+
+    service, root = _service(tmp_path, monkeypatch)
+    original = service.create(
+        CreateRequirement(name="Original draft", repository_roots=(str(root),))
+    ).checkpoint
+    config = ProductionConfig(
+        platform_root=service.team.manifest.platform_root,
+        team_id=service.team.manifest.team_id,
+        team_name=service.team.manifest.name,
+        default_project_id=service.project.manifest.project_id,
+        default_project_name=service.project.manifest.name,
+        model_routes=ProductionConfig.default().model_routes,
+    )
+    reader = ProductionTeamReader(config, {})
+    store = FileConsoleOperationStore(tmp_path / "operations", team_id=config.team_id)
+    adapter = ManagerConsoleAdapter(cast(TeamConsoleHost, _Host(service)))
+    console = ProjectConsole(store=store, executor=adapter)
+    intent = UpdateRequirementIntent(
+        project_id=original.project_id,
+        delivery_id=original.delivery_id,
+        expected_checkpoint_sha256=original.checkpoint_sha256,
+        name="Edited draft",
+        repository_roots=(str(root),),
+    )
+    with TestClient(
+        create_console_app(console, reader, team_id=config.team_id),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        before = client.get("/api/v1/team", params={"project_id": original.project_id}).json()
+        assert [item["id"] for item in before["requests"]] == [original.delivery_id]
+        store.submit(intent=intent, idempotency_key="actual-update-summary", requested_at=AT)
+        running = store.claim_next(at=AT + timedelta(seconds=1))
+        assert running is not None
+        completed = store.succeed(
+            running.operation_id,
+            expected=running.operation_sha256,
+            result=adapter.execute(intent),
+            at=AT + timedelta(seconds=2),
+        )
+        assert completed.result is not None and completed.result.delivery_id
+        after = client.get("/api/v1/team", params={"project_id": original.project_id}).json()
+        assert [item["id"] for item in after["requests"]] == [completed.result.delivery_id]
+        summaries = client.get(
+            "/api/v1/operation-summaries", params={"project_id": original.project_id}
+        )
+        assert summaries.status_code == 200, summaries.text
+        delivery_summaries = client.get(
+            "/api/v1/operation-summaries",
+            params={"project_id": original.project_id, "delivery_id": original.delivery_id},
+        )
+        assert delivery_summaries.status_code == 200, delivery_summaries.text
+        item = delivery_summaries.json()["items"][0]
+        assert item["result_scope_relation"] == "UNVERIFIED_RESOURCE"
+        assert item["result_stage"] is None and item["approval_kind"] is None
+        fixture = {
+            "before": before,
+            "after": after,
+            "original": before["requests"][0],
+            "replacement": after["requests"][0],
+            "operation": client.get(f"/api/v1/operations/{completed.operation_id}").json(),
+            "project_page": summaries.json(),
+            "delivery_page": delivery_summaries.json(),
+            "manifest": client.get("/api/v1/console").json(),
+        }
+    fixture_path = tmp_path / "actual-edit-navigation.json"
+    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    result = subprocess.run(
+        ["node", "tests/team_view/fixtures/operation-edit-navigation.cjs", str(fixture_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert store.get(completed.operation_id) == completed
+    assert service.journal.current(original.delivery_id) == original

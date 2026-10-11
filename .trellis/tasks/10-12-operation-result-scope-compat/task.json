@@ -16,7 +16,9 @@
     ".trellis/spec/core/console-operation-summary-ui.md",
     ".trellis/tasks/10-12-operation-result-scope-compat/",
     "tests/team_view/operation-capabilities.test.cjs",
-    "tests/team_view/operation-progress.test.cjs"
+    "tests/team_view/operation-progress.test.cjs",
+    "tests/team_view/fixtures/operation-edit-navigation.cjs",
+    "tests/manager/test_requirement_retirement.py"
   ],
   "constraints": [
     "Incremental tests only; no MySQL or model",
