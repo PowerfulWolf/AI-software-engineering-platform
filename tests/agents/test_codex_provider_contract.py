@@ -82,7 +82,7 @@ def test_background_auth_noise_does_not_classify_a_distinct_main_failure(
 def test_background_auth_noise_alone_does_not_establish_main_authentication(stderr: str) -> None:
     assert _classify_cli_failure(CodexInvocationResult(returncode=1, stderr=stderr)) == (
         AgentErrorCode.PROVIDER_UNAVAILABLE,
-        True,
+        False,
     )
 
 
@@ -147,8 +147,8 @@ def test_only_the_latest_main_diagnostic_supplies_classification() -> None:
 def test_component_diagnostics_cannot_supply_any_main_failure_marker(marker: str) -> None:
     stderr = f"ERROR: connection failed\nmcp: fixture failed: error: {marker}"
     invocation = CodexInvocationResult(returncode=1, stderr=stderr)
-    assert _recognized_cli_failure(invocation) is None
-    assert "cause=UNKNOWN_EXIT" in _failure_diagnostic(invocation)
+    assert _recognized_cli_failure(invocation) is AgentErrorCode.PROVIDER_UNAVAILABLE
+    assert "cause=PROVIDER_UNAVAILABLE" in _failure_diagnostic(invocation)
 
 
 def test_successful_health_shape_and_stdout_transcript_are_not_failure_evidence() -> None:
@@ -175,7 +175,9 @@ def test_unrelated_prose_does_not_continue_a_json_provider_diagnostic() -> None:
 
 def test_indented_background_log_does_not_continue_a_main_error() -> None:
     stderr = "ERROR: connection failed\n  2026-10-12T00:00:00Z ERROR rmcp::client: 401 Unauthorized"
-    assert _recognized_cli_failure(CodexInvocationResult(returncode=1, stderr=stderr)) is None
+    assert _recognized_cli_failure(CodexInvocationResult(returncode=1, stderr=stderr)) is (
+        AgentErrorCode.PROVIDER_UNAVAILABLE
+    )
 
 
 def test_native_diagnostic_selection_retains_fixed_tail_and_block_bounds() -> None:
@@ -185,7 +187,9 @@ def test_native_diagnostic_selection_retains_fixed_tail_and_block_bounds() -> No
     )
     stderr = "ERROR: connection failed\n  " + "x" * 64_001 + "401 Unauthorized"
     assert len(_main_cli_failure_diagnostic(stderr)) <= 64_000
-    assert _recognized_cli_failure(CodexInvocationResult(returncode=1, stderr=stderr)) is None
+    assert _recognized_cli_failure(CodexInvocationResult(returncode=1, stderr=stderr)) is (
+        AgentErrorCode.PROVIDER_UNAVAILABLE
+    )
 
 
 def test_ansi_main_prefix_does_not_change_stream_digests_or_publish_private_body() -> None:
@@ -243,7 +247,7 @@ def test_complete_json_body_keeps_the_main_provider_failure(
 )
 def test_completed_json_and_untyped_indentation_cannot_supply_authentication(stderr: str) -> None:
     result = CodexInvocationResult(returncode=1, stderr=stderr)
-    assert _recognized_cli_failure(result) is None
+    assert _recognized_cli_failure(result) is AgentErrorCode.PROVIDER_UNAVAILABLE
     assert _classify_cli_failure(result) == (AgentErrorCode.PROVIDER_UNAVAILABLE, True)
 
 

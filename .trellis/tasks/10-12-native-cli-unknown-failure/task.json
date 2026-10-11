@@ -1,0 +1,16 @@
+{
+  "name": "native-cli-unknown-failure",
+  "title": "未知原生退出不能默认证明临时提供方故障",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "3d3130b56aea0570a12bcd14ab91795432dde47d",
+  "allowlist": [
+    "src/ai_software_engineer/agents/codex_cli.py::_classify_cli_failure/_recognized_cli_failure",
+    "tests/agents/test_cli_unknown_failure.py",
+    "tests/agents/test_codex_provider_contract.py",
+    ".trellis/spec/core/native-cli-unknown-failure.md",
+    ".trellis/tasks/10-12-native-cli-unknown-failure/"
+  ],
+  "constraints": ["No production mutation or historical error/transient rewrite", "Incremental tests only"],
+  "rollback": "Revert this isolated classifier commit while idle, retaining all original Run facts. Reverting restores unsafe automatic retries for unknown exits."
+}
