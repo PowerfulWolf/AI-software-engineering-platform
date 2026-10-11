@@ -642,13 +642,18 @@ class CodexCliAgentAdapter:
                 sandbox_arguments = _coder_tooling_sandbox_arguments(
                     self._workspace_root, temporary_root, tooling_root, coder_tooling
                 )
-                coder_tooling = _prepare_coder_python_launchers(coder_tooling, tooling_root)
                 scratch = temporary_root / "scratch"
                 cache = temporary_root / "uv-cache"
+                mypy_cache = temporary_root / "mypy-cache"
                 scratch.mkdir(mode=0o700)
                 cache.mkdir(mode=0o700)
+                mypy_cache.mkdir(mode=0o700)
+                coder_tooling = _prepare_coder_python_launchers(
+                    coder_tooling, tooling_root, mypy_cache_root=mypy_cache
+                )
                 invocation_environment["TMPDIR"] = str(scratch)
                 invocation_environment["UV_CACHE_DIR"] = str(cache)
+                invocation_environment["MYPY_CACHE_DIR"] = str(mypy_cache)
             if coder_tooling is not None:
                 if coder_tooling.pytest is not None:
                     invocation_environment["ASE_PROJECT_PYTEST"] = str(coder_tooling.pytest)
@@ -1373,17 +1378,24 @@ def _coder_tooling_sandbox_arguments(
 
 
 def _prepare_coder_python_launchers(
-    tooling: _NativePythonTooling | None, temporary_root: Path
+    tooling: _NativePythonTooling | None,
+    temporary_root: Path,
+    *,
+    mypy_cache_root: Path,
 ) -> _NativePythonTooling | None:
     """Fixed isolated startup bypasses executable .pth and site customization entirely."""
     if tooling is None or tooling.python is None:
         return tooling
     bootstrap = temporary_root / "python-bootstrap.py"
     bootstrap.write_text(
-        "import runpy, sys\nfrom pathlib import Path\n"
+        "import os, runpy, sys\nfrom pathlib import Path\n"
         "from importlib.machinery import PathFinder\n"
         f"source_paths = {tuple(str(path) for path in tooling.source_paths)!r}\n"
         f"dependency_paths = {tuple(str(path) for path in tooling.dependency_paths)!r}\n"
+        # Native tool subprocesses may use a reduced environment. Bind the same
+        # private cache before user code starts, rather than relying on prose or
+        # inheriting a host cache directory outside the run's sandbox authority.
+        f"os.environ['MYPY_CACHE_DIR'] = {str(mypy_cache_root)!r}\n"
         "stdlib_paths = tuple(sys.path)\n"
         "mode, arguments = sys.argv[1], sys.argv[2:]\n"
         "if Path.cwd().resolve() != Path(source_paths[-1]):\n"
@@ -1504,6 +1516,9 @@ def _coder_python_tooling_instruction(tooling: _NativePythonTooling | None) -> s
         "editable source. Keep the registered tooling read-only. Do not create, copy, install, "
         "or synchronize a virtual environment in the worktree or registered repository; do not "
         "run uv sync, uv run, pip install, or dependency resolution to repair missing tooling. "
+        "For mypy use ASE_PROJECT_PYTHON -m mypy: the launcher binds its default cache to "
+        "this run's private external scratch. Do not redirect caches into the worktree or "
+        "use another run's cache; workspace cache writes receive no extra authorization. "
         "Keep language-specific allowed commands and focused tests within the approved plan. "
         "Record unexecuted verification honestly as NOT_RUN, never PASS. If this prerequisite "
         "prevents completion, preserve only legal changes and return coder-progress with the "

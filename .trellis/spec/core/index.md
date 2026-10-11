@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`coder-cache-isolation.md`](coder-cache-isolation.md): run-owned default mypy cache,
+  fixed bootstrap rebinding, unchanged workspace inventory and explicit containment limits.
+
 - [`controlled-service-restart.md`](controlled-service-restart.md): complete Host admission drain,
   real durable completion, process-stop proof, signal handling and exact private restart handshake.
 

@@ -1,0 +1,14 @@
+{
+  "id": "coder-cache-isolation-20261011",
+  "title": "隔离 Coder 受信 mypy 验证缓存",
+  "status": "completed",
+  "owner": "codex",
+  "created_at": "2026-10-11",
+  "baseline": "8d494027bbbc3a97198dc410601fed11f5f9f91d",
+  "allowed_paths": [
+    "src/ai_software_engineer/agents/codex_cli.py",
+    "tests/agents/test_coder_cache_isolation.py",
+    ".trellis/tasks/10-11-coder-cache-isolation/",
+    ".trellis/spec/core/coder-cache-isolation.md"
+  ]
+}
