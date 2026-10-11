@@ -19,3 +19,15 @@
 待 Root 独立审查后，维护停服、集成、由 Root 执行 exact apply、提交完成证据与推送，
 再启动最新服务并通过公共 baseline proposal/execute-pause/resume 路径继续原需求。
 本子任务不运行真实交付、不产生 QA/Review verdict，也不直接接纳原执行。
+
+## 生产维护结果
+
+Root 在 2026-10-11 10:52:02 UTC 完成精确 apply。旧服务 PID 52944 已通过
+`console_shutdown_15eed66874006e3041734eb8add6da4b` 的 exact READY 后真实退出。
+仅目标测试文件改变，完整 capture/wire/verify 通过；Task/work6/revision/HEAD/branch/index
+及预算保持。生产审计在受控 sidecar `state/external-test-maintenance/<plan_sha256>/`，
+包含授权、完整前后正文和补丁；仓库仅保存脱敏展示、哈希计划与 completion。
+
+`evalevt_external_tests_4045db7748a5b6d7429c0124a0d71d4a` 记录人工 MODIFY_TESTS，
+不能归为 ASE 自治产出。本维护没有补造 receipt/outcome、通过 QA/Review 或继续模型调用；
+后续由公开 baseline proposal/execute-pause/resume 完成真实封存、源码更新和交付。
