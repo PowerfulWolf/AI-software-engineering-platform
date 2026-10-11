@@ -1,0 +1,40 @@
+{
+  "name": "operation-summary-read",
+  "title": "新增完整bytes核验的有界Operation摘要分页读取",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "1769977",
+  "code_commit": "e7f0d19",
+  "goal": "Reduce steady-state console history allocations and response bytes while preserving complete journal validation and exact execution authority.",
+  "allowlist": [
+    "src/ai_software_engineer/web_console/summary_models.py",
+    "src/ai_software_engineer/web_console/summary_projection.py",
+    "src/ai_software_engineer/web_console/store.py",
+    "src/ai_software_engineer/web_console/core.py",
+    "src/ai_software_engineer/web_console/transport.py",
+    "schemas/console-operation-summary.schema.json",
+    "schemas/console-operation-page.schema.json",
+    "schemas/console-operation-cursor.schema.json",
+    "schemas/console-operation-query.schema.json",
+    "tests/web_console/test_operation_summaries.py",
+    ".trellis/spec/core/operation-summaries.md",
+    ".trellis/spec/core/read-memory-lifecycle.md",
+    ".trellis/spec/core/web-console.md",
+    ".trellis/spec/core/index.md",
+    "docs/architecture/contracts.md",
+    ".trellis/tasks/10-12-operation-summary-read/"
+  ],
+  "constraints": [
+    "Incremental tests only",
+    "No production SQL, Host, service or source mutations",
+    "No persisted history rewriting or summary authority",
+    "Complete bytes/hash/path checks on each summary request"
+  ],
+  "verification_commands": [
+    "PYTHONPATH=src ABS_VENV/python -m pytest tests/web_console/test_operation_summaries.py tests/web_console/test_transport.py tests/web_console/test_core.py tests/web_console/test_idle_replay.py tests/web_console/test_operation_budget.py tests/web_console/test_scope_contract.py -q",
+    "MYPYPATH=src PYTHONPATH=src ABS_VENV/python -m mypy src/ai_software_engineer/web_console/{summary_models,summary_projection,store,core,transport}.py tests/web_console/test_operation_summaries.py",
+    "PYTHONPATH=src ABS_VENV/python -m ruff check src/ai_software_engineer/web_console/{summary_models,summary_projection,store,core,transport}.py tests/web_console/test_operation_summaries.py",
+    "git diff --check"
+  ],
+  "rollback": "Revert the summary endpoint/cache/feature and matching frontend capability at an idle maintenance boundary. Keep all journal, Requirement, Task, approval, queue, candidate and draft facts unchanged."
+}
