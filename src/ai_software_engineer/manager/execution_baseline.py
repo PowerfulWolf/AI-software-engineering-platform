@@ -44,6 +44,7 @@ from ai_software_engineer.manager.baseline_models import (
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.completed_output_checkpoint import (
+    CompletedCoderOutputReason,
     require_completed_output_workspace,
 )
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
@@ -325,7 +326,10 @@ class ExecutionBaselineService:
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("旧执行救援需要精确人工工程确认, 不能自动审批")
             authority.require_plan_confirmation(plan)
-        if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+        if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE or (
+            plan.facts.completed_output is not None
+            and plan.facts.completed_output.reason is CompletedCoderOutputReason.REJECTED
+        ):
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("已结束执行恢复需要精确人工工程确认, 不能自动审批")
             authority.require_plan_confirmation(plan)
@@ -517,8 +521,11 @@ class ExecutionBaselineService:
                 ),
                 completed_output_sha256=(
                     current.completed_output.proof_sha256
-                    if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
-                    and current.completed_output is not None
+                    if current.completed_output is not None
+                    and (
+                        plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+                        or current.completed_output.reason is CompletedCoderOutputReason.REJECTED
+                    )
                     else None
                 ),
                 stopped_provider_failure_sha256=(

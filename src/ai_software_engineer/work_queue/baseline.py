@@ -26,6 +26,7 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
     ExecutionBaselinePlan,
 )
+from ai_software_engineer.manager.completed_output_checkpoint import CompletedCoderOutputReason
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.store.mysql_repository import _decode_task, _encode, open_mysql_connection
@@ -89,13 +90,17 @@ class BaselineQueueConsumption(DomainModel):
                 or self.binding.before_inventory_sha256 != self.binding.after_inventory_sha256
             ):
                 raise ValueError("旧执行救援消费必须保留现场并使用独立下一工作身份")
-        if self.plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
-            proof = self.plan.facts.completed_output
+        proof = self.plan.facts.completed_output
+        if (
+            self.plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+            or self.binding.completed_output_sha256 is not None
+            or (proof is not None and proof.reason is CompletedCoderOutputReason.REJECTED)
+        ):
             reservation = self.plan.facts.continuation
             if (
                 proof is None
                 or reservation is None
-                or reservation.retry_cause != "completed_output_unavailable"
+                or reservation.retry_cause != proof.reason.value
                 or self.binding.completed_output_sha256 != proof.proof_sha256
                 or self.next_work_item_id == self.work_item_id
             ):
@@ -357,6 +362,21 @@ def consume_baseline(
             or binding.authority_source != "engineering_operator_decision"
         ):
             raise QueueConflict("遗留未知执行不能退款、自动授权或复用旧工作预留")
+        proof = plan.facts.completed_output
+        if (
+            proof is not None
+            and proof.reason is CompletedCoderOutputReason.REJECTED
+            and (
+                reservation is None
+                or reservation.retry_cause != "completed_output_rejected"
+                or reservation.reservation_already_applied
+                or reservation.retry_failure is not None
+                or binding.completed_output_sha256 != proof.proof_sha256
+                or binding.authority_source != "engineering_operator_decision"
+                or binding.continuation_mode is not BaselineContinuationMode.PAUSE
+            )
+        ):
+            raise QueueConflict("已拒绝 Coder 报告不能退款或自动接纳, 需人工暂停和新工作预留")
         if plan.facts.stopped_provider_failure is not None and (
             reservation is None
             or reservation.reservation_already_applied

@@ -10,6 +10,7 @@ import hashlib
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal, Self
 
@@ -57,12 +58,14 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineExecutionReservation,
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
+    require_completed_output_confirmation,
     require_provider_confirmation_shape,
     require_provider_prerequisite_confirmation,
     require_rescue_confirmation,
 )
 from ai_software_engineer.manager.baseline_native_rules import build_native_rule_change
 from ai_software_engineer.manager.completed_output_checkpoint import (
+    CompletedCoderOutputReason,
     CompletedCoderOutputUnavailableProof,
     require_completed_output_workspace,
 )
@@ -226,6 +229,7 @@ class BaselineExecuteCommand(DomainModel):
 
     def require_plan(self, plan: ExecutionBaselinePlan) -> None:
         plan.validate_integrity()
+        require_completed_output_confirmation(plan, self.continuation_mode)
         if (plan.facts.task.id, plan.plan_sha256) != (self.task_id, self.expected_plan_sha256):
             raise ValueError("工程决定未绑定当前需求和精确执行基线计划")
         change = plan.facts.native_rule_change
@@ -592,7 +596,7 @@ class ProductionBaselineFactCollector:
                 self._verify_legacy_observation(
                     containment, worktree_root=Path(plan.dirty_capture.worktree_path)
                 )
-            elif plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            if plan.facts.completed_output is not None:
                 task = self.repository.get(plan.facts.task.id)
                 item = self.queue.get(plan.facts.work_item_id)
                 if (
@@ -600,27 +604,48 @@ class ProductionBaselineFactCollector:
                     != plan.facts.completed_output
                 ):
                     raise ValueError("已结束执行的原核验事实发生变化, 恢复尚未安排")
-                self.git.verify_mutations(
-                    plan.dirty_capture.to_capture(),
-                    plan.facts.permissions,
-                    denied_paths=plan.facts.denied_paths,
-                )
-                self.git.verify_mutations(
-                    plan.complete_capture.to_capture(),
-                    plan.facts.permissions,
-                    denied_paths=plan.facts.denied_paths,
-                )
-                inventory = capture_mutation_inventory(Path(plan.dirty_capture.worktree_path))
-                if inventory != plan.before_inventory:
-                    raise ValueError("恢复封存后工作现场已变化, 保留文件并重新检查方案")
-                assert plan.facts.completed_output is not None
+                proof = plan.facts.completed_output
                 require_completed_output_workspace(
-                    plan.facts.completed_output,
+                    proof,
                     plan.dirty_capture,
-                    inventory,
+                    plan.before_inventory,
                     plan.facts.permissions,
                     plan.facts.denied_paths,
                 )
+                inventory = capture_mutation_inventory(Path(binding.worktree_path))
+                if inventory.sha256 != binding.after_inventory_sha256:
+                    raise ValueError("未接纳产出接续后的完整现场已变化, 原草稿和失败记录保留")
+                if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+                    self.git.verify_mutations(
+                        plan.dirty_capture.to_capture(),
+                        plan.facts.permissions,
+                        denied_paths=plan.facts.denied_paths,
+                    )
+                    self.git.verify_mutations(
+                        plan.complete_capture.to_capture(),
+                        plan.facts.permissions,
+                        denied_paths=plan.facts.denied_paths,
+                    )
+                    if inventory != plan.before_inventory:
+                        raise ValueError("恢复封存后工作现场已变化, 保留文件并重新检查方案")
+                else:
+                    source_reference = replace(
+                        plan.dirty_capture.to_capture().worktree,
+                        head_revision=binding.execution_source_revision,
+                    )
+                    current_capture = self.git.capture_mutations(
+                        source_reference,
+                        plan.facts.permissions,
+                        denied_paths=plan.facts.denied_paths,
+                    )
+                    if (
+                        current_capture.worktree.head_revision != binding.execution_source_revision
+                        or current_capture.worktree.branch != binding.branch_name
+                        or current_capture.patch != plan.prepared_dirty_patch.encode("utf-8")
+                        or current_capture.index_diff_sha256 != hashlib.sha256(b"").hexdigest()
+                        or capture_mutation_inventory(Path(binding.worktree_path)) != inventory
+                    ):
+                        raise ValueError("未接纳产出基线更新后的源版本、完整草稿或 index 已变化")
 
             if plan.facts.stopped_provider_failure is not None:
                 task = self.repository.get(plan.facts.task.id)
@@ -1217,7 +1242,8 @@ class ProductionBaselineFactCollector:
             outcome is None
             or outcome.result.status is not AgentRunStatus.FAILED
             or outcome.result.error is None
-            or outcome.result.error.code is not AgentErrorCode.WORK_INTERRUPTED
+            or outcome.result.error.code
+            not in {AgentErrorCode.WORK_INTERRUPTED, AgentErrorCode.INVALID_OUTPUT}
         ):
             return None
         assert records is not None
@@ -1409,7 +1435,11 @@ class ProductionBaselineFactCollector:
             return BaselineExecutionReservation(
                 current_attempt=start.request.attempt,
                 next_execution_attempt=start.request.attempt + 1,
-                retry_cause="completed_output_unavailable",
+                retry_cause=(
+                    "completed_output_rejected"
+                    if completed_output.reason is CompletedCoderOutputReason.REJECTED
+                    else "completed_output_unavailable"
+                ),
                 original_run_id=start.request.run_id,
                 current_invocation_start_sha256=start.start_sha256,
                 current_invocation_outcome_sha256=outcome.outcome_sha256,

@@ -27,6 +27,7 @@ from ai_software_engineer.manager.baseline_models import (
     ExecutionBaselinePlan,
 )
 from ai_software_engineer.manager.baseline_native_rules import load_native_rule_epoch
+from ai_software_engineer.manager.completed_output_checkpoint import CompletedCoderOutputReason
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 from ai_software_engineer.redaction import source_inspection_scope
 
@@ -222,8 +223,12 @@ class FileExecutionBaselineStore:
     ) -> None:
         if binding.purpose != plan.purpose:
             raise ValueError("工程绑定与批准方案的处置目的不同")
-        if binding.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
-            proof = plan.facts.completed_output
+        proof = plan.facts.completed_output
+        if (
+            binding.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+            or binding.completed_output_sha256 is not None
+            or (proof is not None and proof.reason is CompletedCoderOutputReason.REJECTED)
+        ):
             if proof is None or binding.completed_output_sha256 != proof.proof_sha256:
                 raise ValueError("已结束执行恢复绑定缺少对应的完整原执行证据")
             authority = self.records.get(
@@ -304,6 +309,16 @@ class FileExecutionBaselineStore:
                     "原执行已结束, 但报告内容仍未知; 保留草稿不是已接纳产出或候选通过证明。\n"
                 )
                 if binding.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+                and plan.facts.completed_output is not None
+                and plan.facts.completed_output.reason is CompletedCoderOutputReason.UNAVAILABLE
+                else (
+                    "原 Coder 执行已真实结束, 原报告被拒绝并保持原失败记录。"
+                    "完整合法代码草稿已保留, 只作为下一次执行的输入; "
+                    "新 Run 必须消费普通工作额度重新产出, 不接纳或修改原报告, "
+                    "候选提交、独立 QA 和 Review 仍须正常完成。\n"
+                )
+                if plan.facts.completed_output is not None
+                and plan.facts.completed_output.reason is CompletedCoderOutputReason.REJECTED
                 else (
                     "原提供方前提失败已记录, 原执行已真实结束; "
                     "工程授权者已声明检查并修复原调用前提。"

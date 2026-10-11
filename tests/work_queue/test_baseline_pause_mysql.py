@@ -19,6 +19,7 @@ from ai_software_engineer.domain.delivery_resolution import (
 from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal
 from ai_software_engineer.domain.execution_baseline import (
     BaselineContinuationMode,
+    BaselinePurpose,
     ExecutionBaselineBinding,
 )
 from ai_software_engineer.knowledge.models import digest
@@ -44,6 +45,9 @@ from ai_software_engineer.work_queue.execution_store import (
 )
 from ai_software_engineer.work_queue.ports import QueueConflict
 from tests.git.test_worktree import _git
+from tests.manager.test_completed_output_checkpoint import CompletedFixture
+from tests.manager.test_completed_output_checkpoint import completed as completed_fixture
+from tests.manager.test_completed_output_rescue import service_for
 from tests.manager.test_execution_baseline import Setup, setup
 from tests.work_queue.test_mysql_queue import dispatcher, queued_item
 
@@ -349,3 +353,114 @@ def test_a_later_source_update_stays_paused_and_rejects_old_continue(paused: Pau
         paused.queue.release_baseline_pause(paused.binding, old_authority)
     assert paused.queue.get(waiting.id) == waiting
     assert paused.repository.get(item.task_id).attempts == item.attempt
+
+
+completed = completed_fixture
+
+
+@pytest.mark.parametrize(
+    "purpose", [BaselinePurpose.COMPLETED_OUTPUT_RESCUE, BaselinePurpose.SOURCE_REBIND]
+)
+@pytest.mark.parametrize("completed", ["invalid_named"], indirect=True)
+def test_rejected_completed_output_consumes_once_pauses_and_claims_exact_successor(
+    completed: CompletedFixture, purpose: BaselinePurpose
+) -> None:
+    """Actual SQL consume/release/claim; original completion uses the offline native fixture."""
+    f = completed
+    service = service_for(f)
+    target = None
+    if purpose is BaselinePurpose.SOURCE_REBIND:
+        root = Path(f.task.repository)
+        (root / "README.md").write_text("trusted SQL fixture baseline\n")
+        _git(root, "add", "README.md")
+        _git(root, "commit", "-m", "independent source baseline")
+        target = _git(root, "rev-parse", "HEAD")
+    plan = service.propose(target, purpose=purpose)
+    authority = BaselineOperatorAuthorization.for_plan(
+        plan,
+        principal=LocalOperatorPrincipal.trusted_local(),
+        reference="exact rejected draft",
+        submitted_at=datetime.now(UTC),
+        continuation_mode=BaselineContinuationMode.PAUSE,
+    )
+    binding = service.execute(plan.plan_sha256, authority=authority)
+    history, old_task = f.sealed_bytes(), f.task
+    original_events = f.native.repository.list_events(old_task.id)
+    dsn = os.environ["ASE_TEST_MYSQL_DSN"]
+    now = datetime.now(UTC)
+    with MySqlTaskRepository(dsn) as repository:
+        repository.create(f.native.task)
+        repository.record_attempt(old_task.id, old_task.attempts)
+        for event in original_events:
+            repository.append_event(event)
+        assert repository.get(old_task.id) == old_task
+        queue = MySqlRoleQueue(dsn, clock=lambda: now)
+        queue.admit(
+            RoleQueueAdmission(
+                task_id=old_task.id,
+                repository_id=f.queue.item.repository_id,
+                allocation_sha256=f.queue.bound.allocation_sha256,
+                legacy_artifacts=(),
+            ),
+            f.queue.bound.model_copy(update={"work_item": f.queue.item}),
+        )
+        checks: list[str] = []
+        waiting = consume_baseline(
+            queue, plan, binding, validate_new_consumption=lambda: checks.append("fresh")
+        )
+        assert waiting.id != f.queue.item.id and waiting.parent_work_item_id == f.queue.item.id
+        assert (
+            waiting.status is WorkItemStatus.WAITING_HUMAN
+            and waiting.attempt == old_task.attempts + 1
+        )
+        assert queue.get(f.queue.item.id).status is WorkItemStatus.CLOSED
+        assert queue.list_schedulable(now=now + timedelta(minutes=1)) == ()
+        reserved = repository.get(old_task.id)
+        assert reserved.work_attempt == old_task.work_attempt + 1
+        assert reserved.retry_failures == old_task.retry_failures
+        assert repository.list_events(old_task.id) == original_events
+        assert (
+            consume_baseline(
+                queue, plan, binding, validate_new_consumption=lambda: checks.append("replay")
+            )
+            == waiting
+        )
+        assert checks == ["fresh"] and repository.get(old_task.id) == reserved
+        assert waiting.wait_disposition is not None
+        continuation = BaselineContinueAuthorization.create(
+            scope=binding.scope,
+            task_id=old_task.id,
+            task_intent_sha256=task_intent_sha256(reserved),
+            task_revision=repository.current_revision(old_task.id),
+            work_item_id=waiting.id,
+            execution_baseline_sha256=binding.binding_sha256,
+            expected_source_revision=binding.execution_source_revision,
+            checkpoint_sequence=waiting.checkpoint_sequence,
+            expected_disposition_sha256=waiting.wait_disposition.disposition_sha256,
+            inventory_sha256=binding.after_inventory_sha256,
+            principal=LocalOperatorPrincipal.trusted_local(),
+            reference="explicit independent resume",
+            submitted_at=now,
+        )
+        assert queue.release_baseline_pause(binding, continuation)
+        assert not queue.release_baseline_pause(binding, continuation)
+        assert repository.get(old_task.id) == reserved
+        step = queue.step(waiting.id)
+        assert step.boundary.attempt == old_task.attempts + 1
+        assert step.boundary.source_revision == binding.execution_source_revision
+        tick = dispatcher(queue, "worker_rejected_completed").tick(
+            now=now + timedelta(seconds=1), work_item_id=waiting.id
+        )
+        assert tick.claim is not None and tick.lease_owner_token is not None
+        assert tick.claim.work_item.id == waiting.id
+        assert tick.claim.lease.id != f.start.lease_id
+        assert tick.claim.work_item.attempt == old_task.attempts + 1
+        queue.wait(
+            waiting.id,
+            lease_id=tick.claim.lease.id,
+            owner_token=tick.lease_owner_token,
+            status=WorkItemStatus.WAITING_DEPENDENCY,
+            reason="offline fixture ends after real claim",
+            now=now + timedelta(seconds=2),
+        )
+    assert all(path.read_bytes() == body for path, body in history.items())

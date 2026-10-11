@@ -202,6 +202,30 @@ def refs(value: object) -> set[str]:
     return set()
 
 
+def completed_failure_code(code: str) -> dict[str, object]:
+    """Match an actual embedded sealed code, not absent nested properties."""
+    return {
+        "type": "object",
+        "required": ["outcome"],
+        "properties": {
+            "outcome": {
+                "required": ["result"],
+                "properties": {
+                    "result": {
+                        "required": ["error"],
+                        "properties": {
+                            "error": {
+                                "required": ["code"],
+                                "properties": {"code": {"const": code}},
+                            }
+                        },
+                    }
+                },
+            }
+        },
+    }
+
+
 def guards(node: dict[str, object]) -> None:
     title = node.get("title")
     if title == "ProposeExecutionBaselineIntent":
@@ -352,7 +376,11 @@ def guards(node: dict[str, object]) -> None:
             {
                 "if": {
                     "required": ["retry_cause"],
-                    "properties": {"retry_cause": {"const": "completed_output_unavailable"}},
+                    "properties": {
+                        "retry_cause": {
+                            "enum": ["completed_output_unavailable", "completed_output_rejected"]
+                        }
+                    },
                 },
                 "then": {
                     "required": [
@@ -381,6 +409,11 @@ def guards(node: dict[str, object]) -> None:
                 "properties": {
                     "outcome": {
                         "properties": {
+                            "start": {
+                                "properties": {
+                                    "request": {"properties": {"role": {"const": "coder"}}}
+                                }
+                            },
                             "result": {
                                 "required": ["error"],
                                 "properties": {
@@ -389,7 +422,9 @@ def guards(node: dict[str, object]) -> None:
                                     "error": {
                                         "type": "object",
                                         "properties": {
-                                            "code": {"const": "WORK_INTERRUPTED"},
+                                            "code": {
+                                                "enum": ["WORK_INTERRUPTED", "INVALID_OUTPUT"]
+                                            },
                                             "transient": {"const": False},
                                         },
                                     },
@@ -423,7 +458,12 @@ def guards(node: dict[str, object]) -> None:
                             "type": "object",
                             "required": ["retry_cause"],
                             "properties": {
-                                "retry_cause": {"const": "completed_output_unavailable"}
+                                "retry_cause": {
+                                    "enum": [
+                                        "completed_output_unavailable",
+                                        "completed_output_rejected",
+                                    ]
+                                }
                             },
                         },
                     },
@@ -509,14 +549,90 @@ def guards(node: dict[str, object]) -> None:
                     else {}
                 ),
             },
-            **(
-                {"else": {"properties": {"completed_output_sha256": {"type": "null"}}}}
-                if title == "ExecutionBaselineBinding"
-                else {}
-            ),
         }
         if gate not in existing:
             node["allOf"] = [*existing, gate]
+
+    if title == "BaselineExecutionFacts":
+        existing = node.get("allOf", [])
+        assert isinstance(existing, list)
+        for cause, code in (
+            ("completed_output_unavailable", "WORK_INTERRUPTED"),
+            ("completed_output_rejected", "INVALID_OUTPUT"),
+        ):
+            gate = {
+                "if": {
+                    "required": ["completed_output"],
+                    "properties": {"completed_output": completed_failure_code(code)},
+                },
+                "then": {
+                    "required": ["continuation"],
+                    "properties": {
+                        "continuation": {
+                            "type": "object",
+                            "required": ["retry_cause"],
+                            "properties": {"retry_cause": {"const": cause}},
+                        }
+                    },
+                },
+            }
+            existing.append(gate)
+        node["allOf"] = existing
+    elif title == "ExecutionBaselineBinding":
+        existing = node.get("allOf", [])
+        assert isinstance(existing, list)
+        gate = {
+            "if": {
+                "required": ["completed_output_sha256"],
+                "properties": {"completed_output_sha256": {"type": "string"}},
+            },
+            "then": {
+                "required": ["continuation_mode"],
+                "properties": {
+                    "purpose": {"enum": ["source_rebind", "completed_output_rescue"]},
+                    "continuation_mode": {"const": "pause"},
+                    "authority_source": {"const": "engineering_operator_decision"},
+                    "legacy_containment_sha256": {"type": "null"},
+                    "stopped_provider_failure_sha256": {"type": "null"},
+                    "superseded_implementation_artifact_id": {"type": "null"},
+                },
+            },
+        }
+        node["allOf"] = [*existing, gate]
+    elif title == "BaselineQueueConsumption":
+        node["allOf"] = [
+            {
+                "if": {
+                    "required": ["plan"],
+                    "properties": {
+                        "plan": {
+                            "required": ["facts"],
+                            "properties": {
+                                "facts": {
+                                    "required": ["completed_output"],
+                                    "properties": {
+                                        "completed_output": completed_failure_code("INVALID_OUTPUT")
+                                    },
+                                }
+                            },
+                        }
+                    },
+                },
+                "then": {
+                    "required": ["binding"],
+                    "properties": {
+                        "binding": {
+                            "required": ["completed_output_sha256", "continuation_mode"],
+                            "properties": {
+                                "completed_output_sha256": {"type": "string"},
+                                "continuation_mode": {"const": "pause"},
+                                "authority_source": {"const": "engineering_operator_decision"},
+                            },
+                        }
+                    },
+                },
+            }
+        ]
 
     # These are independent of the older rescue gates: every regenerated root
     # and embedded definition must retain the permanent-provider boundary.

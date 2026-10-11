@@ -1,5 +1,6 @@
 """Truthful stopped native completion facts; unknown output grants no approval."""
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Self
 
@@ -25,6 +26,13 @@ from ai_software_engineer.orchestration.continuation_models import (
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationOutcome
 
 
+class CompletedCoderOutputReason(StrEnum):
+    """Derived classification of the sealed failure, never independent authority."""
+
+    UNAVAILABLE = "completed_output_unavailable"
+    REJECTED = "completed_output_rejected"
+
+
 class CompletedCoderOutputUnavailableProof(DomainModel):
     """Original FAILED result plus real stop, never a workspace-ready declaration."""
 
@@ -35,6 +43,17 @@ class CompletedCoderOutputUnavailableProof(DomainModel):
     capture_start: ExecutionCaptureStart
     capture_stop: ExecutionCaptureStop
     proof_sha256: StageSha256
+
+    @property
+    def reason(self) -> CompletedCoderOutputReason:
+        error = self.outcome.result.error
+        if error is None:
+            raise ValueError("未接纳产出缺少原封存失败原因")
+        if error.code is AgentErrorCode.WORK_INTERRUPTED:
+            return CompletedCoderOutputReason.UNAVAILABLE
+        if error.code is AgentErrorCode.INVALID_OUTPUT:
+            return CompletedCoderOutputReason.REJECTED
+        raise ValueError("原封存失败不是可重新产出的已完成 Coder 调用")
 
     @model_validator(mode="after")
     def require_exact_native_completion(self) -> Self:
@@ -48,7 +67,7 @@ class CompletedCoderOutputUnavailableProof(DomainModel):
             or outcome.result.status is not AgentRunStatus.FAILED
             or outcome.result.artifact is not None
             or error is None
-            or error.code is not AgentErrorCode.WORK_INTERRUPTED
+            or error.code not in {AgentErrorCode.WORK_INTERRUPTED, AgentErrorCode.INVALID_OUTPUT}
             or error.transient
             or start.request != request
             or start.claim.work_item.id != outcome.start.work_item_id

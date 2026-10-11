@@ -298,7 +298,7 @@ def test_every_published_and_fresh_embedded_binding_enforces_completed_pause_and
         {key: value for key, value in valid.items() if key != "completed_output_sha256"},
         {**valid, "input_mode": "coder_reapply"},
         {**valid, "authority_source": "organization_engineering_policy"},
-        {**valid, "purpose": "source_rebind"},
+        {**valid, "purpose": "stopped_provider_retry"},
     ]
     for filename, document in documents.items():
         binding = (
@@ -324,3 +324,103 @@ def test_every_published_and_fresh_embedded_binding_enforces_completed_pause_and
     assert "execution-baseline.schema.json" in matched
     assert "execution-baseline-queue-consumption.schema.json" in matched
     assert "execution-baseline-queue-release.schema.json" in matched
+
+
+@pytest.mark.parametrize("generated", [False, True])
+def test_unaccepted_completed_output_reason_and_source_pause_guards_match_all_six_graphs(
+    standalone_regenerated: dict[str, Any], generated: bool
+) -> None:
+    names = (
+        "completed-coder-output-unavailable",
+        "execution-baseline-plan",
+        "execution-baseline",
+        "execution-baseline-queue-consumption",
+        "execution-baseline-queue-release",
+        "console-operation",
+    )
+    for name in names:
+        document = (
+            standalone_regenerated[name + ".schema.json"]
+            if generated
+            else json.loads((ROOT / "schemas" / (name + ".schema.json")).read_text())
+        )
+        nodes = {**document.get("$defs", {}), document.get("title"): document}
+        if "CompletedCoderOutputUnavailableProof" in nodes:
+            guards = Draft202012Validator(
+                {"allOf": nodes["CompletedCoderOutputUnavailableProof"].get("allOf", [])}
+            )
+            proof = {
+                "outcome": {
+                    "start": {"request": {"role": "coder"}},
+                    "result": {
+                        "status": "FAILED",
+                        "error": {"code": "INVALID_OUTPUT", "transient": False},
+                    },
+                }
+            }
+            assert guards.is_valid(proof), name
+            for code in ("POLICY_VIOLATION", "AUTHENTICATION_ERROR", "TIMEOUT"):
+                bad = json.loads(json.dumps(proof))
+                bad["outcome"]["result"]["error"]["code"] = code
+                assert not guards.is_valid(bad), (name, code)
+            bad = json.loads(json.dumps(proof))
+            bad["outcome"]["start"]["request"]["role"] = "qa"
+            assert not guards.is_valid(bad), name
+        if "BaselineExecutionFacts" in nodes:
+            guards = Draft202012Validator(
+                {"allOf": nodes["BaselineExecutionFacts"].get("allOf", [])}
+            )
+            for code, cause in (
+                ("WORK_INTERRUPTED", "completed_output_unavailable"),
+                ("INVALID_OUTPUT", "completed_output_rejected"),
+            ):
+                facts: dict[str, Any] = {
+                    "completed_output": {"outcome": {"result": {"error": {"code": code}}}},
+                    "continuation": {"retry_cause": cause},
+                }
+                assert guards.is_valid(facts), name
+                facts["continuation"]["retry_cause"] = (
+                    "completed_output_unavailable"
+                    if cause == "completed_output_rejected"
+                    else "completed_output_rejected"
+                )
+                assert not guards.is_valid(facts), name
+        if "ExecutionBaselineBinding" in nodes:
+            guards = Draft202012Validator(
+                {"allOf": nodes["ExecutionBaselineBinding"].get("allOf", [])}
+            )
+            source = {
+                "purpose": "source_rebind",
+                "completed_output_sha256": "a",
+                "continuation_mode": "pause",
+                "authority_source": "engineering_operator_decision",
+            }
+            assert guards.is_valid(source), name
+            assert not guards.is_valid({**source, "continuation_mode": "resume"}), name
+            assert not guards.is_valid(
+                {**source, "authority_source": "organization_engineering_policy"}
+            ), name
+            assert guards.is_valid(
+                {"purpose": "source_rebind", "authority_source": "organization_engineering_policy"}
+            ), name
+        if "BaselineQueueConsumption" in nodes:
+            guards = Draft202012Validator(
+                {"allOf": nodes["BaselineQueueConsumption"].get("allOf", [])}
+            )
+            consume: dict[str, Any] = {
+                "plan": {
+                    "facts": {
+                        "completed_output": {
+                            "outcome": {"result": {"error": {"code": "INVALID_OUTPUT"}}}
+                        }
+                    }
+                },
+                "binding": {
+                    "completed_output_sha256": "a",
+                    "continuation_mode": "pause",
+                    "authority_source": "engineering_operator_decision",
+                },
+            }
+            assert guards.is_valid(consume), name
+            consume["binding"].pop("completed_output_sha256")
+            assert not guards.is_valid(consume), name

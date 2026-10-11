@@ -29,6 +29,7 @@ from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure, Execu
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git.mutation import WorkspaceMutationInventory
 from ai_software_engineer.manager.completed_output_checkpoint import (
+    CompletedCoderOutputReason,
     CompletedCoderOutputUnavailableProof,
     validate_completed_output_capture,
 )
@@ -52,6 +53,7 @@ class BaselineExecutionReservation(DomainModel):
         "provider_transient",
         "legacy_execution_abandoned",
         "completed_output_unavailable",
+        "completed_output_rejected",
         "provider_prerequisite_repaired",
     ]
     completed_output_sha256: Sha256 | None = Field(
@@ -103,7 +105,7 @@ class BaselineExecutionReservation(DomainModel):
                 raise ValueError(
                     "legacy disposition must consume new work without invented results"
                 )
-        elif self.retry_cause == "completed_output_unavailable":
+        elif self.retry_cause in {"completed_output_unavailable", "completed_output_rejected"}:
             if (
                 self.original_run_id is None
                 or self.current_invocation_start_sha256 is None
@@ -248,7 +250,7 @@ class BaselineExecutionFacts(DomainModel):
             start, request = completion.capture_start, completion.outcome.start.request
             if (
                 reservation is None
-                or reservation.retry_cause != "completed_output_unavailable"
+                or reservation.retry_cause != completion.reason.value
                 or reservation.completed_output_sha256 != completion.proof_sha256
                 or reservation.original_run_id != request.run_id
                 or reservation.current_invocation_start_sha256
@@ -270,7 +272,10 @@ class BaselineExecutionFacts(DomainModel):
                 or not set(request.input_artifact_ids).issubset(self.source_artifact_ids)
             ):
                 raise ValueError("完成但结果未接纳的事实与当前任务、权限或普通工作预留不一致")
-        elif reservation is not None and reservation.retry_cause == "completed_output_unavailable":
+        elif reservation is not None and reservation.retry_cause in {
+            "completed_output_unavailable",
+            "completed_output_rejected",
+        }:
             raise ValueError("完成但结果未接纳的预留缺少完整原执行证明")
         provider = self.stopped_provider_failure
         if provider is not None:
@@ -486,11 +491,7 @@ class BaselineOperatorAuthorization(DomainModel):
         return self
 
     def require_plan_confirmation(self, plan: ExecutionBaselinePlan) -> None:
-        if (
-            plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
-            and self.continuation_mode is not BaselineContinuationMode.PAUSE
-        ):
-            raise ValueError("已结束执行恢复批准后必须保持暂停, 再明确继续原需求")
+        require_completed_output_confirmation(plan, self.continuation_mode)
         require_provider_prerequisite_confirmation(
             plan, self.confirm_provider_prerequisites_repaired, self.continuation_mode
         )
@@ -637,6 +638,18 @@ class BaselineOperationStart(DomainModel):
         self.plan.validate_integrity()
         if self.start_sha256 != digest(self.model_dump(mode="json", exclude={"start_sha256"})):
             raise ValueError("baseline operation start changed")
+
+
+def require_completed_output_confirmation(
+    plan: ExecutionBaselinePlan, continuation_mode: BaselineContinuationMode
+) -> None:
+    """Rejected output is reproduced under exact human PAUSE, never auto-adopted."""
+    proof = plan.facts.completed_output
+    if (
+        plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+        or (proof is not None and proof.reason is CompletedCoderOutputReason.REJECTED)
+    ) and continuation_mode is not BaselineContinuationMode.PAUSE:
+        raise ValueError("已结束执行恢复批准后必须保持暂停, 再明确继续原需求")
 
 
 def require_provider_prerequisite_confirmation(

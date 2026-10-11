@@ -3,9 +3,10 @@
 ## Scope and signatures
 
 This capability handles a nonterminal IMPLEMENTING Task with a sealed FAILED
-WORK_INTERRUPTED/nontransient/no-artifact result and separately sealed completed native
+WORK_INTERRUPTED or INVALID_OUTPUT/nontransient/no-artifact result and separately sealed completed native
 stop (returncode0, output_present=true). Output content and why it was not accepted remain
-unknown unless separately evidenced. It is not TIMEOUT, provider failure, invalid artifact,
+unknown unless separately evidenced. INVALID_OUTPUT retains the original rejection; it is
+not accepted as an artifact. It is not TIMEOUT, provider failure,
 legacy unknown execution, a candidate or a verdict.
 
 ```python
@@ -28,12 +29,15 @@ The typed proof contains original immutable DeliveryInvocationOutcome, Execution
 and ExecutionCaptureStop plus its digest. Validate original start/request/work/lease/checkpoint,
 real historical claim and claim scope, process-stop/start digest and time, frozen Task intent,
 policy, permissions and exact native Requirement/dispatch scope under existing idle/Task fences.
-Require Coder FAILED, WORK_INTERRUPTED, transient=false and artifact=None; completed returncode0,
+Require Coder FAILED, WORK_INTERRUPTED or INVALID_OUTPUT, transient=false and artifact=None; completed returncode0,
 output_present=true and no cause/original_error_code. Recheck actual PGID absence through the
 existing native stop seam. Do not strengthen or reinterpret its historical proof scope.
 
 Baseline facts add optional `completed_output` excluded when None. Reservation adds optional
-`completed_output_sha256` excluded when None and distinct `retry_cause=completed_output_unavailable`.
+`completed_output_sha256` excluded when None. The ordinary `proof.reason` property derives
+`completed_output_unavailable` from sealed WORK_INTERRUPTED, or `completed_output_rejected`
+from sealed INVALID_OUTPUT. It is not a wire field, API input or independent permission. Facts
+and queue consumption must match that derived reason exactly; mixed code/cause pairs reject.
 Require outcome/start/proof references, next attempt=current+1, no receipt, no containment,
 no retry_failure, no already-applied reservation. New execution consumes normal frozen work;
 no transient refund. No accepted publication from the original invocation or later StateEvent
@@ -64,7 +68,7 @@ only that exact base. Missing completed proof rejects without changing original 
 Same-base Plan requires the exact completed proof, complete legal inventory/captures, no accepted
 implementation, native-rule change or legacy containment, unchanged HEAD and dirty patch, and a
 nonconflicted preserve mode. Execution validates files without rebase/reset. Binding carries
-optional `completed_output_sha256` only for this purpose, inherits the previous native-rule epoch
+optional `completed_output_sha256` for this purpose or an explicitly rejected-output SOURCE_REBIND, inherits the previous native-rule epoch
 and source artifact lineage, and requires same base/source, identical before/after inventory,
 exact human engineering authority and PAUSE. The store checks the proof digest and the saved exact
 authority when reopening. None/default fields remain excluded from canonical historical wire.
@@ -76,8 +80,9 @@ rechecks source/inventory/frozen identity and releases only that successor. New 
 must pass normal production gates and independent QA/Review. No HANDLE operation is rebranded or
 relaxed into this capability.
 
-Console contract version 5 advertises this preparation; version 4 retains all prior pause/source
-update behavior. A visible target-free entry says the platform will check, not that any FAILED run
+Console contract version 7 advertises preparation for completed INVALID_OUTPUT; version 5
+continues to advertise the older unknown-output preparation. Earlier versions retain their
+original pause/source-update behavior. A visible target-free entry says the platform will check, not that any FAILED run
 is recoverable. Typed known timeout/provider receipts, permitted result/continuation routes,
 knowledge/rejected/legacy proofs and exhausted budgets keep their own routes without a necessarily
 rejected new entry. The current sealed plan separately explains stopped execution and unknown report
@@ -133,3 +138,52 @@ execution permission. At a controlled idle load boundary, public PROPOSE prepare
 plan; inspect and approve its exact digest with PAUSE, then RESUME latest exact binding. A terminal
 Task remains ineligible. After consumption retain compatible readers and decisions; rollback
 must not resurrect old work or change ordinary work accounting.
+
+
+## Completed rejected output: same flow and historical compatibility
+
+The sealed result remains `FAILED/INVALID_OUTPUT/transient=false/artifact=None`, with the original
+failure code and diagnostic, capture start, completed returncode-zero stop, output-present fact,
+claim and full digest chain. No code repairs the old report, guesses a missing rejection subcause,
+substitutes a timeout/progress receipt or refunds work. The existing proof kind, version and
+`output_content_status=unknown` remain unchanged because rejection does not recreate its content.
+
+Both same-base `COMPLETED_OUTPUT_RESCUE` and selected target `SOURCE_REBIND` support rejected output.
+New rejected-output plans require exact operator engineering authority and PAUSE followed by a
+separate exact latest-bound RESUME. Organization policy and a RESUME execute command reject before
+Git changes or a new queue reservation. A SOURCE binding for this reason carries the existing
+optional `completed_output_sha256`; store reopening and queue consumption match it to the full
+plan proof and saved exact authority. Mixing legacy containment or provider prerequisite proof,
+missing/different digest, accepted implementation or applied/refunded reservation rejects.
+
+Historical WORK_INTERRUPTED proof, facts, reservation and binding bytes/digests are unchanged.
+Old SOURCE_REBIND bindings without `completed_output_sha256`, including their policy/RESUME form,
+remain readable. This compatibility does not let INVALID_OUTPUT use the historical omission.
+The plain reason property is excluded from model serialization and Schema generation.
+
+Immediately before new SQL consumption, production reopens the original outcome/start/stop and
+historical claim under the same Task lock and idle queue fence. It validates the original legal
+complete draft and inventory with frozen permissions. Same-base consumption additionally rechecks
+both actual captures and equal before/after inventory. SOURCE consumption permits the trusted
+rebase to change inventory, but compares the real current inventory to the binding's after digest,
+rechecks source/branch, complete prepared dirty patch, clean index and a second full inventory.
+The original proof remains about the old run; it is not compared to the rebased filesystem as
+though its before inventory described the new baseline.
+
+The six published proof/plan/binding/queue consumption/queue release/Console graphs and fresh
+regeneration retain matching code/cause, proof-required and explicit human PAUSE guards. Runtime
+models additionally enforce cross-record digest equality, claim, source and authority association;
+JSON Schema alone cannot prove those relationships. Public Host tests must cover original rejection
+→ target-free or source proposal → PAUSE with zero calls → latest exact RESUME → new Run, Context
+and claim → normal independent QA/Review, with unchanged old failure and ordinary-work accounting.
+
+### Existing data and rollback
+
+No DDL or production SQL edit is required. An existing exact completed INVALID_OUTPUT without an
+artifact can use the same Requirement's public baseline preparation, inspect the complete plan,
+approve PAUSE and then separately continue. Preparation is not a guarantee of admission: missing
+stop/claim, active ownership, unsafe ignored files, changed workspace or exhausted budget still
+reject while retaining history. K1's missing raw JSON is not reconstructed and GIT_CONTRACT's
+unevidenced subcause stays unknown. After a new rejected reservation is consumed, keep compatible
+readers when rolling back and prefer a forward fix; do not delete the new records or reset attempt
+accounting.

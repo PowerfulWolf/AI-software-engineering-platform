@@ -169,9 +169,14 @@ class ExecutionBaselineBinding(DomainModel):
             raise ValueError(
                 "source rebind must change its execution base without legacy containment"
             )
-        if (
-            self.purpose is not BaselinePurpose.COMPLETED_OUTPUT_RESCUE
-            and self.completed_output_sha256 is not None
+        if self.completed_output_sha256 is not None and (
+            self.purpose
+            not in {BaselinePurpose.COMPLETED_OUTPUT_RESCUE, BaselinePurpose.SOURCE_REBIND}
+            or self.continuation_mode is not BaselineContinuationMode.PAUSE
+            or self.authority_source != "engineering_operator_decision"
+            or self.legacy_containment_sha256 is not None
+            or self.stopped_provider_failure_sha256 is not None
+            or self.superseded_implementation_artifact_id is not None
         ):
             raise ValueError("已结束执行恢复证据只能用于对应的精确恢复绑定")
         if self.stopped_provider_failure_sha256 is not None and (

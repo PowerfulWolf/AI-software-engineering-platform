@@ -26,7 +26,11 @@ from ai_software_engineer.agents.models import (
     AgentRunStatus,
 )
 from ai_software_engineer.domain import AgentRole, Task, TaskStatus
-from ai_software_engineer.domain.engineering_authority import EngineeringScope
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringPolicy,
+    EngineeringScope,
+    LocalOperatorPrincipal,
+)
 from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.git import GitWorktreeManager, WorkspacePolicyError, WorktreeSpec
 from ai_software_engineer.git.baseline import GitExecutionBaselineAdapter
@@ -148,19 +152,43 @@ def completed(
     descriptor = os.open(tmp_path / "original.lock", os.O_RDWR | os.O_CREAT, 0o600)
     problem = getattr(request, "param", None)
     stopped_provider = isinstance(problem, str) and problem.startswith("stopped_provider")
+    rejected_output = isinstance(problem, str) and problem.startswith("invalid_")
+    variant = (
+        problem.removeprefix("invalid_")
+        if isinstance(problem, str) and problem.startswith("invalid_")
+        else problem
+    )
     native = V2Fixture(
         tmp_path,
         Guard(descriptor),
-        work_limit=1 if problem in {"exhausted", "stopped_provider_exhausted"} else 5,
+        work_limit=1 if variant in {"exhausted", "stopped_provider_exhausted"} else 5,
     )
     process: subprocess.Popen[bytes] | None = None
     try:
-        if problem == "named" or stopped_provider:
+        if variant in {"named", "named_policy"} or rejected_output or stopped_provider:
             # Baseline migration requires a semantic branch frozen in a fresh
             # NEW Task. Never alter a sealed invocation or an existing Task row.
             native.repository.close()
             native.task = Task.model_validate(
-                {**native.task.to_wire(), "branch_name": "ai/feature/completed-source"}
+                {
+                    **native.task.to_wire(),
+                    "branch_name": "ai/feature/completed-source",
+                    **(
+                        {
+                            "engineering_policy": EngineeringPolicy.bounded_local(
+                                scope=EngineeringScope(
+                                    team_id=native.scope.team_id,
+                                    project_id=native.scope.project_id,
+                                    repository_id=native.scope.repository_id,
+                                    repository_root=native.task.repository,
+                                ),
+                                principal=LocalOperatorPrincipal.trusted_local(),
+                            )
+                        }
+                        if variant == "named_policy"
+                        else {}
+                    ),
+                }
             )
             assert native.task.status is TaskStatus.NEW
             native.repository = SqliteTaskRepository(tmp_path / "tasks-named.sqlite")
@@ -199,7 +227,7 @@ def completed(
         assert continuation.started(native.request, native.worktree.path) is not None
         if not stopped_provider:
             (native.worktree.path / "src/app.py").write_text("VALUE = 2\n")
-        if problem in {"live_process", "stopped_provider_live_process"}:
+        if variant in {"live_process", "stopped_provider_live_process"}:
             process = subprocess.Popen(
                 (sys.executable, "-c", "import time; time.sleep(60)"), start_new_session=True
             )
@@ -227,7 +255,7 @@ def completed(
             native.request,
             native.worktree.path,
             process_stop=stop,
-            output_present=not stopped_provider and problem != "output_absent",
+            output_present=not stopped_provider and variant != "output_absent",
             cause=None,
             original_error_code=AgentErrorCode.AUTHENTICATION_ERROR if stopped_provider else None,
         )
@@ -237,7 +265,7 @@ def completed(
         ledger_root.parent.mkdir(mode=0o700)
         ledger = FileContinuationStore.initialize(ledger_root, task_id=native.task.id)
         ledger.put_capture_start(capture_start)
-        if problem not in {"missing_stop", "stopped_provider_missing_stop"}:
+        if variant not in {"missing_stop", "stopped_provider_missing_stop"}:
             ledger.put_capture_stop(capture_stop)
         result = (
             AgentResult.model_validate(
@@ -251,6 +279,17 @@ def completed(
                 }
             )
             if stopped_provider
+            else AgentResult.model_validate(
+                {
+                    **native.result().to_wire(),
+                    "error": AgentFailure(
+                        code=AgentErrorCode.INVALID_OUTPUT,
+                        message="原产出未接纳; GIT_CONTRACT。",
+                        transient=False,
+                    ),
+                }
+            )
+            if rejected_output
             else native.result()
         )
         outcome = _outcome(start, result)
@@ -324,6 +363,7 @@ def test_exact_completed_failed_outcome_roundtrips_model_and_schema(
         "artifact",
     ],
 )
+@pytest.mark.parametrize("completed", [None, "invalid_named"], indirect=True)
 def test_unsafe_completion_combinations_fail_model_and_static_schema(
     completed: CompletedFixture, problem: str
 ) -> None:
@@ -500,6 +540,7 @@ def test_failed_outcome_without_exact_stopped_output_cannot_be_collected(
     "problem",
     ["team", "project", "repository", "requirement", "dispatch", "claim", "source", "permissions"],
 )
+@pytest.mark.parametrize("completed", [None, "invalid_named"], indirect=True)
 def test_fenced_collector_rejects_foreign_scope_claim_source_and_frozen_permissions(
     completed: CompletedFixture, problem: str
 ) -> None:
@@ -531,6 +572,7 @@ def test_fenced_collector_rejects_foreign_scope_claim_source_and_frozen_permissi
 
 
 @pytest.mark.parametrize("same_work", [True, False])
+@pytest.mark.parametrize("completed", [None, "invalid_named"], indirect=True)
 def test_existing_original_or_later_publication_cannot_be_overwritten(
     completed: CompletedFixture, same_work: bool
 ) -> None:
@@ -607,6 +649,7 @@ def test_completed_output_workspace_covers_legal_draft_and_explicit_cache(
 
 
 @pytest.mark.parametrize("path", ["ignored.tmp", "src/ignored.tmp"])
+@pytest.mark.parametrize("completed", [None, "invalid_named"], indirect=True)
 def test_git_ignored_noncaches_cannot_evade_full_inventory(
     completed: CompletedFixture, path: str
 ) -> None:
@@ -637,6 +680,7 @@ def test_authorized_noncaches_still_require_complete_draft_coverage(
 
 
 @pytest.mark.parametrize("problem", ["source", "task", "root", "permissions", "denied"])
+@pytest.mark.parametrize("completed", [None, "invalid_named"], indirect=True)
 def test_workspace_authorization_remains_bound_to_original_execution(
     completed: CompletedFixture, problem: str
 ) -> None:
@@ -788,6 +832,7 @@ def test_final_plan_model_rejects_incomplete_or_mismatched_inventory(
 @pytest.mark.parametrize(
     "problem", ["receipt", "refund", "containment", "already_applied", "next_attempt"]
 )
+@pytest.mark.parametrize("completed", [None, "invalid_named"], indirect=True)
 def test_completed_reservation_forbids_other_capabilities_or_refund(
     completed: CompletedFixture, problem: str
 ) -> None:
