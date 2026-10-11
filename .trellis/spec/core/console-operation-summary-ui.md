@@ -208,6 +208,31 @@ the separate history presentation does not synthesize parent/child membership.
 Full/summary rendering uses the same gate, so loading a record cannot make an
 independent result become a current outcome, attention notice or recovery approval.
 
+An actual UPDATE_REQUIREMENT intentionally replaces an editable draft with a new
+identity and retires the exact old draft. This is a separate navigation contract:
+`editedRequirementReplacement(operation, originalRequest, originalTeamId)` may
+return the new current-snapshot Request only for a complete successful UPDATE,
+same Team/Project, exact original ID/checkpoint, old draft absent, and exact new
+result ID/Project/checkpoint present in the current snapshot. It cannot provide any
+old-draft result fact. `readEditedRequirementReplacement` uses the original selected
+Request binding to read its current summary and exact full UPDATE when the Team
+refresh has removed the old Request before ordinary detail hydration. Refresh
+retains selection revision/page/project fences across that await; later user
+navigation or unavailable reads cannot trigger selection. The unified result gate
+still returns null for this independent result. No generic child association or
+readiness/write permission follows from this navigation.
+
+`test_real_update_producer_snapshot_and_shipped_summary_refresh_select_replacement`
+uses the actual Update producer, immutable Operation store and HTTP Team/summary/
+full responses with `fixtures/operation-edit-navigation.cjs` running shipped
+`refreshSnapshot`. Good: the Team read removes the old draft first, then an exact
+full GET selects the replacement once. Bad: different action/Team/Project,
+changed original/new checkpoint, missing replacement, or old draft still present
+does not navigate. A later user selection, page or Project during awaited full GET
+also stays untouched. Every navigation read is GET; independent result approval
+and old-draft outcome remain absent. Legacy full-list edit navigation is covered
+by the focused `ui.test.cjs` refresh-preservation case.
+
 Validation: actual DELETE producer → store/hash-chain replay → HTTP 200/304 with
 unchanged full GET/files; same-Project different/missing resource projections;
 actual shipped JS full hydration, old-summary compatibility, forged relation,

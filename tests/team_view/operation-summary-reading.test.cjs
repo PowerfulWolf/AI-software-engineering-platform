@@ -205,6 +205,43 @@ test("a real create-project result supplies its new identity for scoped full his
   assert.equal(h.run('operationProject(operationDetailCache.get(source.operation_id).value)'), "project_current");
 });
 
+test("summary refresh can read an exact edit solely to navigate to the actual new snapshot draft", async () => {
+  const h = harness(), source = summary(1, {action:"UPDATE_REQUIREMENT", result_scope_relation:"UNVERIFIED_RESOURCE",
+    result_project_id:"project_current", result_delivery_id:"request_edited", result_checkpoint_sha256:null,
+    intent_checkpoint_sha256:digest("b"), summary:null});
+  const value = full(source); value.result = {project_id:"project_current", delivery_id:"request_edited",
+    checkpoint_sha256:digest("d"), stage:"READY_FOR_DISCUSSION", next_action:"讨论新草稿"};
+  h.context.original = h.run("snapshot.requests[0]");
+  h.run('operationsAvailable=true; selected=null; snapshot.requests=[{id:"request_edited", project_id:"project_current", checkpoint_sha256:"' + digest("d") + '", stage:"READY_FOR_DISCUSSION"}]');
+  h.replies.push({body:page([source])}, {body:value});
+  await h.run('readEditedRequirementReplacement(original, "team_current")');
+  assert.equal(h.requests.filter(request => request.url.startsWith("/api/v1/operations/")).length, 1);
+  h.context.value = value;
+  assert.equal(h.run('editedRequirementReplacement(value, original, "team_current").id'), "request_edited");
+  assert.equal(h.run('operationResult(value)'), null, "navigation cannot make the old draft's independent result authoritative");
+  h.run('operationsAvailable=true; operations=[value]');
+  assert.equal(h.run('latestApproval("request_current", original.checkpoint_sha256)'), null);
+  assert.equal(h.requests.some(request => request.options?.method === "POST"), false);
+});
+
+test("edit navigation rejects an unbound result, old checkpoint, foreign owner or absent/currently changed replacement", () => {
+  for (const mutation of ["continue", "old-checkpoint", "foreign-team", "foreign-project", "result-project", "missing", "new-checkpoint", "old-visible"]) {
+    const h = harness(), value = full(summary(1, {action:"UPDATE_REQUIREMENT"}));
+    value.result = {project_id:"project_current", delivery_id:"request_edited", checkpoint_sha256:digest("d"), stage:"READY_FOR_DISCUSSION"};
+    h.context.original = h.run("snapshot.requests[0]"); h.context.value = value;
+    h.run('snapshot.requests=[{id:"request_edited", project_id:"project_current", checkpoint_sha256:"' + digest("d") + '"}]');
+    if (mutation === "continue") value.intent.action = "CONTINUE_DELIVERY";
+    if (mutation === "old-checkpoint") value.intent.expected_checkpoint_sha256 = digest("e");
+    if (mutation === "foreign-team") value.team_id = "team_other";
+    if (mutation === "foreign-project") value.intent.project_id = "project_other";
+    if (mutation === "result-project") value.result.project_id = "project_other";
+    if (mutation === "missing") h.run("snapshot.requests=[]");
+    if (mutation === "new-checkpoint") h.run('snapshot.requests[0].checkpoint_sha256="' + digest("f") + '"');
+    if (mutation === "old-visible") h.run("snapshot.requests.push(original)");
+    assert.equal(h.run('editedRequirementReplacement(value, original, "team_current")'), null, mutation);
+  }
+});
+
 test("the shipped refresh uses summary polling and loads only the current exact full record", async () => {
   const h = harness(), source = summary();
   h.replies.push({body:manifest()}, {body:page([source], {scope:{project_id:"project_current", delivery_id:null}})},

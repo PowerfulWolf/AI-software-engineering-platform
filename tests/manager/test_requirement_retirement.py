@@ -43,6 +43,9 @@ from ai_software_engineer.multi_directory.service import (
     RestartRequirement,
     UpdateRequirement,
 )
+from ai_software_engineer.multi_directory.verification_recovery import (
+    UnstartedDesignCorrectionProof,
+)
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.team_workspace import TeamWorkspace
 
@@ -99,6 +102,12 @@ class _PreparationBackend:
 
     def validate_plan(self, checkpoint: JointCheckpoint, plan: JointExecutionPlan) -> None:
         del checkpoint, plan
+
+    def verify_unstarted_design_rejection(
+        self, checkpoint: JointCheckpoint
+    ) -> UnstartedDesignCorrectionProof:
+        del checkpoint
+        raise AssertionError("draft mutation must not verify design recovery")
 
 
 def _service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[JointDeliveryService, Path]:

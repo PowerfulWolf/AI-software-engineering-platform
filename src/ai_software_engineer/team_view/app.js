@@ -109,6 +109,30 @@ function validOperationResultScopeMetadata(item) {
     ["result_stage", "result_checkpoint_sha256", "approval_kind", "approval_plan_sha256", "baseline_plan_sha256",
       "baseline_purpose", "summary", "next_step"].every(field => item[field] == null) && !item.has_baseline_binding;
 }
+function editedRequirementReplacement(operation, originalRequest, originalTeamId) {
+  const result = operation?.result;
+  if (!originalRequest || originalTeamId !== snapshot?.team_id || operation?.team_id !== originalTeamId ||
+      operation.status !== "SUCCEEDED" || operationAction(operation) !== "UPDATE_REQUIREMENT" ||
+      operationProject(operation) !== originalRequest.project_id || originalRequest.project_id !== currentProjectId() ||
+      operation.intent?.delivery_id !== originalRequest.id ||
+      operation.intent.expected_checkpoint_sha256 !== originalRequest.checkpoint_sha256 ||
+      requestById(originalRequest.id) || result?.project_id !== originalRequest.project_id ||
+      !result.delivery_id || result.delivery_id === originalRequest.id ||
+      !/^[a-f0-9]{64}$/.test(result.checkpoint_sha256 || "")) return null;
+  const replacement = requestById(result.delivery_id);
+  return replacement?.project_id === result.project_id && replacement.checkpoint_sha256 === result.checkpoint_sha256
+    ? replacement : null;
+}
+async function readEditedRequirementReplacement(originalRequest, originalTeamId, signal) {
+  if (!operationSummaryMode() || !operationsAvailable || !originalRequest ||
+      originalTeamId !== snapshot?.team_id || originalRequest.project_id !== currentProjectId() ||
+      requestById(originalRequest.id)) return;
+  const page = await readOperationSummaryPage(originalRequest.project_id, originalRequest.id, {signal});
+  const source = page.items.find(item => item.status === "SUCCEEDED" && item.action === "UPDATE_REQUIREMENT" &&
+    item.team_id === originalTeamId && item.project_id === originalRequest.project_id &&
+    item.delivery_id === originalRequest.id && item.intent_checkpoint_sha256 === originalRequest.checkpoint_sha256);
+  if (source) await readFullOperation(source, {signal, fresh:true});
+}
 const operationSummaryScopeKey = (projectId, deliveryId) => JSON.stringify([consoleTeamId, projectId, deliveryId]);
 const operationReadOwnerSignature = () => JSON.stringify([operationReadOwnerGeneration,
   snapshot?.team_id, consoleTeamId, currentProjectId(), selectionIntentRevision]);
@@ -10947,20 +10971,20 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
   const priorKnowledge = JSON.stringify(pollingKnowledgeFacts());
   const priorTeamReadIssue = teamReadIssue;
   const selectedAtStart = selected, pageAtStart = page, selectionRevisionAtStart = selectionIntentRevision;
+  const selectedRequestAtStart = selectedAtStart?.kind === "request" ? requestById(selectedAtStart.id) : null;
+  const selectedTeamAtStart = snapshot?.team_id;
   const selectEditedReplacement = (sourceSelection) => {
-    if (selectionIntentRevision !== selectionRevisionAtStart || page !== pageAtStart ||
+    if (!operationsAvailable || selectionIntentRevision !== selectionRevisionAtStart || page !== pageAtStart ||
         sourceSelection?.kind !== "request" || !snapshot ||
+        sourceSelection.id !== selectedRequestAtStart?.id ||
         requestById(sourceSelection.id) ||
         (selected && (selected.kind !== "request" || selected.id !== sourceSelection.id))) return false;
-    const replacement = [...operations]
+    const replacement = [...operationDetailCache.values()].map(item => item.value).concat(operations)
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-      .find(operation => operation.status === "SUCCEEDED" &&
-        operationAction(operation) === "UPDATE_REQUIREMENT" &&
-        operationProject(operation) === currentProjectId() &&
-        operation.intent?.delivery_id === sourceSelection.id &&
-        operationResult(operation)?.delivery_id && requestById(operationResult(operation).delivery_id));
+      .map(operation => editedRequirementReplacement(operation, selectedRequestAtStart, selectedTeamAtStart))
+      .find(Boolean);
     if (!replacement) return false;
-    selected = {kind: "request", id: operationResult(replacement).delivery_id};
+    selected = {kind: "request", id: replacement.id};
     return true;
   };
   const refreshSystemViews = async () => {
@@ -11074,7 +11098,12 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
     if (teamResult.status === "rejected") throw teamResult.reason;
     // An edit result can arrive after Team publishes the replacement identity.
     // Follow only the exact saved edit, without overwriting a later user selection.
-    if (!superseded() && selectEditedReplacement(selectedAtStart)) renderCurrentFacts(true);
+    if (!superseded() && selectionIntentRevision === selectionRevisionAtStart && page === pageAtStart &&
+        selectedRequestAtStart && !requestById(selectedRequestAtStart.id) &&
+        (!selected || selected.kind === "request" && selected.id === selectedRequestAtStart.id)) {
+      await readEditedRequirementReplacement(selectedRequestAtStart, selectedTeamAtStart, controller.signal);
+      if (!superseded() && selectEditedReplacement(selectedAtStart)) renderCurrentFacts(true);
+    }
     if (superseded()) {
       showRefreshProgress();
       return;

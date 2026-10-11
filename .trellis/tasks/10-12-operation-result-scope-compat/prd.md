@@ -17,3 +17,10 @@ Acceptance: actual deletion producer → immutable store replay → summary HTTP
 delivery full hydration cannot produce a current approval or POST; full history
 labels the independent result explicitly. Preserve ETag, digest, Team/Project,
 selection, complete active and fresh write checks.
+
+Review correction: a successful UPDATE_REQUIREMENT legitimately retires the exact
+editable draft and returns its replacement. Preserve this product navigation with
+a separate exact full-Operation + current-snapshot identity/checkpoint contract;
+the replacement cannot provide the old draft's stage, approval or baseline.
+Modern summary polling must follow this edit after Team has removed the old ID,
+and must not override user Project, page or selection changes during the read.
