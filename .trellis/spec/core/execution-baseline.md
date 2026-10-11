@@ -39,6 +39,31 @@ An Agent/model cannot submit either trusted facts or an engineering principal.
 
 ## Contracts
 
+### Complete binding reads and standalone Context
+
+`FileExecutionBaselineStore.bindings_for_task(task_id)` reads and validates each exact
+`ExecutionBaselinePlan` once, then uses private
+`_required_patch(binding: ExecutionBaselineBinding, plan: ExecutionBaselinePlan) -> str`.
+The caller still validates the complete binding/predecessor, exact start/embedded plan,
+facts, independent authority and native-rule epoch. The private helper checks exact
+plan digest, complete retained patch URI, UTF-8 SHA/byte length, Task, input mode and
+purpose. It returns the complete patch without creating a discarded Context string.
+No plan, authorization or result survives this call as a cache.
+
+Public `required_context(binding)` independently validates binding integrity and
+freshly reads `plan(binding.plan_sha256)` on **every call**, then uses the same private
+patch check and unchanged complete Context text. `put_binding` retains its existing
+public Context check. Missing start/authority, bad predecessor/epoch, wrong plan identity,
+patch URI/hash/bytes, Task/mode/purpose still reject; no historical facts are rewritten.
+
+Good: a full read uses one plan read per binding and retains all authority reads.
+Base: two independent Context reads read the plan twice. Bad: use a previous request's
+plan or skip exact patch references because a complete binding was once observed.
+`tests/manager/test_baseline_read_reuse.py` counts real store reads and verifies full
+Context equality, immutable bytes and refusal cases. Existing complete baseline, native
+rule and paused-binding regressions remain required. No migration; rollback restores
+duplicate plan reads without changing an execution or approval.
+
 ### Original intent, branch and role lineage
 
 - Keep the same Task, original semantic branch and `coder-attempt-01` worktree. No `-recovery`

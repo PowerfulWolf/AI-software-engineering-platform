@@ -1,0 +1,14 @@
+{
+  "name": "baseline-read-performance",
+  "title": "消除完整基线校验中的重复计划读取",
+  "status": "in_progress",
+  "phase": "verified_awaiting_idle_deployment",
+  "created_at": "2026-10-11",
+  "allowlist": [
+    "src/ai_software_engineer/manager/baseline_store.py",
+    "tests/manager/test_baseline_read_reuse.py",
+    ".trellis/spec/core/read-memory-lifecycle.md",
+    ".trellis/spec/core/execution-baseline.md",
+    ".trellis/tasks/10-11-baseline-read-performance"
+  ]
+}

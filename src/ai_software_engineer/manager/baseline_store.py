@@ -126,7 +126,7 @@ class FileExecutionBaselineStore:
             if plan.facts.facts_sha256 != item.facts_sha256:
                 raise ValueError("baseline binding changed its source facts")
             self._require_authorized_binding(item, plan, previous)
-            self.required_context(item)
+            self._required_patch(item, plan)
             previous = item
         return selected
 
@@ -244,14 +244,15 @@ class FileExecutionBaselineStore:
         ):
             raise ValueError("旧执行救援没有对应的精确人工工程确认")
 
-    @source_inspection_scope()
-    def required_context(self, binding: ExecutionBaselineBinding) -> str:
-        binding.validate_integrity()
-        plan = self.plan(binding.plan_sha256)
+    def _required_patch(
+        self, binding: ExecutionBaselineBinding, plan: ExecutionBaselinePlan
+    ) -> str:
+        """Check complete input against this call's already validated plan."""
         patch = plan.complete_capture.patch
         body = patch.encode("utf-8")
         if (
-            binding.retained_patch.uri != self.patch_uri(plan.plan_sha256)
+            binding.plan_sha256 != plan.plan_sha256
+            or binding.retained_patch.uri != self.patch_uri(plan.plan_sha256)
             or binding.retained_patch.sha256 != hashlib.sha256(body).hexdigest()
             or binding.retained_patch.bytes != len(body)
             or binding.task_id != plan.facts.task.id
@@ -259,6 +260,13 @@ class FileExecutionBaselineStore:
             or binding.purpose != plan.purpose
         ):
             raise ValueError("complete retained baseline patch body changed")
+        return patch
+
+    @source_inspection_scope()
+    def required_context(self, binding: ExecutionBaselineBinding) -> str:
+        binding.validate_integrity()
+        plan = self.plan(binding.plan_sha256)
+        patch = self._required_patch(binding, plan)
         return (
             (
                 "平台按人工工程决定保留了完整当前草稿, 代码基线和需求分支保持。"

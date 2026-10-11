@@ -652,6 +652,16 @@ the absence of a memory leak. Measure the actual public operation separately.
 
 ## Snapshot-local complete baseline bindings (2026-10-10)
 
+Within one complete `FileExecutionBaselineStore.bindings_for_task` validation, reuse
+the typed plan already read in that exact iteration only for private `_required_patch`.
+Do not call public `required_context` merely to discard its complete text: it intentionally
+performs another independent full plan read. Exact binding/start/authority/predecessor/epoch
+and complete patch URI/hash/bytes/identity checks remain. Public Context calls stay fresh,
+and this reuse does not extend a scope or retain plans across snapshots. The actual-store
+regression in `tests/manager/test_baseline_read_reuse.py` requires plan reads 2→1 per binding,
+unchanged start/authority reads, and identical complete Context from independent reads.
+See `execution-baseline.md` for the full seam contract and refusal matrix.
+
 ### Scope and signatures
 
 Engineering history, pending continuation and interruption history can project the same Task's
