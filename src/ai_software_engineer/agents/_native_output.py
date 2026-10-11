@@ -21,6 +21,7 @@ class _BoundedText:
 
     head: str = ""
     tail: str = ""
+    truncated: bool = False
 
     def append(self, text: str) -> None:
         head_remaining = _STREAM_LIMIT // 2 - len(self.head)
@@ -28,6 +29,8 @@ class _BoundedText:
             self.head += text[:head_remaining]
             text = text[head_remaining:]
         if text:
+            if len(self.tail) + len(text) > _STREAM_LIMIT - _STREAM_LIMIT // 2:
+                self.truncated = True
             self.tail = (self.tail + text)[-(_STREAM_LIMIT - _STREAM_LIMIT // 2) :]
 
     def value(self) -> str:
@@ -93,6 +96,10 @@ class _NativeOutputDrain:
         if self._pending:
             raise OSError("native output has not reached EOF")
         return self._stdout.text.value(), self._stderr.text.value()
+
+    @property
+    def stderr_truncated(self) -> bool:
+        return self._stderr.text.truncated
 
     def close(self) -> None:
         self._selector.close()

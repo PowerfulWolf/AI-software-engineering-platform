@@ -383,13 +383,59 @@ def test_exact_initial_dirty_seed_preserves_unchanged_failure(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize("new_mutation", [False, True])
+@pytest.mark.parametrize(
+    ("stderr", "stderr_truncated", "expected_code", "eligible"),
+    [
+        ("usage limit reached", False, AgentErrorCode.QUOTA_EXHAUSTED, True),
+        (
+            "ERROR: stream disconnected before completion: HTTP 503 Service Unavailable\n"
+            "2026-10-12T00:00:00Z ERROR rmcp::transport: 401 Unauthorized; login required",
+            False,
+            AgentErrorCode.PROVIDER_UNAVAILABLE,
+            True,
+        ),
+        (
+            "mcp: fixture failed: 401 Unauthorized\nERROR: HTTP 403 Forbidden",
+            False,
+            AgentErrorCode.AUTHENTICATION_ERROR,
+            False,
+        ),
+        (
+            "x" * 1_000_000,
+            True,
+            AgentErrorCode.PROVIDER_UNAVAILABLE,
+            False,
+        ),
+        (
+            'ERROR: provider request failed\n{"error": {"message": "401 Unauthorized"',
+            False,
+            AgentErrorCode.PROVIDER_UNAVAILABLE,
+            False,
+        ),
+    ],
+    ids=[
+        "existing_quota",
+        "main_transport_with_background_auth",
+        "true_main_auth",
+        "truncated_unknown",
+        "incomplete_main_json",
+    ],
+)
 def test_real_fallback_uses_preserved_progress_only_when_primary_left_it_unchanged(
-    tmp_path: Path, new_mutation: bool
+    tmp_path: Path,
+    new_mutation: bool,
+    stderr: str,
+    stderr_truncated: bool,
+    expected_code: AgentErrorCode,
+    eligible: bool,
 ) -> None:
     root, request, admission = progress(tmp_path)
     before = capture_mutation_inventory(root)
     primary_runner = FailedRunner(
-        mutate=(lambda cwd: mutate_workspace(cwd, "body")) if new_mutation else None
+        result=CodexInvocationResult(
+            returncode=1, stderr=stderr, stderr_truncated=stderr_truncated
+        ),
+        mutate=(lambda cwd: mutate_workspace(cwd, "body")) if new_mutation else None,
     )
 
     class BackupRunner(_ProgressRunner):
@@ -436,20 +482,29 @@ def test_real_fallback_uses_preserved_progress_only_when_primary_left_it_unchang
     store = FileModelRouteAttemptStore(tmp_path / "model-routes")
     result = FallbackAgentAdapter(routes, attempt_store=store).run(request)
     records = store.list_for_run(request.run_id)
-    assert primary_runner.calls == 1 and backup_runner.calls == (0 if new_mutation else 1)
-    assert len(records) == (1 if new_mutation else 2)
+    should_fallback = eligible and not new_mutation
+    assert primary_runner.calls == 1 and backup_runner.calls == (1 if should_fallback else 0)
+    assert len(records) == (2 if should_fallback else 1)
+    assert records[0].result.error is not None
+    assert records[0].result.error.code is (
+        AgentErrorCode.POLICY_VIOLATION if new_mutation else expected_code
+    )
     assert records[0].outcome is (
-        RouteAttemptOutcome.FAILED if new_mutation else RouteAttemptOutcome.FALLBACK
+        RouteAttemptOutcome.FALLBACK if should_fallback else RouteAttemptOutcome.FAILED
     )
     if new_mutation:
         assert result.error is not None and result.error.code is AgentErrorCode.POLICY_VIOLATION
         assert (root / "src/partial.py").read_text() == "new_write = True\n"
-    else:
+    elif should_fallback:
         assert result.status is AgentRunStatus.SUCCEEDED and result.artifact is not None
         assert result.artifact.kind.value == "coder-progress"
         assert capture_mutation_inventory(root) == before
+    else:
+        assert result.error is not None and result.error.code is expected_code
+        assert result.error.transient is False and result.artifact is None
+        assert capture_mutation_inventory(root) == before
     assert FallbackAgentAdapter(routes, attempt_store=store).run(request) == result
-    assert primary_runner.calls == 1 and backup_runner.calls == (0 if new_mutation else 1)
+    assert primary_runner.calls == 1 and backup_runner.calls == (1 if should_fallback else 0)
 
 
 @pytest.mark.parametrize("fault", ["inventory", "index"])

@@ -1,0 +1,30 @@
+{
+  "name": "cli-failure-classification",
+  "title": "按主执行诊断分类 native CLI 失败，排除后台 MCP 鉴权噪声",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "05cb35b9e664e7271ac1914989d36061f2142ecf",
+  "worktree": "/Users/zhangjunshuai/workspace/code/ase-cli-failure-classification",
+  "allowlist": [
+    "src/ai_software_engineer/agents/codex_cli.py",
+    "src/ai_software_engineer/agents/_native_output.py",
+    "tests/agents/test_codex_provider_contract.py",
+    "tests/agents/test_codex_cli.py",
+    "tests/agents/test_codex_failed_continuation.py",
+    ".trellis/spec/core/production-team-host.md",
+    ".trellis/tasks/10-12-cli-failure-classification"
+  ],
+  "constraints": [
+    "no main edits, production API/SQL/model/K1 access or full tests",
+    "unchanged fallback order/allowlist; incomplete diagnostics cannot grant transient authority",
+    "unchanged actual auth and mutation/policy/stop gates",
+    "no raw actual stderr or credentials printed or persisted",
+    "historical run first cause remains unproven"
+  ],
+  "validation": [
+    "focused provider classification red/green",
+    "real Git adapter and preserved-progress fallback regressions",
+    "incremental native stop/output/failed-continuation compatibility",
+    "scoped Ruff and strict mypy, independent read-only review"
+  ]
+}
