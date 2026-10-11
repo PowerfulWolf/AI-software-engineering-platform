@@ -1,0 +1,11 @@
+{
+  "name": "product-approval-linear-read",
+  "title": "Product 审批历史线性完整读取",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "874f6a6",
+  "allowlist": ["src/ai_software_engineer/product/store.py", "tests/product/test_approval_read_prefix.py", ".trellis/spec/core/product-approval-read-prefix.md", ".trellis/tasks/10-12-product-approval-linear-read/"],
+  "constraints": ["Incremental tests only; no MySQL", "No production Host/service/SQL/source mutation", "Same complete raw bytes feed hash and fixed decode", "Fresh final bytes/path/inventory observation", "No cross-call authority or result cache; bounded association only"],
+  "verification_commands": ["PYTHONPATH=src /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/python -m pytest -q --tb=short tests/product/test_approval_read_prefix.py tests/product/test_store.py tests/product/test_service.py tests/design/test_service.py", "MYPYPATH=src PYTHONPATH=src /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/python -m mypy src/ai_software_engineer/product/store.py tests/product/test_approval_read_prefix.py", "PYTHONPATH=src /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/python -m ruff check src/ai_software_engineer/product/store.py tests/product/test_approval_read_prefix.py", "PYTHONPATH=src /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/python -m ruff format --check src/ai_software_engineer/product/store.py tests/product/test_approval_read_prefix.py", "git diff --check"],
+  "rollback": "Revert read optimization only while idle; retain all durable history and drafts."
+}
