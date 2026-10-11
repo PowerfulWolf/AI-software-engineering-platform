@@ -2062,6 +2062,162 @@ function completedRescuePlan(h) {
   return plan;
 }
 
+function unacceptedDraftFixture(h, version = 7) {
+  completedRescueFixture(h);
+  h.run(`consoleOperationContractVersion = ${version}`);
+  h.step.wait_disposition.facts.classification = 'INVALID_OUTPUT';
+}
+function unacceptedDraftPlan(h, source = false) {
+  const plan = completedRescuePlan(h);
+  plan.facts.completed_output.outcome.result.error.code = 'INVALID_OUTPUT';
+  plan.facts.continuation.retry_cause = 'completed_output_rejected';
+  if (source) {
+    plan.purpose = 'source_rebind'; plan.target_base_ref = 'e'.repeat(40);
+    h.run(`operations[0].intent.purpose = 'source_rebind'; operations[0].intent.target_base_ref = rescuePlan.target_base_ref`);
+  }
+  return plan;
+}
+
+test('rejected report offers the existing target-free preparation at version 7', async () => {
+  const h = harness(); unacceptedDraftFixture(h);
+  const proof = investigation(h, ['CHECKPOINT_UNAVAILABLE', 'OUTCOME_REJECTED']);
+  proof.permitted_resolutions = []; proof.source_revision = 'c'.repeat(40);
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  const prepare = control(box, '准备保留进度的恢复方案'); assert.ok(prepare);
+  assert.match(text(box), /报告.*被拒/);
+  await prepare.events.click();
+  assert.equal(h.run('submitted[0].purpose'), 'completed_output_rescue');
+  assert.equal(h.run('Object.hasOwn(submitted[0], "target_base_ref")'), false);
+});
+
+test('rejected completed proof approves only exact PAUSE and explains preserved ordinary work', async () => {
+  const h = harness(); unacceptedDraftFixture(h); const plan = unacceptedDraftPlan(h);
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  assert.match(text(box), /报告.*被拒/); assert.match(text(box), /具体.*子因.*未保存/);
+  assert.match(text(box), /消耗 1 次.*开发额度/); assert.match(text(box), /独立 QA 和 Review/);
+  await control(box, '批准保留进度，保持暂停').events.click();
+  assert.equal(h.run('submitted[0].expected_plan_sha256'), plan.plan_sha256);
+  assert.equal(h.run('submitted[0].continuation_mode'), 'pause');
+});
+
+for (const version of [5, 6]) test(`older service version ${version} cannot submit rejected report preparation or source update`, async () => {
+  const h = harness(); unacceptedDraftFixture(h, version);
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  assert.equal(control(box, '准备保留进度的恢复方案'), undefined);
+  assert.equal(control(box, '调查并保留原草稿'), undefined);
+  assert.match(text(box), /当前服务.*不支持/);
+  assert.equal(h.run('submitted.length'), 0);
+});
+
+test('detached rejected report approvals refuse every drift without writes', async () => {
+  for (const mutation of [
+    'rescuePlan.facts.continuation.retry_cause = "completed_output_unavailable"',
+    'rescuePlan.facts.completed_output.outcome.result.error.code = "AUTHENTICATION_ERROR"',
+    'rescuePlan.facts.completed_output.outcome.result.error.transient = true',
+    'rescuePlan.facts.completed_output.outcome.result.artifact = {}',
+    'rescuePlan.facts.completed_output.capture_stop.process_stop.kind = "terminated"',
+    'rescuePlan.facts.completed_output.capture_stop.output_present = false',
+    'rescuePlan.facts.completed_output.capture_start.request.run_id = "foreign_run"',
+    'rescuePlan.facts.continuation.completed_output_sha256 = "a".repeat(64)',
+    'consoleOperationContractVersion = 6',
+    'snapshot.selected_project_id = "foreign_project"',
+  ]) {
+    const h = harness(); unacceptedDraftFixture(h); unacceptedDraftPlan(h);
+    const approve = control(h.run('engineeringWaitBox(data.request, data.task, data.step)'), '批准保留进度，保持暂停');
+    assert.ok(approve); h.run(mutation); await approve.events.click();
+    assert.equal(h.run('submitted.length'), 0, mutation);
+  }
+});
+
+test('rejected completed source plan uses the same proof and native rule approval path', async () => {
+  const h = harness(); unacceptedDraftFixture(h); const plan = unacceptedDraftPlan(h, true);
+  assert.ok(h.run('engineeringBaselinePlan(data.request, data.task, data.step)'));
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  assert.match(text(box), /报告.*被拒/); assert.match(text(box), /普通开发额度/);
+  await control(box, '批准更新基线，保持暂停').events.click();
+  assert.equal(h.run('submitted[0].expected_plan_sha256'), plan.plan_sha256);
+  assert.equal(h.run('submitted[0].continuation_mode'), 'pause');
+  const prior = control(box, '批准更新基线，保持暂停');
+  h.run('rescuePlan.facts.continuation.completed_output_sha256 = "a".repeat(64)');
+  await prior.events.click(); assert.equal(h.run('submitted.length'), 1);
+});
+
+test('rejected source approvals retain version and complete native rule review gates', async () => {
+  for (const mutation of [
+    'consoleOperationContractVersion = 6',
+    'snapshot.selected_project_id = "foreign_project"',
+    'rescuePlan.facts.completed_output.outcome.result.error.code = "WORK_INTERRUPTED"',
+    'rescuePlan.facts.native_rule_change = {change_sha256: "8".repeat(64), changes: [{path: "AGENTS.md"}]}',
+  ]) {
+    const h = harness(); unacceptedDraftFixture(h); unacceptedDraftPlan(h, true);
+    const old = control(h.run('engineeringWaitBox(data.request, data.task, data.step)'), '批准更新基线，保持暂停');
+    assert.ok(old); h.run(mutation); await old.events.click();
+    assert.equal(h.run('submitted.length'), 0, mutation);
+  }
+});
+
+test('copied rejected source report names the current target decision and preserves original findings', async () => {
+  const h = harness(); unacceptedDraftFixture(h);
+  const old = handling(h, 'PLATFORM_ATTENTION', ['CHECKPOINT_UNAVAILABLE', 'OUTCOME_REJECTED']);
+  old.source_revision = old.investigation.source_revision = 'c'.repeat(40);
+  const oldOperation = h.run('operations[0]'); unacceptedDraftPlan(h, true); h.context.oldOperation = oldOperation;
+  h.run('operations.push(oldOperation); globalThis.copied = []; navigator = {clipboard: {writeText: async report => copied.push(report)}}');
+  await h.run('copyEngineeringWaitReport(data.request, handling)');
+  const report = h.run('copied[0]');
+  assert.match(report, /报告被拒/); assert.match(report, /原调查记录事项/);
+  assert.match(report, /审阅目标代码.*项目规范/); assert.match(report, /普通开发执行/);
+  assert.match(report, /报告内容仍未知/);
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  assert.equal(control(box, '准备保留进度的恢复方案'), undefined);
+  assert.equal(control(box, '平台修复后重新处理'), undefined);
+  assert.match(text(box), /批准更新基线/);
+});
+
+test('known fixed slice rejection stays known in current plan and copied report without exposing output', async () => {
+  const h = harness(); unacceptedDraftFixture(h);
+  const old = handling(h, 'PLATFORM_ATTENTION', ['OUTCOME_REJECTED']);
+  old.source_revision = old.investigation.source_revision = 'c'.repeat(40);
+  const oldOperation = h.run('operations[0]'); const plan = unacceptedDraftPlan(h);
+  plan.facts.completed_output.outcome.result.error.message =
+    'Codex CLI returned invalid structured output; cause=WORK_SLICE;validation_rule=PARTIAL_CANDIDATE;output_sha256=' + digest('f');
+  h.context.oldOperation = oldOperation;
+  h.run('operations.push(oldOperation); globalThis.copied = []; navigator = {clipboard: {writeText: async report => copied.push(report)}}');
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  assert.match(text(box), /本轮仍有后续步骤.*只能保存开发进度/);
+  assert.doesNotMatch(text(box), /具体旧校验子因未保存/);
+  await h.run('copyEngineeringWaitReport(data.request, handling)');
+  assert.match(h.run('copied[0]'), /本轮仍有后续步骤.*只能保存开发进度/);
+  assert.match(h.run('copied[0]'), /报告内容仍未知/);
+  assert.doesNotMatch(h.run('copied[0]'), /具体旧校验子因未保存/);
+});
+
+test('retained rejected preparation and source controls cannot write after service capability changes', async () => {
+  const h = harness(); unacceptedDraftFixture(h);
+  const prior = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  const prepare = control(prior, '准备保留进度的恢复方案');
+  const source = control(prior, '调查并保留原草稿');
+  assert.ok(prepare); assert.ok(source);
+  const input = descend(prior).find(node => node.attributes['aria-label'] === '目标代码完整版本');
+  input.value = 'e'.repeat(40);
+  h.run('consoleOperationContractVersion = 6');
+  await prepare.events.click(); await source.events.click();
+  assert.equal(h.run('submitted.length'), 0);
+});
+
+test('current exact completed draft facts supersede older stopped but incomplete capture findings', () => {
+  const h = harness(); unacceptedDraftFixture(h);
+  const old = handling(h, 'PLATFORM_ATTENTION', ['CHECKPOINT_UNAVAILABLE', 'OUTCOME_REJECTED']);
+  old.source_revision = old.investigation.source_revision = 'c'.repeat(40);
+  old.investigation.process_stop_sha256 = digest('7');
+  const oldOperation = h.run('operations[0]'); unacceptedDraftPlan(h); h.context.oldOperation = oldOperation;
+  h.run('operations.push(oldOperation)');
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  const current = descend(box).find(node => node.className === 'engineering-wait-facts');
+  assert.match(text(current), /开发报告被拒/);
+  assert.match(text(current), /完整合法草稿已封存/);
+  assert.doesNotMatch(text(current), /尚未形成可安全复用|原开发文件.*仍需平台核对/);
+});
+
 test('completed output preparation is visible, target-free and promises only a platform check', async () => {
   const h = harness(); completedRescueFixture(h);
   const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
