@@ -368,6 +368,25 @@ def _progress_output_guidance(request: AgentRequest) -> str:
     )
 
 
+def _negative_credential_test_guidance(request: AgentRequest) -> str:
+    if request.role not in {AgentRole.CODER, AgentRole.QA} or not request.permissions.write_paths:
+        return ""
+    return (
+        "\nNEGATIVE_CREDENTIAL_TEST_GUIDANCE: "
+        "Negative credential and fence-token tests must obtain dynamically generated tokens or "
+        "references from an independent authorized fixture within the current permissions. "
+        "Preserve the original negative-test intent and existing non-empty unknown-token, "
+        "empty-value and expired-token assertions where applicable. "
+        "An unknown token must be distinct from the valid fixture token. "
+        "Never embed fixed credential-like literals in source or tests, or encode/concatenate "
+        "values to evade secret inspection. "
+        "Do not weaken tests, skip assertions, or relax machine permissions or capture policy. "
+        "If no legal fixture/reference can be constructed, report an explicit blocked reason "
+        "through the existing role output schema; do not claim unverified acceptance criteria "
+        "passed."
+    )
+
+
 _PROJECT_OBSERVATION_GUIDANCE = (
     " When returning implementation-report, qa-report or review-report, you may include "
     "project_observations for reusable descriptive project facts actually discovered in this run. "
@@ -398,6 +417,7 @@ class RequestPromptBuilder:
             "output_contract.supersedes_by_kind; "
             "input_artifact_ids are context dependencies, not necessarily direct parents."
             + _progress_output_guidance(request)
+            + _negative_credential_test_guidance(request)
             + _PROJECT_OBSERVATION_GUIDANCE
         )
         user = json.dumps(
@@ -460,6 +480,7 @@ class ContextPromptBuilder:
             "input_artifact_ids are context dependencies, not necessarily direct parents.\n"
             f"MACHINE_POLICY={policy_sections[0]}"
             + _progress_output_guidance(request)
+            + _negative_credential_test_guidance(request)
             + _PROJECT_OBSERVATION_GUIDANCE
         )
         sections: list[dict[str, JsonValue]] = []
