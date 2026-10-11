@@ -21,8 +21,13 @@ from ai_software_engineer.manager.production_backend import (
     _task_commands,
 )
 from ai_software_engineer.manager.production_rules import production_rules
+from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.read_record_scope import recovery_record_read_scope
-from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected
+from ai_software_engineer.recovery.models import (
+    RecoveryPlan,
+    RecoveryRejected,
+    RecoveryScopeSupplement,
+)
 from ai_software_engineer.recovery.native import (
     NativeRecoverySource,
     NativeRecoverySourceReader,
@@ -32,7 +37,10 @@ from ai_software_engineer.recovery.scope import (
     expanded_recovery_permissions,
     inspect_recovery_scope_supplement,
 )
-from ai_software_engineer.recovery.workspace_snapshot import read_terminal_workspace_snapshot
+from ai_software_engineer.recovery.workspace_snapshot import (
+    _terminal_workspace_window,
+    read_terminal_workspace_snapshot,
+)
 from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.runtime_workspace import (
@@ -50,6 +58,19 @@ class NativeRecoveryFacts:
     target: ProjectPreparation
     profile: RepositoryProfile
     baseline: ProjectSpecBaseline
+
+
+@dataclass(frozen=True)
+class _RecoveryTargetPreflight:
+    original: NativeRecoverySource
+    team: TeamWorkspace
+    project: ProjectWorkspace
+    sidecar: Path
+    target: ProjectPreparation
+    profile: RepositoryProfile
+    manager: GitWorktreeManager
+    allowed_paths: tuple[str, ...]
+    supplement: RecoveryScopeSupplement | None
 
 
 class NativeRecoveryFactsVerifier:
@@ -73,6 +94,12 @@ class NativeRecoveryFactsVerifier:
     def inspect(self, plan: RecoveryPlan) -> NativeRecoveryFacts:
         try:
             plan.validate_integrity()
+            if (
+                _uses_standard_native_inspection(self)
+                and plan.workspace_snapshot is not None
+                and not plan.quarantined_paths
+            ):
+                return self._inspect_window(plan)
             first = self._inspect(plan)
             if first != self._inspect(plan):
                 raise ValueError("recovery facts changed during inspection")
@@ -83,6 +110,57 @@ class NativeRecoveryFactsVerifier:
             ) from error
 
     def _inspect(self, plan: RecoveryPlan) -> NativeRecoveryFacts:
+        original = self._read_source(plan)
+        target = self._target_preflight(plan, original)
+        workspace_snapshot = read_terminal_workspace_snapshot(
+            self._config,
+            self._environment,
+            original,
+            plan.capture,
+            approved_permissions=plan.permissions,
+            scope_supplement=target.supplement,
+        )
+        if workspace_snapshot != plan.workspace_snapshot:
+            raise ValueError("terminal workspace snapshot is missing or no longer current")
+        return self._target_facts(plan, target)
+
+    def _inspect_window(self, plan: RecoveryPlan) -> NativeRecoveryFacts:
+        plan.require_execution_supported()
+        with _terminal_workspace_window(self._config, self._environment, plan.source) as window:
+            original = self._read_source(plan)
+            target = self._target_preflight(plan, original)
+            first = self._target_facts(plan, target)
+            before = window.observe(
+                original,
+                plan.capture,
+                permissions=plan.permissions,
+                supplement=target.supplement,
+            )
+            original_after = self._read_source(plan)
+            target_after = self._target_preflight(plan, original_after)
+            second = self._target_facts(plan, target_after)
+            # Fresh SQL, stop, capture and inventory follow the LAST source and
+            # complete target pass; neither observation's stop object is reused.
+            after = window.observe(
+                original_after,
+                plan.capture,
+                permissions=plan.permissions,
+                supplement=target_after.supplement,
+            )
+            if (
+                first != second
+                or before.facts != after.facts
+                or before.observation.inventory_after != after.observation.inventory_after
+                or before.observation.ignored_paths != after.observation.ignored_paths
+                or before.observation.tracked_environment_paths
+                != after.observation.tracked_environment_paths
+                or before.snapshot != plan.workspace_snapshot
+                or after.snapshot != plan.workspace_snapshot
+            ):
+                raise ValueError("recovery facts changed during inspection")
+        return first
+
+    def _read_source(self, plan: RecoveryPlan) -> NativeRecoverySource:
         plan.require_execution_supported()
         source = plan.source
         original = self._source.inspect(
@@ -92,6 +170,12 @@ class NativeRecoveryFactsVerifier:
         )
         if original.source != source or original.denied_paths != plan.denied_paths:
             raise ValueError("original source or policy changed")
+        return original
+
+    def _target_preflight(
+        self, plan: RecoveryPlan, original: NativeRecoverySource
+    ) -> _RecoveryTargetPreflight:
+        source = plan.source
         config = self._config
         team = TeamWorkspace.initialize(
             config.platform_root,
@@ -155,16 +239,22 @@ class NativeRecoveryFactsVerifier:
             or expanded_recovery_permissions(original.permissions, supplement) != plan.permissions
         ):
             raise ValueError("approved source Coder permissions are no longer current")
-        workspace_snapshot = read_terminal_workspace_snapshot(
-            config,
-            self._environment,
-            original,
-            plan.capture,
-            approved_permissions=plan.permissions,
-            scope_supplement=supplement,
+        return _RecoveryTargetPreflight(
+            original, team, project, sidecar, target, profile, manager, allowed_paths, supplement
         )
-        if workspace_snapshot != plan.workspace_snapshot:
-            raise ValueError("terminal workspace snapshot is missing or no longer current")
+
+    def _target_facts(
+        self, plan: RecoveryPlan, preflight: _RecoveryTargetPreflight
+    ) -> NativeRecoveryFacts:
+        original = preflight.original
+        team, project = preflight.team, preflight.project
+        sidecar, target, profile = preflight.sidecar, preflight.target, preflight.profile
+        manager, allowed_paths, supplement = (
+            preflight.manager,
+            preflight.allowed_paths,
+            preflight.supplement,
+        )
+        source, config = plan.source, self._config
         if supplement is not None:
             allowed_paths = (*allowed_paths, *supplement.paths)
         allowed_paths = plan.rebound_write_paths(allowed_paths)
@@ -247,4 +337,14 @@ class NativeRecoveryFactsVerifier:
 
 
 # Capture the original delegate before trusted composition can extend validation.
+_STANDARD_NATIVE_INSPECT = NativeRecoveryFactsVerifier._inspect
 _STANDARD_NATIVE_VALIDATE = NativeRecoveryFactsVerifier.validate
+
+
+def _uses_standard_native_inspection(verifier: NativeRecoveryFactsVerifier) -> bool:
+    inspect = verifier._inspect
+    return bool(
+        type(verifier) is NativeRecoveryFactsVerifier
+        and getattr(inspect, "__self__", None) is verifier
+        and getattr(inspect, "__func__", None) is _STANDARD_NATIVE_INSPECT
+    )

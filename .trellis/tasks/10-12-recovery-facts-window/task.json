@@ -1,0 +1,11 @@
+{
+  "name": "recovery-facts-window",
+  "title": "现代终态失败恢复的同步完整事实观察窗口",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "completed_at": "2026-10-12",
+  "base_commit": "ac39c2e",
+  "allowlist": ["src/ai_software_engineer/recovery/current.py", "src/ai_software_engineer/recovery/workspace_snapshot.py", "tests/recovery/test_facts_window.py", "tests/recovery/facts_window_fixture.py", ".trellis/tasks/10-12-recovery-facts-window/", ".trellis/spec/core/recovery-facts-window.md"],
+  "constraints": ["Root approved executable design before implementation", "No production/main/registered repository operations", "Necessary incremental real MySQL fixture/tests only in exclusively owned ai_software_engineer_test; verify exact database, no other sessions and all 13 mutable tables empty; finally stop owned offline child processes and return all 13 tables to empty before releasing ownership", "Never connect, initialize, reset or write production ase_self_iteration", "No Schema/approval/claim/fence changes", "No skip boolean or cross-call current-facts cache", "Legacy/progress/quarantine preserve old safe path", "Preserve root-owned frozen standard Native validate alias", "Incremental tests only"],
+  "rollback": "Restore the old nested inspection composition after active workers are idle; preserve all stored facts, approvals, Task, journal and retained worktrees."
+}

@@ -11,12 +11,14 @@ import hashlib
 import json
 import os
 import stat
+from asyncio import current_task
 from collections.abc import Iterator, Mapping
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from fnmatch import fnmatchcase
 from pathlib import Path
+from threading import get_ident
 from typing import TYPE_CHECKING
 
 from pydantic import TypeAdapter
@@ -125,6 +127,13 @@ class TerminalWorkspaceObservation:
     task_lock_held: bool
     process_group_stopped: bool
     observed_at: datetime
+
+
+@dataclass(frozen=True)
+class _TerminalWorkspaceRead:
+    facts: TerminalWorkspaceFacts
+    observation: TerminalWorkspaceObservation
+    snapshot: RecoveryWorkspaceSnapshot
 
 
 def _require(condition: bool) -> None:
@@ -760,6 +769,163 @@ def _existing_task_scope(root: Path, task_id: str, guard: WorkerExecutionGuard) 
         os.close(directory)
 
 
+def _window_owner() -> tuple[int, int | None]:
+    try:
+        task = current_task()
+    except RuntimeError:
+        task = None
+    return get_ident(), id(task) if task is not None else None
+
+
+def _audit_terminal_workspace(
+    original: NativeRecoverySource,
+    capture: CapturedChanges,
+    facts: TerminalWorkspaceFacts,
+    scope: RecoveryWorkspaceScope,
+    git: GitWorktreeManager,
+    guard: WorkerExecutionGuard,
+    permissions: AgentPermissions,
+    supplement: RecoveryScopeSupplement | None,
+) -> _TerminalWorkspaceRead:
+    """Audit one fresh terminal read; callers separately own full native reads."""
+    _require(facts.scope == scope)
+    _require(facts.start.request.permissions == original.permissions)
+    _require(facts.start.request.source_revision == original.worktree_revision)
+    _require(facts.routes[-1].outcome is RouteAttemptOutcome.FAILED)
+    if supplement is not None:
+        from ai_software_engineer.recovery.scope import inspect_recovery_scope_supplement
+
+        _require(
+            inspect_recovery_scope_supplement(
+                git,
+                capture.to_capture().worktree,
+                original,
+                request=supplement.request,
+            )
+            == supplement
+        )
+    git.verify_capture(capture.to_capture(), permissions, denied_paths=original.denied_paths)
+    observation = _observe(git, facts, guard)
+    snapshot = validate_terminal_workspace_snapshot(
+        source=original.source,
+        permissions=permissions,
+        denied_paths=original.denied_paths,
+        capture=capture,
+        facts=facts,
+        observation=observation,
+        scope_supplement=supplement,
+    )
+    return _TerminalWorkspaceRead(facts, observation, snapshot)
+
+
+class _TerminalWorkspaceWindow:
+    """Private synchronous observation scope; no cached source or authorization."""
+
+    def __init__(
+        self,
+        config: ProductionConfig,
+        environment: Mapping[str, str],
+        source: RecoverySource,
+        sidecar: Path,
+        team_root: Path,
+        scope: RecoveryWorkspaceScope,
+        guard: WorkerExecutionGuard,
+    ) -> None:
+        self._config, self._environment, self._source = config, environment, source
+        self._sidecar, self._team_root, self._scope = sidecar, team_root, scope
+        self._guard = guard
+        self._owner = _window_owner()
+        self._closed = False
+        self._observations = 0
+
+    def _require_owner(self) -> None:
+        _require(
+            not self._closed and self._owner == _window_owner() and bool(self._guard.inherited_fds)
+        )
+
+    def observe(
+        self,
+        original: NativeRecoverySource,
+        capture: CapturedChanges,
+        *,
+        permissions: AgentPermissions,
+        supplement: RecoveryScopeSupplement | None,
+    ) -> _TerminalWorkspaceRead:
+        self._require_owner()
+        _require(self._observations < 2)
+        _require(
+            original.source == self._source
+            and original.task.interruption_continuation_policy is not None
+            and original.preparation.repository_workspace_root == str(self._sidecar)
+            and original.preparation.team_root == str(self._team_root)
+            and original.preparation.team_id == self._scope.team_id
+            and original.preparation.repository_id == self._scope.repository_id
+        )
+        # Each pass independently reads the complete terminal SQL, stop,
+        # invocation and routes BEFORE verifying capture and actual inventory.
+        facts = _read_facts(self._config, self._environment, original, self._sidecar, self._scope)
+        git = GitWorktreeManager(
+            self._source.scope.repository_root,
+            Path(self._config.platform_root) / "worktrees" / self._source.scope.repository_id,
+            branch_names={self._source.task_id: original.task.branch_name},
+        )
+        result = _audit_terminal_workspace(
+            original, capture, facts, self._scope, git, self._guard, permissions, supplement
+        )
+        self._observations += 1
+        return result
+
+    def _finish(self) -> None:
+        self._require_owner()
+        _require(self._observations == 2)
+
+    def _close(self) -> None:
+        self._closed = True
+
+
+@contextmanager
+def _terminal_workspace_window(
+    config: ProductionConfig, environment: Mapping[str, str], source: RecoverySource
+) -> Iterator[_TerminalWorkspaceWindow]:
+    """Own the existing Worker lock around both full source/target/terminal passes."""
+    window: _TerminalWorkspaceWindow | None = None
+    try:
+        _require(config.team_id == source.scope.team_id)
+        team = TeamWorkspace.initialize(
+            config.platform_root,
+            team_id=source.scope.team_id,
+            name=config.team_name,
+            read_only=True,
+        )
+        project, repository = team.project_registry().locate_repository(source.scope.repository_id)
+        _require(repository.manifest.repository_root == source.scope.repository_root)
+        scope = RecoveryWorkspaceScope(
+            team_id=source.scope.team_id,
+            project_id=project.manifest.project_id,
+            repository_id=source.scope.repository_id,
+            requirement_id=source.scope.delivery_id,
+            dispatch_sha256=source.dispatch_sha256,
+        )
+        locks = repository.root / "state/queue-worker-locks"
+        _reject_symlinks(locks)
+        guard = WorkerExecutionGuard()
+        with _existing_task_scope(locks, source.task_id, guard):
+            window = _TerminalWorkspaceWindow(
+                config, environment, source, repository.root, team.root, scope, guard
+            )
+            yield window
+            window._finish()
+    except RecoveryRejected:
+        raise
+    except Exception as error:
+        raise RecoveryRejected(
+            "终态开发现场的完整审计未通过; 原任务和文件保留, 请核对平台保存的原执行记录"
+        ) from error
+    finally:
+        if window is not None:
+            window._close()
+
+
 @source_inspection_scope()
 def read_terminal_workspace_snapshot(
     config: ProductionConfig,
@@ -839,40 +1005,16 @@ def read_terminal_workspace_snapshot(
                 return None
             _require(final.outcome is RouteAttemptOutcome.FAILED)
             facts = _read_facts(config, environment, original, sidecar, scope)
-            _require(facts.scope == scope)
-            _require(facts.start.request.permissions == original.permissions)
-            _require(facts.start.request.source_revision == original.worktree_revision)
             permissions = approved_permissions or original.permissions
             git = GitWorktreeManager(
                 source.scope.repository_root,
                 Path(config.platform_root) / "worktrees" / source.scope.repository_id,
                 branch_names={source.task_id: original.task.branch_name},
             )
-            if scope_supplement is not None:
-                from ai_software_engineer.recovery.scope import inspect_recovery_scope_supplement
-
-                _require(
-                    inspect_recovery_scope_supplement(
-                        git,
-                        capture.to_capture().worktree,
-                        original,
-                        request=scope_supplement.request,
-                    )
-                    == scope_supplement
-                )
-            git.verify_capture(
-                capture.to_capture(), permissions, denied_paths=original.denied_paths
+            first = _audit_terminal_workspace(
+                original, capture, facts, scope, git, guard, permissions, scope_supplement
             )
-            observation = _observe(git, facts, guard)
-            snapshot = validate_terminal_workspace_snapshot(
-                source=source,
-                permissions=permissions,
-                denied_paths=original.denied_paths,
-                capture=capture,
-                facts=facts,
-                observation=observation,
-                scope_supplement=scope_supplement,
-            )
+            observation, snapshot = first.observation, first.snapshot
             _require(_read_facts(config, environment, original, sidecar, scope) == facts)
             _require(
                 reader.inspect(
