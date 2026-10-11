@@ -37,6 +37,7 @@ from ai_software_engineer.execution import (
     CommandTimedOut,
 )
 from ai_software_engineer.git import CommandPolicyViolation
+from ai_software_engineer.owned_processes import OwnedRecordFinalization, owned_record_finalization
 from ai_software_engineer.redaction import RedactedText, redact_text
 
 Clock = Callable[[], datetime]
@@ -81,6 +82,26 @@ class RunEvidenceSession:
         timeout_seconds: float | None = None,
         description: str = "policy-bound command execution",
     ) -> CommandEvidenceRecord:
+        with owned_record_finalization() as finalization:
+            return self._capture_command(
+                operation_id,
+                executor,
+                arguments,
+                timeout_seconds=timeout_seconds,
+                description=description,
+                finalization=finalization,
+            )
+
+    def _capture_command(
+        self,
+        operation_id: OperationId,
+        executor: CommandExecutor,
+        arguments: tuple[str, ...],
+        *,
+        timeout_seconds: float | None = None,
+        description: str = "policy-bound command execution",
+        finalization: OwnedRecordFinalization,
+    ) -> CommandEvidenceRecord:
         evidence_id = self._evidence_id(EvidenceKind.COMMAND, operation_id)
         safe_arguments, argument_redactions = _redact_many(arguments)
         existing = self._existing(evidence_id, EvidenceKind.COMMAND, operation_id)
@@ -89,6 +110,7 @@ class RunEvidenceSession:
                 raise EvidenceCaptureError("existing command evidence has the wrong type")
             if existing.payload.argv != safe_arguments:
                 raise EvidenceCaptureError("command replay changed argv")
+            finalization.confirm_saved()
             return existing
         captured_at = self._captured_at()
         try:
@@ -106,6 +128,7 @@ class RunEvidenceSession:
                 evidence_id, operation_id, description, captured_at, payload, redactions
             )
             self._store.put(record)
+            finalization.confirm_saved()
             raise
         except CommandPolicyViolation as error:
             payload, redactions = self._failed_command_payload(
@@ -120,6 +143,7 @@ class RunEvidenceSession:
                 evidence_id, operation_id, description, captured_at, payload, redactions
             )
             self._store.put(record)
+            finalization.confirm_saved()
             raise
         except CommandExecutionError as error:
             payload, redactions = self._failed_command_payload(
@@ -134,6 +158,7 @@ class RunEvidenceSession:
                 evidence_id, operation_id, description, captured_at, payload, redactions
             )
             self._store.put(record)
+            finalization.confirm_saved()
             raise
         if result.argv != arguments:
             raise EvidenceCaptureError("command executor returned argv different from request")
@@ -149,7 +174,9 @@ class RunEvidenceSession:
         record = self._command_record(
             evidence_id, operation_id, description, captured_at, payload, redactions
         )
-        return cast(CommandEvidenceRecord, self._store.put(record))
+        saved = cast(CommandEvidenceRecord, self._store.put(record))
+        finalization.confirm_saved()
+        return saved
 
     def record_diff(
         self,
@@ -412,6 +439,12 @@ class EvidenceCapturingAgentAdapter:
         self._model = model
 
     def run(self, request: AgentRequest) -> AgentResult:
+        with owned_record_finalization() as finalization:
+            result = self._run(request)
+            finalization.confirm_saved()
+            return result
+
+    def _run(self, request: AgentRequest) -> AgentResult:
         if request.run_id != self._session.identity.run_id:
             raise EvidenceCaptureError("AgentRequest does not match evidence session")
         result = self._delegate.run(request)

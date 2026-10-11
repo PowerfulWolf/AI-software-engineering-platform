@@ -41,6 +41,7 @@ from ai_software_engineer.manager.verification_environment import (
     discover_swift_sandbox_capability,
     swift_sandbox_argv,
 )
+from ai_software_engineer.owned_processes import owned_record_finalization
 from ai_software_engineer.recovery.models import RecoveryRejected, VerificationExecutionBlocked
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_admission import VerificationFacts
@@ -147,9 +148,12 @@ class BoundSwiftVerificationEvidence:
                         "verification toolchain or sandbox binary changed; repropose"
                     )
                 _require_clean_candidate(workspace_root, plan.inputs.candidate_revision)
-                with tempfile.TemporaryDirectory(
-                    prefix=f"ase-verify-{request.role.value}-"
-                ) as temporary:
+                with (
+                    owned_record_finalization() as finalization,
+                    tempfile.TemporaryDirectory(
+                        prefix=f"ase-verify-{request.role.value}-"
+                    ) as temporary,
+                ):
                     scratch = Path(temporary).resolve(strict=True)
                     environment = {
                         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -259,6 +263,7 @@ class BoundSwiftVerificationEvidence:
                             recorded_at=datetime.now(UTC),
                         )
                     )
+                    finalization.confirm_saved()
         if receipt.effective_failure_code is not None:
             raise VerificationExecutionBlocked(
                 receipt.record_sha256, receipt.effective_failure_code

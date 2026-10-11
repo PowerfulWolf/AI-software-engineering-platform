@@ -3,12 +3,10 @@
 import math
 import os
 import re
-import signal
 import subprocess
 import threading
 import time
 from collections.abc import Mapping
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Protocol
@@ -325,10 +323,12 @@ def _finish_owned_command(
     terminate: bool,
 ) -> None:
     try:
-        if terminate:
-            _terminate_process_group(process)
-        else:
-            _ensure_process_group_stopped(process)
+        if ownership is None:
+            raise CommandExecutionUncertain("command has no spawn-bound session ownership")
+        try:
+            ownership.stop_session()
+        except OwnedProcessesUncertain as error:
+            raise CommandExecutionUncertain("owned command session stop remains unknown") from error
         if drain_threads is not None:
             _join_drain_threads(drain_threads)
             if collectors is None or not all(value.drain_complete for value in collectors):
@@ -349,62 +349,6 @@ def _join_drain_threads(threads: tuple[threading.Thread, threading.Thread]) -> N
         thread.join(timeout=1.0)
         if thread.is_alive():
             raise CommandExecutionUncertain("command output pipe did not close")
-
-
-def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
-    """Terminate the child process group, escalating to SIGKILL if needed."""
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        with suppress(ProcessLookupError):
-            process.terminate()
-    except OSError as error:
-        raise CommandExecutionUncertain("owned command group state is unknown") from error
-    try:
-        process.wait(timeout=1.0)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            with suppress(ProcessLookupError):
-                process.kill()
-        except OSError as error:
-            raise CommandExecutionUncertain("owned command group could not be stopped") from error
-        try:
-            process.wait(timeout=1.0)
-        except subprocess.TimeoutExpired as error:
-            raise CommandExecutionUncertain("owned command process did not stop") from error
-    _ensure_process_group_stopped(process)
-
-
-def _ensure_process_group_stopped(process: subprocess.Popen[bytes]) -> None:
-    """A reaped leader does not prove that its owned descendants have stopped."""
-    deadline = time.monotonic() + 1.0
-    while True:
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            return
-        except PermissionError as error:
-            # macOS can expose an unreaped descendant group as EPERM briefly.
-            # Only a later ESRCH proves stop; timeout stays uncertain.
-            if time.monotonic() >= deadline:
-                raise CommandExecutionUncertain("owned command group state is unknown") from error
-            time.sleep(0.01)
-            continue
-        except OSError as error:
-            raise CommandExecutionUncertain("owned command group state is unknown") from error
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
-        except OSError as error:
-            raise CommandExecutionUncertain(
-                "owned command descendants could not be stopped"
-            ) from error
-        if time.monotonic() >= deadline:
-            raise CommandExecutionUncertain("owned command descendants did not stop")
-        time.sleep(0.01)
 
 
 __all__ = [

@@ -226,7 +226,12 @@ def test_post_spawn_observation_failure_records_real_stop_never_not_started(
 ) -> None:
     children: list[subprocess.Popen[str]] = []
 
-    def unavailable(process: subprocess.Popen[str], *, kind: str) -> None:
+    def unavailable(
+        process: subprocess.Popen[str],
+        *,
+        kind: str,
+        observation: object | None = None,
+    ) -> None:
         children.append(process)
         raise OSError("private ownership registration failure")
 

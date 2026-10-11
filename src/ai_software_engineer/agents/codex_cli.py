@@ -7,7 +7,6 @@ import json
 import os
 import re
 import shlex
-import signal
 import subprocess
 import tempfile
 import time
@@ -86,6 +85,7 @@ from ai_software_engineer.owned_processes import (
     OwnedProcessesUncertain,
     OwnedProcessKind,
     OwnedProcessObservation,
+    capture_owned_process,
     observe_owned_process,
 )
 from ai_software_engineer.redaction import redact_text
@@ -228,6 +228,7 @@ class SubprocessCodexCommandRunner:
         check_owner()
         started = time.monotonic()
         process: subprocess.Popen[bytes] | None = None
+        ownership: OwnedProcessObservation | None = None
         failure_kind: Literal["input_preparation_failed", "process_spawn_failed"] = (
             "input_preparation_failed"
         )
@@ -254,6 +255,14 @@ class SubprocessCodexCommandRunner:
                     start_new_session=True,
                     pass_fds=guard.inherited_fds if guard is not None else (),
                 )
+                # Actual spawn ownership precedes prompt close and a fallible
+                # Host registry call. Registry failure cannot erase its stop.
+                ownership = capture_owned_process(process)
+                ownership = observe_owned_process(
+                    process,
+                    kind=self._process_kind,
+                    observation=ownership,
+                )
         except OSError as error:
             if process is None:
                 raise CodexProcessNotStarted(failure_kind) from error
@@ -261,7 +270,6 @@ class SubprocessCodexCommandRunner:
             # through the same owned cleanup below, never a not-started fact.
             setup_error = error
         assert process is not None
-        ownership: OwnedProcessObservation | None = None
         output: _NativeOutputDrain | None = None
         output_closed = False
 
@@ -291,13 +299,11 @@ class SubprocessCodexCommandRunner:
 
         def stop() -> tuple[str, str]:
             try:
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGTERM)
+                if ownership is None:
+                    raise CodexExecutionUnconfirmed("原执行缺少启动时的会话归属记录")
+                ownership.stop_session()
                 if not drain(1):
-                    with suppress(ProcessLookupError):
-                        os.killpg(process.pid, signal.SIGKILL)
-                    if not drain(1):
-                        raise subprocess.TimeoutExpired(argv, 1)
+                    raise subprocess.TimeoutExpired(argv, 1)
                 assert output is not None
                 return output.result()
             except BaseException as error:
@@ -306,48 +312,31 @@ class SubprocessCodexCommandRunner:
                 # A drain/setup error must not leave a TERM-resistant owned
                 # leader running. Reaping it still does not establish pipe EOF.
                 with suppress(OSError):
-                    os.killpg(process.pid, signal.SIGKILL)
+                    process.kill()
                 with suppress(OSError, subprocess.TimeoutExpired):
                     process.wait(timeout=1)
-                if not isinstance(error, (subprocess.TimeoutExpired, OSError)):
+                if not isinstance(
+                    error, (subprocess.TimeoutExpired, OSError, OwnedProcessesUncertain)
+                ):
                     raise
                 # Escaped descendants can retain pipes after the group dies.
                 raise CodexExecutionUnconfirmed("原执行输出收尾停止状态无法确认") from error
 
         def stopped(kind: str) -> NativeProcessStop | None:
-            # Draining and reaping the leader cannot prove descendants stopped.
-            # Only the owned process session's absence establishes this fact.
-            for sent in (signal.SIGTERM, signal.SIGKILL):
-                try:
-                    os.killpg(process.pid, 0)
-                except ProcessLookupError:
-                    return NativeProcessStop.create(
-                        process_id=process.pid,
-                        group_id=process.pid,
-                        returncode=process.returncode,
-                        kind=kind,
-                        stopped_at=datetime.now(UTC),
-                    )
-                except PermissionError:
-                    pass
-                with suppress(ProcessLookupError, PermissionError):
-                    os.killpg(process.pid, sent)
-                deadline = time.monotonic() + 1
-                while time.monotonic() < deadline:
-                    try:
-                        os.killpg(process.pid, 0)
-                    except ProcessLookupError:
-                        return NativeProcessStop.create(
-                            process_id=process.pid,
-                            group_id=process.pid,
-                            returncode=process.returncode,
-                            kind=kind,
-                            stopped_at=datetime.now(UTC),
-                        )
-                    except PermissionError:
-                        pass
-                    time.sleep(0.02)
-            return None
+            if ownership is None:
+                return None
+            try:
+                session_proof = ownership.stop_session()
+            except OwnedProcessesUncertain:
+                return None
+            return NativeProcessStop.create(
+                process_id=process.pid,
+                group_id=process.pid,
+                returncode=process.returncode,
+                kind=kind,
+                stopped_at=datetime.now(UTC),
+                session_proof=session_proof,
+            )
 
         observed = False
         setup_completed = False
@@ -377,10 +366,11 @@ class SubprocessCodexCommandRunner:
                 raise setup_error
             # Registration may fail after the child exists. The common cleanup
             # must still stop that exact process and publish actual stop facts.
-            ownership = observe_owned_process(process, kind=self._process_kind)
             setup_completed = True
             while True:
                 check_owner()
+                if ownership is not None:
+                    ownership.observe_session()
                 if time.monotonic() - started >= timeout_seconds:
                     stdout, stderr = stop()
                     proof = stopped("local_execution_limit")

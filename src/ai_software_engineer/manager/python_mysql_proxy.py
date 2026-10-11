@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import signal
 import socket
 import subprocess
 import threading
@@ -14,7 +13,9 @@ from pathlib import Path
 from ai_software_engineer.manager.python_mysql_resources import IsolatedMysqlResource
 from ai_software_engineer.owned_processes import (
     OwnedProcessesUncertain,
+    OwnedProcessObservation,
     current_owned_operation,
+    current_owned_record_finalization,
     finish_owned_process,
     observe_owned_process,
 )
@@ -32,12 +33,13 @@ class MysqlUnixProxy:
             raise ValueError("proxy requires the exact created resource and socket")
         self._resource, self._endpoint = resource, endpoint
         self._owned_operation = current_owned_operation()
+        self._record_finalization = current_owned_record_finalization()
         self._cleanup_uncertain = threading.Event()
         self._stop = threading.Event()
         self._slots = threading.BoundedSemaphore(32)
         self._lock = threading.Lock()
         self._clients: set[socket.socket] = set()
-        self._processes: set[subprocess.Popen[bytes]] = set()
+        self._processes: dict[subprocess.Popen[bytes], OwnedProcessObservation] = {}
         self._workers: list[threading.Thread] = []
         self._server = socket.socket(socket.AF_UNIX)
         self._server.bind(str(endpoint))
@@ -67,7 +69,10 @@ class MysqlUnixProxy:
             worker.start()
 
     def _bridge(self, client: socket.socket) -> None:
-        with self._owned_operation.activate() if self._owned_operation else nullcontext():
+        with (
+            self._owned_operation.activate() if self._owned_operation else nullcontext(),
+            self._record_finalization.activate() if self._record_finalization else nullcontext(),
+        ):
             self._bridge_owned(client)
 
     def _bridge_owned(self, client: socket.socket) -> None:
@@ -94,7 +99,7 @@ class MysqlUnixProxy:
             observation = observe_owned_process(process, kind="tool")
             assert process.stdin is not None and process.stdout is not None
             with self._lock:
-                self._processes.add(process)
+                self._processes[process] = observation
             current = process
 
             def write_upstream() -> None:
@@ -127,7 +132,16 @@ class MysqlUnixProxy:
             client.close()
             if process is not None:
                 try:
-                    finish_owned_process(process, None, output_drained=False)
+                    # Keep the captured controller for all session cleanup; the
+                    # separate pipe worker must also finish before registry clear.
+                    if observation is None:
+                        raise OwnedProcessesUncertain("MySQL proxy spawn ownership is missing")
+                    finish_owned_process(
+                        process,
+                        observation,
+                        output_drained=False,
+                        complete_observation=False,
+                    )
                     if upstream is not None:
                         upstream.join(timeout=1)
                         if upstream.is_alive():
@@ -144,7 +158,7 @@ class MysqlUnixProxy:
                     if observation is not None:
                         observation.uncertain()
                 with self._lock:
-                    self._processes.discard(process)
+                    self._processes.pop(process, None)
             if upstream is not None:
                 upstream.join(timeout=5)
             with self._lock:
@@ -159,16 +173,13 @@ class MysqlUnixProxy:
             for client in self._clients:
                 with suppress(OSError):
                     client.shutdown(socket.SHUT_RDWR)
-            for process in self._processes:
+            for observation in self._processes.values():
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    # A reaped-zombie race is not proof either way. The bridge
-                    # still must independently verify its owned group and pipe.
-                    pass
-                except OSError:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise OwnedProcessesUncertain("MySQL proxy session drain exceeded bound")
+                    observation.stop_session(timeout_seconds=min(1.0, remaining / 2))
+                except OwnedProcessesUncertain:
                     self._cleanup_uncertain.set()
         self._thread.join(timeout=max(0, deadline - time.monotonic()))
         for worker in self._workers:

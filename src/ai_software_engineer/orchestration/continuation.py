@@ -765,6 +765,17 @@ class NativeCoderContinuation:
                 raise ContinuationRejected("synchronous stop requires the original exact request")
             stop.require_request(request)
             return
+        if stop.session_proof is not None:
+            from ai_software_engineer.owned_sessions import (
+                OwnedSessionUnknown,
+                require_recorded_session_empty,
+            )
+
+            try:
+                require_recorded_session_empty(stop.session_proof)
+            except (OSError, ValueError, OwnedSessionUnknown) as error:
+                raise ContinuationRejected("原执行会话的完整停止状态无法确认") from error
+            return
         try:
             os.killpg(stop.group_id, 0)
         except ProcessLookupError:

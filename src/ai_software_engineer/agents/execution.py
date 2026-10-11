@@ -7,11 +7,12 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from contextvars import ContextVar
 from typing import Annotated, Literal, Protocol, Self
 
-from pydantic import AwareDatetime, Field, StrictInt, model_validator
+from pydantic import AwareDatetime, ConfigDict, Field, StrictInt, model_validator
 
 from ai_software_engineer.agents.models import AgentRequest, AgentResult
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.project_delivery import StageSha256
+from ai_software_engineer.owned_sessions import OwnedSessionStopProof
 
 
 class AgentInvocationControl(Protocol):
@@ -25,7 +26,22 @@ class AgentInvocationControl(Protocol):
 
 
 class NativeProcessStop(DomainModel):
-    """Trusted runner observation of its own session after process-group shutdown."""
+    """Legacy leader/group stop, optionally with a new explicit owned-SID proof."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {"required": ["kind"], "properties": {"kind": {"const": "completed"}}},
+                    "then": {"properties": {"returncode": {"const": 0}}},
+                },
+                {
+                    "if": {"required": ["kind"], "properties": {"kind": {"const": "failed"}}},
+                    "then": {"properties": {"returncode": {"not": {"const": 0}}}},
+                },
+            ]
+        }
+    )
 
     process_id: Annotated[StrictInt, Field(gt=0)]
     group_id: Annotated[StrictInt, Field(gt=0)]
@@ -33,6 +49,10 @@ class NativeProcessStop(DomainModel):
     kind: Literal["completed", "failed", "local_execution_limit"]
     stopped_at: AwareDatetime
     stop_sha256: StageSha256
+    session_proof: OwnedSessionStopProof | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
     @classmethod
     def create(cls, **values: object) -> Self:
@@ -47,6 +67,12 @@ class NativeProcessStop(DomainModel):
             self.kind == "failed" and self.returncode == 0
         ):
             raise ValueError("native stop kind must agree with process result")
+        if self.session_proof is not None:
+            self.session_proof.validate_integrity()
+            if self.session_proof.leader.process_id != self.process_id:
+                raise ValueError("native stop session proof belongs to another spawned leader")
+            if self.session_proof.observed_at > self.stopped_at:
+                raise ValueError("native stop cannot predate its owned-session observation")
         return self
 
     def recompute_sha256(self) -> str:
