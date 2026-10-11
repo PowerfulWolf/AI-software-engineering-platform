@@ -72,10 +72,11 @@ class FileExecutionBaselineStore:
 
     @source_inspection_scope()
     def plan(self, sha256: str) -> ExecutionBaselinePlan:
-        plan = self.records.get("baseline-plans", sha256, ExecutionBaselinePlan)
-        plan.validate_integrity()
-        if plan.plan_sha256 != sha256:
-            raise ValueError("baseline plan key changed")
+        plan = self.records.read_recovery_record(
+            "baseline-plans", sha256, ExecutionBaselinePlan, kind="baseline-plan"
+        )
+        if plan is None:
+            raise ValueError("baseline plan missing")
         return plan
 
     def native_rule_epoch(self, sha256: str) -> NativeRuleEpoch:
@@ -94,10 +95,13 @@ class FileExecutionBaselineStore:
 
     @source_inspection_scope()
     def start(self, plan_sha256: str) -> BaselineOperationStart | None:
-        start = self.records.find("baseline-starts", plan_sha256, BaselineOperationStart)
-        if start is not None:
-            start.validate_integrity()
-        return start
+        return self.records.read_recovery_record(
+            "baseline-starts",
+            plan_sha256,
+            BaselineOperationStart,
+            kind="baseline-start",
+            optional=True,
+        )
 
     @source_inspection_scope()
     def bindings_for_task(self, task_id: str) -> tuple[ExecutionBaselineBinding, ...]:

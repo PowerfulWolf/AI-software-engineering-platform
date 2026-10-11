@@ -60,6 +60,10 @@ from ai_software_engineer.manager.production_delivery import (
 from ai_software_engineer.orchestration import RetryResult
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
+from ai_software_engineer.read_record_scope import (
+    finish_recovery_record_reads,
+    recovery_record_read_scope,
+)
 from ai_software_engineer.recovery.allocation import RecoveryAllocator
 from ai_software_engineer.recovery.context import (
     approved_parent_context,
@@ -294,6 +298,7 @@ class NativeRecoveryEntry:
         )
 
     @source_inspection_scope()
+    @recovery_record_read_scope()
     def propose(
         self,
         *,
@@ -463,6 +468,7 @@ class NativeRecoveryEntry:
         return inspect_recovery_scope_supplement(manager, old, original, request=request)
 
     @source_inspection_scope()
+    @recovery_record_read_scope()
     def propose_delivery(
         self,
         checkpoint: ProjectDeliveryCheckpoint,
@@ -491,6 +497,7 @@ class NativeRecoveryEntry:
             coder_scope_request=coder_scope_request,
         )
 
+    @recovery_record_read_scope()
     def latest_delivery(
         self, checkpoint: ProjectDeliveryCheckpoint
     ) -> tuple[FileRecoveryStore, RecoveryPlan, Path] | None:
@@ -519,6 +526,7 @@ class NativeRecoveryEntry:
     def open_plan(self, path: Path) -> tuple[FileRecoveryStore, RecoveryPlan]:
         return open_recovery_plan(self.config, path)
 
+    @recovery_record_read_scope()
     def require_current_plan(self, path: Path) -> RecoveryPlan:
         """Reject a plan whose retained work, policy, target, or scope approval drifted."""
         _, plan = self.open_plan(path)
@@ -526,6 +534,7 @@ class NativeRecoveryEntry:
         return plan
 
     @source_inspection_scope()
+    @recovery_record_read_scope()
     def approve(self, path: Path, *, confirmed_plan: str, reference: str) -> None:
         if self.operator_principal is not None:
             self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
@@ -630,6 +639,7 @@ class NativeRecoveryEntry:
             if preparation.preparation != facts.target:
                 raise RecoveryRejected("recovery target changed before terminal adoption")
             dispatch = self._dispatch_for(store, plan)
+            finish_recovery_record_reads()
             delivery = self.backend.run_prepared_allocation(
                 dispatch,
                 preparation,
@@ -884,6 +894,7 @@ class NativeRecoveryEntry:
             raise RecoveryRejected("recovery allocation differs from the approved Task")
         return dispatch
 
+    @recovery_record_read_scope()
     def _execute(
         self,
         store: FileRecoveryStore,
@@ -1031,6 +1042,7 @@ class NativeRecoveryEntry:
                 initial_workspace_admission=FirstCoderRunWorkspaceAdmission(seed)
             )
         )
+        finish_recovery_record_reads()
         return self.backend.run_prepared_allocation(
             dispatch,
             preparation,

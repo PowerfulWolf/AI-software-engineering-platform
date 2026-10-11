@@ -47,6 +47,10 @@ from ai_software_engineer.manager.production_backend import (
 from ai_software_engineer.manager.python_verification import PythonMysqlSandboxCapability
 from ai_software_engineer.manager.verification_coordination import ManagerVerificationAdvice
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
+from ai_software_engineer.read_record_scope import (
+    finish_recovery_record_reads,
+    recovery_record_read_scope,
+)
 from ai_software_engineer.recovery.context import approved_parent_context
 from ai_software_engineer.recovery.entry import (
     NativeRecoveryEntry,
@@ -822,6 +826,7 @@ class DeliveryResumeController:
             retry_at=now + timedelta(seconds=1),
         )
 
+    @recovery_record_read_scope()
     def _continue_coder_recovery(
         self,
         current: ProjectDeliveryCheckpoint,
@@ -906,6 +911,7 @@ class DeliveryResumeController:
                         next_action="请在已停止的精确工作区上批准一次新的 Coder 执行。",
                     )
                 assert command.approval_reference is not None
+                finish_recovery_record_reads()
                 execution = self._recovery.execute_interruption(
                     path,
                     confirmed_plan=proposal.plan_sha256,
@@ -928,6 +934,7 @@ class DeliveryResumeController:
         if authorization is None or not authorization.decision.approved:
             return self._recovery_approval_required(current, plan, path)
         try:
+            finish_recovery_record_reads()
             execution = self._recovery.resume_execution(path)
         except RecoveryRejected as error:
             return self._recovery_human_gate(current, str(error))

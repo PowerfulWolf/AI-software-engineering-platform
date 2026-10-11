@@ -1,5 +1,29 @@
 # Read-side memory lifecycle
 
+## Synchronous recovery immutable-record decoding (2026-10-12)
+
+Exact approval and offline successor Task sealing repeatedly decode the same large baseline
+Plan/Start and failed Context while native source/facts admission deliberately repeats its
+before/after observations. Preserve those observations. The fixed decoder scope in
+[recovery-record-read-scope.md](recovery-record-read-scope.md) can share only fully verified
+immutable record decoding after every consumer rereads/hashes all original bytes.
+
+The scope retains at most 512 entries / 32 MiB of aggregate raw plus typed serialization
+accounting across roots; this is not a heap/RSS bound. Authority, current SQL/Git/lease/process
+facts and success decisions stay fresh. No arbitrary decoder/validator can register a weaker
+result. Results have private deep-copy isolation; copied threads and asynchronous children
+cannot borrow the parent's owner. Explicitly clear before any model execution, as well as
+on success and failure. Existing large Context validity and UTF-8-only decoding stay intact;
+cache overflow fully decodes rather than adding a new record-size refusal.
+
+Tests exercise actual repeated selector/context consumers, the public approval → authorization
+→ Task builder → sealing path, unchanged live-fact observation counts, corruption and authority
+absence, nested-copy isolation, aggregate capacity, thread/async ownership and weak-reference
+release. Existing data needs no migration or new Requirement. Deploy only during an idle
+controlled service window; rollback removes the optimization and preserves all durable facts.
+The isolated fixture measurements are recorded in the corresponding Trellis task; do not infer
+end-to-end delivery speed or a long-running memory-leak conclusion from those finite reads.
+
 ## Baseline-consumption-local pure inspection reuse (2026-10-12)
 
 ### Scope and signatures

@@ -60,6 +60,7 @@ from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.project_workspace import ProjectWorkspace
+from ai_software_engineer.read_record_scope import recovery_record_read_scope
 from ai_software_engineer.recovery.allocation_lineage import (
     allocation_preparation_sha256,
     resolve_planner_dispatch,
@@ -154,6 +155,7 @@ class NativeRecoverySourceReader:
         return journal
 
     @source_inspection_scope()
+    @recovery_record_read_scope()
     def inspect(
         self, scope: RecoveryScope, *, failed_run_id: str, failed_context_id: str
     ) -> NativeRecoverySource:
@@ -171,6 +173,7 @@ class NativeRecoverySourceReader:
             ) from error
 
     @source_inspection_scope()
+    @recovery_record_read_scope()
     def discover_failed_coder(self, scope: RecoveryScope) -> NativeRecoverySource:
         """Locate the one recoverable terminal Coder run for a pre-candidate Delivery."""
         try:

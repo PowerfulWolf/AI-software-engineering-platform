@@ -65,6 +65,9 @@
 - [Read memory lifecycle](read-memory-lifecycle.md): nested validation-error frame release,
   worker-owned snapshot admission and bounded serial/concurrent memory verification.
 
+- [Recovery record read scope](recovery-record-read-scope.md): fixed complete-byte Plan/Start/
+  Context decoding reuse, fresh authority/facts, bounded synchronous ownership and pre-model release.
+
 - [`engineering-authority.md`](engineering-authority.md): versioned engineering policy, trusted
   Product/Engineering duties, exact nonterminal wait investigations and resolutions.
 

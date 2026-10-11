@@ -21,6 +21,7 @@ from ai_software_engineer.manager.production_backend import (
     _task_commands,
 )
 from ai_software_engineer.manager.production_rules import production_rules
+from ai_software_engineer.read_record_scope import recovery_record_read_scope
 from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected
 from ai_software_engineer.recovery.native import (
     NativeRecoverySource,
@@ -68,6 +69,7 @@ class NativeRecoveryFactsVerifier:
         self.inspect(plan)
 
     @source_inspection_scope()
+    @recovery_record_read_scope()
     def inspect(self, plan: RecoveryPlan) -> NativeRecoveryFacts:
         try:
             plan.validate_integrity()
