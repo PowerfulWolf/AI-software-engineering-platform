@@ -1,0 +1,487 @@
+{
+  "$defs": {
+    "CodexConnectionMode": {
+      "enum": [
+        "direct",
+        "proxy"
+      ],
+      "type": "string"
+    },
+    "NativeProcessStop": {
+      "additionalProperties": false,
+      "description": "Trusted runner observation of its own session after process-group shutdown.",
+      "properties": {
+        "process_id": {
+          "exclusiveMinimum": 0,
+          "title": "Process Id",
+          "type": "integer"
+        },
+        "group_id": {
+          "exclusiveMinimum": 0,
+          "title": "Group Id",
+          "type": "integer"
+        },
+        "returncode": {
+          "title": "Returncode",
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "completed",
+            "failed",
+            "local_execution_limit"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "stopped_at": {
+          "format": "date-time",
+          "title": "Stopped At",
+          "type": "string"
+        },
+        "stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stop Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "process_id",
+        "group_id",
+        "returncode",
+        "kind",
+        "stopped_at",
+        "stop_sha256"
+      ],
+      "title": "NativeProcessStop",
+      "type": "object"
+    },
+    "ProviderRouteKind": {
+      "enum": [
+        "codex_cli",
+        "responses"
+      ],
+      "type": "string"
+    },
+    "ReasoningEffort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
+    },
+    "StructuredCallIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "invocation_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "route_index": {
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Route Index",
+          "type": "integer"
+        },
+        "provider": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/$defs/ReasoningEffort"
+        },
+        "route_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderRouteKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "connection_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexConnectionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TeamRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "phase": {
+          "enum": [
+            "stage_reply",
+            "knowledge_intent",
+            "knowledge_assessment"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "invocation_id",
+        "route_index",
+        "provider",
+        "model",
+        "reasoning_effort",
+        "phase",
+        "request_sha256"
+      ],
+      "title": "StructuredCallIdentity",
+      "type": "object"
+    },
+    "StructuredExecutionAdmission": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "structured_execution_admission",
+          "default": "structured_execution_admission",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "observation_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "call": {
+          "$ref": "#/$defs/StructuredCallIdentity"
+        },
+        "execution_kind": {
+          "enum": [
+            "native",
+            "http"
+          ],
+          "title": "Execution Kind",
+          "type": "string"
+        },
+        "transport_request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Transport Request Sha256",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "number"
+        },
+        "admitted_at": {
+          "format": "date-time",
+          "title": "Admitted At",
+          "type": "string"
+        },
+        "admission_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Admission Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "observation_id",
+        "call",
+        "execution_kind",
+        "transport_request_sha256",
+        "timeout_seconds",
+        "admitted_at",
+        "admission_sha256"
+      ],
+      "title": "StructuredExecutionAdmission",
+      "type": "object"
+    },
+    "StructuredHttpRoundTripReceipt": {
+      "additionalProperties": false,
+      "description": "The local synchronous transport returned; remote work may still be running.",
+      "properties": {
+        "kind": {
+          "const": "structured_http_round_trip",
+          "default": "structured_http_round_trip",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "admission": {
+          "$ref": "#/$defs/StructuredExecutionAdmission"
+        },
+        "outcome": {
+          "enum": [
+            "returned",
+            "transport_error"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "http_status": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Http Status"
+        },
+        "response_body_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Body Sha256"
+        },
+        "error_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "timeout",
+                "os_error"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Kind"
+        },
+        "receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Receipt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "admission",
+        "outcome",
+        "completed_at",
+        "receipt_sha256"
+      ],
+      "title": "StructuredHttpRoundTripReceipt",
+      "type": "object"
+    },
+    "StructuredNativeNotStartedReceipt": {
+      "additionalProperties": false,
+      "description": "The owned runner failed before creating a process; this is not a stop.",
+      "properties": {
+        "kind": {
+          "const": "structured_native_not_started",
+          "default": "structured_native_not_started",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "admission": {
+          "$ref": "#/$defs/StructuredExecutionAdmission"
+        },
+        "failure_kind": {
+          "enum": [
+            "input_preparation_failed",
+            "process_spawn_failed"
+          ],
+          "title": "Failure Kind",
+          "type": "string"
+        },
+        "failed_at": {
+          "format": "date-time",
+          "title": "Failed At",
+          "type": "string"
+        },
+        "receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Receipt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "admission",
+        "failure_kind",
+        "failed_at",
+        "receipt_sha256"
+      ],
+      "title": "StructuredNativeNotStartedReceipt",
+      "type": "object"
+    },
+    "StructuredNativeStopReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "structured_native_stop",
+          "default": "structured_native_stop",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "admission": {
+          "$ref": "#/$defs/StructuredExecutionAdmission"
+        },
+        "process_stop": {
+          "$ref": "#/$defs/NativeProcessStop"
+        },
+        "stdout_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stdout Sha256",
+          "type": "string"
+        },
+        "stderr_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stderr Sha256",
+          "type": "string"
+        },
+        "receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Receipt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "admission",
+        "process_stop",
+        "stdout_sha256",
+        "stderr_sha256",
+        "receipt_sha256"
+      ],
+      "title": "StructuredNativeStopReceipt",
+      "type": "object"
+    },
+    "TeamRole": {
+      "description": "Long-lived roles that a Team-owned AgentProfile may declare.",
+      "enum": [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "TeamRole",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "knowledge_execution_record",
+      "default": "knowledge_execution_record",
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "intent_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Intent Sha256",
+      "type": "string"
+    },
+    "observation": {
+      "discriminator": {
+        "mapping": {
+          "structured_execution_admission": "#/$defs/StructuredExecutionAdmission",
+          "structured_http_round_trip": "#/$defs/StructuredHttpRoundTripReceipt",
+          "structured_native_not_started": "#/$defs/StructuredNativeNotStartedReceipt",
+          "structured_native_stop": "#/$defs/StructuredNativeStopReceipt"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/StructuredExecutionAdmission"
+        },
+        {
+          "$ref": "#/$defs/StructuredNativeStopReceipt"
+        },
+        {
+          "$ref": "#/$defs/StructuredNativeNotStartedReceipt"
+        },
+        {
+          "$ref": "#/$defs/StructuredHttpRoundTripReceipt"
+        }
+      ],
+      "title": "Observation"
+    },
+    "record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Record Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "intent_sha256",
+    "observation",
+    "record_sha256"
+  ],
+  "title": "KnowledgeExecutionRecord",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/knowledge-execution-record.schema.json"
+}

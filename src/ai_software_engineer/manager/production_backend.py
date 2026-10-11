@@ -1598,10 +1598,15 @@ class ProductionProjectDeliveryBackend:
                 if requirement_records.is_dir():
                     audit_stores.append(KnowledgeRecordStore(requirement_records))
 
-        def claimed_context() -> ContextSource:
+        from ai_software_engineer.work_queue.models import QueueClaim
+
+        def knowledge_claim() -> QueueClaim:
             worker_guard.check()
             assert worker_guard.lease is not None
-            claim = worker_guard.lease.claim
+            return worker_guard.lease.claim
+
+        def claimed_context() -> ContextSource:
+            claim = knowledge_claim()
             return ContextSource(
                 source_id="execution.claim",
                 uri=f"claim://{claim.lease.id}",
@@ -1658,6 +1663,7 @@ class ProductionProjectDeliveryBackend:
                 repository_id=facts.workspace.repository_id,
                 sources=runtime_config.context_sources,
                 wait_port=WorkerKnowledgeWait(worker_guard, knowledge_records),
+                invocation_claim=knowledge_claim,
             )
             if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory)
             else baseline_contexts

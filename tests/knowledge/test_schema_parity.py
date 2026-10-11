@@ -11,6 +11,11 @@ from ai_software_engineer.knowledge.agents import KnowledgeConsultation, Knowled
 from ai_software_engineer.knowledge.delivery import DeliveryWorkflowAdmission, DeliveryWorkflowProof
 from ai_software_engineer.knowledge.evaluation import KnowledgeEvaluationReport
 from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeResolution, KnowledgeResume
+from ai_software_engineer.knowledge.invocation import (
+    KnowledgeExecutionRecord,
+    KnowledgeInvocationIntent,
+    KnowledgeInvocationOutcome,
+)
 from ai_software_engineer.knowledge.models import (
     KnowledgeEvidence,
     KnowledgeReadRequest,
@@ -22,6 +27,9 @@ from ai_software_engineer.knowledge.stages import StageWorkflowProof
 from ai_software_engineer.knowledge.workflow import WorkflowSkillEvidence
 
 MODELS: dict[str, type[DomainModel]] = {
+    "knowledge-invocation-intent": KnowledgeInvocationIntent,
+    "knowledge-invocation-outcome": KnowledgeInvocationOutcome,
+    "knowledge-execution-record": KnowledgeExecutionRecord,
     "knowledge-consultation": KnowledgeConsultation,
     "knowledge-model-call": KnowledgeModelCall,
     "knowledge-delivery-proof": DeliveryWorkflowProof,

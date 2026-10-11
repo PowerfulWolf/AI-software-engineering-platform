@@ -124,15 +124,23 @@ class KnowledgeRecordStore:
         finally:
             os.close(fd)
 
-    def list[T: DomainModel](self, namespace: str, model: type[T]) -> tuple[T, ...]:
+    def list[T: DomainModel](
+        self, namespace: str, model: type[T], *, limit: int | None = None
+    ) -> tuple[T, ...]:
         self._name(namespace, "")
+        if limit is not None and (type(limit) is not int or limit < 1):
+            raise KnowledgeError("STORE_RECORD_LIMIT")
         fd = self._open()
         try:
-            names = sorted(
-                name
-                for name in os.listdir(fd)
-                if name.startswith(namespace + "-") and name.endswith(".json")
-            )
+            names = []
+            with os.scandir(fd) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if name.startswith(namespace + "-") and name.endswith(".json"):
+                        names.append(name)
+                        if limit is not None and len(names) > limit:
+                            raise KnowledgeError("STORE_RECORD_LIMIT")
+            names.sort()
         finally:
             os.close(fd)
         return tuple(

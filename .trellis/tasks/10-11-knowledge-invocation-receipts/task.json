@@ -1,0 +1,16 @@
+{
+  "name": "knowledge-invocation-receipts",
+  "title": "知识准备完整调用记录与防重复执行",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-11",
+  "allowlist": [
+    "src/ai_software_engineer/knowledge",
+    "src/ai_software_engineer/manager/production_backend.py",
+    "tests/knowledge",
+    "schemas/knowledge-invocation-*.schema.json",
+    ".trellis/spec/core/active-knowledge.md",
+    ".trellis/tasks/10-11-knowledge-invocation-receipts",
+    "schemas/knowledge-execution-record.schema.json"
+  ]
+}

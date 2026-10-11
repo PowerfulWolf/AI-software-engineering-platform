@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -28,6 +29,7 @@ from ai_software_engineer.knowledge.gaps import (
     KnowledgeResolution,
     KnowledgeWaitPort,
 )
+from ai_software_engineer.knowledge.invocation import KnowledgeInvocationJournal
 from ai_software_engineer.knowledge.legacy_scope import retain_legacy_snapshot
 from ai_software_engineer.knowledge.models import (
     KnowledgeError,
@@ -39,6 +41,7 @@ from ai_software_engineer.knowledge.retrieval import KnowledgeRetrieval
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.multi_directory.models import JointCheckpoint
 from ai_software_engineer.orchestration.context import RunContextBuilder
+from ai_software_engineer.work_queue.models import QueueClaim
 
 
 def joint_knowledge_client(
@@ -144,12 +147,14 @@ class KnowledgeRunContextBuilder:
         sources: tuple[ContextSource, ...],
         retrieval: KnowledgeRetrieval | None = None,
         wait_port: KnowledgeWaitPort | None = None,
+        invocation_claim: Callable[[], QueueClaim] | None = None,
     ) -> None:
         self.delegate, self.contexts, self.clients = delegate, contexts, clients
         self.repository_root, self.records = repository_root, records
         self.team_id, self.project_id, self.repository_id = team_id, project_id, repository_id
         self.sources, self.retrieval = sources, retrieval
         self.wait_port = wait_port
+        self.invocation_claim = invocation_claim
 
     def build(
         self,
@@ -272,6 +277,9 @@ class KnowledgeRunContextBuilder:
             self.retrieval,
             wait_port=self.wait_port,
             allow_repository_inspection=True,
+            invocation_journal=KnowledgeInvocationJournal(
+                self.records, claimed=self.invocation_claim
+            ),
         ).consult(
             binding,
             snapshot,

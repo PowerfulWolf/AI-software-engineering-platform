@@ -27,6 +27,7 @@ from ai_software_engineer.knowledge.gaps import (
     KnowledgeResolution,
     KnowledgeWaitPort,
 )
+from ai_software_engineer.knowledge.invocation import KnowledgeInvocationJournal
 from ai_software_engineer.knowledge.models import (
     BoundedText,
     Digest,
@@ -168,6 +169,7 @@ class KnowledgeConsultationService:
         wait_port: KnowledgeWaitPort | None = None,
         allow_repository_inspection: bool = False,
         design_rechecks: tuple[DesignKnowledgeRecheck, ...] = (),
+        invocation_journal: KnowledgeInvocationJournal | None = None,
     ) -> None:
         self.client = client
         self.records = records
@@ -175,6 +177,7 @@ class KnowledgeConsultationService:
         self.wait_port = wait_port
         self.allow_repository_inspection = allow_repository_inspection
         self.design_rechecks = design_rechecks
+        self.invocation_journal = invocation_journal or KnowledgeInvocationJournal(records)
 
     def _unresolved(self, binding: KnowledgeRunBinding) -> tuple[KnowledgeGap, ...]:
         rechecked = rechecked_gap_ids(self.design_rechecks, binding)
@@ -201,7 +204,10 @@ class KnowledgeConsultationService:
             with model_call_phase(
                 "knowledge_intent" if phase == "intent" else "knowledge_assessment"
             ):
-                result = self.client.complete(
+                result = self.invocation_journal.call(
+                    binding,
+                    phase,
+                    client=self.client,
                     instructions=instructions,
                     input_payload=input_payload,
                     output_schema=output_schema,

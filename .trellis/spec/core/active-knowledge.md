@@ -64,6 +64,61 @@ hide prior visibility; current incompatible scoped snapshots must fail closed un
 
 ## Evaluation and completion evidence
 
+### Complete knowledge invocation receipts
+
+`KnowledgeInvocationJournal(records, *, claimed: Callable[[], QueueClaim] | None).call(
+binding, phase, *, client, instructions, input_payload, output_schema, timeout_seconds)`
+persists an exact `KnowledgeInvocationIntent` before invoking a model. The request digest covers
+instructions, payload, output schema and finite timeout. Delivery composition supplies the actual
+Worker claim through `KnowledgeRunContextBuilder(..., invocation_claim=knowledge_claim)`; the
+stored claim must match Task, role and repository. Upstream stages retain their existing exact
+reservation/approval gates and do not fabricate Delivery claims.
+
+Records live under `knowledge_records/invocations/<scope digest>/`. The scope is exactly Team,
+Project, Requirement, repositories, Task and role; Run, Context, source revision and lease are
+deliberately excluded. `invocation_scope_lane_sha256(...)` is shared with read-side consumers;
+callers must not construct fake bindings to locate a lane. The immutable intent/outcome key is
+`run_id + ':' + phase`. `KnowledgeRecordStore.list(..., limit=512)` checks matching filenames
+before decoding any record, and rejects oversize lanes rather than returning a partial history.
+
+Each actual route saves a typed admission under the current execution guard before native spawn
+or HTTP transport. The owned runner saves `NativeProcessStop` before translating timeout,
+nonzero exit or invalid JSON. A dedicated `StructuredNativeNotStartedReceipt` is valid only
+when the owned runner proves `Popen` did not return a process; it has no PID or synthetic stop.
+Post-spawn ownership errors require actual controlled cleanup and remain execution-uncertain.
+HTTP round-trip receipts describe local synchronous transport completion, never remote stop.
+See [structured execution observation](structured-execution-observation.md).
+
+`KnowledgeExecutionRecord` independently seals each admission/completion before the final
+`KnowledgeInvocationOutcome` (RETURNED/FAILED). Outcome embeds the exact intent, bounded and
+redaction-checked result or typed error metadata, and all complete route records. Both outer
+store digest and inner integrity/identity are checked on replay. Successful fake clients may
+have empty observations; that is data, never proof of native stop or authority to recover.
+
+| Case | Result |
+| --- | --- |
+| Exact complete success or failure after restart | Revalidate independent records and replay; no new model call |
+| Changed input, schema, timeout, Context or source in the same Run | Reject exact replay; preserve original facts |
+| Intent without complete outcome | Refuse original Run and new Run/Context/source in the same lane |
+| Actual stop saved, outcome publication fails | Retain stop independently; do not infer an accepted result |
+| Owner lost while a route is in progress | Preserve actual completion; prohibit new fallback admission and outcome mutation |
+| Observation write fails | Execution-uncertain, no fallback and no provider transient refund |
+| Missing executable before spawn | Typed NOT_STARTED; a still-authorized configured fallback may proceed |
+| Secret-bearing result or corrupt receipt/hash | Reject publication/replay without exposing original payload |
+
+These receipts do not authorize automatic retries, new claims, approvals, candidates, verdicts
+or terminal Task revival. Local execution limits remain distinct from provider transient
+failures. A same-Task automatic continuation additionally requires real claim authority,
+frozen budget and original workspace validation; a stop digest alone is insufficient.
+
+Required regression coverage: `tests/knowledge/test_invocation_receipts.py`,
+`test_invocation_native.py`, `test_schema_parity.py`, and
+`tests/agents/test_structured_observation.py`. Exercise all seven roles, real process fixtures,
+cross-process replay, incomplete records, write failures, fallback fencing and original error
+metadata. Old consultations/model-call/gap bytes and digests are unchanged. Old unknown executions
+receive no synthetic backfill; use the existing public exact recovery path. Active executions
+are not hot-loaded or rebound when deploying this change.
+
 `KnowledgeModelCall` persists actual provider/model, usage, duration and output digest for each
 consultation call. `KnowledgeEvaluationReport` uses nullable metrics when their denominator is
 zero; omitted nulls must round-trip through the standard `DomainModel.to_wire` contract.
