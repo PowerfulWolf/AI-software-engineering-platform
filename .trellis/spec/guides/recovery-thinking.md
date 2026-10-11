@@ -179,3 +179,19 @@ execution-baseline.md 的 accepted artifact order 与 repeated baseline 验证�
 
 本次 exact plan、隔离 28 项完整捕获红绿和目标测试证明见
 `.trellis/tasks/10-11-run6-fixture-maintenance/`。不改变产品契约或旧事实，不计 ASE 自治交付。
+
+### 恢复性能要量到真实边界（2026-10-12）
+
+- 将 `TASK_SEALED → dispatch committed → seed verified → first admission` 分段，分别数
+  builder、facts、完整SourceReader、只读SQL snapshot、capture和inventory，不把局部解码测量
+  外推到整个恢复。fake若替换了被测门禁，未覆盖的耗时必须写unknown。
+- 有限次数仍会因嵌套验证放大。保留fence的fresh语义，同时识别immutable模型、完整prefix及
+  live事实各自的成本；不能通过删安全门、mtime缓存、截断补丁或猜测停止证明加速。
+- 长标量补丁和大量嵌套模型的复制成本不同。至少用同一真实source事实的独立只读重放核对结果
+  digest；plain计时与函数profile分别报告。cProfile可能放大深拷贝的小调用成本，不能凭profile
+  的累计时间断言端到端回退或改善。嵌套累计时间不能相加。
+- `find_approval → 每个approval find_product_spec → 全specs` 会产生O(A×S)历史解码。
+  优化应建立单调用内完整且稳定的关联prefix，并保持全部原始字节、目录身份、关联与重复检查；
+  approval/current权限不能加入跨调用或模型期间的成功缓存。
+- 运行中的生产Operation需要保留原授权及现场；冷读重放的时间不代表它当前在哪个函数。
+  新优化只在合法idle维护边界上线，不重复提交审批或重写旧记录来制造进度。

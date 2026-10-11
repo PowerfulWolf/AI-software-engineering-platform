@@ -115,3 +115,72 @@ Production at `1769977` continues the previously approved K1 operation. Integrat
 does not establish production activation or K1 delivery. The service and registered source
 checkout remain unchanged until a safe maintenance boundary and any required exact source
 baseline approval.
+
+## Actual K1 source replay and remaining amplification
+
+At `2026-10-11T21:13Z`–`21:17Z`, independent fresh processes replayed one real
+`NativeRecoverySourceReader.inspect` for the already authorized K1 source. This was a
+bounded read-only diagnosis: no TeamHost, initialization, authority, Task, queue, service
+or workspace write. Its existing SQL ports used consistent READ ONLY snapshots and
+finally rollback/close. Each process had a 45-second alarm; output retained only timings,
+function names and fingerprints, never original source/context/DSN or credentials.
+
+The old and integrated readers both succeeded. SHA-256 of exact source, Task, request,
+ProductSpec, approval, TechnicalDesign and ExecutionPlan wire facts was identical:
+`6b16fa4a665d3c4fb10b7d33059c54e6ead9cadff3d926ac7d62fcf09809795b`.
+This checks those returned immutable source facts; it is not a claim/READY decision or
+proof of the executing worker's instantaneous stack.
+
+| Fresh-process replay | Baseline `1769977` | Integrated `874f6a6` |
+| --- | ---: | ---: |
+| Plain CPU seconds | 20.710 | 16.371 |
+| Plain wall seconds | 21.074 | 16.513 |
+| cProfile CPU seconds | 18.578 | 21.748 |
+| cProfile wall seconds | 18.729 | 21.984 |
+
+The plain comparison measured about 21% CPU reduction, rather than the smaller scalar
+fixture's 6.3–8.6 times improvement. The instrumented result reversed the comparison;
+the scoped path included over two million deep-copy calls. cProfile changes the cost of
+many small calls, and machine/active-service variability remains. Treat the two plain
+runs as one bounded observation, not a portable latency guarantee or whole-operation
+benchmark. Do not remove private-copy isolation or freshness checks to improve a timer.
+
+The baseline profile's single SourceReader inspection included four baseline epoch
+reads, five complete `bindings_for_task` calls, 36 Plan reads, 20 Start reads and 20
+native-rule epoch reads. Baseline epoch replay was about 9.94 cumulative CPU seconds;
+15 joint-journal history reads were about 3.61 seconds. Nested cumulative times overlap.
+These are actual isolated source-replay counts, not counts sampled from the running
+production Operation. Do not multiply cold-reader timings into a predicted live duration:
+reader-owned immutable journal reuse and input shape can differ.
+
+The modern terminal path's static success graph from `TASK_SEALED` to fresh dispatch
+contains six builders, 30 facts inspections and 180 SourceReader calls. Seed and first
+Coder admission add two builders, ten inspections and 60 source reads. Each builder
+retains its original authorization/facts/capture observations; MySQL pre/post callbacks
+remain real fences. The dispatch prefix statically includes 192 capture verifications
+(384 capture passes), 120 complete inventory calls (240 passes), and 480 read-only SQL
+transactions before other allocator/backend work. These are code counts, not observed
+production execution or measured full-path timings. The three-model decode scope does
+not eliminate these live observations.
+
+A bounded filename/stat inventory of the current sidecar's Product store found five
+approvals / 4,375 bytes and five specs / 88,748 bytes. `find_approval` independently has
+an O(approval × spec) lookup; it was not the main function in this profile. It requires
+its own stable-prefix contract and regression rather than expanding the authority cache.
+
+The initial four-phase fake-fixture readiness probe could not represent complete native
+SQL/capture/inventory work. Their real timing remains unknown until the separately bounded
+real offline fixture report is available. This task's validation and earlier isolated
+numbers must not be described as end-to-end recovery performance.
+
+The subsequent real offline fixture used a separate guarded database
+`ai_software_engineer_test` (production is `ase_self_iteration`), temporary Git/sidecars,
+the existing offline owned failed-Codex process, and serial execution. Baseline `1769977`
+and scoped `aeca8a9` each reached the original hard deadline (120.06 and 120.04 wall
+seconds). The first observer published only at session completion, so neither run
+produced trustworthy phase timers or counts: those values remain **unknown**, rather
+than zero, a pass, or a measured speedup. The `/tmp` observer was corrected to publish
+bounded private intermediate statistics for future work, without rerunning or extending
+this measurement budget. Both timeout paths reset the dedicated test database; all 13
+mutable facts tables were checked empty, with no owned observer/offline-Codex process
+remaining. This measurement is incomplete and is not a K1 recovery result.
