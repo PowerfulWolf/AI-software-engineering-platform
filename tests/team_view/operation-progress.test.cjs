@@ -202,7 +202,8 @@ test("succeeded delivery history reports its sealed blocked, waiting or done res
     DONE: "操作已结束 · 当次需求已交付"};
   for (const [stage, expected] of Object.entries(titles)) {
     h.data.operation.status = "SUCCEEDED";
-    h.data.operation.result = {stage, next_action: "查看当次执行记录。"};
+    h.data.operation.result = {project_id: h.data.request.project_id, delivery_id: h.data.request.id,
+      checkpoint_sha256: h.data.request.checkpoint_sha256, stage, next_action: "查看当次执行记录。"};
     const original = JSON.stringify(h.data.operation);
     const row = rows(h.render())[0];
     assert.equal(row.children[0].textContent, expected);
@@ -219,7 +220,8 @@ test("succeeded delivery history reports its sealed blocked, waiting or done res
   assert.match(noResult, /命令已完成/);
   assert.doesNotMatch(noResult, /当次需求已交付|当次交付已阻塞|当前阶段 ·|执行成功/);
   for (const stage of ["DESIGNING", "PLANNING", "CLOSED", "unknown_result", "toString"]) {
-    h.data.operation.result = {stage, next_action: "查看当次记录。"};
+    h.data.operation.result = {project_id: h.data.request.project_id, delivery_id: h.data.request.id,
+      checkpoint_sha256: h.data.request.checkpoint_sha256, stage, next_action: "查看当次记录。"};
     assert.doesNotMatch(text(rows(h.render())[0]), /当次需求已交付|当前阶段 ·/);
   }
   h.data.operation.result = {stage: "DONE", next_action: "项目操作完成。"};
@@ -231,7 +233,8 @@ test("sealed outcome diagnostic and current missing planning handoff render exac
   const h = harness();
   const original = "Designer did not publish a verified planning handoff";
   h.data.operation.status = "SUCCEEDED";
-  h.data.operation.result = {stage: "BLOCKED", diagnostic: original, next_action: "工程团队核验交接记录后继续。"};
+  h.data.operation.result = {project_id: h.data.request.project_id, delivery_id: h.data.request.id,
+    checkpoint_sha256: h.data.request.checkpoint_sha256, stage: "BLOCKED", diagnostic: original, next_action: "工程团队核验交接记录后继续。"};
   assert.match(text(rows(h.render())[0]), /当次原因 · 设计到计划的交接尚未通过校验，当前交付已阻塞/);
   assert.match(h.run('humanizeBlockingText(data.operation.result.diagnostic)'), /由工程团队核验具体原因并处理/);
   assert.equal(h.data.operation.result.diagnostic, original);

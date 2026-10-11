@@ -36,6 +36,17 @@
       "title": "ConsoleOperationStatus",
       "type": "string"
     },
+    "OperationResultScopeRelation": {
+      "enum": [
+        "NO_RESULT",
+        "SAME_RESOURCE",
+        "CREATED_RESOURCE",
+        "NO_RESOURCE",
+        "UNVERIFIED_RESOURCE"
+      ],
+      "title": "OperationResultScopeRelation",
+      "type": "string"
+    },
     "SubmittedApprovalKind": {
       "enum": [
         "plan",
@@ -83,6 +94,36 @@
       ],
       "default": null,
       "title": "Delivery Id"
+    },
+    "result_scope_relation": {
+      "$ref": "#/$defs/OperationResultScopeRelation",
+      "default": "NO_RESULT"
+    },
+    "result_project_id": {
+      "anyOf": [
+        {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Result Project Id"
+    },
+    "result_delivery_id": {
+      "anyOf": [
+        {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Result Delivery Id"
     },
     "action": {
       "$ref": "#/$defs/ConsoleAction"

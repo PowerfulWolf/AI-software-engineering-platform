@@ -268,7 +268,13 @@ def test_large_complete_plan_is_available_only_from_exact_get(
     complete = store.succeed(
         operation_id,
         expected=running_sha,
-        result=_result().model_copy(update={"execution_baseline_plan": plan}),
+        result=_result().model_copy(
+            update={
+                "delivery_id": "delivery_created",
+                "checkpoint_sha256": "a" * 64,
+                "execution_baseline_plan": plan,
+            }
+        ),
         at=AT + timedelta(seconds=2),
     )
     complete_wire = complete.model_dump_json()
@@ -463,3 +469,144 @@ def test_cursor_schema_validates_actual_wire_and_changed_completion_is_stale(
     )
     with pytest.raises(StaleOperationCursor):
         store.summary_page(OperationSummaryQuery(page_size=1, cursor=page.next_cursor))
+
+
+def test_actual_delete_producer_roundtrips_summary_http_and_complete_bytes(tmp_path: Path) -> None:
+    from ai_software_engineer.web_console.models import DeleteRequirementIntent
+    from tests.web_console.test_manager import DELIVERY_ID, PROJECT_ID, _adapter
+
+    adapter, _, entry = _adapter(tmp_path)
+    intent = DeleteRequirementIntent(
+        project_id=PROJECT_ID,
+        delivery_id=DELIVERY_ID,
+        expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+    )
+    store = FileConsoleOperationStore(tmp_path / "operations", team_id="team_test")
+    store.submit(intent=intent, idempotency_key="actual-delete-summary", requested_at=AT)
+    running = store.claim_next(at=AT + timedelta(seconds=1))
+    assert running is not None
+    completed = store.succeed(
+        running.operation_id,
+        expected=running.operation_sha256,
+        result=adapter.execute(intent),
+        at=AT + timedelta(seconds=2),
+    )
+    assert completed.result is not None and completed.result.delivery_id is None
+    before = {path: path.read_bytes() for path in store.root.glob("operation_*/*.json")}
+    console = ProjectConsole(store=store, executor=Mock())
+    client = TestClient(
+        create_console_app(console, _Reader(), team_id="team_test"),
+        base_url="http://127.0.0.1:8765",
+    )
+    response = client.get(
+        "/api/v1/operation-summaries", params={"project_id": PROJECT_ID, "delivery_id": DELIVERY_ID}
+    )
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["delivery_id"] == DELIVERY_ID
+    assert item["result_scope_relation"] == "NO_RESOURCE"
+    assert item["result_delivery_id"] is None and item["result_stage"] is None
+    assert item["next_step"] is None
+    assert (
+        client.get(
+            "/api/v1/operation-summaries",
+            params={"project_id": PROJECT_ID, "delivery_id": DELIVERY_ID},
+            headers={"If-None-Match": response.headers["etag"]},
+        ).status_code
+        == 304
+    )
+    full = client.get(f"/api/v1/operations/{completed.operation_id}")
+    assert full.json() == completed.to_wire()
+    assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize("result_delivery", ["delivery_native_independent", None])
+def test_independent_same_project_result_is_not_current_requirement_semantics(
+    tmp_path: Path, result_delivery: str | None
+) -> None:
+    from ai_software_engineer.web_console.models import (
+        ConsoleApprovalRequest,
+        ContinueDeliveryIntent,
+    )
+
+    store = FileConsoleOperationStore(tmp_path / "operations", team_id="team_test")
+    intent = ContinueDeliveryIntent(
+        project_id="project_alpha",
+        delivery_id="delivery_parent",
+        expected_checkpoint_sha256="a" * 64,
+    )
+    store.submit(intent=intent, idempotency_key="independent-result", requested_at=AT)
+    running = store.claim_next(at=AT + timedelta(seconds=1))
+    assert running is not None
+    result = ConsoleCommandResult(
+        project_id="project_alpha",
+        delivery_id=result_delivery,
+        checkpoint_sha256="b" * 64 if result_delivery else None,
+        stage="BLOCKED",
+        next_action="独立结果的下一步",
+        diagnostic="独立结果的原因",
+        approval=ConsoleApprovalRequest(
+            kind="coder_recovery", title="独立结果审批", plan_sha256="c" * 64, facts=("结果现场",)
+        )
+        if result_delivery
+        else None,
+    )
+    completed = store.succeed(
+        running.operation_id,
+        expected=running.operation_sha256,
+        result=result,
+        at=AT + timedelta(seconds=2),
+    )
+    page = store.summary_page(
+        OperationSummaryQuery(project_id="project_alpha", delivery_id="delivery_parent")
+    )
+    assert page.total_count == 1
+    item = page.items[0].model_dump(mode="json")
+    assert item["result_scope_relation"] == "UNVERIFIED_RESOURCE"
+    assert item["result_project_id"] == "project_alpha"
+    assert item["result_delivery_id"] == result_delivery
+    for name in (
+        "result_stage",
+        "result_checkpoint_sha256",
+        "approval_kind",
+        "approval_plan_sha256",
+        "baseline_plan_sha256",
+        "baseline_purpose",
+        "task_id",
+        "work_item_id",
+        "summary",
+        "next_step",
+    ):
+        assert item[name] is None, name
+    assert item["has_baseline_binding"] is False
+    assert item["intent_checkpoint_sha256"] == "a" * 64
+    assert not store.summary_page(
+        OperationSummaryQuery(project_id="project_alpha", delivery_id="delivery_native_independent")
+    ).items
+    assert store.get(completed.operation_id) == completed
+
+
+def test_create_project_may_obtain_new_project_identity_only_from_its_result(
+    tmp_path: Path,
+) -> None:
+    store = FileConsoleOperationStore(tmp_path / "operations", team_id="team_test")
+    store.submit(
+        intent=CreateProjectIntent(name="New identity"),
+        idempotency_key="created-identity",
+        requested_at=AT,
+    )
+    running = store.claim_next(at=AT + timedelta(seconds=1))
+    assert running is not None
+    store.succeed(
+        running.operation_id,
+        expected=running.operation_sha256,
+        result=ConsoleCommandResult(
+            project_id="project_created", stage="CREATED", next_action="查看新项目"
+        ),
+        at=AT + timedelta(seconds=2),
+    )
+    page = store.summary_page(OperationSummaryQuery(project_id="project_created"))
+    assert page.total_count == 1
+    assert page.items[0].result_scope_relation == "CREATED_RESOURCE"
+    assert page.items[0].project_id == page.items[0].result_project_id == "project_created"
+    assert page.items[0].result_stage == "CREATED"

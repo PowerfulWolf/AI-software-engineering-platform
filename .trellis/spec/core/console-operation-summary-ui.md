@@ -180,6 +180,48 @@ current progress to a retained old history row.
 
 ## Tests, stock data and rollback
 
+### Intent ownership and independent result scope (2026-10-12)
+
+Summary `project_id`/`delivery_id` identify the submitted intent; only creation
+commands obtain missing new identity from their result. `result_scope_relation`
+and independent `result_project_id`/`result_delivery_id` are reading locators.
+`NO_RESOURCE` is the known DELETE_REQUIREMENT command-only outcome;
+`UNVERIFIED_RESOURCE` also covers other delivery-bound results missing a resource.
+Neither exposes delivery-stage/approval/baseline/next-step semantics in a summary.
+Foreign Project/Team and corrupted history still fail closed before filtering.
+
+`operationResultScopeRelation` independently derives relation from complete
+intent/result on every use; `operationResult` is the shared gate for all current
+stage, checkpoint, approval, engineering handling, decision, baseline and rescue
+consumers. Same-Project different delivery never gains authority through the
+intent checkpoint fallback. Complete hydration checks a supplied summary relation
+and result locators against the actual full record, alongside the existing digest,
+sequence, Team/Project, target, owner and inventory checks. Old summaries without
+the additive fields remain readable, but unrelated full results still cannot
+provide current authority. Fresh write and exact callback checks remain required.
+
+Historical rows preserve neutral command status/intent and explicitly show the
+independent result object and unverified association. Expanding the original
+record separates its original stage/reason/next-action/plan under an audit-only
+fold with no operation controls. Raw complete GET/cache bytes are unchanged;
+the separate history presentation does not synthesize parent/child membership.
+Full/summary rendering uses the same gate, so loading a record cannot make an
+independent result become a current outcome, attention notice or recovery approval.
+
+Validation: actual DELETE producer → store/hash-chain replay → HTTP 200/304 with
+unchanged full GET/files; same-Project different/missing resource projections;
+actual shipped JS full hydration, old-summary compatibility, forged relation,
+foreign Project, result-locator injection, zero-POST stale approval callback,
+neutral deletion and full independently labelled historical audit. Existing
+approval, ETag, scope/owner, active completeness and progress tests remain.
+
+Stock data needs no migration: all original Operation histories remain immutable.
+At a verified idle maintenance boundary load the fix and refresh the original
+Project/Requirement; summaries recompute independently scoped old results. Do not
+delete records or change producer payloads to repair this reader. Rollback only
+read-side code/assets/schema; retain all original facts (the prior reader may again
+reject these legitimate histories).
+
 `operation-summary-reading.test.cjs` runs shipped JS/fake HTTP and covers reading
 separation, ETag, exact digest, active completeness, pagination, full-GET callback
 fences, Team isolation and cache byte/count refusal. Its browser counterpart uses

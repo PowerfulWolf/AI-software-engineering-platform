@@ -104,6 +104,33 @@ test("summary SUCCEEDED shows neutral command completion and the sealed delivery
   assert.doesNotMatch(text(row), /执行成功|需求已交付|当前阶段/);
 });
 
+test("independent result history remains explicit audit after full hydration without becoming current recovery", async () => {
+  const h = harness();
+  Object.assign(h.previous, {result_scope_relation:"UNVERIFIED_RESOURCE", result_project_id:h.scope.project_id,
+    result_delivery_id:"request_independent", result_stage:null, result_checkpoint_sha256:null,
+    approval_kind:null, approval_plan_sha256:null});
+  const record = h.model.full.get(h.previous.operation_id);
+  Object.assign(record.result, {project_id:h.scope.project_id, delivery_id:"request_independent",
+    stage:"DONE", diagnostic:"独立结果的真实原因", next_action:"独立结果的历史下一步"});
+  Object.assign(record, h.previous);
+  await h.read();
+  assert.equal(h.run("latestApproval(data.request.id, data.request.checkpoint_sha256, data.request.project_id)"), null);
+  assert.equal(h.run("observedApprovedRecoveryOperation(data.request, operations.find(item=>item.status==='RUNNING'))"), false);
+  const row = rowFor(h.render(), "独立结果对象");
+  assert.ok(row, "independent result identity must remain in complete history");
+  assert.match(text(row), /关系尚未核验/);
+  assert.doesNotMatch(text(row), /当次需求已交付|当次交付已阻塞|当次待确认方案/);
+  const details = descend(row).find(node => node.tagName === "DETAILS" && text(node).includes("查看完整处理记录"));
+  details.open = true;
+  await details.listeners.get("toggle")();
+  assert.match(text(row), /独立命令结果（仅供历史审计）/);
+  assert.match(text(row), /原结果原因 · 独立结果的真实原因/);
+  assert.match(text(row), /原结果记录的下一步 · 独立结果的历史下一步/);
+  assert.doesNotMatch(text(row), /当次需求已交付|当次待确认方案/);
+  assert.equal(h.calls.some(call => call.options?.method === "POST"), false);
+  assert.equal(record.result.delivery_id, "request_independent", "audit/full bytes stay intact");
+});
+
 for (const unavailable of ["runtime", "detail"]) {
   test(`exact recovery reading remains current while the ${unavailable} write gate is unavailable`, async () => {
     const h = harness({deliveryReady: unavailable !== "runtime"}); await h.read();
