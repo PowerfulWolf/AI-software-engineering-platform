@@ -46,6 +46,9 @@
 - [`controlled-service-restart.md`](controlled-service-restart.md): complete Host admission drain,
   real durable completion, process-stop proof, signal handling and exact private restart handshake.
 
+- [`owned-session-stop.md`](owned-session-stop.md): actual Popen session ownership, complete SID
+  and observed-birth stop proof, bounded durable finalization and unchanged legacy stop scope.
+
 - [`legacy-execution-rescue.md`](legacy-execution-rescue.md): exact human engineering rescue of
   legacy unknown local Coder executions, current-process ownership, OS containment and complete preserved workspace.
 

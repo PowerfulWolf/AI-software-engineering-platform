@@ -1,0 +1,134 @@
+# Actual owned session stop and durable finalization
+
+## Scope and failure mode
+
+The native, structured, policy-bound command and currently registered verification/query runners
+share one trusted stop boundary. A spawned leader may exit while a same-SID child moves into another
+PGID and closes both inherited output pipes. Leader reap, original PGID absence and EOF can then all
+be true while that child remains alive. None is a complete owned-session stop.
+
+`OwnedSessionController` binds only a real, successfully created isolated `subprocess.Popen` object.
+It is private trusted composition, absent from Agent tools; no supplied PID selector, shell process
+survey, general signal permission or new Agent capability is introduced. It observes the original
+positive SID and every process birth it has already observed. An observed birth leaving that SID
+causes uncertainty. An **unobserved** descendant escaping through `setsid()` is outside this proof;
+this is not full process-tree containment. Retained output pipes still independently fail EOF.
+
+## Signatures and ownership
+
+```python
+# owned_sessions.py
+OwnedSessionController(process: subprocess.Popen[str] | subprocess.Popen[bytes])
+controller.observe_session()  # active owner polling, read only
+controller.stop(timeout_seconds=1.0) -> OwnedSessionStopProof
+controller.require_empty() -> OwnedSessionStopProof  # read only
+require_recorded_session_empty(proof: OwnedSessionStopProof) -> None  # no signal authority
+
+# owned_processes.py
+ownership = capture_owned_process(process)  # immediately after actual Popen, before reap
+ownership = observe_owned_process(process, kind="native", observation=ownership)
+finish_owned_process(process, ownership, output_drained=False,
+                     timeout_seconds=1.0, complete_observation=True)
+
+# trusted durable application boundary, never an Agent tool
+with owned_record_finalization() as finalization:
+    execute_and_observe_real_stop()
+    typed_store.put(exact_record)  # or the actual run manifest seal
+    finalization.confirm_saved()
+```
+
+Ownership capture requires `PID == PGID == SID`, kernel birth identity and current boot identity
+before leader reap. Missing/failing capture can clean the actual `Popen` leader, but cannot reconstruct
+session ownership or publish a stronger stop. Capture errors retain only a failure flag, not an
+Exception/traceback that could keep a complete caller payload alive.
+
+Darwin uses `libproc.proc_listallpids`, exact `PROC_PIDTBSDINFO` birth records and `kern.boottime`;
+Linux uses `/proc` kernel start ticks, boot UUID and SID membership. Enumeration is bounded to 16,384
+processes and one second per scan; saturated/partial/denied inspection is unknown. System/kernel
+processes with zero SID are excluded before constructing a positive owned identity. The controller
+retains at most 16,384 observed PID/birth identities and hashes at most 1,000,000 observations in
+constant memory. The latter supports legitimate long native polling; it does not retain scan bodies.
+
+Each signal checks current boot, original leader identity and all known births, then freshly verifies
+the exact target PID/PGID/SID/birth. Signals go to individually verified members, never an unchecked
+reused PGID. Finite TERM then KILL phases repeatedly scan; success requires leader reap and two
+complete empty observations. Peer PGID changes inside the original SID are tracked. A reused peer
+PID with a different birth is the old process absent, never authority to signal the recycled process.
+Leader/SID reuse is conservatively rejected. OS observation-to-signal is not atomic containment.
+
+## Wire and digest contract
+
+`NativeProcessStop.session_proof: OwnedSessionStopProof | None` is additive. Absent/null proof is
+omitted by ordinary `model_dump` and wire serialization, preserving the original stop and enclosing
+record digests. Existing records keep their original leader/group scope and are never upgraded.
+New stops retain `kind=completed → returncode=0` and `kind=failed → returncode!=0` guards in both
+the canonical generated Schema and typed validation.
+
+`OwnedSessionStopProof` carries version `v1`, fixed `proof_scope=owned_session_empty`, boot identity,
+isolated leader, sorted unique observed PID/birth identities, bounded observation count, streaming
+observations SHA-256, aware observation time and proof SHA-256. The proof leader must exactly match
+the stop leader and observation cannot postdate the stop. Unknown fields and corrupted digests fail.
+`require_recorded_session_empty` validates this proof and rechecks current boot, conservative leader
+occupancy, every observed original birth (including a living birth now in another SID), and original
+SID absence twice. This read never signals. Legacy proof reads retain the old group check.
+
+`scripts/sync-owned-session-schemas.py` synchronizes only `NativeProcessStop` and its new definition
+closure in exactly ten embedded Schemas, preserving enclosing handwritten guards. Fresh repair
+generation obtains the same canonical stop guards; repeated generation must be byte stable.
+
+## Durable responsibility and Host registry
+
+Stop, EOF, pipe-worker completion and actual publication are distinct conjuncts. A registry snapshot
+may be `running`, `finalizing` or `uncertain`; all remain present and prevent Host drain READY.
+`finalizing` means actual execution stopped while its required record has not yet finished saving.
+An ended thread, locally closed descriptor or missing registry Operation context is not stop proof.
+
+| Trusted consumer | Required completion before registry removal |
+|---|---|
+| Native Codex runner | complete SID stop + true EOF + reap, exact observer stop save, then independent recheck |
+| `RunEvidenceSession.capture_command` | complete command stop and actual `EvidenceStore.put` return |
+| `EvidenceCapturingAgentAdapter` | all nested command evidence, actual result evidence and run manifest `seal` |
+| Swift verification binding | resource/command cleanup and exact COMPLETED/BLOCKED verification receipt put |
+| Python/MySQL verification | owned command/proxy/resource cleanup and exact verification receipt put |
+| Read-only Git/OS query or DEVNULL helper with no publish contract | actual session stop and relevant pipe/thread completion |
+
+Nested saved scopes transfer their stopped observations to the outer scope; they cannot clear them
+before the outer run seal. Trusted proxy workers explicitly inherit both operation and finalization
+contexts and finish pipe workers before adding stopped observations. Finalization retains at most
+4,096 deduplicated observations, clears all references/parent links on exit, and rechecks the stop
+facts before removal. Store/seal failure, omitted `confirm_saved`, late/duplicate confirmation or
+scope overflow preserves uncertainty. It never fabricates a failed provider result or verdict.
+
+## Validation matrix and test points
+
+| Case | Required result |
+|---|---|
+| Same SID/different PGID child closes stdout/stderr; including TERM resistance | stop peer before successful publication; escalate to KILL within finite bound |
+| Observed child uses setsid and closes both pipes | unknown; no successful stop/registry clear; stored original birth also rejects read-side reuse |
+| Unobserved setsid child closes pipes | explicitly outside owned SID proof; no whole-tree claim |
+| Denied, partial, oversized or saturated enumeration; boot/birth drift | no unchecked signal, no registry clear, Host cannot READY |
+| Leader already reaped before capture | no retrospective stronger ownership proof |
+| Stop/evidence/receipt put or run seal fails after real process exit | all affected snapshots uncertain; drain stays blocked |
+| Multiple nested successful commands before outer seal | snapshots stay finalizing until actual seal completes |
+| Old absent/null proof and nested historical digest | original bytes/digest unchanged |
+| Wrong scope/leader/time/digest/extra proof field | typed/static contract rejects |
+
+Executable coverage lives in `tests/execution/test_owned_session_stop.py`,
+`test_owned_session_inspection.py`, `test_owned_record_finalization.py` and
+`tests/contracts/test_owned_session_stop_schema.py`, plus existing adapter/executor/evidence/continuation
+regressions. Real subprocess coverage was run on Darwin. Linux parsing and identity logic have unit
+coverage; no real Linux host or MySQL runtime is claimed by this task.
+
+## Existing-data treatment and rollback
+
+No migration, MySQL access, historical stop backfill, Task/queue/approval rewrite or K1 resume.
+Old records retain their original scope and current-fact recovery gates. New code changes do not
+prove that an already-running old binary or historical execution stopped. Root integrates only after
+independent review and deploys at an idle verified controlled restart boundary. If an old unknown
+execution lacks facts, use its existing exact authorized recovery route rather than republishing a
+new proof for it.
+
+Rollback the implementation before starting new invocations, after verified controlled stop. Preserve
+all optional proof bytes and original evidence/history; do not strip a proof to change its digest.
+A reverted binary must not read new proof-bearing records unless its reader supports the extension.
+No `src/templates/markdown/spec` template tree exists here; no parallel template sync applies.

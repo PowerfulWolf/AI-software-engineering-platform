@@ -1049,3 +1049,23 @@ execution reads; original files, publication receipts, outcomes and valid ancest
 immutable. New output still needs normal candidate, independent QA and Review gates.
 See [rejected-coder-output](../../.trellis/spec/core/rejected-coder-output.md) for exact
 signatures, error matrix, Schema contracts and existing-data rollout.
+
+### Actual owned session stop (2026-10-11)
+
+`NativeProcessStop.session_proof` optionally carries a v1 `owned_session_empty` proof,
+bound to the actual isolated Popen, boot identity and observed PID/birth identities.
+Same-SID children in other PGIDs must stop even if both output pipes already closed.
+Leader reap, EOF and complete session absence are checked separately; already observed
+births escaping the SID reject a stop. Unobserved setsid escape remains outside this
+bounded proof and is not claimed as full process-tree containment.
+
+Absent/null proof is omitted from ordinary and wire dumps so old stop and enclosing
+digests remain unchanged. All ten embedded stop Schemas preserve canonical completed/
+failed returncode guards. New proof reads recheck every stored original birth and
+current boot/SID without signal authority; historical proof is never upgraded.
+
+The trusted Host registry retains stopped executions in `finalizing` until the actual
+command evidence, outer run manifest seal or controlled verification receipt returns.
+Nested/thread-owned scopes preserve this boundary; save failure keeps uncertainty and
+prevents service READY. Scope, signatures, error matrix, bounds, tests and existing-data
+treatment are defined in [owned-session-stop](../../.trellis/spec/core/owned-session-stop.md).

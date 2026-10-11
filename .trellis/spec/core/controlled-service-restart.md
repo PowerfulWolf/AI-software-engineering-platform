@@ -33,7 +33,7 @@ console.close(timeout=5)         # explicit READY/REFUSED result
 registry = HostOwnedProcessRegistry()
 with registry.operation_scope(operation_id):
     execute_and_persist_complete_operation()
-registry.await_stopped(timeout_seconds)  # every registered group/pipes must be verified
+registry.await_stopped(timeout_seconds)  # every registered session/pipes/save must be verified
 
 # service_lifecycle.py
 coordinator = ConsoleShutdownCoordinator(console=console, write_gate=gate,
@@ -99,7 +99,7 @@ READY/request/result or refuse. An initial empty lifecycle directory is allowed 
 | Input or failure | Required result / preserved facts |
 |---|---|
 | Real active Operation, writer, provider/tool or index | DRAINING; no READY or replacement |
-| All durable work, threads and owned process groups/pipes complete | exact READY then exit, one successor |
+| All durable work, threads and owned sessions/pipes complete | exact READY then exit, one successor |
 | Deadline while active | REFUSED; old PID/threads retained, reads available; retry or timeout-only resume |
 | Operation terminal/claim store failure or proof write failure | sticky REFUSED; no resume/READY |
 | New mutation/submit/claim after drain | Chinese SERVICE_DRAINING / no durable submission; queued untouched |
@@ -126,6 +126,12 @@ disappearance, daemon death, lease expiry, manufactured provider error or old RE
   legacy/dead/stale identities, shared lock, apply idempotence and removed-secret environment isolation.
 - `test_owned_processes.py` and adapter/executor tests: real process groups, bounded pipes/stop,
   uncertain cleanup blocker, structured/native/tool/verification subprocess coverage.
+- Same-SID peers may change PGID and close both pipes. The trusted actual-Popen controller checks
+  the complete original SID and every observed birth; group absence, leader reap and EOF alone cannot
+  clear a stop. Registry `finalizing` also blocks READY until the exact evidence/receipt/run seal
+  returns. Nested scopes and proxy workers retain that save boundary. New/legacy proof scope,
+  enumeration/history bounds, known escape refusal and real regressions are specified in
+  [`owned-session-stop.md`](owned-session-stop.md).
 - Native directory chooser uses the same owned process seam within HTTP write scopes. Port binding
   and lifecycle identity publication precede starting any Operation/index worker; failure starts neither.
 - Known index/process uncertainty and terminal-record failures reject RESUME before publishing RUNNING;

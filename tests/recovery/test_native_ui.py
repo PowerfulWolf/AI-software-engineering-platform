@@ -275,6 +275,9 @@ def test_exited_mock_preserves_exact_launch_diagnostics_without_retry(
     monkeypatch.setattr("ai_software_engineer.manager.native_ui.run_owned_subprocess", run)
     monkeypatch.setattr("ai_software_engineer.manager.native_ui.subprocess.Popen", launch)
     monkeypatch.setattr("ai_software_engineer.manager.native_ui.finish_owned_process", Mock())
+    # This UI rendering fixture mocks the entire subprocess boundary. Actual
+    # Popen ownership/stop refusal is covered by the real execution fixtures.
+    monkeypatch.setattr("ai_software_engineer.manager.native_ui.observe_owned_process", Mock())
     monkeypatch.setattr("ai_software_engineer.manager.native_ui.time.sleep", lambda _: None)
     results = run_native_ui(native_ui_capability(scenario()), capability(), Path.cwd(), private, {})
     assert len(results) == 1
@@ -322,6 +325,7 @@ def test_missing_approved_pixels_is_a_typed_environment_block(
     monkeypatch.setattr("ai_software_engineer.manager.native_ui.run_owned_subprocess", run)
     monkeypatch.setattr("ai_software_engineer.manager.native_ui.subprocess.Popen", launch)
     monkeypatch.setattr("ai_software_engineer.manager.native_ui.finish_owned_process", Mock())
+    monkeypatch.setattr("ai_software_engineer.manager.native_ui.observe_owned_process", Mock())
     monkeypatch.setattr("ai_software_engineer.manager.native_ui.time.sleep", lambda _: None)
     capture = scenario().model_copy(
         update={"steps": (NativeUiStep(name="initial", capture_window=True),)}

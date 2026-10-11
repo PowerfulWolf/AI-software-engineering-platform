@@ -33,6 +33,7 @@ from ai_software_engineer.manager.python_verification import (
     python_mysql_sandbox_command,
     python_mysql_sandbox_environment,
 )
+from ai_software_engineer.owned_processes import owned_record_finalization
 from ai_software_engineer.recovery.python_mysql_records import (
     MysqlResourceIntent,
     MysqlResourceRecord,
@@ -128,6 +129,7 @@ def execute_python_mysql_verification(
     validate_facts()
     require_clean_candidate(source, identity.candidate_revision)
     with (
+        owned_record_finalization() as finalization,
         tempfile.TemporaryDirectory(prefix="ase-pytest-scratch-") as temp,
         tempfile.TemporaryDirectory(prefix="ase-mysql-private-") as protected,
     ):
@@ -236,7 +238,7 @@ def execute_python_mysql_verification(
                     failure = "COMMAND_START_FAILED"
         require_clean_candidate(source, identity.candidate_revision)
         validate_facts()
-        return records.put_verification_execution(
+        receipt = records.put_verification_execution(
             VerificationExecutionRecord.create(
                 **{
                     k: v
@@ -249,3 +251,5 @@ def execute_python_mysql_verification(
                 recorded_at=clock(),
             )
         )
+        finalization.confirm_saved()
+        return receipt

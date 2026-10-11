@@ -201,7 +201,7 @@ cannot create an absent-output continuation receipt. A provider failure uses
 and `execution-continuation.schema.json` require v2 and matching cause/stop kind.
 
 `SubprocessCommandExecutor.run` raises `CommandExecutionUncertain` if it cannot
-prove the owned command group and output drains stopped. It is deliberately not a
+prove the complete owned command session and output drains stopped. It is deliberately not a
 `CommandExecutionError`: the registry must not convert it to an ordinary tool
 refusal. A reaped leader alone is insufficient. `QueuedDeliverySupervisor` seals an
 owner-fenced `EXECUTION_UNCERTAIN` wait, releases the lease and preserves the Task
@@ -209,6 +209,16 @@ checkpoint/worktree. `PolicyBoundToolRegistry.write_file` preserves existing
 regular permission bits (special bits refused), uses 0644 for new files, and applies
 the mode before fsync/atomic replace. A mkstemp 0600 file must not become the source
 file: it breaks complete mutation capture and executable source behavior.
+
+New native stops may carry `session_proof` with the versioned `owned_session_empty`
+scope. It binds the actual isolated spawn, boot identity and observed process births,
+and is published only after full session stop, reap and true EOF. Continuation rechecks
+all original observed births and current SID before using it; a known peer escaping
+the SID remains unknown. Legacy absent/null proof is omitted even from nested dumps,
+preserving its old digest and group scope. Command evidence and verification receipts
+retain Host `finalizing` ownership until their real put/run seal returns; a save failure
+cannot be disguised as successful stop. See [`owned-session-stop.md`](owned-session-stop.md)
+for bounds, signatures, compatibility, containment limits and executable test points.
 
 Good: a Responses Coder writes a lawful file, receives a typed provider failure,
 and its stopped synchronous loop produces a complete v2 receipt; a new claim and

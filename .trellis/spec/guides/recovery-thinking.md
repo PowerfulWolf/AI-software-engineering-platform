@@ -70,6 +70,19 @@ is insufficient. Test the real service process and inherited replacement lock, n
 Old binaries do not gain a new close protocol when disk code changes. Document the one-time maintenance
 upgrade and leave missing historical Run facts untouched. See `../core/controlled-service-restart.md`.
 
+Original process-group absence is not complete session absence: a same-SID peer can move into a
+different PGID and close both inherited pipes. Bind stop ownership to the actual Popen before reap,
+inspect the complete SID and every observed kernel birth, and keep EOF separate. A known birth
+escaping the SID cannot disappear from history; never signal a recycled PID under its old birth.
+Do not claim unobserved setsid descendants are contained by a session proof. Exercise the real silent
+peer and bounded OS-inspection failure, not only a fake leader.
+
+Process exit also cannot precede the required durable save boundary in the Host registry. Trace real
+command evidence put → outer run seal or controlled verification receipt put, including nested and
+cross-thread consumers; keep stopped entries finalizing until all required saves return. Store failure
+must preserve uncertainty. Do not keep capture exceptions/tracebacks in long-lived ownership objects,
+and test that failed ownership capture releases its caller payload. See `../core/owned-session-stop.md`.
+
 For a legacy UNKNOWN local Coder whose stop facts were never sealed, an idle ASE service or expired
 lease is not a stop proof. The platform may perform a bounded, read-only current-account OS survey
 and seal a complete draft, but only an engineering principal may separately attest that the old call
