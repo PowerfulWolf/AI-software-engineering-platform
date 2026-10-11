@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+from enum import StrEnum
 from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, StringConstraints, field_validator, model_validator
@@ -35,6 +36,36 @@ _APPROVAL_LOCATORS: tuple[tuple[SubmittedApprovalKind, str], ...] = (
 
 class StaleOperationCursor(ValueError):
     """The caller's finite history page is no longer the current inventory."""
+
+
+class OperationResultScopeRelation(StrEnum):
+    NO_RESULT = "NO_RESULT"
+    SAME_RESOURCE = "SAME_RESOURCE"
+    CREATED_RESOURCE = "CREATED_RESOURCE"
+    NO_RESOURCE = "NO_RESOURCE"
+    UNVERIFIED_RESOURCE = "UNVERIFIED_RESOURCE"
+
+
+def _result_scope_relation(operation: ConsoleOperation) -> OperationResultScopeRelation:
+    result = operation.result
+    if result is None:
+        return OperationResultScopeRelation.NO_RESULT
+    intent_project = getattr(operation.intent, "project_id", None)
+    if intent_project is not None and result.project_id != intent_project:
+        raise ValueError("operation summary result scope differs from submitted scope")
+    if operation.intent.action == ConsoleAction.CREATE_PROJECT and intent_project is None:
+        return OperationResultScopeRelation.CREATED_RESOURCE
+    if operation.intent.action == ConsoleAction.CREATE_REQUIREMENT:
+        return (
+            OperationResultScopeRelation.CREATED_RESOURCE
+            if result.delivery_id is not None
+            else OperationResultScopeRelation.UNVERIFIED_RESOURCE
+        )
+    if operation.delivery_id == result.delivery_id:
+        return OperationResultScopeRelation.SAME_RESOURCE
+    if operation.intent.action == ConsoleAction.DELETE_REQUIREMENT and result.delivery_id is None:
+        return OperationResultScopeRelation.NO_RESOURCE
+    return OperationResultScopeRelation.UNVERIFIED_RESOURCE
 
 
 class OperationSummaryScope(DomainModel):
@@ -97,6 +128,9 @@ class OperationSummary(DomainModel):
     team_id: TeamId
     project_id: ProjectId | None = None
     delivery_id: DeliveryId | None = None
+    result_scope_relation: OperationResultScopeRelation = OperationResultScopeRelation.NO_RESULT
+    result_project_id: ProjectId | None = None
+    result_delivery_id: DeliveryId | None = None
     action: ConsoleAction
     status: ConsoleOperationStatus
     sequence: Annotated[int, Field(ge=1)]
@@ -124,13 +158,18 @@ class OperationSummary(DomainModel):
 
     @classmethod
     def from_operation(cls, operation: ConsoleOperation) -> Self:
-        result = operation.result
+        original_result = operation.result
+        relation = _result_scope_relation(operation)
+        result = (
+            original_result
+            if relation
+            in {
+                OperationResultScopeRelation.SAME_RESOURCE,
+                OperationResultScopeRelation.CREATED_RESOURCE,
+            }
+            else None
+        )
         intent_project = getattr(operation.intent, "project_id", None)
-        if result is not None and (
-            (intent_project is not None and result.project_id != intent_project)
-            or (operation.delivery_id is not None and result.delivery_id != operation.delivery_id)
-        ):
-            raise ValueError("operation summary result scope differs from submitted scope")
         approval = next(
             (
                 (kind, value)
@@ -164,9 +203,16 @@ class OperationSummary(DomainModel):
         return cls(
             operation_id=operation.operation_id,
             team_id=operation.team_id,
-            project_id=getattr(operation.intent, "project_id", None)
-            or (result.project_id if result else None),
-            delivery_id=operation.delivery_id or (result.delivery_id if result else None),
+            project_id=intent_project or (result.project_id if result else None),
+            delivery_id=operation.delivery_id
+            or (
+                result.delivery_id
+                if result and relation == OperationResultScopeRelation.CREATED_RESOURCE
+                else None
+            ),
+            result_scope_relation=relation,
+            result_project_id=original_result.project_id if original_result else None,
+            result_delivery_id=original_result.delivery_id if original_result else None,
             action=operation.intent.action,
             status=operation.status,
             sequence=operation.sequence,

@@ -104,7 +104,8 @@ test("capability withdrawal preserves a recorded decision without calling it rej
       resolution: {resolution_kind: "RETRY_FROM_CHECKPOINT", proof_sha256: proof.proof_sha256}};
     operations = [{operation_id: "operation_resolved", status: "SUCCEEDED", updated_at: "2026-10-05T02:00:00Z",
       intent: {...bound, action: "HANDLE_DELIVERY_WAIT"},
-      result: {checkpoint_sha256: data.request.checkpoint_sha256, engineering_wait_handling: handling}}];
+      result: {project_id: data.request.project_id, delivery_id: data.request.id,
+        checkpoint_sha256: data.request.checkpoint_sha256, engineering_wait_handling: handling}}];
   })();`);
   h.context.info.supported_actions = [];
   await h.refresh();

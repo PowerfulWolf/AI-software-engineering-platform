@@ -1,0 +1,27 @@
+{
+  "name": "operation-result-scope-compat",
+  "title": "兼容合法的无资源和独立交付结果，不让历史摘要阻断全部需求",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "770c02e",
+  "allowlist": [
+    "src/ai_software_engineer/web_console/summary_models.py",
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/web_console/test_operation_summaries.py",
+    "tests/team_view/operation-summary-reading.test.cjs",
+    "tests/team_view/recovery-progress-summary.test.cjs",
+    "schemas/console-operation-summary.schema.json",
+    "schemas/console-operation-page.schema.json",
+    ".trellis/spec/core/operation-summaries.md",
+    ".trellis/spec/core/console-operation-summary-ui.md",
+    ".trellis/tasks/10-12-operation-result-scope-compat/",
+    "tests/team_view/operation-capabilities.test.cjs",
+    "tests/team_view/operation-progress.test.cjs"
+  ],
+  "constraints": [
+    "Incremental tests only; no MySQL or model",
+    "Isolated worktree; no production changes",
+    "Full Operation bytes and exact approval remain unchanged"
+  ],
+  "rollback": "Revert this read-only projection and UI commit, retaining all Operation history and approvals."
+}

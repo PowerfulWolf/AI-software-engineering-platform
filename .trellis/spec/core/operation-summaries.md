@@ -40,8 +40,36 @@ Each summary exposes `operation_id`, `team_id`, `project_id`, `delivery_id`, `ac
 `sequence`, `requested_at`, `updated_at`, `operation_sha256`, `error_code`, `error_summary`,
 `result_stage`, `next_step`, `summary`, `approval_kind` and `has_details=true`. Stage is at most
 128 characters; reading texts at most 512, with an explicit ellipsis when shortened. Full reasons
-remain in single-operation GET. Scope identity uses submitted Project/Requirement, or the real result
-for a newly created identity; conflicting submitted/result scope and foreign Team reject before filtering.
+remain in single-operation GET. Scope identity uses submitted Project/Requirement. Only
+CREATE_PROJECT and CREATE_REQUIREMENT may supply a newly created identity from their result.
+Foreign Project and Team still reject before filtering; a different delivery in the same
+Project is an independently scoped historical result, not evidence of parent/child membership.
+
+`result_scope_relation` is a typed enum: `NO_RESULT`, `SAME_RESOURCE`,
+`CREATED_RESOURCE`, `NO_RESOURCE`, `UNVERIFIED_RESOURCE`. Independent
+`result_project_id`/`result_delivery_id` retain exact result locators. A delivery-bound
+DELETE_REQUIREMENT returning no delivery is the known `NO_RESOURCE` producer;
+any other delivery-bound result lacking its resource is `UNVERIFIED_RESOURCE`.
+Both relations retain neutral intent/command metadata but publish no result stage,
+checkpoint, approval, result-derived task/work, baseline, diagnostic or next-step
+semantics. Full GET remains complete and immutable for explicitly scoped audit.
+The additive reading fields keep `v0.1`: new clients independently scope complete
+records from their real intent/result; absent fields from old summary servers cannot
+authorize an unrelated full result. Full Operation schema and hash chain are unchanged.
+
+| Scope scenario | Summary and client behavior |
+| --- | --- |
+| Good: actual DELETE producer, result delivery absent | owner remains intent; NO_RESOURCE, HTTP 200/304; neutral command-only history |
+| Good: CREATE has no new submitted identity | CREATED_RESOURCE uses the actual result identity; scoped full hydration matches |
+| Base: same resource or older server without additive locators | normal full detail and approvals still require exact result/checkpoint and fresh gates |
+| Bad: same Project different or missing non-DELETE delivery result | UNVERIFIED_RESOURCE, no result semantic locators/current authority; explicit separate historical audit |
+| Bad: foreign Project/Team, broken bytes/digest/predecessor | whole read fails closed even for another filter; no 304 or partially omitted history |
+
+Regression assertions live in `tests/web_console/test_operation_summaries.py` and
+`tests/team_view/{operation-summary-reading,recovery-progress-summary}.test.cjs`.
+The real deletion result must originate from ManagerConsoleAdapter, pass the actual
+FileConsoleOperationStore hash-chain replay and HTTP endpoint, and preserve complete
+GET/files. Hydration and historical rendering tests execute the shipped app.js.
 
 Bounded locator fields `result_checkpoint_sha256`, `intent_checkpoint_sha256`,
 `submitted_approval_sha256`, `submitted_approval_kind` (plan/scope/repair), `intent_plan_sha256`,

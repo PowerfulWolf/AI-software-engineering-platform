@@ -114,6 +114,97 @@ const full = source => ({...source, schema_version:"v0.1", intent:{action:source
 const manifest = () => ({schema_version:"v0.2", team_id:"team_current", delivery_ready:true,
   operation_contract_version:6, supported_actions:["CONTINUE_DELIVERY"], operation_summary_contract_version:"v0.1"});
 
+test("hydrating an independent same-Project result cannot supply a current approval", async () => {
+  const h = harness(), source = summary(1, {result_scope_relation:"UNVERIFIED_RESOURCE",
+    result_project_id:"project_current", result_delivery_id:"request_independent",
+    result_checkpoint_sha256:null, intent_checkpoint_sha256:digest("b"), summary:null});
+  const value = full(source);
+  value.result.project_id = "project_current";
+  value.result.delivery_id = "request_independent";
+  value.result.checkpoint_sha256 = digest("d");
+  h.replies.push({body:page([source])}, {body:value});
+  await h.run("loadCurrentOperationDetails()");
+  h.run("operationsAvailable=true");
+  assert.equal(h.run('latestApproval("request_current", "' + digest("b") + '")'), null);
+  assert.equal(h.run("recordedOperationOutcome(operationReadingRecords()[0])"), null);
+  assert.equal(h.run("operationNeedsHumanAttention(operationReadingRecords()[0])"), false);
+  h.context.foreignApproval = JSON.stringify(value.result.approval);
+  h.run('consoleAvailable=true; consoleDeliveryReady=true; consoleOperationContractVersion=6; consoleSupportedActions=["CONTINUE_DELIVERY"]; renderDetail=()=>{}; renderNotification=()=>{}');
+  const decision = await h.run('submitRecoveryApprovalOperation({action:"CONTINUE_DELIVERY", project_id:"project_current", delivery_id:"request_current", expected_checkpoint_sha256:"' + digest("b") + '", approved_plan_sha256:"' + digest("e") + '"}, foreignApproval)');
+  assert.equal(decision, null);
+  assert.equal(h.requests.some(request => request.options?.method === "POST"), false);
+});
+
+test("old summary locators cannot authorize a hydrated independent full result", async () => {
+  const h = harness(), source = summary();
+  const value = full(source);
+  value.result.project_id = "project_current";
+  value.result.delivery_id = "request_independent";
+  h.replies.push({body:page([source])}, {body:value});
+  await h.run("loadCurrentOperationDetails()");
+  h.run("operationsAvailable=true");
+  assert.equal(h.run('latestApproval("request_current", "' + digest("b") + '")'), null);
+  assert.equal(h.run("recordedOperationOutcome(operationReadingRecords()[0])"), null);
+});
+
+test("foreign Project and forged result-relation metadata refuse complete hydration", async () => {
+  for (const wrong of ["project", "relation", "delivery"]) {
+    const h = harness(), source = summary(1, {result_scope_relation:"SAME_RESOURCE",
+      result_project_id:"project_current", result_delivery_id:"request_current"});
+    const value = full(source); value.result.project_id = "project_current";
+    if (wrong === "project") value.result.project_id = "project_foreign";
+    if (wrong === "relation") value.result.delivery_id = "request_independent";
+    if (wrong === "delivery") source.result_delivery_id = "request_independent";
+    h.replies.push({body:page([source])}, {body:value});
+    await assert.rejects(h.run("loadCurrentOperationDetails()"));
+    assert.equal(h.run("operations.length"), 0);
+    assert.equal(h.requests.some(request => request.options?.method === "POST"), false);
+  }
+});
+
+test("independent summary results cannot smuggle current stage or approval locators", async () => {
+  for (const mutation of [{result_stage:"DONE"}, {approval_kind:"coder_recovery"},
+    {baseline_plan_sha256:digest("e")}, {next_step:"继续原需求"}, {has_baseline_binding:true},
+    {result_scope_relation:"NO_RESOURCE", action:"CONTINUE_DELIVERY", result_delivery_id:null}]) {
+    const h = harness(), source = summary(1, {result_scope_relation:"UNVERIFIED_RESOURCE",
+      result_project_id:"project_current", result_delivery_id:"request_independent",
+      result_checkpoint_sha256:null, summary:null, ...mutation});
+    h.replies.push({body:page([source])});
+    await assert.rejects(h.run('readOperationSummaryPage("project_current", "request_current")'));
+    assert.equal(h.run("operationSummaryPages.size"), 0);
+  }
+});
+
+test("only deletion has a command-only no-resource result; other missing resources remain unverified", async () => {
+  for (const [action, relation] of [["DELETE_REQUIREMENT", "NO_RESOURCE"], ["CONTINUE_DELIVERY", "UNVERIFIED_RESOURCE"]]) {
+    const h = harness(), source = summary(1, {action, result_scope_relation:relation,
+      result_project_id:"project_current", result_delivery_id:null, result_checkpoint_sha256:null,
+      intent_checkpoint_sha256:digest("b"), summary:null});
+    const value = full(source); value.result = {project_id:"project_current", stage:"REQUIREMENT_DELETED", next_action:"历史结果"};
+    h.replies.push({body:page([source])}, {body:value});
+    await h.run("loadCurrentOperationDetails()");
+    h.run("operationsAvailable=true");
+    assert.equal(h.run("operationResultScopeRelation(operations[0])"), relation);
+    assert.equal(h.run("operationResult(operations[0])"), null);
+    assert.equal(h.run("recordedOperationOutcome(operations[0])"), null);
+  }
+});
+
+test("a real create-project result supplies its new identity for scoped full history", async () => {
+  const h = harness(), source = summary(1, {action:"CREATE_PROJECT", delivery_id:null,
+    result_scope_relation:"CREATED_RESOURCE", result_project_id:"project_current", result_delivery_id:null,
+    result_checkpoint_sha256:null, summary:null});
+  const value = full(source); value.intent = {action:"CREATE_PROJECT", name:"New Project"};
+  value.result = {project_id:"project_current", stage:"CREATED", next_action:"查看项目"};
+  const scoped = page([source], {scope:{project_id:"project_current", delivery_id:null}});
+  h.replies.push({body:scoped}, {body:value});
+  await h.run('readOperationSummaryPage("project_current", null)');
+  h.context.source = source;
+  const record = await h.run('readFullOperation(source, {fresh:true})');
+  assert.equal(record, value);
+  assert.equal(h.run('operationProject(operationDetailCache.get(source.operation_id).value)'), "project_current");
+});
+
 test("the shipped refresh uses summary polling and loads only the current exact full record", async () => {
   const h = harness(), source = summary();
   h.replies.push({body:manifest()}, {body:page([source], {scope:{project_id:"project_current", delivery_id:null}})},
