@@ -40,6 +40,19 @@ v0.1 的 `FakeAgentAdapter` 不渲染 prompt、不访问网络或 Git，而是�
 system/user 两条消息。模型输出必须是一个完整 Artifact envelope；adapter 在进入
 Orchestrator 前完成 JSON、Schema、role/kind、身份和 candidate revision 校验。
 
+`RequestPromptBuilder` 与 `ContextPromptBuilder` 对有非空 `write_paths` 的 Coder/QA 在
+system 消息加入同一 `NEGATIVE_CREDENTIAL_TEST_GUIDANCE`。负向 credential/fence-token
+测试必须从独立且获当前权限允许的 fixture 获取动态生成的 token/reference；非空未知 token
+必须与合法 fixture token 分离，并保留原负向测试意图与已有非空未知/空值/过期断言（适用时），
+不引入新的过期验收要求。禁止在源码或测试嵌入固定疑似凭证
+字面量、编码/拼接规避扫描、削弱断言、跳过测试或放宽机器权限/capture policy。无法在原
+权限内合法构造时，使用当前角色输出 Schema 的既有适用字段明确报告 blocked reason，不得
+宣称未验证的验收标准通过。只读 Coder/QA 与其它角色不收到修改源码指导；原 permissions
+不变。native adapter 消费同一 PromptPayload，直接继承此指导，不维护第二份规则。
+
+这项指导不建立 public sentinel 或扫描例外；测试目录、短值、负向断言或 `replace` 调用
+不能证明字面量无秘密，完整源码/patch 仍按现有敏感信息检查规则核验。
+
 provider 配置示例（endpoint 可以是 `https://api.openai.com/v1` 或完整
 `.../chat/completions`）：
 

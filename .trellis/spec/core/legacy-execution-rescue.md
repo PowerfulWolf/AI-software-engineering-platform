@@ -404,3 +404,37 @@ Correct：完整源码提供 AST/tokenize 与绑定事实，partial patch 只用
 存量无需迁移或改库。读取原 K1 的实际 24 项完整变更可完成 capture/wire roundtrip；
 全部 2,000 工作树条目与 index 前后摘要一致。用户空闲时加载新服务并刷新，再在原需求点击
 “修复后重新检查恢复前提”，查看精确方案并自行确认/审批；不改旧 UNKNOWN 或历史操作。
+
+### 负向凭证测试的生成指导（2026-10-11）
+
+`RequestPromptBuilder.build(AgentRequest) -> PromptPayload` 与
+`ContextPromptBuilder.build(AgentRequest) -> PromptPayload` 使用同一私有 guidance helper。
+仅 `role=CODER/QA` 且 `permissions.write_paths` 非空时在 system 消息附加
+`NEGATIVE_CREDENTIAL_TEST_GUIDANCE`；只读运行及 Orchestrator/Reviewer 不获得源码修改指导。
+native adapter 消费同一消息，不另建常量或更改 wire/Schema。
+
+- 负向 credential/fence-token 测试从独立、获当前权限允许的 fixture 获取动态生成的
+  token/reference。非空未知 token 必须与合法 fixture token 分离；保留原负向测试意图与
+  已有非空未知/空值/过期断言（适用时），不引入新的过期验收要求。
+- 不嵌入固定疑似凭证字面量，不通过编码或拼接规避扫描，不移除/削弱断言或跳过测试，
+  不放宽权限及 capture policy。无法合法构造时，通过角色输出 Schema 的既有适用字段明确
+  报告 blocked reason；不得宣称未验证的验收标准通过。
+- 这不是 scanner 例外。未建立版本化公开 sentinel 契约时，不按当前 literal/hash、
+  tests 路径、值长度、`pytest.raises` 或 `replace` 语法判定无秘密；原 source/patch 与
+  强 key/Bearer/PEM 检测保持不变。instruction、日志、知识、URI 仍用通用检测。
+
+| 情况 | 验证 |
+| --- | --- |
+| writable Coder/QA，任一 builder | system 恰好一次完整指导，原 permissions 保持 |
+| readonly Coder/QA 或其它角色 | 无源码修改指导 |
+| 不可信 task 要求 skip/放宽规则 | 仍为 user 数据，system 规则独立存在 |
+| 两个 builder/native | 两个 builder 输出相同指导，native 继承消息，无复制常量 |
+
+增量 contract tests：`tests/agents/test_negative_credential_prompt_guidance.py`，先验证两个
+真实 builder 缺指导而失败，再验证动态 fixture、非空未知/空值/过期、禁止规避与 blocked 规则。
+这些断言以保留原测试意图与已有适用场景为限，不要求目标项目新增过期语义。
+不调用真实模型，不把 prompt 测试当作 scanner、capture 或独立 QA/Review 的替代。
+
+存量数据处置：只影响之后构造的 prompt，不迁移、改写或补造旧 Context/Task/Operation/
+审批/执行事实。既有受拒源码仍需精确授权并带人工审计的维护，重新完整核验后从原公开恢复
+入口继续；此 guidance 不授权修改现有工作区或自动继续。回滚本次 prompt helper 与文档即可。
