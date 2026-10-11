@@ -146,6 +146,13 @@ class NativeCoderContinuation:
         self._prepared: set[str] = set()
 
     def prepare(self, request: AgentRequest, root: Path) -> str | None:
+        return self._prepare(request, root, publish=True)
+
+    def preview(self, request: AgentRequest, root: Path) -> str | None:
+        """Validate full frozen inputs without writing the one-use admission."""
+        return self._prepare(request, root, publish=False)
+
+    def _prepare(self, request: AgentRequest, root: Path, *, publish: bool) -> str | None:
         if request.role is not AgentRole.CODER:
             return None
         task = self._current_task()
@@ -214,6 +221,25 @@ class NativeCoderContinuation:
                 self._uncertain(task, "已发布的接续准入不能绑定新的执行或租约。现场已保留。")
         elif len(prior_admissions) >= policy.max_continuations:
             raise InterruptionBudgetExhausted("frozen continuation capability is exhausted")
+        if publish:
+            self._publish_admission(request, receipt, task, claim, existing)
+        return (
+            "平台按组织工程授权核验了上次中断的草稿。此次是新的独立执行记录。\n"
+            "以下完整补丁是已核验的既有工作; 不是 CoderProgress、候选提交或验收结论。\n"
+            "请在原范围和权限内继续。不得修改规范、直接提交或宣称未经独立验收的通过。\n"
+            f"中断回执: {receipt.receipt_sha256}\n完整补丁:\n{receipt.capture.patch}"
+        )
+
+    def _publish_admission(
+        self,
+        request: AgentRequest,
+        receipt: ExecutionInterruptionReceipt,
+        task: Task,
+        claim: QueueClaim,
+        existing: ContinuationAdmission | None,
+    ) -> None:
+        policy = task.interruption_continuation_policy
+        assert policy is not None
         record = ContinuationAdmission.create(
             schema_version=policy.schema_version,
             scope=self._scope,
@@ -232,12 +258,6 @@ class NativeCoderContinuation:
             self._verify_workspace(receipt, request.permissions, self._denied(task))
             self._store.put_admission(record)
         self._prepared.add(request.run_id)
-        return (
-            "平台按组织工程授权核验了上次中断的草稿。此次是新的独立执行记录。\n"
-            "以下完整补丁是已核验的既有工作; 不是 CoderProgress、候选提交或验收结论。\n"
-            "请在原范围和权限内继续。不得修改规范、直接提交或宣称未经独立验收的通过。\n"
-            f"中断回执: {receipt.receipt_sha256}\n完整补丁:\n{receipt.capture.patch}"
-        )
 
     def started(self, request: AgentRequest, root: Path) -> WorkspaceMutationInventory | None:
         if request.role is not AgentRole.CODER:

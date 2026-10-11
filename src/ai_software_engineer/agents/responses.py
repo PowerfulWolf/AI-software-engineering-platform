@@ -19,6 +19,7 @@ from ai_software_engineer.agents.continuation import (
     ContinuationExecutionUncertain,
     InterruptionAdmissionRejected,
     InterruptionObservation,
+    continuation_preview,
 )
 from ai_software_engineer.agents.diagnostics import http_error_detail, safe_diagnostic
 from ai_software_engineer.agents.execution import (
@@ -30,6 +31,7 @@ from ai_software_engineer.agents.json_schema import (
     bind_coder_progress_sequence,
     strict_output_schema,
 )
+from ai_software_engineer.agents.model_input import BoundModelInputBudget
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
     AgentFailure,
@@ -122,6 +124,14 @@ class _ExecutionWindow:
         return remaining
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedResponsesInput:
+    request: AgentRequest
+    input_items: tuple[WirePayload, ...]
+    body: bytes
+    continuation_prompt: str | None
+
+
 class _WindowBoundCommandExecutor:
     """Keep the real restricted executor within the invocation's remaining window."""
 
@@ -162,6 +172,7 @@ class ResponsesAgentAdapter:
         execution_guard: ExecutionGuard | None = None,
         initial_workspace_admission: InitialWorkspaceAdmission | None = None,
         interruption_control: CoderInterruptionControl | None = None,
+        input_budget: BoundModelInputBudget | None = None,
     ) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
@@ -181,6 +192,8 @@ class ResponsesAgentAdapter:
         if interruption_control is not None and agent.role is not AgentRole.CODER:
             raise ResponsesAgentConfigurationError("interruption control is Coder-only")
         self._interruption_control = interruption_control
+        self._input_budget = input_budget
+        self._prepared_inputs: dict[str, _PreparedResponsesInput] = {}
         self._workspace_root = root
         self._endpoint = _normalize_endpoint(endpoint)
         self._api_key = api_key
@@ -203,6 +216,38 @@ class ResponsesAgentAdapter:
         self._requests: dict[str, AgentRequest] = {}
         self._results: dict[str, AgentResult] = {}
 
+    def prepare_input(self, request: AgentRequest) -> None:
+        """Freeze the first serialized request, including schemas and attachments."""
+        prior = self._requests.get(request.run_id)
+        if prior is not None:
+            if prior != request:
+                raise AgentRequestConflict("completed Responses input request changed")
+            return
+        existing = self._prepared_inputs.get(request.run_id)
+        if existing is not None:
+            if existing.request != request:
+                raise AgentRequestConflict("prepared Responses input request changed")
+            return
+        if self._execution_guard is not None:
+            self._execution_guard.check()
+        preview = continuation_preview(self._interruption_control, request, self._workspace_root)
+        items = self._input_items(request, preview)
+        body = _request_body(
+            self._model,
+            items,
+            request.role,
+            reasoning_effort=self._reasoning_effort,
+            attempt=request.attempt,
+        )
+        if self._input_budget is not None:
+            self._input_budget.check(request, body.decode("utf-8"))
+        self._prepared_inputs[request.run_id] = _PreparedResponsesInput(
+            request, tuple(items), body, preview
+        )
+
+    def discard_prepared_input(self, request: AgentRequest) -> None:
+        self._prepared_inputs.pop(request.run_id, None)
+
     def run(self, request: AgentRequest) -> AgentResult:
         prior = self._requests.get(request.run_id)
         if prior is not None:
@@ -218,11 +263,27 @@ class ResponsesAgentAdapter:
         try:
             if self._execution_guard is not None:
                 self._execution_guard.check()
+            prepared = self._prepared_inputs.get(request.run_id)
+            if prepared is not None:
+                if (
+                    prepared.request != request
+                    or prepared.continuation_prompt
+                    != continuation_preview(
+                        self._interruption_control, request, self._workspace_root
+                    )
+                ):
+                    raise WorkspacePolicyError("prepared Responses input or continuation changed")
+                if self._input_budget is not None:
+                    self._input_budget.check(request, prepared.body.decode("utf-8"))
             window.continuation_prompt = (
                 self._interruption_control.prepare(request, self._workspace_root)
                 if self._interruption_control is not None
                 else None
             )
+            if prepared is not None and window.continuation_prompt != prepared.continuation_prompt:
+                raise WorkspacePolicyError(
+                    "admitted continuation differs from prepared Responses input"
+                )
             _validate_request_binding(
                 request,
                 self._agent,
@@ -317,9 +378,53 @@ class ResponsesAgentAdapter:
                 duration_ms=_elapsed_ms(started),
                 initial_inventory=initial_inventory,
             )
+        finally:
+            self.discard_prepared_input(request)
         self._requests[request.run_id] = request
         self._results[request.run_id] = result
         return result
+
+    def _input_items(
+        self, request: AgentRequest, continuation_prompt: str | None
+    ) -> list[WirePayload]:
+        prompt = self._prompt_builder.build(request)
+        input_items: list[WirePayload] = [
+            {
+                "role": message.role,
+                "content": cast(
+                    JsonValue,
+                    [{"type": "input_text", "text": message.content}],
+                ),
+            }
+            for message in prompt.messages
+        ]
+        if continuation_prompt is not None:
+            input_items.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": continuation_prompt,
+                        }
+                    ],
+                }
+            )
+        for attachment in prompt.images:
+            input_items.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": attachment.label},
+                        {
+                            "type": "input_image",
+                            "image_url": attachment.image.data_url(),
+                            "detail": "high",
+                        },
+                    ],
+                }
+            )
+        return input_items
 
     def _failure_result(
         self,
@@ -433,43 +538,12 @@ class ResponsesAgentAdapter:
                 window,
             ),
         )
-        prompt = self._prompt_builder.build(request)
-        input_items: list[WirePayload] = [
-            {
-                "role": message.role,
-                "content": cast(
-                    JsonValue,
-                    [{"type": "input_text", "text": message.content}],
-                ),
-            }
-            for message in prompt.messages
-        ]
-        if window.continuation_prompt is not None:
-            input_items.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": window.continuation_prompt,
-                        }
-                    ],
-                }
-            )
-        for attachment in prompt.images:
-            input_items.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": attachment.label},
-                        {
-                            "type": "input_image",
-                            "image_url": attachment.image.data_url(),
-                            "detail": "high",
-                        },
-                    ],
-                }
-            )
+        prepared = self._prepared_inputs.pop(request.run_id, None)
+        input_items = (
+            list(prepared.input_items)
+            if prepared is not None
+            else self._input_items(request, window.continuation_prompt)
+        )
         tool_calls = 0
         latest_usage: AgentUsage | None = None
         if self._interruption_control is not None:
@@ -478,12 +552,16 @@ class ResponsesAgentAdapter:
         for turn in range(1, self._max_turns + 1):
             if self._execution_guard is not None:
                 self._execution_guard.check()
-            body = _request_body(
-                self._model,
-                input_items,
-                request.role,
-                reasoning_effort=self._reasoning_effort,
-                attempt=request.attempt,
+            body = (
+                prepared.body
+                if turn == 1 and prepared is not None
+                else _request_body(
+                    self._model,
+                    input_items,
+                    request.role,
+                    reasoning_effort=self._reasoning_effort,
+                    attempt=request.attempt,
+                )
             )
             response = self._transport.post(
                 self._endpoint,

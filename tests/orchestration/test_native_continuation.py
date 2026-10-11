@@ -327,7 +327,16 @@ def test_stopped_legal_draft_continues_same_task_branch_with_one_work_charge(
         }
     )
     reopened = fixture.service()
+    before_preview = {str(path): path.read_bytes() for path in fixture.store_root.rglob("*.json")}
+    preview = reopened.preview(replacement, root)
+    assert preview is not None and "VALUE = 2" in preview
+    assert not reopened._prepared and not reopened._starts
+    assert fixture.store.admissions_for_task(current.id) == ()
+    assert {
+        str(path): path.read_bytes() for path in fixture.store_root.rglob("*.json")
+    } == before_preview
     prompt = reopened.prepare(replacement, root)
+    assert prompt == preview
     assert prompt is not None and "VALUE = 2" in prompt
     admission = fixture.store.get_admission(current.id)
     assert admission.new_request == replacement

@@ -15,6 +15,7 @@ from typing import Annotated, Protocol, Self
 
 from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstraints, model_validator
 
+from ai_software_engineer.agents.model_input import ModelInputPreparation
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
     AgentRequest,
@@ -289,6 +290,27 @@ class FallbackAgentAdapter:
         self._results: dict[RunId, AgentResult] = {}
 
     def run(self, request: AgentRequest) -> AgentResult:
+        try:
+            return self._run(request)
+        finally:
+            self.discard_prepared_input(request)
+
+    def prepare_input(self, request: AgentRequest) -> None:
+        """Bound all possible frozen route inputs without running any provider."""
+        try:
+            for route in self._routes:
+                if isinstance(route.adapter, ModelInputPreparation):
+                    route.adapter.prepare_input(request)
+        except BaseException:
+            self.discard_prepared_input(request)
+            raise
+
+    def discard_prepared_input(self, request: AgentRequest) -> None:
+        for route in self._routes:
+            if isinstance(route.adapter, ModelInputPreparation):
+                route.adapter.discard_prepared_input(request)
+
+    def _run(self, request: AgentRequest) -> AgentResult:
         prior = self._requests.get(request.run_id)
         if prior is not None:
             if prior != request:

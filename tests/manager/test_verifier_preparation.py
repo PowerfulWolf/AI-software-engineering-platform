@@ -11,6 +11,7 @@ from typing import Never, cast
 import pytest
 
 from ai_software_engineer.agents import AgentRequest
+from ai_software_engineer.context import ContextBudgetExceeded
 from ai_software_engineer.domain import AgentRole, Task, TaskStatus
 from ai_software_engineer.domain.native_verification import (
     NativeVerificationWaiting,
@@ -124,6 +125,48 @@ def _marker(records: KnowledgeRecordStore) -> VerifierPreparationCheckpoint:
     (marker,) = records.list("verifier-preparations", VerifierPreparationCheckpoint)
     marker.validate_integrity()
     return marker
+
+
+def test_final_input_overflow_preserves_finished_verification_before_zero_model_starts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path)
+    resources, executions, _ = _fake_ports(monkeypatch, fixture)
+    gate, delegate, failure, records = _gate(fixture, tmp_path)
+    discarded: list[AgentRequest] = []
+
+    def overflow(request: AgentRequest) -> Never:
+        assert _marker(records).observation.native_execution_state == "FINISHED"
+        raise ContextBudgetExceeded("final provider input exceeds bound")
+
+    gate.prepare_input = overflow
+    gate.discard_prepared_input = discarded.append
+    with pytest.raises(ContextBudgetExceeded):
+        gate.prepare(fixture.request)
+    assert delegate.calls == 0 and not failure.events
+    assert len(resources) == len(executions) == 1
+    assert _marker(records).result == "READY"
+    assert _marker(records).observation.native_execution_state == "FINISHED"
+    assert discarded == [fixture.request]
+
+
+def test_historical_model_start_skips_final_input_preparation_and_native_tests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path)
+    resources, executions, _ = _fake_ports(monkeypatch, fixture)
+    gate, delegate, _, records = _gate(fixture, tmp_path, delegate=_Delegate(started=True))
+
+    def forbidden(request: AgentRequest) -> Never:
+        raise AssertionError("historical start must directly delegate replay/uncertainty")
+
+    gate.prepare_input = forbidden
+    gate.discard_prepared_input = forbidden
+    assert gate.prepare(fixture.request) == fixture.request
+    assert delegate.calls == 1 and not resources and not executions
+    assert records.list("verifier-preparations", VerifierPreparationCheckpoint) == ()
 
 
 @pytest.mark.parametrize(

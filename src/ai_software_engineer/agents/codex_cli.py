@@ -27,6 +27,7 @@ from ai_software_engineer.agents.continuation import (
     ContinuationExecutionUncertain,
     InterruptionAdmissionRejected,
     InterruptionObservation,
+    continuation_preview,
     native_stop_recorder,
 )
 from ai_software_engineer.agents.execution import ExecutionGuard, NativeProcessStop, execution_scope
@@ -34,6 +35,7 @@ from ai_software_engineer.agents.json_schema import (
     bind_coder_progress_sequence,
     strict_output_schema,
 )
+from ai_software_engineer.agents.model_input import BoundModelInputBudget
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
     AgentFailure,
@@ -169,6 +171,25 @@ class _NativePythonTooling:
     python: Path | None
     source_paths: tuple[Path, ...]
     dependency_paths: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedNativeInput:
+    request: AgentRequest
+    resources: ExitStack
+    compiled_prompt: str
+    continuation_prompt: str | None
+    sandbox_arguments: tuple[str, ...]
+    image_arguments: tuple[str, ...]
+    schema_path: Path
+    schema_content: str
+    output_path: Path
+    environment: Mapping[str, str]
+
+    @property
+    def budget_content(self) -> str:
+        """All platform-owned text inputs; CLI implicit system material is unobserved."""
+        return self.compiled_prompt + "\n" + self.schema_content
 
 
 class CodexCommandRunner(Protocol):
@@ -461,6 +482,7 @@ class CodexCliAgentAdapter:
         execution_guard: ExecutionGuard | None = None,
         candidate_source: BoundCandidateSource | None = None,
         interruption_control: CoderInterruptionControl | None = None,
+        input_budget: BoundModelInputBudget | None = None,
     ) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
@@ -482,6 +504,8 @@ class CodexCliAgentAdapter:
         self._prompt_builder = prompt_builder or RequestPromptBuilder()
         self._candidate_source = candidate_source
         self._interruption_control = interruption_control
+        self._input_budget = input_budget
+        self._prepared_inputs: dict[str, _PreparedNativeInput] = {}
         self._executable = executable
         self._proxy_overrides = codex_cli_proxy_overrides(proxy_base_url, proxy_api_key_env)
         self._reasoning_effort = reasoning_effort
@@ -498,6 +522,30 @@ class CodexCliAgentAdapter:
         )
         self._requests: dict[str, AgentRequest] = {}
         self._results: dict[str, AgentResult] = {}
+
+    def prepare_input(self, request: AgentRequest) -> None:
+        """Compile once before durable model start; no admission or subprocess launch."""
+        prior = self._requests.get(request.run_id)
+        if prior is not None:
+            if prior != request:
+                raise AgentRequestConflict("completed native input request changed")
+            return
+        existing = self._prepared_inputs.get(request.run_id)
+        if existing is not None:
+            if existing.request != request:
+                raise AgentRequestConflict("prepared native input request changed")
+            return
+        if self._execution_guard is not None:
+            self._execution_guard.check()
+        preview = continuation_preview(self._interruption_control, request, self._workspace_root)
+        self._prepared_inputs[request.run_id] = self._compile_input(
+            request, preview, enforce_final_budget=True
+        )
+
+    def discard_prepared_input(self, request: AgentRequest) -> None:
+        prepared = self._prepared_inputs.pop(request.run_id, None)
+        if prepared is not None:
+            prepared.resources.close()
 
     def run(self, request: AgentRequest) -> AgentResult:
         prior = self._requests.get(request.run_id)
@@ -559,6 +607,8 @@ class CodexCliAgentAdapter:
                 transient=False,
                 duration_ms=_elapsed_ms(started),
             )
+        finally:
+            self.discard_prepared_input(request)
         self._requests[request.run_id] = request
         self._results[request.run_id] = result
         return result
@@ -574,6 +624,21 @@ class CodexCliAgentAdapter:
         )
         if initial_head != expected_head:
             raise CodexCliError("worktree HEAD does not match AgentRequest source revision")
+        prepared = self._prepared_inputs.get(request.run_id)
+        if prepared is not None:
+            if prepared.request != request or prepared.continuation_prompt != continuation_preview(
+                self._interruption_control, request, self._workspace_root
+            ):
+                raise WorkspacePolicyError("prepared native input or continuation changed")
+            if self._input_budget is not None:
+                self._input_budget.check(request, prepared.budget_content)
+            try:
+                if prepared.schema_path.read_text(encoding="utf-8") != prepared.schema_content:
+                    raise WorkspacePolicyError("prepared native output schema changed")
+            except OSError as error:
+                raise WorkspacePolicyError(
+                    "prepared native output schema is unavailable"
+                ) from error
         try:
             continuation_prompt = (
                 self._interruption_control.prepare(request, self._workspace_root)
@@ -590,6 +655,8 @@ class CodexCliAgentAdapter:
                 transient=False,
                 duration_ms=_elapsed_ms(started),
             )
+        if prepared is not None and continuation_prompt != prepared.continuation_prompt:
+            raise WorkspacePolicyError("admitted continuation differs from prepared native input")
         if continuation_prompt is not None:
             pass  # The trusted control has checked the exact one-use admission.
         elif (
@@ -613,83 +680,16 @@ class CodexCliAgentAdapter:
                 for path in initial_changed:
                     policy.authorize_write(path)
 
-        prompt = self._prompt_builder.build(request)
-        qa_runner = _manager_provisioned_qa_runner(request, self._workspace_root)
-        coder_tooling = _manager_provisioned_coder_tooling(request, self._workspace_root)
+        prepared = self._prepared_inputs.pop(request.run_id, None) or self._compile_input(
+            request, continuation_prompt
+        )
         verifier = request.role in {AgentRole.QA, AgentRole.REVIEWER}
-        invocation_environment = dict(self._environment)
-        if qa_runner is not None:
-            invocation_environment["ASE_PROJECT_PYTEST"] = str(qa_runner)
-        with (
-            tempfile.TemporaryDirectory(prefix="ase-codex-") as temporary,
-            ExitStack() as tooling_scope,
-        ):
-            temporary_root = Path(temporary).resolve(strict=True)
-            sandbox_arguments: tuple[str, ...] = ("--sandbox", _sandbox_mode(request.role))
-            if coder_tooling is not None and coder_tooling.python is not None:
-                tooling_root = Path(
-                    tooling_scope.enter_context(
-                        tempfile.TemporaryDirectory(prefix="ase-codex-tools-")
-                    )
-                ).resolve(strict=True)
-                sandbox_arguments = _coder_tooling_sandbox_arguments(
-                    self._workspace_root, temporary_root, tooling_root, coder_tooling
-                )
-                scratch = temporary_root / "scratch"
-                cache = temporary_root / "uv-cache"
-                mypy_cache = temporary_root / "mypy-cache"
-                scratch.mkdir(mode=0o700)
-                cache.mkdir(mode=0o700)
-                mypy_cache.mkdir(mode=0o700)
-                coder_tooling = _prepare_coder_python_launchers(
-                    coder_tooling, tooling_root, mypy_cache_root=mypy_cache
-                )
-                invocation_environment["TMPDIR"] = str(scratch)
-                invocation_environment["UV_CACHE_DIR"] = str(cache)
-                invocation_environment["MYPY_CACHE_DIR"] = str(mypy_cache)
-            if coder_tooling is not None:
-                if coder_tooling.pytest is not None:
-                    invocation_environment["ASE_PROJECT_PYTEST"] = str(coder_tooling.pytest)
-                if coder_tooling.python is not None:
-                    invocation_environment["ASE_PROJECT_PYTHON"] = str(coder_tooling.python)
-                invocation_environment["PYTHONPATH"] = os.pathsep.join(
-                    str(path) for path in coder_tooling.source_paths
-                )
-                invocation_environment["PYTHONDONTWRITEBYTECODE"] = "1"
-            compiled_prompt = _compile_prompt(
-                request,
-                prompt.to_messages(include_images=False),
-                manager_qa_runner=qa_runner,
-                manager_coder_tooling=coder_tooling,
-            )
-            if continuation_prompt is not None:
-                compiled_prompt += continuation_prompt
-            if verifier and self._candidate_source is None:
-                compiled_prompt += candidate_read_snapshot(
-                    self._workspace_root, source_revision, request.permissions
-                )
-            schema_path = temporary_root / "output-schema.json"
-            output_path = temporary_root / "last-message.json"
-            schema_path.write_text(
-                json.dumps(
-                    _artifact_schema(request.role, attempt=request.attempt), ensure_ascii=False
-                ),
-                encoding="utf-8",
-            )
-            image_arguments: list[str] = []
-            for index, attachment in enumerate(prompt.images, start=1):
-                image_path = temporary_root / f"evidence-{index}.png"
-                image_path.write_bytes(attachment.image.bytes())
-                image_path.chmod(0o600)
-                image_arguments.extend(("--image", str(image_path)))
-                compiled_prompt += (
-                    f"\nAttached image {index}: {attachment.label}; "
-                    f"PNG SHA-256 {attachment.image.sha256}\n"
-                )
-            if verifier and self._candidate_source is not None:
-                compiled_prompt = self._candidate_source.append(
-                    request, self._workspace_root, compiled_prompt
-                )
+        with prepared.resources:
+            compiled_prompt = prepared.compiled_prompt
+            sandbox_arguments = prepared.sandbox_arguments
+            image_arguments = prepared.image_arguments
+            schema_path, output_path = prepared.schema_path, prepared.output_path
+            invocation_environment = prepared.environment
             try:
                 failed_invocation_before = _capture_failed_invocation_snapshot(self._workspace_root)
                 if failed_invocation_before.head_revision != initial_head:
@@ -914,6 +914,107 @@ class CodexCliAgentAdapter:
                 transient=False,
                 duration_ms=_elapsed_ms(started),
             )
+
+    def _compile_input(
+        self,
+        request: AgentRequest,
+        continuation_prompt: str | None,
+        *,
+        enforce_final_budget: bool = False,
+    ) -> _PreparedNativeInput:
+        source_revision = _require_full_revision(request.source_revision)
+        prompt = self._prompt_builder.build(request)
+        qa_runner = _manager_provisioned_qa_runner(request, self._workspace_root)
+        coder_tooling = _manager_provisioned_coder_tooling(request, self._workspace_root)
+        verifier = request.role in {AgentRole.QA, AgentRole.REVIEWER}
+        invocation_environment = dict(self._environment)
+        if qa_runner is not None:
+            invocation_environment["ASE_PROJECT_PYTEST"] = str(qa_runner)
+        resources = ExitStack()
+        try:
+            temporary = resources.enter_context(tempfile.TemporaryDirectory(prefix="ase-codex-"))
+            temporary_root = Path(temporary).resolve(strict=True)
+            sandbox_arguments: tuple[str, ...] = ("--sandbox", _sandbox_mode(request.role))
+            if coder_tooling is not None and coder_tooling.python is not None:
+                tooling_root = Path(
+                    resources.enter_context(tempfile.TemporaryDirectory(prefix="ase-codex-tools-"))
+                ).resolve(strict=True)
+                sandbox_arguments = _coder_tooling_sandbox_arguments(
+                    self._workspace_root, temporary_root, tooling_root, coder_tooling
+                )
+                scratch = temporary_root / "scratch"
+                cache = temporary_root / "uv-cache"
+                mypy_cache = temporary_root / "mypy-cache"
+                scratch.mkdir(mode=0o700)
+                cache.mkdir(mode=0o700)
+                mypy_cache.mkdir(mode=0o700)
+                coder_tooling = _prepare_coder_python_launchers(
+                    coder_tooling, tooling_root, mypy_cache_root=mypy_cache
+                )
+                invocation_environment["TMPDIR"] = str(scratch)
+                invocation_environment["UV_CACHE_DIR"] = str(cache)
+                invocation_environment["MYPY_CACHE_DIR"] = str(mypy_cache)
+            if coder_tooling is not None:
+                if coder_tooling.pytest is not None:
+                    invocation_environment["ASE_PROJECT_PYTEST"] = str(coder_tooling.pytest)
+                if coder_tooling.python is not None:
+                    invocation_environment["ASE_PROJECT_PYTHON"] = str(coder_tooling.python)
+                invocation_environment["PYTHONPATH"] = os.pathsep.join(
+                    str(path) for path in coder_tooling.source_paths
+                )
+                invocation_environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            compiled_prompt = _compile_prompt(
+                request,
+                prompt.to_messages(include_images=False),
+                manager_qa_runner=qa_runner,
+                manager_coder_tooling=coder_tooling,
+            )
+            if continuation_prompt is not None:
+                compiled_prompt += continuation_prompt
+            if verifier and self._candidate_source is None:
+                compiled_prompt += candidate_read_snapshot(
+                    self._workspace_root, source_revision, request.permissions
+                )
+            schema_path = temporary_root / "output-schema.json"
+            output_path = temporary_root / "last-message.json"
+            schema_content = json.dumps(
+                _artifact_schema(request.role, attempt=request.attempt), ensure_ascii=False
+            )
+            schema_path.write_text(schema_content, encoding="utf-8")
+            image_arguments: list[str] = []
+            for index, attachment in enumerate(prompt.images, start=1):
+                image_path = temporary_root / f"evidence-{index}.png"
+                image_path.write_bytes(attachment.image.bytes())
+                image_path.chmod(0o600)
+                image_arguments.extend(("--image", str(image_path)))
+                compiled_prompt += (
+                    f"\nAttached image {index}: {attachment.label}; "
+                    f"PNG SHA-256 {attachment.image.sha256}\n"
+                )
+            if verifier and self._candidate_source is not None:
+                compiled_prompt = self._candidate_source.append(
+                    request,
+                    self._workspace_root,
+                    compiled_prompt,
+                    enforce_budget=not enforce_final_budget or self._input_budget is None,
+                )
+            if enforce_final_budget and self._input_budget is not None:
+                self._input_budget.check(request, compiled_prompt + "\n" + schema_content)
+            return _PreparedNativeInput(
+                request=request,
+                resources=resources,
+                compiled_prompt=compiled_prompt,
+                continuation_prompt=continuation_prompt,
+                sandbox_arguments=sandbox_arguments,
+                image_arguments=tuple(image_arguments),
+                schema_path=schema_path,
+                schema_content=schema_content,
+                output_path=output_path,
+                environment=invocation_environment,
+            )
+        except BaseException:
+            resources.close()
+            raise
 
     def _interrupted_result(
         self,
