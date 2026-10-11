@@ -256,6 +256,33 @@ class DeliveryWaitFactCollector:
         observation = self._capture_observation(task, step, start, historical, guard)
         return observation[1] if observation else None
 
+    def stopped_failed_capture(
+        self, task: Task, step: QueuedRoleStep, guard: WorkerExecutionGuard
+    ) -> (
+        tuple[
+            DeliveryInvocationStart,
+            DeliveryInvocationOutcome,
+            ExecutionCaptureStart,
+            ExecutionCaptureStop,
+        ]
+        | None
+    ):
+        """Read the exact failed invocation and verify its real owned stop."""
+        original = self._original_invocation(task, step, guard)
+        if original is None:
+            return None
+        start, historical = original
+        outcome = KnowledgeRecordStore(self.state / "invocations", read_only=True).find(
+            "invocation-outcomes", step.work_item.id, DeliveryInvocationOutcome
+        )
+        if outcome is None:
+            return None
+        outcome.validate_integrity()
+        if outcome.start != start:
+            raise ContinuationRejected("原失败结果与启动记录不一致")
+        observation = self._capture_observation(task, step, start, historical, guard)
+        return (start, outcome, *observation) if observation else None
+
     def _capture_observation(
         self,
         task: Task,

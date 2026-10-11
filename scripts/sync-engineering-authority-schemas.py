@@ -155,6 +155,21 @@ resolution_schema["$defs"]["DeliveryResolution"]["allOf"] = [
 ]
 resolution_schema["$defs"]["DeliveryWaitHandling"]["allOf"] = [
     {
+        "if": {
+            "required": ["budget_settlement_sha256"],
+            "properties": {"budget_settlement_sha256": {"type": "string"}},
+        },
+        "then": {
+            "properties": {
+                "status": {"const": "BUDGET_EXHAUSTED"},
+                "resolution": {"type": "null"},
+                "collection_failed": {"const": False},
+                "collection_failure": {"type": "null"},
+                "investigation": {"properties": {"permitted_resolutions": {"maxItems": 0}}},
+            },
+        },
+    },
+    {
         "if": {"properties": {"status": {"const": "RESOLVED"}}},
         "then": {"required": ["resolution"], "properties": {"resolution": {"type": "object"}}},
         "else": {"properties": {"resolution": {"type": "null"}}},

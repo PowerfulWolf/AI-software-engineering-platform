@@ -38,6 +38,8 @@
 
 ## Files
 
+- [`stopped-budget-settlement.md`](stopped-budget-settlement.md): exact stopped exhausted legacy wait settlement, atomic terminal event/queue closure and unchanged recovery approvals.
+
 - [`dynamic-credential-source.md`](dynamic-credential-source.md): exact AST provenance for
   runtime-generated negative security test input, unchanged generic secret detection and full captures.
 

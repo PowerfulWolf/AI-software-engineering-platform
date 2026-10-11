@@ -1,0 +1,29 @@
+{
+  "name": "stopped-exhausted-settlement",
+  "title": "旧非临时失败耗尽等待精确收尾",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "5d1ebc7",
+  "allowlist": [
+    "src/ai_software_engineer/domain/stopped_budget_settlement.py",
+    "src/ai_software_engineer/domain/delivery_resolution.py",
+    "src/ai_software_engineer/manager/stopped_budget_settlement.py",
+    "src/ai_software_engineer/manager/delivery_wait.py",
+    "src/ai_software_engineer/manager/wait_fact_collection.py",
+    "src/ai_software_engineer/manager/production_host.py",
+    "src/ai_software_engineer/work_queue/execution_store.py",
+    "scripts/*schemas.py",
+    "schemas/*.schema.json",
+    "tests/manager/test_stopped_budget*.py",
+    "tests/work_queue/test_stopped_budget_settlement_mysql.py",
+    ".trellis/spec/core/stopped-budget-settlement.md",
+    ".trellis/spec/core/index.md",
+    ".trellis/tasks/10-12-stopped-exhausted-settlement/"
+  ],
+  "constraints": [
+    "Incremental tests only",
+    "Public exact HANDLE; no direct production SQL",
+    "No refund, verdict, new claim or duplicate Requirement"
+  ],
+  "rollback": "Retain additive typed readers after settlement publication; never remove history or drafts."
+}

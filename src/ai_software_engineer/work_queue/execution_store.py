@@ -31,6 +31,7 @@ from ai_software_engineer.domain.engineering_authority import EngineeringCapabil
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.stopped_budget_settlement import StoppedFailureBudgetSettlement
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.domain.workforce import (
     LeaseId,
@@ -39,6 +40,7 @@ from ai_software_engineer.domain.workforce import (
     validate_assignment_independence,
 )
 from ai_software_engineer.knowledge.models import digest
+from ai_software_engineer.orchestration.state_machine import apply_event
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.store.mysql_repository import _decode_task, _encode, open_mysql_connection
 from ai_software_engineer.work_queue.models import (
@@ -305,6 +307,131 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     "baseline action requires all owned role claims to be released"
                 )
             yield cursor
+
+    def settle_stopped_budget(
+        self, cursor: DictCursor, settlement: StoppedFailureBudgetSettlement
+    ) -> None:
+        """Append Task/event/queue together inside the caller's idle authority fence."""
+        settlement.validate_integrity()
+        task, proof, event = settlement.task, settlement.investigation, settlement.event
+        self._lock_authority(cursor)
+        cursor.execute(
+            "SELECT id,payload_json,revision,status FROM tasks WHERE id=%s FOR UPDATE", (task.id,)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise QueueNotFound(task.id)
+        current = self._decode_model(row, "payload_json", Task)
+        revision = row["revision"]
+        if row["id"] != current.id or row["status"] != current.status.value:
+            raise QueueCorruption("额度收尾的任务索引与正文不一致")
+        cursor.execute(
+            "SELECT lease_id FROM work_queue_claims WHERE task_id=%s AND state='ACTIVE' FOR UPDATE",
+            (task.id,),
+        )
+        if cursor.fetchone() is not None:
+            raise QueueLeaseLost("额度收尾期间仍有执行权限未释放")
+        cursor.execute(
+            "SELECT id,payload_json FROM work_queue_items WHERE task_id=%s FOR UPDATE", (task.id,)
+        )
+        items = tuple(self._decode_item(value) for value in cursor.fetchall())
+        item = next((value for value in items if value.id == proof.work_item_id), None)
+        if item is None:
+            raise QueueNotFound(proof.work_item_id)
+        next_task = apply_event(task, event)
+        cursor.execute(
+            "SELECT payload_json FROM state_events WHERE event_id=%s FOR UPDATE", (event.event_id,)
+        )
+        previous_event = cursor.fetchone()
+        cursor.execute(
+            "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+            "WHERE task_id=%s FOR UPDATE",
+            (task.id,),
+        )
+        if any(
+            _decode(value, AcceptedRoleArtifact).checkpoint_sequence >= proof.checkpoint_sequence
+            for value in cursor.fetchall()
+        ):
+            raise QueueConflict("原失败调用之后已有接纳产物, 暂不能额度收尾")
+        if previous_event is not None:
+            cursor.execute(
+                "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
+                "AND event_type='STOPPED_BUDGET_SETTLED' ORDER BY sequence",
+                (item.id,),
+            )
+            publications = cursor.fetchall()
+            if (
+                json.loads(str(previous_event["payload_json"])) != event.to_wire()
+                or current != next_task
+                or revision != proof.task_revision + 1
+                or item.status is not WorkItemStatus.CLOSED
+                or record_digest(item) != settlement.closed_item_sha256
+                or any(value.status is not WorkItemStatus.CLOSED for value in items)
+                or len(publications) != 1
+                or json.loads(str(publications[0]["payload_json"]))["detail"]
+                != {
+                    "settlement_sha256": settlement.settlement_sha256,
+                    "previous_work_item_sha256": settlement.expected_item_sha256,
+                    "budget_refund": False,
+                }
+            ):
+                raise QueueConflict("已收尾记录与原精确额度决定不一致")
+            return
+        if (
+            current != task
+            or revision != proof.task_revision
+            or record_digest(item) != settlement.expected_item_sha256
+            or item.wait_disposition != proof.disposition
+            or item.status not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+            or any(
+                value.id != item.id and value.status is not WorkItemStatus.CLOSED for value in items
+            )
+            or record_digest(self.step(item.id)) != proof.step_sha256
+        ):
+            raise QueueConflict("额度收尾的原任务或唯一等待已经变化")
+        cursor.execute(
+            "INSERT INTO state_events (event_id,task_id,revision,payload_json) "
+            "VALUES (%s,%s,%s,%s)",
+            (event.event_id, task.id, proof.task_revision + 1, _encode(event.to_wire())),
+        )
+        cursor.execute(
+            "UPDATE tasks SET payload_json=%s,status=%s,revision=%s,updated_at=%s "
+            "WHERE id=%s AND revision=%s",
+            (
+                _encode(next_task.to_wire()),
+                next_task.status.value,
+                proof.task_revision + 1,
+                next_task.updated_at.isoformat(),
+                task.id,
+                proof.task_revision,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise QueueConflict("额度收尾期间任务版本已变化")
+        closed = item.model_copy(
+            update={
+                "status": WorkItemStatus.CLOSED,
+                "wait_reason": None,
+                "wait_disposition": None,
+                "available_at": None,
+                "updated_at": event.occurred_at,
+            }
+        )
+        self._update_item(cursor, closed)
+        self._append_event(
+            cursor,
+            closed,
+            from_status=item.status,
+            event_type="STOPPED_BUDGET_SETTLED",
+            lease_id=None,
+            occurred_at=event.occurred_at,
+            detail={
+                "settlement_sha256": settlement.settlement_sha256,
+                "previous_work_item_sha256": settlement.expected_item_sha256,
+                "budget_refund": False,
+            },
+        )
+        self._lock_authority(cursor)
 
     def original_claim(self, lease_id: str) -> QueueClaim:
         """Read the original CLAIMED event, never reconstruct it from current work."""

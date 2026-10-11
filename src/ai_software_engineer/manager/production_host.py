@@ -315,7 +315,7 @@ class TeamHost:
                     delivery_id=delivery_id,
                     repository=repository,
                 ).handle(command)
-                return result.status == "RESOLVED"
+                return result.status == "RESOLVED" or result.budget_settlement_sha256 is not None
         return False
 
     def _resume_delivery_once(
@@ -531,7 +531,7 @@ class TeamHost:
                 delivery_id=delivery_id,
                 repository=repository,
             ).handle(command)
-        if handling.status == "RESOLVED":
+        if handling.status == "RESOLVED" or handling.budget_settlement_sha256 is not None:
             self._resume_delivery_once(
                 ResumeProjectDelivery(delivery_id=delivery_id), project_id=project_id
             )
@@ -743,7 +743,13 @@ class TeamHost:
         delivery_id: str,
         repository: MySqlTaskRepository,
     ) -> DeliveryWaitService:
+        from datetime import UTC, datetime
+
         from ai_software_engineer.agents.fallback import model_route_root
+        from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+        from ai_software_engineer.manager.stopped_budget_settlement import (
+            StoppedBudgetSettlementService,
+        )
         from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCollector
 
         runtime = self._runtime(project_id)
@@ -844,6 +850,15 @@ class TeamHost:
                 delivery_id if delivery_id.startswith("delivery_multi_") else task.id
             ),
             knowledge_retry=knowledge_retry,
+            budget_settlement=StoppedBudgetSettlementService(
+                repository=repository,
+                queue=self._work_queue,
+                records=KnowledgeRecordStore(workspace.directory("state") / "delivery-waits"),
+                collector=collector,
+                git=git,
+                clock=lambda: datetime.now(UTC),
+                idle_scope=lambda: self._work_queue.idle_task_scope(task.id),
+            ),
             prerequisite_collector=lambda current, step: (
                 runtime.backend.inspect_delivery_wait_prerequisites(
                     current,
