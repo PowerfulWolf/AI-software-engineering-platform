@@ -181,6 +181,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     provider_failure: bool = False,
     unknown_failure: bool = False,
     work_limit: int = 3,
+    rejected_completed_output: bool = False,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -213,12 +214,17 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     ) -> StructuredModelResult:
         title = output_schema.get("title")
         if title == "ManagerCoordinationDraft":
-            assert unknown_failure and work_limit == 1
+            assert (unknown_failure and work_limit == 1) or rejected_completed_output
             assert "WAITING_HUMAN" in cast(list[str], input_payload["advertised_actions"])
             return StructuredModelResult(
                 payload=ManagerCoordinationDraft(
                     action="WAITING_HUMAN",
-                    summary="原生调用失败且已授权工作额度耗尽, 原记录和现场保留。",
+                    summary=(
+                        "原 Coder 报告未接纳, 原失败和代码草稿保留, "
+                        "等待完整平台检查和精确工程决定。"
+                        if rejected_completed_output
+                        else "原生调用失败且已授权工作额度耗尽, 原记录和现场保留。"
+                    ),
                     next_action="先核验原失败与完整现场, 再通过原需求准备精确恢复授权。",
                     responsible_actor="ASE 平台与工程授权者",
                     resume_condition="原需求的精确恢复计划已批准。",
@@ -330,12 +336,19 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                 assert request.execution_baseline_sha256 is None
                 assert isinstance(adapter._interruption_control, NativeCoderContinuation)
                 output = Path(argv[argv.index("--output-last-message") + 1])
-                script = (
+                completed_script = (
                     "from pathlib import Path; import sys; sys.stdin.read(); "
                     "Path('hello.txt').write_text('retained draft\\n'); "
-                    "Path('.mypy_cache').mkdir(); "
-                    "Path('.mypy_cache/cache.db').write_bytes(b'x' * 22_000_000); "
-                    "Path(sys.argv[1]).write_text('{}')"
+                    + (
+                        ""
+                        if rejected_completed_output
+                        else "Path('.mypy_cache').mkdir(); "
+                        "Path('.mypy_cache/cache.db').write_bytes(b'x' * 22_000_000); "
+                    )
+                    + "Path(sys.argv[1]).write_text('{}')"
+                )
+                script = (
+                    completed_script
                     if completed_output
                     else "import sys; sys.stdin.read(); "
                     "sys.stderr.write('Error: HTTP 401 Unauthorized\\n'); sys.exit(1)"
@@ -710,14 +723,19 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     if completed_output:
         assert results[0].status is AgentRunStatus.FAILED
         assert results[0].artifact is None and results[0].error is not None
-        assert results[0].error.code is AgentErrorCode.WORK_INTERRUPTED
+        assert results[0].error.code is (
+            AgentErrorCode.INVALID_OUTPUT
+            if rejected_completed_output
+            else AgentErrorCode.WORK_INTERRUPTED
+        )
         assert not results[0].error.transient
         stop = receipt_store.capture_stop(calls[0].request.run_id)
         assert stop.process_stop.kind == "completed" and stop.process_stop.returncode == 0
         assert stop.output_present and stop.cause is None and stop.original_error_code is None
         # Isolated fixture maintenance is separate from source recovery authority.
         # The original output remains unparsed and its FAILED result remains immutable.
-        shutil.rmtree(original_worktree / ".mypy_cache")
+        if not rejected_completed_output:
+            shutil.rmtree(original_worktree / ".mypy_cache")
     if provider_failure:
         assert results[0].status is AgentRunStatus.FAILED
         assert results[0].artifact is None and results[0].error is not None
@@ -769,7 +787,11 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     if capture_pending:
         assert current_item.wait_disposition is not None
         assert current_item.wait_disposition.facts.classification == (
-            "NONTRANSIENT_INFRA" if completed_output or provider_failure else "EXECUTION_UNCERTAIN"
+            "INVALID_OUTPUT"
+            if rejected_completed_output
+            else "NONTRANSIENT_INFRA"
+            if completed_output or provider_failure
+            else "EXECUTION_UNCERTAIN"
         )
     else:
         assert not host.work_queue.claims_for_work_item(current_item.id)
@@ -869,7 +891,11 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             != public_delivery_id
         )
         assert native_plan.facts.continuation is not None
-        assert native_plan.facts.continuation.retry_cause == "completed_output_unavailable"
+        assert native_plan.facts.continuation.retry_cause == (
+            "completed_output_rejected"
+            if rejected_completed_output
+            else "completed_output_unavailable"
+        )
         assert native_plan.facts.continuation.retry_failure is None
     elif provider_failure:
         assert original_receipts == ()
@@ -1006,6 +1032,11 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         )
         assert binding.authority_source == "engineering_operator_decision"
         assert frozen_task.retry_failures is None
+    if rejected_completed_output:
+        assert plan.facts.completed_output is not None
+        assert binding.completed_output_sha256 == plan.facts.completed_output.proof_sha256
+        assert binding.continuation_mode is BaselineContinuationMode.PAUSE
+        assert binding.authority_source == "engineering_operator_decision"
     if same_base:
         if not provider_failure:
             assert plan.facts.completed_output is not None
@@ -1602,4 +1633,23 @@ def test_public_unknown_native_exit_preserves_failure_and_routes_by_ordinary_bud
         same_base=True,
         unknown_failure=True,
         work_limit=work_limit,
+    )
+
+
+@pytest.mark.mysql
+@pytest.mark.parametrize("same_base", [True, False], ids=["same_source", "updated_source"])
+def test_public_rejected_completed_output_preserves_original_failure_and_delivers_independently(
+    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, same_base: bool
+) -> None:
+    test_public_baseline_updates_original_workspace_then_completes_independent_delivery(
+        tmp_path,
+        mysql_dsn,
+        monkeypatch,
+        mode=BaselineInputMode.PRESERVE_DRAFT,
+        reject_after_baseline=False,
+        native_pause=not same_base,
+        capture_pending=True,
+        completed_output=True,
+        same_base=same_base,
+        rejected_completed_output=True,
     )

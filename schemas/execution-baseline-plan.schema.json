@@ -746,7 +746,10 @@
                 ],
                 "properties": {
                   "retry_cause": {
-                    "const": "completed_output_unavailable"
+                    "enum": [
+                      "completed_output_unavailable",
+                      "completed_output_rejected"
+                    ]
                   }
                 }
               }
@@ -772,6 +775,124 @@
             "properties": {
               "completed_output": {
                 "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "completed_output"
+            ],
+            "properties": {
+              "completed_output": {
+                "type": "object",
+                "required": [
+                  "outcome"
+                ],
+                "properties": {
+                  "outcome": {
+                    "required": [
+                      "result"
+                    ],
+                    "properties": {
+                      "result": {
+                        "required": [
+                          "error"
+                        ],
+                        "properties": {
+                          "error": {
+                            "required": [
+                              "code"
+                            ],
+                            "properties": {
+                              "code": {
+                                "const": "WORK_INTERRUPTED"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "completed_output_unavailable"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "completed_output"
+            ],
+            "properties": {
+              "completed_output": {
+                "type": "object",
+                "required": [
+                  "outcome"
+                ],
+                "properties": {
+                  "outcome": {
+                    "required": [
+                      "result"
+                    ],
+                    "properties": {
+                      "result": {
+                        "required": [
+                          "error"
+                        ],
+                        "properties": {
+                          "error": {
+                            "required": [
+                              "code"
+                            ],
+                            "properties": {
+                              "code": {
+                                "const": "INVALID_OUTPUT"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "completed_output_rejected"
+                  }
+                }
               }
             }
           }
@@ -847,6 +968,7 @@
             "provider_transient",
             "legacy_execution_abandoned",
             "completed_output_unavailable",
+            "completed_output_rejected",
             "provider_prerequisite_repaired"
           ],
           "title": "Retry Cause",
@@ -1017,7 +1139,10 @@
             ],
             "properties": {
               "retry_cause": {
-                "const": "completed_output_unavailable"
+                "enum": [
+                  "completed_output_unavailable",
+                  "completed_output_rejected"
+                ]
               }
             }
           },
@@ -1671,6 +1796,17 @@
           "properties": {
             "outcome": {
               "properties": {
+                "start": {
+                  "properties": {
+                    "request": {
+                      "properties": {
+                        "role": {
+                          "const": "coder"
+                        }
+                      }
+                    }
+                  }
+                },
                 "result": {
                   "required": [
                     "error"
@@ -1686,7 +1822,10 @@
                       "type": "object",
                       "properties": {
                         "code": {
-                          "const": "WORK_INTERRUPTED"
+                          "enum": [
+                            "WORK_INTERRUPTED",
+                            "INVALID_OUTPUT"
+                          ]
                         },
                         "transient": {
                           "const": false
@@ -2663,10 +2802,43 @@
               "completed_output_sha256",
               "continuation_mode"
             ]
-          },
-          "else": {
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "completed_output_sha256"
+            ],
             "properties": {
               "completed_output_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation_mode"
+            ],
+            "properties": {
+              "purpose": {
+                "enum": [
+                  "source_rebind",
+                  "completed_output_rescue"
+                ]
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
                 "type": "null"
               }
             }

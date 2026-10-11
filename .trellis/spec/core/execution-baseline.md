@@ -538,3 +538,23 @@ READY generation or later wait cannot produce this hint. This closes the service
 v0.1's synchronous Supervisor: telling users to wait for unattended dispatch would leave it idle.
 Multi-repository plans retain independent review/open/consent state, pruning only plans no longer
 present in a completed detail render; reading a second repository cannot clear the first approval.
+
+
+## Unified completed, unaccepted Coder draft input
+
+`CompletedCoderOutputUnavailableProof.reason` is derived from the immutable original error:
+WORK_INTERRUPTED → completed_output_unavailable, INVALID_OUTPUT → completed_output_rejected.
+The latter is ordinary work, not a transient refund or accepted progress. Facts/Plan retain the
+full original proof and complete draft; the queue validates exact reason agreement. Both same-base
+rescue and explicitly selected SOURCE_REBIND use the existing flow. Newly rejected SOURCE inputs
+must carry the proof digest in Binding, match the exact saved plan and engineering operator
+approval, and remain PAUSE until the separate latest-bound continuation decision. Old SOURCE
+bindings without that optional digest retain their previous reading and authority semantics.
+
+Production consumption rechecks old execution facts separately from the real resulting workspace.
+Same-base inputs require unchanged complete inventory and both captures; SOURCE inputs may change
+before/after during the trusted Git rebase, but must match the resulting Binding after inventory,
+source/branch, full prepared patch and clean index. Preserve the original failure, source lineage,
+Task/event history, normal work counters and complete ignored inventory. No new Task, purpose,
+process-stopped Boolean, accepted artifact or role verdict is introduced. The completed-output
+spec owns the detailed guards, public validation matrix, existing-data handling and rollback.

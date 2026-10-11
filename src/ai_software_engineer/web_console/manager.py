@@ -32,6 +32,7 @@ from ai_software_engineer.manager.baseline_production import (
     BaselineExecuteCommand,
     BaselineProposeCommand,
 )
+from ai_software_engineer.manager.completed_output_checkpoint import CompletedCoderOutputReason
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     DeliveryCheckpointStale,
@@ -372,6 +373,12 @@ class ManagerConsoleAdapter:
                             "请确认原模型认证或执行器配置前提已修复, 批准保留进度并保持暂停, "
                             "再明确继续原需求; 原失败记录保留, 消耗普通开发额度。"
                             if plan.purpose is BaselinePurpose.STOPPED_PROVIDER_RETRY
+                            else "原 Coder 执行已核验结束, 原报告未接纳, 失败记录保留。"
+                            "完整合法代码草稿已封存; 请核对精确方案, 批准后保持暂停, "
+                            "再明确继续, 使用普通开发额度重新产出; 候选、QA 和 Review 仍需完成。"
+                            if plan.facts.completed_output is not None
+                            and plan.facts.completed_output.reason
+                            is CompletedCoderOutputReason.REJECTED
                             else "原执行已核验结束, 报告内容仍未知。完整合法进度已封存; "
                             "请核对精确恢复方案, 批准后保持暂停, 再明确继续原需求。"
                             if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE

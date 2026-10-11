@@ -138,7 +138,7 @@ def _read_native_rule_change(
 
 _MAX_REQUEST_BYTES = 64_000
 _MAX_SPEC_REQUEST_BYTES = 512_000
-_OPERATION_CONTRACT_VERSION = 6
+_OPERATION_CONTRACT_VERSION = 7
 _LOGGER = logging.getLogger(__name__)
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
