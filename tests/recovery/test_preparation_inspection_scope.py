@@ -258,12 +258,13 @@ def test_builder_reuses_complete_source_and_generic_but_repeats_all_fresh_facts(
     f = preparation_fixture(tmp_path, monkeypatch)
     scans = count_scans(monkeypatch)
     first = f.builder.build(f.plan.plan_sha256)
-    assert f.reads == {"facts": 10, "capture": 2}
+    # Four inspections retain both authorization sandwiches; each observes twice.
+    assert f.reads == {"facts": 8, "capture": 2}
     assert f.getters == {"plan": 6, "authorization": 2}
     assert scans == Scans(source=1, generic=6, patch=1)
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
     assert f.builder.build(f.plan.plan_sha256) == first
-    assert f.reads == {"facts": 20, "capture": 4}
+    assert f.reads == {"facts": 16, "capture": 4}
     assert f.getters == {"plan": 12, "authorization": 4}
     assert scans == Scans(source=2, generic=12, patch=2)
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
@@ -290,7 +291,7 @@ def test_sealing_encloses_store_and_builder_without_caching_getters(
     first = call(f.plan.plan_sha256)
     fresh = reads.copy()
     fresh_getters = f.getters.copy()
-    assert fresh["facts"] == 10 and fresh["capture"] == 2
+    assert fresh["facts"] == 8 and fresh["capture"] == 2
     assert fresh["authorization"] > 2
     assert scans == Scans(source=1, generic=6, patch=1)
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
@@ -372,7 +373,7 @@ def test_allocator_shares_scans_across_both_fenced_fresh_checks(
     )
     record = allocator.allocate(f.plan.plan_sha256)
     assert f.reads == {
-        "facts": 40,
+        "facts": 32,
         "capture": 8,
         "snapshot": 1,
         "fence_before": 1,
@@ -384,7 +385,7 @@ def test_allocator_shares_scans_across_both_fenced_fresh_checks(
     f.reads.clear()
     f.getters.clear()
     assert allocator.allocate(f.plan.plan_sha256) == record
-    assert f.reads == {"facts": 30, "capture": 6, "snapshot": 1, "fence_before": 1}
+    assert f.reads == {"facts": 24, "capture": 6, "snapshot": 1, "fence_before": 1}
     assert f.getters == {"plan": 24, "authorization": 10}
     assert scans == Scans(source=2, generic=12, patch=2)
 
@@ -458,7 +459,7 @@ def test_zero_cache_budget_does_not_skip_scans_or_fresh_facts(
     monkeypatch.setattr(redaction, "_MAX_INSPECTION_ENTRIES", 0)
     scans = count_scans(monkeypatch)
     f.builder.build(f.plan.plan_sha256)
-    assert f.reads == {"facts": 10, "capture": 2}
+    assert f.reads == {"facts": 8, "capture": 2}
     assert f.getters == {"plan": 6, "authorization": 2}
     assert scans.source > 1 and scans.patch > 1 and scans.generic > 6
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
@@ -549,11 +550,11 @@ def test_seed_reuses_scans_and_replay_keeps_fresh_sealing_and_capture_checks(
     scans = count_scans(monkeypatch)
     receipt = seed.seed(target)
     assert isinstance(receipt, RecoverySeedRecord)
-    assert f.reads == {"facts": 10, "capture": 2, "seed_application": 1, "seed_verify": 1}
+    assert f.reads == {"facts": 8, "capture": 2, "seed_application": 1, "seed_verify": 1}
     assert scans == Scans(source=1, generic=6, patch=1)
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
     assert seed.seed(target) == receipt
-    assert f.reads == {"facts": 20, "capture": 4, "seed_application": 1, "seed_verify": 2}
+    assert f.reads == {"facts": 16, "capture": 4, "seed_application": 1, "seed_verify": 2}
     assert scans == Scans(source=2, generic=12, patch=2)
 
 
@@ -566,7 +567,7 @@ def test_authorize_releases_scope_before_provider_and_replay_is_still_rejected(
     f.reads.clear()
     scans = count_scans(monkeypatch)
     seed.authorize(request, target.path)
-    assert f.reads == {"facts": 10, "capture": 2, "seed_verify": 1}
+    assert f.reads == {"facts": 8, "capture": 2, "seed_verify": 1}
     assert scans == Scans(source=1, generic=6, patch=1)
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
 

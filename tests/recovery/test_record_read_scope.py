@@ -406,9 +406,9 @@ def test_public_approval_real_builder_fresh_fences_and_clear_before_execution(
     monkeypatch.setattr(KnowledgeRecordStore, "_decode_payload", staticmethod(decode))
     original_task = fixture.original.task.model_dump_json()
     entry.approve(path, confirmed_plan=plan.plan_sha256, reference="exact approval")
-    assert observations == 18, "all authorization and Task-builder before/after facts remain"
+    assert observations == 16, "both authorization sandwiches remain; no middle builder inspect"
     assert decodes["ExecutionBaselinePlan"] == decodes["BaselineOperationStart"] == 1
-    assert decodes["BaselineOperatorAuthorization"] >= 18
+    assert decodes["BaselineOperatorAuthorization"] >= 16
     assert fixture.original.task.model_dump_json() == original_task
     receipt = store.get_authorization(plan.plan_sha256)
     sealed = store.get_task_record(plan.plan_sha256)
