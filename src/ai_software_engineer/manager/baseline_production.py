@@ -1440,6 +1440,7 @@ class ProductionBaselineFactCollector:
         elif (
             outcome is not None
             and outcome.result.error is not None
+            and outcome.result.error.transient
             and outcome.result.error.code.value in TRANSIENT_CODES
         ):
             cause = "provider_transient"

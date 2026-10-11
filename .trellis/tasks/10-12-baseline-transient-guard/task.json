@@ -1,0 +1,20 @@
+{
+  "name": "baseline-transient-guard",
+  "title": "源码基线接续同时核验提供方错误类别与临时故障标记",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "5d1ebc718f1b5ee17435615b8cdf55afefa64220",
+  "worktree": "/Users/zhangjunshuai/workspace/code/ase-baseline-transient-guard",
+  "allowlist": [
+    "src/ai_software_engineer/manager/baseline_production.py",
+    "tests/manager/test_execution_baseline_reservation.py",
+    ".trellis/spec/core/execution-baseline.md",
+    ".trellis/tasks/10-12-baseline-transient-guard/"
+  ],
+  "constraints": [
+    "Incremental tests only; no production SQL, model, service or main checkout mutation",
+    "No nontransient refund, frozen budget increase, outcome rewrite or new recovery capability",
+    "Retain independently validated interruption receipt and stopped-provider proof paths"
+  ],
+  "rollback": "Revert this isolated guard commit while service is idle; retain all historical facts. An older version reintroduces the unsafe code-only accounting path."
+}
