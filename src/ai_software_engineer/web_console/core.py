@@ -321,17 +321,31 @@ class ProjectConsole:
         )
 
     def _run(self) -> None:
+        idle_waits = (
+            self._poll_seconds,
+            max(self._poll_seconds, 1.0),
+            max(self._poll_seconds, 2.0),
+            max(self._poll_seconds, 5.0),
+        )
+        idle_index = 0
         try:
             while True:
+                # Clear before the complete claim: an earlier durable submission
+                # is visible to that claim, and a later submission wakes its wait.
+                self._wake.clear()
                 with self._condition:
                     if self._stop.is_set():
                         if self._thread is current_thread():
                             self._thread = None
                         self._condition.notify_all()
                         return
-                if self.run_once() is None:
-                    self._wake.wait(self._poll_seconds)
-                    self._wake.clear()
+                if self.run_once() is not None:
+                    idle_index = 0
+                    continue
+                if self._wake.wait(idle_waits[idle_index]):
+                    idle_index = 0
+                else:
+                    idle_index = min(idle_index + 1, len(idle_waits) - 1)
         except BaseException:
             # A dead dispatcher is never accepted as evidence of completed work.
             # Do not log exception payloads or a traceback containing secrets.
