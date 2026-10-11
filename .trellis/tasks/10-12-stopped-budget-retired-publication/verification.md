@@ -61,3 +61,47 @@ not repaired or ignored. The additive helper/reader do not make historical inval
 usable. Before consuming the public action, revert the code commit if necessary. After
 terminal consumption retain compatible typed settlement readers and all original audit
 records/drafts; use a forward fix rather than deleting history or reviving the Task.
+
+## Production stock verification — 2026-10-12
+
+The integrated code was pushed and deployed at `176997764f8b0d3a43c0b4daee5ee6424e9aae71`
+using a successful controlled service stop/start. The registered target repository was
+fast-forwarded to the same clean revision while the service was stopped. The original
+K1 Requirement remains `delivery_multi_8a5103309c232515bcf733947d32830365dd02c6`;
+no duplicate Requirement was created.
+
+The exact public HANDLE operation
+`operation_9b64d4fabd2d9279625629bc748973b0` completed `SUCCEEDED`. Its typed result
+reports `ENGINEERING_WAIT_HANDLED / BUDGET_EXHAUSTED`, and directs a fresh recovery
+proposal and exact approval under that original Requirement. The original stopped
+Task `task_recovery_8ca06fa0aec236ab940597ad1482bfc8` became `BLOCKED`, and only its
+current work item was closed. It was not revived or given additional attempts.
+
+A before/after consistent read-only SQL snapshot audit passed. It verified:
+
+- The Task changed only its status and update time; attempts remain **11**, and the
+  complete retry account is unchanged.
+- The original eight StateEvents remain an identical prefix; exactly one legitimate
+  terminal event was appended. Its original sealed settlement time is preserved on
+  replay rather than replaced with a new decision time.
+- All eleven claims and all three accepted publication records are unchanged.
+- The original invocation start, failed outcome and real failed process-stop record
+  retain their original digests. The truncated unknown failure was not reclassified,
+  refunded, corrected or treated as a usable result.
+- The retained worktree HEAD, branch, index, all thirty dirty paths, complete file
+  bytes/modes and complete inventory match the pre-settlement capture. The full patch
+  remains 604,438 bytes with SHA-256
+  `c085ce5563e49e446c861eb4771cc3634af2f8ad0ebb27181175d9cbf80211f5`.
+
+The read-only audit reported `audit_passed=true`, `attempts_unchanged=true`,
+`original_failure_stop_claims_accepted_and_history_preserved=true` and
+`new_state_events=1`. It always rolls back and closes its connection; no diagnostic
+Host, DDL or direct production SQL update was used. Private raw snapshots and source
+bodies are excluded from the repository.
+
+The same original Requirement's public Continue action was then submitted without
+an approval digest to prepare a fresh recovery plan. That proposal is separate from
+settlement success. K1 is **not delivered** at this boundary: it still requires the
+new exact plan approval, a claimed Coder, candidate-bound independent QA and Review,
+and a verifiable final handoff. Preserve the stock audit and all original records if
+subsequent recovery fails; do not reopen the terminal Task or discard its draft.
