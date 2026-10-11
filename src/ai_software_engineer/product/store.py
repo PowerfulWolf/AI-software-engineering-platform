@@ -11,12 +11,14 @@ import secrets
 import stat
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager, suppress
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, Protocol, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
 from ai_software_engineer.domain.enums import ProductApprovalDecision
+from ai_software_engineer.domain.identity import RepositoryId
 from ai_software_engineer.domain.model import DomainModel, WirePayload
 from ai_software_engineer.domain.project_delivery import (
     ProductApprovalId,
@@ -43,6 +45,8 @@ _SPEC_ID_ADAPTER: Final[TypeAdapter[ProductSpecId]] = TypeAdapter(ProductSpecId)
 _APPROVAL_ID_ADAPTER: Final[TypeAdapter[ProductApprovalId]] = TypeAdapter(ProductApprovalId)
 _OPERATION_ID_ADAPTER: Final[TypeAdapter[ProductOperationId]] = TypeAdapter(ProductOperationId)
 _RECORD_KEYS: Final = frozenset(("record", "sha256"))
+_APPROVAL_PREFIX_MAX_ENTRIES: Final = 512
+_APPROVAL_PREFIX_MAX_BYTES: Final = 2 * 1024 * 1024
 _RecordT = TypeVar("_RecordT", bound=DomainModel)
 
 
@@ -64,6 +68,155 @@ class ProductRecordLineageError(ProductRecordStoreError):
 
 class ProductRecordPathError(ProductRecordStoreError):
     """Raised when a store path could leave the configured sidecar root."""
+
+
+class _ApprovalPrefixOverflow(Exception):
+    """Internal optimization capacity; the original complete lookup remains valid."""
+
+
+@dataclass(frozen=True)
+class _SpecAssociation:
+    request_id: ProjectRequestId
+    repository_id: RepositoryId
+    sha256: StageSha256
+    duplicate: bool = False
+
+
+@dataclass(frozen=True)
+class _SpecVersionIdentity:
+    id: ProductSpecId
+    request_id: ProjectRequestId
+    repository_id: RepositoryId
+    version: int
+    supersedes: ProductSpecId | None
+
+    @classmethod
+    def from_record(cls, record: ProductSpec) -> _SpecVersionIdentity:
+        return cls(
+            record.id, record.request_id, record.repository_id, record.version, record.supersedes
+        )
+
+
+@dataclass(frozen=True)
+class _TrustedProductText:
+    text: str
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
+class _RecordFingerprint:
+    path: Path
+    sha256: str
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
+class _DirectoryFingerprint:
+    path: Path
+    device: int
+    inode: int
+    names: tuple[str, ...] | None
+
+
+class _ApprovalReadPrefix:
+    """One lookup's bounded association and complete-observation fingerprints."""
+
+    def __init__(self) -> None:
+        self.specs: dict[ProductSpecId, _SpecAssociation] = {}
+        self._files: list[_RecordFingerprint] = []
+        self._directories: list[_DirectoryFingerprint] = []
+        self._entries = 0
+        self._bytes = 0
+
+    def _reserve(self, payload: object) -> None:
+        size = len(_canonical_json(payload).encode("utf-8"))
+        if (
+            self._entries + 1 > _APPROVAL_PREFIX_MAX_ENTRIES
+            or self._bytes + size > _APPROVAL_PREFIX_MAX_BYTES
+        ):
+            raise _ApprovalPrefixOverflow
+        self._entries += 1
+        self._bytes += size
+
+    def directory(self, path: Path, *, inventory: bool = True) -> tuple[Path, ...]:
+        observed = _approval_directory_fingerprint(path, inventory=inventory)
+        self._reserve((str(path), observed.device, observed.inode, observed.names))
+        self._directories.append(observed)
+        return tuple(path / name for name in observed.names or ())
+
+    def record(self, path: Path, content: _TrustedProductText) -> None:
+        digest = hashlib.sha256(content.text.encode("utf-8")).hexdigest()
+        self._reserve((str(path), digest, content.device, content.inode))
+        self._files.append(_RecordFingerprint(path, digest, content.device, content.inode))
+
+    def spec(self, record: ProductSpec) -> None:
+        existing = self.specs.get(record.id)
+        if existing is not None:
+            if not existing.duplicate:
+                self.specs[record.id] = replace(existing, duplicate=True)
+            return
+        self._reserve(
+            (record.id, record.request_id, record.repository_id, record.product_spec_sha256, False)
+        )
+        self.specs[record.id] = _SpecAssociation(
+            record.request_id, record.repository_id, record.product_spec_sha256
+        )
+
+    def validate_approval(self, approval: ProductSpecApproval) -> None:
+        association = self.specs.get(approval.product_spec_id)
+        if association is not None and association.duplicate:
+            raise ProductRecordCorruption(
+                f"duplicate ProductSpec identity: {approval.product_spec_id}"
+            )
+        if association is None or (
+            association.request_id != approval.request_id
+            or association.repository_id != approval.repository_id
+            or association.sha256 != approval.product_spec_sha256
+        ):
+            raise ProductRecordCorruption("ProductSpecApproval does not bind a durable ProductSpec")
+
+    def revalidate(self, root: Path) -> None:
+        self._revalidate_directories()
+        for fingerprint in self._files:
+            content: _TrustedProductText | None = None
+            try:
+                try:
+                    content = _read_trusted_product_text(root, fingerprint.path)
+                except (OSError, UnicodeError) as error:
+                    raise ProductRecordCorruption(
+                        f"cannot decode product record: {fingerprint.path.name}"
+                    ) from error
+                if (
+                    content.device != fingerprint.device
+                    or content.inode != fingerprint.inode
+                    or hashlib.sha256(content.text.encode("utf-8")).hexdigest()
+                    != fingerprint.sha256
+                ):
+                    raise ProductRecordCorruption(
+                        f"product record changed during approval lookup: {fingerprint.path.name}"
+                    )
+            finally:
+                content = None
+        self._revalidate_directories()
+
+    def _revalidate_directories(self) -> None:
+        for observed in self._directories:
+            current = _approval_directory_fingerprint(
+                observed.path, inventory=observed.names is not None
+            )
+            if current != observed:
+                raise ProductRecordCorruption(
+                    "Product record inventory changed during approval lookup"
+                )
+
+    def clear(self) -> None:
+        self.specs.clear()
+        self._files.clear()
+        self._directories.clear()
+        self._entries = 0
+        self._bytes = 0
 
 
 class ProductRecordStore(Protocol):
@@ -390,16 +543,11 @@ class FileProductRecordStore:
         if not request_dir.exists():
             return ()
         records = self._list_numbered(request_dir, ProductSpec)
-        previous: ProductSpec | None = None
+        previous: _SpecVersionIdentity | None = None
         for expected, record in enumerate(records, start=1):
-            if record.request_id != request_id or record.version != expected:
-                raise ProductRecordCorruption("ProductSpec versions are not contiguous")
-            if previous is None:
-                if record.supersedes is not None:
-                    raise ProductRecordCorruption("first ProductSpec has invalid supersedes")
-            elif record.repository_id != previous.repository_id or record.supersedes != previous.id:
-                raise ProductRecordCorruption("ProductSpec version chain is broken")
-            previous = record
+            observed = _SpecVersionIdentity.from_record(record)
+            _validate_product_spec_sequence(request_id, expected, observed, previous)
+            previous = observed
         return records
 
     def put_approval(self, approval: ProductSpecApproval) -> ProductSpecApproval:
@@ -432,6 +580,106 @@ class FileProductRecordStore:
 
     def find_approval(self, approval_id: ProductApprovalId | str) -> ProductSpecApproval | None:
         validated_id = _validate_identity(_APPROVAL_ID_ADAPTER, approval_id, "approval")
+        prefix = _ApprovalReadPrefix()
+        try:
+            return self._find_approval_prefix(validated_id, prefix)
+        except _ApprovalPrefixOverflow:
+            # Exit the handler before fallback. Its traceback can otherwise retain
+            # the in-progress full spec/text while the complete old lookup runs.
+            pass
+        finally:
+            prefix.clear()
+        return self._find_approval_unindexed(validated_id)
+
+    def _find_approval_prefix(
+        self, validated_id: ProductApprovalId, prefix: _ApprovalReadPrefix
+    ) -> ProductSpecApproval | None:
+        found: ProductSpecApproval | None = None
+        category = self._category("approvals", create=False)
+        if not category.exists():
+            return None
+        prefix.directory(self._root, inventory=False)
+        self._require_directory(category)
+        specs_loaded = False
+        for request_dir in prefix.directory(category):
+            self._require_directory(request_dir)
+            try:
+                _validate_identity(_REQUEST_ID_ADAPTER, request_dir.name, "request")
+            except ProductRecordNotFound as error:
+                raise ProductRecordCorruption(
+                    f"invalid approval request directory: {request_dir.name}"
+                ) from error
+            for path in prefix.directory(request_dir):
+                if path.suffix != ".json":
+                    raise ProductRecordCorruption(
+                        f"unexpected product record filename: {path.name}"
+                    )
+                record = self._read_approval_prefix(path, ProductSpecApproval, prefix)
+                if record.request_id != request_dir.name or path.stem != record.product_spec_id:
+                    raise ProductRecordCorruption("ProductSpecApproval filename identity mismatch")
+                if not specs_loaded:
+                    self._index_approval_specs(prefix)
+                    specs_loaded = True
+                prefix.validate_approval(record)
+                if record.id == validated_id:
+                    if found is not None:
+                        raise ProductRecordCorruption(
+                            f"duplicate approval identity: {validated_id}"
+                        )
+                    found = record
+        prefix.revalidate(self._root)
+        return found
+
+    def _index_approval_specs(self, prefix: _ApprovalReadPrefix) -> None:
+        category = self._category("specs", create=False)
+        if not category.exists():
+            return
+        self._require_directory(category)
+        for request_dir in prefix.directory(category):
+            self._require_directory(request_dir)
+            try:
+                _validate_identity(_REQUEST_ID_ADAPTER, request_dir.name, "request")
+            except ProductRecordNotFound as error:
+                raise ProductRecordCorruption(
+                    f"invalid ProductSpec request directory: {request_dir.name}"
+                ) from error
+            previous: _SpecVersionIdentity | None = None
+            record: ProductSpec | None = None
+            try:
+                for expected, path in enumerate(prefix.directory(request_dir), start=1):
+                    if path.name != f"{expected:08d}.json":
+                        raise ProductRecordCorruption(
+                            f"unexpected product record filename: {path.name}"
+                        )
+                    record = self._read_approval_prefix(path, ProductSpec, prefix)
+                    observed = _SpecVersionIdentity.from_record(record)
+                    _validate_product_spec_sequence(request_dir.name, expected, observed, previous)
+                    prefix.spec(record)
+                    previous = observed
+                    record = None
+            finally:
+                # A retained later corruption traceback must not own valid earlier
+                # spec bodies through this traversal's predecessor/current locals.
+                record = None
+                previous = None
+
+    def _read_approval_prefix(
+        self, target: Path, model: type[_RecordT], prefix: _ApprovalReadPrefix
+    ) -> _RecordT:
+        content: _TrustedProductText | None = None
+        try:
+            content = _read_trusted_product_text(self._root, target)
+            prefix.record(target, content)
+            return _decode_product_record(target, content.text, model)
+        except (OSError, UnicodeError) as error:
+            raise ProductRecordCorruption(f"cannot decode product record: {target.name}") from error
+        finally:
+            content = None
+
+    def _find_approval_unindexed(
+        self, validated_id: ProductApprovalId
+    ) -> ProductSpecApproval | None:
+        """Original complete path, used when private association capacity is exceeded."""
         found: ProductSpecApproval | None = None
         category = self._category("approvals", create=False)
         if not category.exists():
@@ -668,34 +916,8 @@ class FileProductRecordStore:
 
     def _read(self, target: Path, model: type[_RecordT]) -> _RecordT:
         try:
-            payload: object = json.loads(
-                _read_trusted_text(self._root, target),
-                parse_constant=lambda value: (_ for _ in ()).throw(
-                    ValueError(f"non-finite JSON value: {value}")
-                ),
-            )
-            if not isinstance(payload, dict) or set(payload) != _RECORD_KEYS:
-                raise ProductRecordCorruption(
-                    f"product record has an invalid envelope: {target.name}"
-                )
-            record_payload = payload.get("record")
-            digest = payload.get("sha256")
-            if not isinstance(record_payload, dict) or not isinstance(digest, str):
-                raise ProductRecordCorruption(f"product record is incomplete: {target.name}")
-            if digest != _digest(record_payload):
-                raise ProductRecordCorruption(
-                    f"product record envelope digest mismatch: {target.name}"
-                )
-            record = model.model_validate(record_payload)
-            _validate_record(record)
-            return record
-        except ProductRecordCorruption:
-            raise
-        except ProductRecordIntegrityError as error:
-            raise ProductRecordCorruption(
-                f"product record inner digest mismatch: {target.name}"
-            ) from error
-        except (OSError, UnicodeError, ValueError, ValidationError) as error:
+            return _decode_product_record(target, _read_trusted_text(self._root, target), model)
+        except (OSError, UnicodeError) as error:
             raise ProductRecordCorruption(f"cannot decode product record: {target.name}") from error
 
     def _list_numbered(self, directory: Path, model: type[_RecordT]) -> tuple[_RecordT, ...]:
@@ -796,6 +1018,71 @@ class FileProductRecordStore:
             raise ProductRecordPathError(
                 f"Product record path escapes its store root: {path}"
             ) from error
+
+
+def _decode_product_record[RecordT: DomainModel](
+    target: Path, text: str, model: type[RecordT]
+) -> RecordT:
+    """Fixed original envelope/model/integrity decoder, always fed complete trusted bytes."""
+    try:
+        payload: object = json.loads(
+            text,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"non-finite JSON value: {value}")
+            ),
+        )
+        if not isinstance(payload, dict) or set(payload) != _RECORD_KEYS:
+            raise ProductRecordCorruption(f"product record has an invalid envelope: {target.name}")
+        record_payload = payload.get("record")
+        digest = payload.get("sha256")
+        if not isinstance(record_payload, dict) or not isinstance(digest, str):
+            raise ProductRecordCorruption(f"product record is incomplete: {target.name}")
+        if digest != _digest(record_payload):
+            raise ProductRecordCorruption(f"product record envelope digest mismatch: {target.name}")
+        record = model.model_validate(record_payload)
+        _validate_record(record)
+        return record
+    except ProductRecordCorruption:
+        raise
+    except ProductRecordIntegrityError as error:
+        raise ProductRecordCorruption(
+            f"product record inner digest mismatch: {target.name}"
+        ) from error
+    except (ValueError, ValidationError) as error:
+        raise ProductRecordCorruption(f"cannot decode product record: {target.name}") from error
+
+
+def _validate_product_spec_sequence(
+    request_id: ProjectRequestId | str,
+    expected: int,
+    record: _SpecVersionIdentity,
+    previous: _SpecVersionIdentity | None,
+) -> None:
+    if record.request_id != request_id or record.version != expected:
+        raise ProductRecordCorruption("ProductSpec versions are not contiguous")
+    if previous is None:
+        if record.supersedes is not None:
+            raise ProductRecordCorruption("first ProductSpec has invalid supersedes")
+    elif record.repository_id != previous.repository_id or record.supersedes != previous.id:
+        raise ProductRecordCorruption("ProductSpec version chain is broken")
+
+
+def _approval_directory_fingerprint(path: Path, *, inventory: bool) -> _DirectoryFingerprint:
+    try:
+        before = path.lstat()
+        if not stat.S_ISDIR(before.st_mode) or path.resolve(strict=False) != path:
+            raise ProductRecordPathError(f"untrusted Product record directory: {path}")
+        names = tuple(sorted(item.name for item in path.iterdir())) if inventory else None
+        after = path.lstat()
+        if (
+            not stat.S_ISDIR(after.st_mode)
+            or before.st_dev != after.st_dev
+            or before.st_ino != after.st_ino
+        ):
+            raise ProductRecordPathError(f"Product record directory changed during read: {path}")
+        return _DirectoryFingerprint(path, before.st_dev, before.st_ino, names)
+    except OSError as error:
+        raise ProductRecordPathError(f"cannot inspect Product record directory: {path}") from error
 
 
 def _validate_request_lineage(
@@ -960,6 +1247,10 @@ def _directory_fd_matches_path(descriptor: int, path: Path) -> bool:
 
 
 def _read_trusted_text(root: Path, target: Path) -> str:
+    return _read_trusted_product_text(root, target).text
+
+
+def _read_trusted_product_text(root: Path, target: Path) -> _TrustedProductText:
     """Read one regular file through trusted directory FDs and detect parent swaps."""
     directory_fd: int | None = None
     record_fd: int | None = None
@@ -995,7 +1286,7 @@ def _read_trusted_text(root: Path, target: Path) -> str:
             raise ProductRecordPathError(
                 f"Product record directory changed during read: {target.parent}"
             )
-        return content.decode("utf-8")
+        return _TrustedProductText(content.decode("utf-8"), before.st_dev, before.st_ino)
     except ProductRecordPathError:
         raise
     except FileNotFoundError as error:
