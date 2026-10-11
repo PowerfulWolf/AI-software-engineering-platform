@@ -23,6 +23,7 @@ from ai_software_engineer.recovery import (
 )
 from ai_software_engineer.recovery.records import RecoveryTaskRecord
 from tests.recovery.test_authorization import Human, approval, make_plan
+from tests.recovery.test_task_policy_builder import authorized_plan, policy_fixture
 
 
 def record_for(plan: RecoveryPlan, authorization: RecoveryAuthorization) -> RecoveryTaskRecord:
@@ -47,7 +48,20 @@ def record_for(plan: RecoveryPlan, authorization: RecoveryAuthorization) -> Reco
             ),
         ),
         status=TaskStatus.NEW,
-        max_attempts=1,
+        max_attempts=(
+            plan.target_authorization.source_max_attempts if plan.target_authorization else 1
+        ),
+        retry_policy=(
+            plan.target_authorization.source_retry_policy if plan.target_authorization else None
+        ),
+        engineering_policy=(
+            plan.target_authorization.engineering_policy if plan.target_authorization else None
+        ),
+        interruption_continuation_policy=(
+            plan.target_authorization.interruption_continuation_policy
+            if plan.target_authorization
+            else None
+        ),
         created_at=plan.created_at,
         updated_at=plan.created_at,
         metadata={
@@ -141,3 +155,79 @@ def test_bad_task_record_rejected(tmp_path: Path, change: str) -> None:
         if change in ("base", "authorization"):
             changed = changed.model_copy(update={"record_sha256": changed.recompute_sha256()})
         changed.validate_binding(plan, decision)
+
+
+def test_record_preserves_exact_approved_target_authority(tmp_path: Path) -> None:
+    plan = authorized_plan(policy_fixture(tmp_path))
+    decision = RecoveryAuthorization.create(approval(plan), Human().verify(approval(plan)))
+    record = record_for(plan, decision)
+    record.validate_binding(plan, decision)
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/recovery-task-record.schema.json").read_text()
+    )
+    Draft202012Validator(schema).validate(record.to_wire())
+    authority = plan.target_authorization
+    assert authority is not None
+    assert record.task.engineering_policy == authority.engineering_policy
+    assert (
+        record.task.interruption_continuation_policy == authority.interruption_continuation_policy
+    )
+    assert record.task.retry_policy == authority.source_retry_policy
+
+
+@pytest.mark.parametrize("change", ["drop_engineering", "drop_continuation", "scope", "budget"])
+def test_record_rejects_valid_but_unapproved_task_policy_changes(
+    tmp_path: Path, change: str
+) -> None:
+    plan = authorized_plan(policy_fixture(tmp_path))
+    decision = RecoveryAuthorization.create(approval(plan), Human().verify(approval(plan)))
+    record = record_for(plan, decision)
+    authority = plan.target_authorization
+    assert authority is not None and authority.source_retry_policy is not None
+    task = record.task
+    if change == "drop_engineering":
+        task = task.model_copy(update={"engineering_policy": None})
+    elif change == "drop_continuation":
+        task = task.model_copy(update={"interruption_continuation_policy": None})
+    elif change == "scope":
+        policy = authority.engineering_policy
+        task = task.model_copy(
+            update={
+                "engineering_policy": policy.model_copy(
+                    update={
+                        "scope": policy.scope.model_copy(update={"project_id": "project_other"})
+                    }
+                )
+            }
+        )
+    else:
+        retry = authority.source_retry_policy.model_copy(update={"max_work_attempts": 5})
+        task = task.model_copy(
+            update={"retry_policy": retry, "max_attempts": retry.execution_limit}
+        )
+    changed = record.model_copy(update={"task": task})
+    changed = changed.model_copy(update={"record_sha256": changed.recompute_sha256()})
+    with pytest.raises(RecoveryRejected, match="authority differs"):
+        changed.validate_binding(plan, decision)
+
+
+def test_legacy_record_rejects_new_authority_not_in_approved_plan(tmp_path: Path) -> None:
+    fixture = policy_fixture(tmp_path)
+    plan = fixture.plan
+    decision = RecoveryAuthorization.create(approval(plan), Human().verify(approval(plan)))
+    record = record_for(plan, decision)
+    before = record.model_dump_json()
+    authority = authorized_plan(fixture).target_authorization
+    assert authority is not None
+    changed = record.model_copy(
+        update={
+            "task": record.task.model_copy(
+                update={"engineering_policy": authority.engineering_policy}
+            )
+        }
+    )
+    changed = changed.model_copy(update={"record_sha256": changed.recompute_sha256()})
+    with pytest.raises(RecoveryRejected, match="authority differs"):
+        changed.validate_binding(plan, decision)
+    assert record.model_dump_json() == before
+    record.validate_binding(plan, decision)

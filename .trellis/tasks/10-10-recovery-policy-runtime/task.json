@@ -1,0 +1,16 @@
+{
+  "name": "recovery-policy-runtime",
+  "title": "新恢复授权经真实Configured工厂续跑与独立验收",
+  "status": "in_progress",
+  "phase": "implement",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "tests/manager/test_production_continuation.py",
+    "src/ai_software_engineer/recovery/entry.py",
+    "src/ai_software_engineer/recovery/resume.py",
+    "src/ai_software_engineer/git/worktree.py",
+    ".trellis/spec/core/delivery-recovery.md",
+    "docs/architecture/git-worktree.md",
+    ".trellis/tasks/10-10-recovery-policy-runtime"
+  ]
+}

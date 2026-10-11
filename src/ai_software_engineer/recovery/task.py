@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from ai_software_engineer.domain import ProjectRequest, Task
+from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.project_delivery import derive_delivery_task
 from ai_software_engineer.recovery.current import NativeRecoveryFacts, NativeRecoveryFactsVerifier
 from ai_software_engineer.recovery.models import RecoveryRejected
@@ -29,6 +30,18 @@ class AuthorizedRecoveryTaskBuilder:
         plan = self._authorization.require_current_authorization(plan_sha256)
         facts = self._facts.inspect(plan)
         original = facts.original
+        target_authorization = plan.target_authorization
+        if target_authorization is not None:
+            target_authorization.validate_current(
+                source=original.source,
+                task=original.task,
+                scope=EngineeringScope(
+                    team_id=facts.target.team_id,
+                    project_id=facts.target.project_id,
+                    repository_id=facts.target.repository_id,
+                    repository_root=facts.target.repository_root,
+                ),
+            )
         request = original.request
         if plan.created_at < request.updated_at:
             raise RecoveryRejected("recovery plan predates the approved request")
@@ -63,6 +76,14 @@ class AuthorizedRecoveryTaskBuilder:
             base_ref=plan.target_base_revision,
             max_attempts=original.task.max_attempts,
             retry_policy=original.task.retry_policy,
+            engineering_policy=(
+                target_authorization.engineering_policy if target_authorization else None
+            ),
+            interruption_continuation_policy=(
+                target_authorization.interruption_continuation_policy
+                if target_authorization
+                else None
+            ),
             created_at=plan.created_at,
             constraints=constraints,
             owner=original.task.owner,

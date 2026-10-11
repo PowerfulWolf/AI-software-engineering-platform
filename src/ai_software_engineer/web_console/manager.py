@@ -897,6 +897,25 @@ def _summarize(
                     "批准本次精确恢复方案后由 Coder 继续开发，"  # noqa: RUF001
                     "实现完成后仍须独立 QA 和 Reviewer 验收。",
                     *(
+                        (
+                            "本次批准包含有界工程处理授权: ASE 可核验中断、准备已登记验证"
+                            "并处理范围内工程前提; "
+                            "每次仍须通过现场与额度检查, 未知执行不会直接续跑。",
+                        )
+                        if recovery_plan.target_authorization is not None
+                        else ()
+                    ),
+                    *(
+                        (
+                            "已核实停止的开发中断可按原任务已冻结额度保留进度续跑; "
+                            "不扩大文件范围, 不替代独立验收, 不授权合并或部署。",
+                        )
+                        if recovery_plan.target_authorization is not None
+                        and recovery_plan.target_authorization.interruption_continuation_policy
+                        is not None
+                        else ()
+                    ),
+                    *(
                         ("从干净基线重新实现; 完整旧补丁作为历史输入, 不直接应用。",)
                         if recovery_plan.input_mode == "coder_reapply"
                         else ()

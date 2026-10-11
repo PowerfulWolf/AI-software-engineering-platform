@@ -1,5 +1,66 @@
 # Explicit delivery recovery — T044
 
+## 新恢复计划冻结目标执行授权（2026-10-10）
+
+### Scope / Trigger
+
+正常派发冻结工程处理与受控开发续跑策略；恢复 Task 不能在重新派发时丢失这些策略，
+也不能在旧批准下临时添加。此授权只属于新计划和新Task，不改变旧终态、停止事实或验收。
+
+### Signatures / Contracts
+
+```python
+RecoveryPlan.target_authorization: RecoveryTargetAuthorization | None
+RecoveryTargetAuthorization.issue(*, source, task, scope, principal) -> Self
+RecoveryTargetAuthorization.validate_current(*, source, task, scope) -> None
+NativeRecoveryEntry._target_authorization(original, prepared, *, project_id)
+AuthorizedRecoveryTaskBuilder.build(plan_sha256) -> RecoveryTaskDraft
+RecoveryTaskRecord.validate_binding(plan, authorization) -> None
+```
+
+- 新记录v1包含source_task_id/source_task_sha256/source_max_attempts/source_retry_policy、
+  engineering_policy和interruption_continuation_policy，全部进入新plan摘要。可信Host
+  ENGINEERING主体仅按真实注册的Team/Project/Repository/root签发固定bounded_local。
+  外部请求/模型文字不能提供主体职责；无工程职责不签发目标授权。
+- continuation v2只从原Task冻结retry预算派生；没有retry预算时保持None。不得采用当前
+  配置扩额，也不得用新policy退款已发生本地时限。source预算、完整Task SHA和registry
+  scope在current与builder重核。builder只复制已批准plan字段，record拒绝计划外注入、
+  替换两policy或改变预算。旧plan字段缺省/None在递归dump中省略，旧摘要/Task bytes保持。
+- `entry._execute → backend.run_prepared_allocation`复用正常Configured组合，按新Task策略
+  装配NativeCoderContinuation和已登记的独立验证服务，不引入第二执行器。真实停止、
+  完整workspace/claim/输入核验仍独立必需。知识准备尚无native-start的超时不能据此伪造
+  native停止收据，也不声称仅补这两个字段已建立同Task知识重试路径。
+- Console读取已持久计划，在审批正文用中文说明实际有界工程处理与原额度续跑范围；
+  不让产品填写policy、Lease或hash。仅在相应授权存在时显示，不把旧方案说明成新授权。
+  文件范围、QA/Review、合并/部署门禁保持；需要额外精确批准的动作仍须独立批准。
+
+### Validation & Error Matrix
+
+| 事实 | 必须结果 |
+| --- | --- |
+| 新计划含可信目标授权，精确新摘要批准 | 新Task两policy与计划逐项相同，复用正常执行组合 |
+| 旧plan字段缺失/None，已有封存Task | 序列化/摘要/Task保持，不隐式升级 |
+| source Task SHA/预算、注册Project/root、issuer职责漂移 | current/builder/record拒绝，无执行 |
+| legacy原Task无retry | 工程授权可精确批准，但不造v2续跑能力 |
+| retry存在，continuation为空对象/缺version/非v2 | Python与Schema均拒绝 |
+| 已批准旧plan后全局配置增加额度 | 仍按原冻结预算，不读取配置重新计算授权 |
+| 知识准备无可信停止收据、原生调用尚未记录 | 保留未知事实，不借新policy直接续跑 |
+
+Good：同一需求的新恢复方案明确授权保留进度续跑，新Task保留独立验证能力。Base：旧
+计划可读、旧bytes不变。Bad：builder读取最新配置给旧批准添加权限或追补旧Task。
+Wrong：derive_delivery_task只传retry_policy，或临时补当前policy。Correct：目标授权进入
+新计划摘要，真实工程主体精确批准，当前事实重验后复制到新Task。
+
+### Tests / Existing data / Rollback
+
+`test_task_policy_builder.py`覆盖签发职责、注册scope、源预算/Task SHA、builder新旧输出、
+递归dump字节与Schema反例；`test_task_record.py`拒绝授权注入/预算漂移；schema同步脚本
+保留旧defs/allOf并幂等。`test_manager.py`对新旧计划的中文审批facts作条件断言。
+实际Configured恢复、停止续跑、真实新claim及登记验证端口组合另做增量验收，不以字段
+测试代替真实交付。无改库或旧Task补写；部署后从原需求准备新的精确方案，核验旧进度/
+停止/新基线后批准新摘要。保留所有旧方案、失败和工作区。新计划持久化后回滚需保留
+新字段兼容reader；不支持的新版本fail closed，不能删除字段或重用旧批准。
+
 ## Terminal recovery after an approved execution baseline update (2026-10-10)
 
 ### 1. Scope / Trigger
@@ -793,14 +854,21 @@ bounded regular UTF-8 file. A captured addition may be absent from the target an
 the verified patch application; a captured base file missing from the target is rejected. Reject
 effective external filter/merge-driver configuration and merge attributes.
 Reject `.gitattributes` edits so the applied patch cannot change its own merge behavior.
-No model, state, dispatch, approval, commit, ref rewrite, reset or old worktree write occurs here.
+No model, state, dispatch, approval, commit, ref rewrite, destructive file reset or old worktree write
+occurs here. The fresh target index may be normalized back to its HEAD after a successful patch
+application; this does not discard the applied working-tree draft.
 
 Use full-index zero-context three-way Git apply with fixed text default, whitespace behavior and
 existing hook/fsmonitor guards. Preflight actually applies with `--cached --3way --unidiff-zero` to
 a disposable copied index (`GIT_INDEX_FILE`); Git may create unreachable shared objects, but no
-target index/files/refs change. Recheck source, target and configuration, then apply with `--index`
-to target. Return a revalidated target capture; independent newer-base changes remain. Original
-source is checked again. Observation is not an OS lock against concurrent hostile writers.
+target index/files/refs change. Recheck source, target and configuration, then apply the same
+three-way patch to the target. Because `--3way` implies `--index`, normalize only the exact captured
+paths in the fresh target index back to their clean HEAD entries while retaining all applied
+working-tree files. A seeded draft is ordinary Coder worktree content and a later interruption can
+reject new staged changes without rejecting the inherited draft or unstaging unrelated paths.
+Return a revalidated target capture;
+independent newer-base changes remain. Original source is checked again. Observation is not an OS
+lock against concurrent hostile writers.
 
 | Case | Result |
 |---|---|
@@ -2442,7 +2510,8 @@ accept an old retry plan as fresh authorization; propose from the latest actual 
 Only the contiguous tail `IMPLEMENTING → CONTINUE_REQUIRED(coder_requested_continuation) →
 QUEUED(coder_continuation_queued) → IMPLEMENTING(coder_continuation_resumed) → BLOCKED` qualifies.
 First two transitions refer to the sealed progress at attempt N; last two use N+1. The terminal
-reason must be the explicit Coder knowledge AUTHENTICATION_ERROR or TIMEOUT failure and agree with
+reason must be the explicit Coder knowledge AUTHENTICATION_ERROR, legacy TIMEOUT failure or current
+`coder knowledge preparation reached local time limit`, and agree with
 the Delivery summary. All reference the base revision; no candidate event may exist. Route/context
 keep their real N identity; the source Task and revision remain at N+1. Never fabricate a run.
 
@@ -2453,6 +2522,15 @@ keep their real N identity; the source Task and revision remain at N+1. Never fa
 | Later route, ambiguous run, active claim/work item | Reject source |
 | Sealed progress differs from route or HEAD/dirty paths differ | Reject source |
 | Capture contents/policy change after plan | Existing current-facts/capture verifier rejects approval/execution |
+
+成功 route 保存的 Agent progress 可以仍带 provisional `integrity`，而 accepted artifact
+由平台校验后封存为真实摘要/时间。`read_terminal_workspace_snapshot` 以
+`artifact_digest(route_progress) == artifact_digest(accepted_progress)` 比较完整 canonical
+正文（仅排除 integrity），不能要求完整对象全等，也不能只比较 artifact ID。accepted
+仍必须由 FileArtifactStore 验封并经 Native source reader 认证完整 event/route/Context
+链；run/source 独立约束、任务锁、停止/claim 复核与第二次 source/routes 读取保持。
+正文、Task、Context、Run或source变化均拒绝。真实 provisional→sealed 正例与这些
+负例由 `tests/recovery/test_workspace_snapshot.py` 覆盖；无历史artifact重写或补造seal。
 
 Good: retain all edits made by the latest Coder, including files absent from its original recovery
 seed. Base: current-attempt failed routes and budget-exhausted progress use their existing rules.
@@ -2640,7 +2718,8 @@ the normal-cleanup removal case. Neither helper creates a worktree or moves refs
 - A QA FAIL/Review REJECT → IMPLEMENTING transition reserves the next Coder attempt before
   knowledge consultation. That transition alone does not establish a provider execution or edits.
 - Accept only terminal BLOCKED with exact `TRANSIENT_INFRA: coder knowledge preparation failed:
-  AUTHENTICATION_ERROR` or `...: TIMEOUT`, matching checkpoint summary, the same feedback/failure
+  AUTHENTICATION_ERROR`, legacy `...: TIMEOUT`, or current `TRANSIENT_INFRA: coder knowledge
+  preparation reached local time limit`, matching checkpoint summary, the same feedback/failure
   attempt, exactly one attempt after the last candidate. Full event-chain validation still applies.
 - Original accepted implementation must be referenced by both candidate and blocked events.
   Revalidate sealed feedback type/verdict, Task, candidate and QA parent implementation.

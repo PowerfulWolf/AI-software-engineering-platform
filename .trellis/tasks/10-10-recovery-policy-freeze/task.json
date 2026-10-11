@@ -1,0 +1,25 @@
+{
+  "name": "recovery-policy-freeze",
+  "title": "新精确恢复计划冻结目标工程授权与原预算续跑能力",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/recovery/models.py",
+    "src/ai_software_engineer/recovery/task.py",
+    "src/ai_software_engineer/recovery/entry.py",
+    "src/ai_software_engineer/recovery/current.py",
+    "src/ai_software_engineer/recovery/records.py",
+    "scripts/sync-recovery-target-authorization-schema.py",
+    "schemas/delivery-recovery.schema.json",
+    "tests/recovery/test_authorization.py",
+    "tests/recovery/test_task_record.py",
+    "tests/recovery/test_task_policy_builder.py",
+    ".trellis/tasks/10-10-recovery-policy-freeze",
+    "src/ai_software_engineer/web_console/manager.py",
+    "tests/web_console/test_manager.py",
+    ".trellis/spec/core/delivery-recovery.md",
+    ".trellis/spec/core/engineering-continuation.md",
+    "docs/architecture/contracts.md"
+  ]
+}

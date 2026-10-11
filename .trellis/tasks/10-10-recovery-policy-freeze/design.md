@@ -1,0 +1,31 @@
+# 恢复目标授权契约
+
+## 类型与身份
+
+`RecoveryPlan.target_authorization: RecoveryTargetAuthorization | None`，default=None，
+exclude_if=None；旧wire、嵌套model_dump和摘要保持。目标授权包括kind/version、source
+Task ID/SHA、source_max_attempts、typed source_retry_policy、EngineeringPolicy和可选
+InterruptionContinuationPolicy。policy内保留完整EngineeringScope和typed ENGINEERING
+签发主体，全部进入新计划摘要。
+
+## 签发与验证
+
+NativeDeliveryRecoveryEntry在准备新计划时仅从可信operator_principal、已经注册的
+Repository所属Project以及真实prepared Team/Repo/root签发bounded_local。没有ENGINEERING
+主体不新增目标授权。continuation只通过original.task.retry_policy构造，legacy缺预算时
+保持None。模型检查source/旧范围、签发职责、bounded_local能力/预算、retry执行额度以及
+续跑policy精确相等，不采用模型/请求提供的权限扩张。
+
+NativeRecoveryFactsVerifier在读取原Task与注册Project后，再核对完整scope、source身份和
+冻结retry/max_attempts。Builder只复制已批准plan的两policy，既有原Task预算仍由facts
+验证，无临时config访问。RecoveryTaskRecord核对新Task两policy和预算严格等于已批准
+plan，legacy没有目标授权时不允许偷偷增加policy。
+
+## 测试与Schema
+
+先补新授权改变摘要/None省略/不合法issuer及scope/budget的纯模型测试；pure fake builder
+提供typed NativeRecoveryFacts和精确批准port，不启动Git、MySQL或模型；record测试拒绝
+两policy注入/替换及预算漂移。Schema同步脚本仅补RecoveryPlan新字段及其传递定义，保留
+handwritten allOf；同步整个包含此模型的wire定义后验证正反fixture与生成一致性。
+
+组织规范由根代理同步。本任务不修改workspace_snapshot或其他worker的恢复执行改动。

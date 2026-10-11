@@ -240,3 +240,75 @@ TASK_SEALED10:49:31.002209Z。root在真实Chrome仅GET读取该明细，页面�
 零写请求/零pageerror。不能用空model-calls判断调用；准备观察不冒充当前角色claim。
 活动Operation期间只提交已独立验证的通知info蓝色i补丁，资产不热替换；待安全idle加载，
 当前f88执行目标60fa1f4保持冻结，不为了图标重新创建需求或改变批准基线。
+
+## f88正式接续与真实实现调用
+
+2026-10-10，公开准备观察随后真实追加DISPATCH_COMMITTED10:54:07.821671Z、
+SEED_VERIFIED10:55:06.292877Z、EXECUTION_CLAIMED10:55:09.987870Z。新Task完整ID为
+task_recovery_f88b78a7888c3e28c91bf298c5f0efd6；不是新的Requirement。
+10:56:02Z短一致READ ONLY SQL快照（约0.014秒）确认IMPLEMENTING/attempt1/revision2、
+WorkItem RUNNING，lease ACTIVE且最近心跳10:56:00，未到期。工作额度10、执行身份40、
+当前工作消耗1、临时故障0；没有修改冻结policy或旧失败计数。
+
+前两次真正模型调用是claimed Coder知识准备，非生产代码实现：knowledge_intent从
+10:55:10.260033Z运行99.286秒、knowledge_assessment从10:56:52.734063Z运行215.088秒，
+均为gpt-6.1-sol且SUCCEEDED。知识client使用注册主clone cwd符合既有composition；
+不能以空原生invocation-start或空model-calls列表断言不存在知识模型调用。
+
+10:57:15Z尚无原生实现invocation-start；10:59:39Zroot精确只读getter同样未找到。
+随后真实原生invocation-start封存于11:00:28.335772Z，run_1770292277924007b187d5b794912f7e，
+start SHA aeb2e361090ce5d834bf4375235d913916aa5d7cc6fd248c272ff8424469eb28，
+source60fa1f45aa9ebd663899d04c7c8a66c77950fbe8。11:01:23Z安全进程元数据确认服务52966
+的Codex子进程90332实际cwd为该Task的coder-attempt-01隔离工作区。至此可确认Coder
+实现调用开始；还没有实现候选、QA PASS或Review APPROVE，K1未交付。
+
+本轮真实Chrome只读验收1440/390px：当前标题/节点“实现·执行中”、处理方ASE团队、
+下一步等待角色，无旧审批按钮；五项准备历史与公开API一致，无横向溢出、JS异常或非GET。
+客户端单次503读取失败后准备卡/阅读DOM与scroll300保持，恢复后同样保持。发现全新会话
+被2026-10-04无target的CREATE_REQUIREMENT失败弹窗遮住当前正常K1，另开
+10-10-project-operation-notices任务修复；没有删除真实失败历史或重复提交创建动作。
+
+b74558b已成功推送origin/main；其信息图标资源尚未加载。当前真实活动Operation与
+原生Coder期间不重启、不热替换资产、不改变批准target或旧worktree。恢复准备7分28秒
+仍影响体验，独立诊断见preparation-diagnosis-f88.md；叶子计时尚不能证明分钟级根因。
+
+## f88 第一份接纳进度与第二轮自动接续
+
+第一轮原生执行自然结束并成功保存非候选 coder-progress：
+art_coder_4e44709e868ab562a74af759350068c1，摘要
+a5a24a02fd561659e685447b95572809413d24ca4a9b0ee7eccd1323bfcbb505。
+HEAD 仍为批准输入60fa1f4，27个业务文件草稿保持。已完成contract_first包，仍有7个
+工作包未完成；进度中明确保留未通过测试，不将checkpoint解释成实现或验收完成。
+11:18:55.087664Z第一轮lease正常释放、WorkItem CLOSED。平台自动进入同Task的
+attempt2，work_a9a0dad0a153931ef482f72cc533e72adbde4fbd726face5d8ec8b5f0aa35044，
+lease_43ae6e50bde322abda2c07e0；没有再次提交批准或创建同名Requirement。
+
+11:30:06Z短一致只读快照确认Task IMPLEMENTING/attempt2，第二轮RUNNING，心跳
+11:29:58.592384Z且租约ACTIVE。第二轮知识意图模型调用从11:18:55.596473Z运行
+153.319秒并成功；原生实现invocation-start尚未保存。服务52966当前存在Codex子进程
+60589，cwd为注册仓库主clone，符合知识准备调用；不能把该进程称为第二轮代码实现。
+知识充分性评估结束和第二轮实现准入仍待真实记录核验。
+
+3b77839已推送origin/main，修复新会话被无需求target的历史Project失败弹窗遮挡，
+完整旧操作转入可读Project操作记录。与b74558b同样尚未部署；当前服务资产冻结在
+60fa1f4。新增detail-read-freshness任务补充详情就近旧数据说明，仍在离线验收中，
+不以代码已提交或fixture通过冒充生产页面已加载。存量无需改库，活动操作安全结束后
+再受控加载兼容资产并核对HTTP摘要与实际浏览器。
+
+## f88 第二轮知识评估达到本地时限
+
+11:31:30.712072Z Task 正常封存 BLOCKED，11:31:30.738682Z第二轮lease释放且WorkItem
+CLOSED。公开model-calls记录知识充分性评估从11:21:30.474281Z运行600035ms后FAILED；
+没有第二轮原生invocation-start/outcome，不能解释为新的源码开发中断或旧执行停止未知。
+第一轮accepted progress仍完整保留。11:32:00.664841Z原批准Operation自然SUCCEEDED，
+result.stage=BLOCKED，父checkpoint更新为
+4cd7e8f43914a6ce23c6e5252ac58cf362ae78d71683dbe290c8dfbaf3b246ae。
+Operation完成只说明命令执行结束，不说明需求交付成功。
+
+精确只读Task显示work额度10、执行身份40、work_attempt2、无transient debit，
+engineering_policy与interruption_continuation_policy均缺省。当前Task作为旧恢复Task没有
+非终态wait能力；本地时限分类非provider transient，不能凭剩余次数直接自动重试或改库。
+独立研究定位到两个窄缺口：交付知识咨询额外固定600秒而非调用方已准入窗口；
+progress_source原因集合漏掉实际local-limit文案，不能识别已有第一轮进度。已建独立
+delivery-knowledge-window任务先红测、修复并验收，随后使用现有精确RecoveryPlan继续
+同一Requirement。恢复Task策略冻结缺口另行记录，不能给f88补写policy或重置终态。

@@ -592,6 +592,15 @@ class GitWorktreeManager:
                 self.verify_capture(clean, target_permissions, denied_paths=target_denied_paths)
                 self._validate_seed_configuration(target, capture.changed_paths)
                 self._run_git_bytes((*arguments, "-"), cwd=target.path, input=capture.patch)
+                # ``--3way`` implies ``--index`` even when the flag is omitted
+                # from argv.  Keep the applied draft in the worktree while
+                # returning a clean index. Restrict the mixed reset to the
+                # exact captured paths so an observed concurrent writer cannot
+                # have unrelated staged paths silently removed.
+                self._run_git(
+                    ("reset", "--mixed", target.head_revision, "--", *capture.changed_paths),
+                    cwd=target.path,
+                )
             seeded = self.capture_changes(
                 target, target_permissions, denied_paths=target_denied_paths
             )

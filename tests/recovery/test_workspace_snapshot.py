@@ -943,7 +943,22 @@ def test_raw_sql_indexes_cannot_disagree_with_valid_payload(native: Fixture, pro
         )
 
 
-@pytest.mark.parametrize("case", ["accepted", "prior_only", "stop_unknown", "reader_rejected"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "accepted",
+        "provisional",
+        "content_mismatch",
+        "source_mismatch",
+        "context_mismatch",
+        "run_mismatch",
+        "task_mismatch",
+        "missing_accepted",
+        "prior_only",
+        "stop_unknown",
+        "reader_rejected",
+    ],
+)
 def test_successful_progress_keeps_verified_existing_recovery_contract(
     native: Fixture, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
@@ -961,8 +976,47 @@ def test_successful_progress_keeps_verified_existing_recovery_contract(
             ),
         }
     )
+    accepted_progress = progress
+    if case in {
+        "provisional",
+        "content_mismatch",
+        "source_mismatch",
+        "context_mismatch",
+        "run_mismatch",
+        "task_mismatch",
+    }:
+        from ai_software_engineer.artifacts import seal_artifact
+        from ai_software_engineer.domain import ArtifactIntegrity, CoderProgressArtifact
+
+        progress = progress.model_copy(
+            update={"integrity": ArtifactIntegrity(sha256="0" * 64, validated=False)}
+        )
+        accepted_progress = progress
+        if case == "content_mismatch":
+            accepted_progress = progress.model_copy(
+                update={"content": progress.content.model_copy(update={"summary": "Other work"})}
+            )
+        elif case == "source_mismatch":
+            accepted_progress = progress.model_copy(update={"source_revision": "c" * 40})
+        elif case == "context_mismatch":
+            accepted_progress = progress.model_copy(update={"context_manifest_id": "ctx_other"})
+        elif case == "run_mismatch":
+            accepted_progress = progress.model_copy(
+                update={"producer": progress.producer.model_copy(update={"run_id": "run_other"})}
+            )
+        elif case == "task_mismatch":
+            accepted_progress = progress.model_copy(update={"task_id": "task_other"})
+        sealed_progress = seal_artifact(accepted_progress, validated_at=NOW + timedelta(seconds=2))
+        assert isinstance(sealed_progress, CoderProgressArtifact)
+        accepted_progress = sealed_progress
     original = cast(
-        NativeRecoverySource, SimpleNamespace(**{**vars(original), "accepted_progress": progress})
+        NativeRecoverySource,
+        SimpleNamespace(
+            **{
+                **vars(original),
+                "accepted_progress": None if case == "missing_accepted" else accepted_progress,
+            }
+        ),
     )
     monkeypatch.setattr(
         "ai_software_engineer.recovery.native.NativeRecoverySourceReader.inspect",
@@ -1012,7 +1066,7 @@ def test_successful_progress_keeps_verified_existing_recovery_contract(
             pytest.fail("accepted final progress must not require a native failure capture-stop")
 
         monkeypatch.setattr(module, "_read_facts", no_failure_audit)
-    if case == "accepted":
+    if case in {"accepted", "provisional"}:
         assert read_terminal_workspace_snapshot(config, {}, original, audit.capture) is None
         assert stopped_calls == ["verified"]
     elif case == "prior_only":

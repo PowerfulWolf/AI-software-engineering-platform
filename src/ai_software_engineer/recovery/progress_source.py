@@ -21,6 +21,7 @@ CODER_KNOWLEDGE_FAILURE_REASONS: Final = frozenset(
     {
         "TRANSIENT_INFRA: coder knowledge preparation failed: AUTHENTICATION_ERROR",
         "TRANSIENT_INFRA: coder knowledge preparation failed: TIMEOUT",
+        "TRANSIENT_INFRA: coder knowledge preparation reached local time limit",
     }
 )
 

@@ -327,15 +327,21 @@ def test_native_source_is_verified_read_only_and_rejects_corruption(
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    "knowledge_failure,execution_failure", [(False, False), (True, False), (False, True)]
+    "knowledge_failure,execution_failure",
+    [(None, False), ("authentication", False), ("local_timeout", False), (None, True)],
 )
 def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
     tmp_path: Path,
     mysql_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
-    knowledge_failure: bool,
+    knowledge_failure: str | None,
     execution_failure: bool,
 ) -> None:
+    from ai_software_engineer.domain.engineering_authority import (
+        LocalOperatorPrincipal,
+        OperatorDuty,
+    )
+
     original_build = FileRunContextBuilder.build
     original_run = ContinuedCoder.run
 
@@ -357,7 +363,31 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
                     transient=False,
                 ),
             )
-        return original_run(self, request)
+        result = original_run(self, request)
+        if request.work_slice is not None:
+            from ai_software_engineer.domain.artifact import CoderProgressArtifact
+
+            progress = result.artifact
+            assert isinstance(progress, CoderProgressArtifact)
+            work = request.work_slice
+            result = result.model_copy(
+                update={
+                    "artifact": progress.model_copy(
+                        update={
+                            "content": progress.content.model_copy(
+                                update={
+                                    "completed_step_ids": work.completed_step_ids,
+                                    "remaining_step_ids": (
+                                        *work.selected_step_ids,
+                                        *work.later_step_ids,
+                                    ),
+                                }
+                            )
+                        }
+                    )
+                }
+            )
+        return result
 
     monkeypatch.setattr(ContinuedCoder, "run", run)
 
@@ -380,7 +410,14 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
         )
         if knowledge_failure and agent.role is AgentRole.CODER and attempt == 2:
             raise StructuredModelError(
-                AgentErrorCode.AUTHENTICATION_ERROR, "offline knowledge failure", transient=False
+                AgentErrorCode.TIMEOUT
+                if knowledge_failure == "local_timeout"
+                else AgentErrorCode.AUTHENTICATION_ERROR,
+                "offline knowledge failure",
+                transient=False,
+                timeout_kind="local_execution_limit"
+                if knowledge_failure == "local_timeout"
+                else None,
             )
         return context
 
@@ -411,6 +448,14 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
         delivery_route_adapters=factory,
+        # This branch exercises historical terminal knowledge failures. Modern
+        # engineering-owned Tasks retain a nonterminal queue wait instead.
+        operator_principal=LocalOperatorPrincipal(
+            operator_id="operator:product-history-fixture",
+            duties=(OperatorDuty.PRODUCT,),
+        )
+        if knowledge_failure
+        else None,
     )
     workspace = host.projects()[0]
     entry = host.project_entry()
@@ -424,6 +469,10 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
             approval_reference="test-approval",
         )
     )
+    for _ in range(config.execution_retry_policy.delivery_policy().max_work_attempts):
+        if blocked.checkpoint.stage.value != "DELIVERING":
+            break
+        blocked = entry.resume(ResumeProjectDelivery(delivery_id=started.checkpoint.delivery_id))
     checkpoint = blocked.checkpoint
     assert checkpoint.stage.value == "BLOCKED"
     assert checkpoint.failure_code is not None
@@ -452,6 +501,17 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
     )
     assert source.source.failed_run_id == factory.requests[-1].run_id
     assert source.source.failed_context_id == factory.requests[-1].context_manifest_id
+    if knowledge_failure:
+        assert source.task.engineering_policy is None
+        # The source used a product-only principal; exact recovery and scope
+        # approval now belong to the trusted engineering operator.
+        host = TeamHost(
+            config=config,
+            environment=environment,
+            structured_clients=_ScriptedClientFactory(),
+            delivery_route_adapters=factory,
+            operator_principal=LocalOperatorPrincipal.trusted_local(),
+        )
     plan, plan_path = host.recovery_entry().propose_delivery(checkpoint)
     if execution_failure:
         assert "+later interrupted changes\n" in plan.capture.patch
@@ -549,6 +609,12 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
         with MySqlTaskRepository(mysql_dsn) as repository:
             before = repository.get(source.task.id), repository.list_events(source.task.id)
         events = before[1]
+        assert events[-1].reason == (
+            "TRANSIENT_INFRA: coder knowledge preparation reached local time limit"
+            if knowledge_failure == "local_timeout"
+            else "TRANSIENT_INFRA: coder knowledge preparation failed: AUTHENTICATION_ERROR"
+        )
+        assert not source.task.retry_failures
         assert routes[-1].result.artifact is not None
         assert is_prior_progress_source(routes[-1], source.task, checkpoint, events)
         for index in range(len(events) - 4, len(events)):

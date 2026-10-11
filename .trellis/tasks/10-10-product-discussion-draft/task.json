@@ -1,0 +1,13 @@
+{
+  "name": "product-discussion-draft",
+  "title": "Team 暂不可读时保留 Product 讨论草稿并精确禁止提交",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/browser/product-discussion-draft.test.cjs",
+    ".trellis/tasks/10-10-product-discussion-draft",
+    ".trellis/spec/core/incremental-polling.md"
+  ]
+}

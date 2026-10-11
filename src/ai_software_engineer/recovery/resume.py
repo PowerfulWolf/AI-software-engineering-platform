@@ -559,6 +559,7 @@ class DeliveryResumeController:
             native.source.stages.product,
             native.source.stages.design,
             native.source.stages.plan,
+            requirement_id=plan.scope.delivery_id,
             extra_context=(
                 *approved_parent_context(
                     self._config, plan.scope, plan.parent_delivery_id, plan.parent_checkpoint_sha256

@@ -1,0 +1,12 @@
+{
+  "name": "console-fixture-alignment",
+  "title": "等待真实刷新并准确绑定当前Task的增量fixture",
+  "status": "in_progress",
+  "phase": "verified_pending_deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "tests/team_view/ui.test.cjs",
+    "tests/team_view/browser/task-detail-reading.test.cjs",
+    ".trellis/tasks/10-10-console-fixture-alignment"
+  ]
+}

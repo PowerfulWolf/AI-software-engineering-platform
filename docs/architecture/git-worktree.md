@@ -219,4 +219,6 @@ T044 C2 的 `seed_changes(capture, target, source_permissions, target_permission
 双方权限校验后，将文本修改或已捕获的新增文件应用到另一个新 Task 的干净 Coder worktree。
 新基线必须包含旧基线；冲突先在临时暂存区检出，不污染目标文件。若 capture 声明新增文件而目标
 已存在，或 capture 声明修改文件而目标缺少基线文件，必须拒绝。旧 worktree 不变，应用后只返回
-改动捕获，不提交代码、不生成 verdict；恢复 Task 仍必须经过独立 Coder、QA、Reviewer 契约。
+改动捕获；应用后仅将捕获路径的新目标 index 规范化回 HEAD，继承的草稿作为普通工作区内容交给 Coder，
+不把 seed 误当作新的暂存改动，也不移除无关路径的暂存状态。不提交代码、不生成 verdict；恢复 Task 仍必须
+经过独立 Coder、QA、Reviewer 契约。

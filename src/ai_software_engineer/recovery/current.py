@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import AgentRole, ProjectPreparation
+from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.knowledge_selection import (
     effective_project_knowledge_paths,
@@ -97,6 +98,17 @@ class NativeRecoveryFactsVerifier:
             read_only=True,
         )
         project, repository = team.project_registry().locate_repository(source.scope.repository_id)
+        if plan.target_authorization is not None:
+            plan.target_authorization.validate_current(
+                source=source,
+                task=original.task,
+                scope=EngineeringScope(
+                    team_id=team.manifest.team_id,
+                    project_id=project.manifest.project_id,
+                    repository_id=repository.manifest.repository_id,
+                    repository_root=repository.manifest.repository_root,
+                ),
+            )
         sidecar = repository.root
         target = _preparation(sidecar, source.scope.repository_id, plan.target_preparation_sha256)
         previous = original.preparation

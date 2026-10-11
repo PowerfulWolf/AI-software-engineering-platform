@@ -1,5 +1,6 @@
 """Repository-only recovery seeding, with real Git and no live platform writes."""
 
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -69,9 +70,11 @@ def test_seed_preserves_new_base_and_original_source(
     assert "VALUE = 2\n" in content and "FOOTER = 2\n" in content
     assert seeded.worktree == target
     assert seeded.changed_paths == ("src/app.py",)
+    assert seeded.index_diff_sha256 == hashlib.sha256(b"").hexdigest()
     manager.verify_capture(seeded, permissions)
     manager.verify_capture(capture, permissions)
     assert (index_bytes(source), (source.path / "src/app.py").read_bytes()) == before
+    assert git(target.path, "diff", "--cached", "--name-only") == ""
     assert git(target.path, "rev-parse", "HEAD") == target.head_revision
     assert git(source.path, "rev-parse", "HEAD") == source.head_revision
     assert git(tmp_path / "repo", "status", "--porcelain") == ""
@@ -95,6 +98,7 @@ def test_seed_preserves_new_files_and_original_source(
     manager.verify_capture(capture, permissions)
     manager.verify_capture(seeded, permissions)
     assert created.read_text(encoding="utf-8") == "NEW = 1\n"
+    assert git(target.path, "diff", "--cached", "--name-only") == ""
     assert git(target.path, "rev-parse", "HEAD") == target.head_revision
     assert git(source.path, "rev-parse", "HEAD") == source.head_revision
 
@@ -169,6 +173,7 @@ def test_same_base_and_empty_seed(
     seeded = manager.seed_changes(capture, target, permissions, permissions)
     assert seeded.file_sha256s == capture.file_sha256s
     assert (target.path / "src/app.py").read_bytes() == (source.path / "src/app.py").read_bytes()
+    assert git(target.path, "diff", "--cached", "--name-only") == ""
     manager.verify_capture(capture, permissions)
 
 

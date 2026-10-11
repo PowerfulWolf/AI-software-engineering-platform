@@ -137,6 +137,20 @@ class RecoveryTaskRecord(DomainModel):
         self.validate_integrity()
         plan.validate_integrity()
         authorization.validate_integrity()
+        authority = plan.target_authorization
+        if (
+            self.task.engineering_policy != (authority.engineering_policy if authority else None)
+            or self.task.interruption_continuation_policy
+            != (authority.interruption_continuation_policy if authority else None)
+            or (
+                authority is not None
+                and (
+                    self.task.max_attempts != authority.source_max_attempts
+                    or self.task.retry_policy != authority.source_retry_policy
+                )
+            )
+        ):
+            raise RecoveryRejected("recovery Task authority differs from the exact approved plan")
         expected = {
             "recovery_of_task_id": plan.source.task_id,
             "recovery_of_delivery_id": plan.source.scope.delivery_id,

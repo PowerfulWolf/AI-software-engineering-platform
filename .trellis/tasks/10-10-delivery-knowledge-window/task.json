@@ -1,0 +1,24 @@
+{
+  "name": "delivery-knowledge-window",
+  "title": "交付知识准备使用已准入窗口并保留本地到期后的可信进度",
+  "status": "completed",
+  "phase": "verified_pending_deployment",
+  "created_at": "2026-10-10",
+  "allowlist": [
+    "src/ai_software_engineer/recovery/progress_source.py",
+    "src/ai_software_engineer/knowledge/agents.py",
+    "tests/recovery/test_progress_source.py",
+    "tests/recovery/test_native.py",
+    "tests/knowledge/test_delivery_context.py",
+    "tests/knowledge/test_consultation.py",
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/knowledge-preparation-timeout.test.cjs",
+    "tests/team_view/browser/knowledge-preparation-timeout.test.cjs",
+    "tests/team_view/ui.test.cjs",
+    ".trellis/spec/core/execution-retry-policy.md",
+    ".trellis/spec/core/delivery-recovery.md",
+    ".trellis/tasks/10-10-delivery-knowledge-window",
+    "src/ai_software_engineer/recovery/workspace_snapshot.py",
+    "tests/recovery/test_workspace_snapshot.py"
+  ]
+}

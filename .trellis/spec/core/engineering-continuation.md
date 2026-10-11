@@ -7,6 +7,12 @@ one checked continuation of a stopped first invocation, not candidate approval, 
 expansion, terminal reset or arbitrary dirty adoption. Production preview and dispatch commit
 must freeze the same policy; absence remains absent in old Task/approval wire bytes.
 
+恢复后继Task的两项执行策略必须来自新精确批准的
+`RecoveryPlan.target_authorization`，不能从当前配置临时添加或追补旧Task。新continuation
+按原Task冻结retry预算派生；旧plan/无预算保持原缺省。current facts和TaskRecord重验
+完整来源、注册scope与预算；授权范围、存量操作及兼容规则见delivery-recovery.md的
+“新恢复计划冻结目标执行授权”。知识准备无native-start不构成已停止的原生调用。
+
 `WorkspaceMutationInventory` records bounded no-follow final file observations, including ignored
 files. `ExecutionInterruptionReceipt` binds the original request/claim, Task intent, policy,
 stopped-process evidence, complete capture, before/after inventory digests and mutation paths.

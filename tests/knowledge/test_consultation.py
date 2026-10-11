@@ -147,19 +147,10 @@ def test_real_composition_seam_consults_and_replays(tmp_path: Path, role: TeamRo
     assert model.calls == ["KnowledgeIntent", "KnowledgeAssessment", "Output", "Output"]
 
 
-@pytest.mark.parametrize(
-    ("role", "expected"),
-    [
-        (TeamRole.PRODUCT, 300),
-        (TeamRole.DESIGNER, 300),
-        (TeamRole.PLANNER, 300),
-        (TeamRole.CODER, 300),
-        (TeamRole.QA, 300),
-        (TeamRole.REVIEWER, 300),
-    ],
-)
-def test_upstream_knowledge_calls_share_expanded_stage_window(
-    tmp_path: Path, role: TeamRole, expected: int
+@pytest.mark.parametrize("role", list(TeamRole))
+@pytest.mark.parametrize("role_timeout", (60, 1200, 1800))
+def test_structured_knowledge_calls_share_the_admitted_role_window(
+    tmp_path: Path, role: TeamRole, role_timeout: int
 ) -> None:
     frozen = snapshot(document())
     model = Model()
@@ -170,9 +161,9 @@ def test_upstream_knowledge_calls_share_expanded_stage_window(
         instructions="Produce role output",
         input_payload={"question": "refund"},
         output_schema={"title": "Output"},
-        timeout_seconds=300,
+        timeout_seconds=role_timeout,
     )
-    assert model.timeouts == [expected, expected, 300]
+    assert model.timeouts == [role_timeout] * 3
 
 
 def test_unknown_stops_before_final_role_call(tmp_path: Path) -> None:

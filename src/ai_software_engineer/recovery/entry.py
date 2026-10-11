@@ -20,12 +20,17 @@ from ai_software_engineer.config import (
 from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.domain import (
     AgentRole,
+    ProjectPreparation,
     Task,
     TaskStatus,
     TeamRole,
 )
 from ai_software_engineer.domain.branch import BranchName, available_successor_branch
-from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal, OperatorDuty
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringScope,
+    LocalOperatorPrincipal,
+    OperatorDuty,
+)
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound, WorktreeSpec
 from ai_software_engineer.git.policy import is_protected_rule_path
@@ -71,11 +76,12 @@ from ai_software_engineer.recovery.models import (
     RecoveryScope,
     RecoveryScopeRequest,
     RecoveryScopeSupplement,
+    RecoveryTargetAuthorization,
     SafeText,
     VerifiedRecoveryDecision,
     digest,
 )
-from ai_software_engineer.recovery.native import NativeRecoverySourceReader
+from ai_software_engineer.recovery.native import NativeRecoverySource, NativeRecoverySourceReader
 from ai_software_engineer.recovery.preparation_progress import (
     record_authorization,
     record_dispatch_committed,
@@ -252,6 +258,28 @@ class NativeRecoveryEntry:
         self.operator_principal = operator_principal
         self._facts = NativeRecoveryFactsVerifier(config, self.environment)
 
+    def _target_authorization(
+        self,
+        original: NativeRecoverySource,
+        prepared: ProjectPreparation,
+        *,
+        project_id: str,
+    ) -> RecoveryTargetAuthorization | None:
+        principal = self.operator_principal
+        if principal is None or OperatorDuty.ENGINEERING not in principal.duties:
+            return None
+        return RecoveryTargetAuthorization.issue(
+            source=original.source,
+            task=original.task,
+            scope=EngineeringScope(
+                team_id=prepared.team_id,
+                project_id=project_id,
+                repository_id=prepared.repository_id,
+                repository_root=prepared.repository_root,
+            ),
+            principal=principal,
+        )
+
     @source_inspection_scope()
     def propose(
         self,
@@ -340,10 +368,11 @@ class NativeRecoveryEntry:
         )
         if quarantined_paths:
             input_mode = "coder_reapply"
+        target_facts = self.backend._facts(prepared_result)
         target_permissions = _delivery_role_permissions(
             AgentRole.CODER,
             allowed_paths,
-            _task_commands(self.backend._facts(prepared_result).profile),
+            _task_commands(target_facts.profile),
         )
         target_branch_name = target_branch_name or available_successor_branch(
             original.product.branch_name or original.task.branch_name,
@@ -365,6 +394,9 @@ class NativeRecoveryEntry:
             workspace_snapshot=workspace_snapshot,
             target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(repository_root)),
             target_preparation_sha256=prepared.preparation_sha256,
+            target_authorization=self._target_authorization(
+                original, prepared, project_id=target_facts.workspace.manifest.project_id
+            ),
             target_branch_name=target_branch_name,
             scope_supplement=supplement,
             scope_approval_reference=scope_approval_reference if supplement is not None else None,
@@ -589,6 +621,7 @@ class NativeRecoveryEntry:
                 facts.original.product,
                 facts.original.design,
                 facts.original.plan,
+                requirement_id=plan.source.scope.delivery_id,
                 route_scope=(recovery_route,),
             )
         return NativeRecoveryExecution(
@@ -897,6 +930,7 @@ class NativeRecoveryEntry:
             draft.facts.original.product,
             draft.facts.original.design,
             draft.facts.original.plan,
+            requirement_id=plan.source.scope.delivery_id,
             route_adapters=factory,
             extra_context=(*extra, *recovery_context_sources(plan)),
             route_scope=(recovery_route,),

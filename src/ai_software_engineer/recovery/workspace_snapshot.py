@@ -25,6 +25,7 @@ from pymysql.cursors import DictCursor
 from ai_software_engineer.agents import FileModelRouteAttemptStore, ModelRouteAttempt
 from ai_software_engineer.agents.fallback import RouteAttemptOutcome, model_route_root
 from ai_software_engineer.agents.models import AgentRunStatus
+from ai_software_engineer.artifacts import artifact_digest
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import (
     AgentPermissions,
@@ -815,7 +816,8 @@ def read_terminal_workspace_snapshot(
                 progress = final.result.artifact
                 _require(
                     isinstance(progress, CoderProgressArtifact)
-                    and progress == original.accepted_progress
+                    and isinstance(original.accepted_progress, CoderProgressArtifact)
+                    and artifact_digest(progress) == artifact_digest(original.accepted_progress)
                     and progress.producer.run_id == source.failed_run_id
                     and progress.source_revision == original.worktree_revision
                 )

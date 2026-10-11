@@ -37,9 +37,12 @@ approval, feedback, product/design/plan artifact or historical checkpoint is rew
 successful invocation consumes its normal work attempt; prior capacity facts remain audit
 history. Unknown process interruption does not refund. The knowledge intent/assessment
 subcalls for these three roles receive the same expanded window. Delivery consultation uses
-`knowledge_phase_timeout(role, timeout_seconds)`: the minimum of the role's admitted timeout
-and 600 seconds, shared by both `KnowledgeAwareStructuredClient` and
-`KnowledgeRunContextBuilder`. There is no hidden 120-second cap. A typed local consultation
+`knowledge_phase_timeout(role, timeout_seconds)`: the caller's already admitted finite role
+window, shared by both `KnowledgeAwareStructuredClient` and `KnowledgeRunContextBuilder`.
+There is no additional 120- or 600-second consultation cap. Native Coder at 1800 seconds and
+QA/Reviewer at 1200 seconds retain those finite windows for each intent/assessment subcall;
+a shorter admitted window remains shorter. This is not an unlimited invocation or an extension
+of a frozen role permission. A typed local consultation
 limit produces `knowledge preparation reached local time limit`, does not debit the transient
 budget or fabricate an AgentRun, and projects `RESOURCE_UNAVAILABLE`; other non-budget
 `TRANSIENT_INFRA` outcomes project `TRANSIENT_PROVIDER_FAILURE`. Only a proven first Coder
@@ -111,8 +114,9 @@ refreshes the page, without changing any persisted delivery facts.
 `tests/agents/test_structured_models.py` asserts local vs explicit provider evidence and route
 count; `tests/manager/test_stage_retry_budget.py` asserts all three stage counters, windows,
 restart, success and exhaustion; `tests/knowledge/test_consultation.py` asserts upstream subcalls
-receive the expanded window and delivery windows retain the caller's limit up to 600 seconds;
-`test_delivery_context.py` covers native Coder/QA/Reviewer at 60 and 1200 seconds;
+receive the expanded window and delivery windows retain the caller's finite admitted limit;
+`test_delivery_context.py` covers native Coder/QA/Reviewer at 60, 1200 and 1800 seconds;
+`test_consultation.py` checks the same windows through all structured role consultations;
 `test_execution_retry_budget.py` asserts local knowledge stops without a transient debit or Coder
 call. `tests/team_view/test_design_budget.py` and UI/Console tests assert
 the projection, action suppression and distinct `MODEL_EXECUTION_LIMIT` code.
@@ -132,6 +136,52 @@ error, a durable independent counter, cross-layer tests and the shared checklist
 `../guides/timeout-classification.md`. Similar native Task timeouts still have a distinct
 checkpoint/attempt policy; do not copy this joint-upstream policy into Delivery roles without
 their own evidence and contract tests.
+
+### 保留进度后的知识超时与用户下一步（2026-10-10）
+
+`recovery.progress_source.CODER_KNOWLEDGE_FAILURE_REASONS` includes the exact current terminal
+reason `TRANSIENT_INFRA: coder knowledge preparation reached local time limit`, in addition to
+the existing authentication and legacy TIMEOUT reasons. Both `is_prior_progress_source` and
+`require_unchanged_pre_provider_candidate` consume this one exact set; arbitrary timeout prose
+cannot grant recovery. A prior accepted progress still requires the adjacent attempt and complete
+four-event tail, same source/report/route/Context, no candidate or later provider execution,
+no active Worker claim and a fully verified current worktree. Post-feedback candidate checks still
+require independent unfinished consultation evidence, sealed finding, unchanged candidate and
+all existing stop/claim gates. This does not reopen the terminal Task or refund a local window.
+
+`team_view/app.js::knowledgePreparationTimeoutRole(value)` accepts only this exact current
+Coder/QA/Reviewer reason, and `humanizeBlockingText` explains the finite preparation timeout and
+that this round's role work has not begun; it does not claim a prepared plan exists. Only a current
+BLOCKED Requirement with independently projected STOPPED state, Coder exact reason and no
+current engineering-unknown/current-approval priority gets the existing Continue preparation
+guidance from `requestBlockingSummary`. `isStoppedCoderKnowledgeTimeout(request, node)` shares
+this presentation condition with the existing Continue button, which is directly visible rather
+than hidden in engineering-reference details. Team/control read failure and missing CONTINUE
+capability give their actual unavailability guidance. A current exact QUEUED/RUNNING Operation
+instead says to wait for that request; another Project/Requirement cannot suppress this action.
+QA/Reviewer retain their separate recovery route;
+the message itself cannot establish a callable recovery service or approval.
+
+| 场景 | 必须保持的行为 |
+| --- | --- |
+| accepted progress N，知识本地时限 N+1，无源码调用 | 原终态/失败历史不改，现有精确恢复计划可重新准备 |
+| 近似 reason、非相邻 attempt、summary/artifact/source 不符 | 拒绝识别，不靠错误字符串替代事实核验 |
+| 反馈后 candidate 同类知识超时 | 继续要求独立未完成 consultation 证明，不绕过候选/反馈校验 |
+| 前端可用 Coder 继续且没有已准备方案 | “继续交付”先检查/准备，方案准备好后才批准 |
+| 当前工程 UNKNOWN、真实 WAITING、已有精确方案 | 保持原处理/审批优先级，不误称停止事实完整 |
+| Team不可读或Continue能力缺失 | 说明当前不可提交，不让用户寻找不可点击入口 |
+| 同需求Continue已排队/仍在收尾，尚无新角色 | 等待当次结果，不建议再次点击；不声称新的Coder已运行 |
+
+Good：已保存进度可沿原需求正式续接，用户知道先准备后批准。Base：短60秒窗口和旧
+原因兼容保持。Bad：把剩余工作预算当自动重试权、给旧Task补policy、声称知识超时是
+provider失败或已开始新的代码执行。
+Required increments: `tests/recovery/test_progress_source.py`, the exact local-timeout native
+recovery case, `tests/knowledge/test_delivery_context.py`, `test_consultation.py`, and
+`tests/team_view/knowledge-preparation-timeout.test.cjs`; existing local-timeout accounting remains
+unchanged. No schema/database/history migration. Deploy while idle, Continue the original
+Requirement to prepare a fresh exact plan, inspect its scope and approve that plan. Preserve old
+Task, progress, failed call and all receipts. Before consuming new plans rollback code/assets only;
+after consumption retain compatible readers and prefer forward repair.
 
 ## Scope and signatures
 

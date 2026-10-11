@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +25,7 @@ from ai_software_engineer.agents.codex_cli import (
     CodexInvocationResult,
     SubprocessCodexCommandRunner,
 )
+from ai_software_engineer.agents.execution import ExecutionGuard
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
@@ -44,13 +45,19 @@ from ai_software_engineer.domain import (
     QaReportArtifact,
     QaTestRun,
     QaTestStatus,
+    StateEvent,
+    Task,
     TaskStatus,
     WorkItemStatus,
 )
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.execution import SubprocessCommandExecutor
 from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
-from ai_software_engineer.manager import production_backend, production_delivery
+from ai_software_engineer.manager import (
+    native_verification,
+    production_backend,
+    production_delivery,
+)
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ReplyToProduct,
@@ -58,9 +65,13 @@ from ai_software_engineer.manager.delivery import (
 )
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
 from ai_software_engineer.manager.production_host import TeamHost
-from ai_software_engineer.orchestration import RetryDeliveryResult
+from ai_software_engineer.orchestration import RetryDeliveryResult, RetryResult
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
+from ai_software_engineer.recovery import RecoveryRejected, RecoveryScope
+from ai_software_engineer.recovery.native import NativeRecoverySourceReader
+from ai_software_engineer.recovery.verification_execution import VerificationEvidence
+from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.work_queue.models import QueueClaim
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 from tests.manager.test_production_backend import (
@@ -121,8 +132,9 @@ def _coder_draft(adapter: CodexCliAgentAdapter, request: AgentRequest) -> Artifa
 
 
 @pytest.mark.mysql
+@pytest.mark.parametrize("recover_delivery", [False, True], ids=["ordinary", "recovery"])
 def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
-    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, recover_delivery: bool
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -133,6 +145,50 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
     source = _git_output("rev-parse", "HEAD", cwd=repository)
     calls: list[Invocation] = []
     results: list[AgentResult] = []
+    recovery_started = False
+    evidence_calls: list[tuple[AgentRequest, Path, QueueClaim]] = []
+    prepare_calls: list[AgentRequest] = []
+    original_prepare = native_verification.RegisteredNativePythonVerifier.prepare_verifier
+    original_evidence = native_verification._RegisteredNativeVerificationEvidence.evidence_for
+
+    def observed_prepare(
+        registry: native_verification.RegisteredNativePythonVerifier,
+        *,
+        request: AgentRequest,
+        workspace_root: Path,
+        guard: ExecutionGuard | None,
+        allow_ordinary_commands: bool = False,
+        route_sha256: str | None = None,
+    ) -> None:
+        original_prepare(
+            registry,
+            request=request,
+            workspace_root=workspace_root,
+            guard=guard,
+            allow_ordinary_commands=allow_ordinary_commands,
+            route_sha256=route_sha256,
+        )
+        prepare_calls.append(request)
+
+    def observed_evidence(
+        provider: native_verification._RegisteredNativeVerificationEvidence,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None = None,
+    ) -> VerificationEvidence:
+        evidence = original_evidence(provider, request, workspace_root, execution_guard)
+        guard = cast(WorkerExecutionGuard, execution_guard)
+        guard.check()
+        assert guard.lease is not None
+        evidence_calls.append((request, workspace_root, guard.lease.claim))
+        return evidence
+
+    monkeypatch.setattr(
+        native_verification.RegisteredNativePythonVerifier, "prepare_verifier", observed_prepare
+    )
+    monkeypatch.setattr(
+        native_verification._RegisteredNativeVerificationEvidence, "evidence_for", observed_evidence
+    )
     original_complete = _ScriptedStructuredClient.complete
     first_product_call = True
 
@@ -194,8 +250,9 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
         lambda *_: _ScriptedClientFactory(),
     )
 
-    class Runner:
+    class Runner(SubprocessCodexCommandRunner):
         def __init__(self, adapter: CodexCliAgentAdapter, request: AgentRequest) -> None:
+            super().__init__(cast(ExecutionGuard, adapter._execution_guard))
             self.adapter, self.request = adapter, request
 
         def run(
@@ -234,8 +291,33 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
                 with pytest.raises(WorkspacePolicyError):
                     policy.authorize_write(".trellis/spec/core/forbidden.md")
                 assert _git_output("rev-parse", "HEAD", cwd=cwd) == source
+                if recover_delivery and not recovery_started:
+                    # Produce a real terminal source, with owned native start/stop
+                    # and preserved dirty progress. No fabricated stop or verdict.
+                    outcome = SubprocessCodexCommandRunner(guard).run(
+                        (
+                            sys.executable,
+                            "-c",
+                            "from pathlib import Path; import sys; sys.stdin.read(); "
+                            "Path('hello.txt').write_text('original preserved progress\\n'); "
+                            "sys.stderr.write('error: authentication failure offline fixture\\n'); "
+                            "raise SystemExit(1)",
+                        ),
+                        cwd=cwd,
+                        environment=environment,
+                        stdin=stdin,
+                        timeout_seconds=5,
+                    )
+                    assert outcome.returncode == 1 and outcome.process_stop is not None
+                    assert outcome.process_stop.kind == "failed"
+                    outcome.process_stop.validate_integrity()
+                    with pytest.raises(ProcessLookupError):
+                        os.killpg(outcome.process_stop.group_id, 0)
+                    return outcome
                 if request.attempt == 1:
-                    assert (cwd / "hello.txt").read_text() == "hello\n"
+                    assert (cwd / "hello.txt").read_text() == (
+                        "original preserved progress\n" if recover_delivery else "hello\n"
+                    )
                     # Exercise the real owned subprocess runner and actual group
                     # shutdown proof, instead of fabricating a timeout receipt.
                     outcome = SubprocessCodexCommandRunner(guard).run(
@@ -265,6 +347,8 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
                 artifact = _coder_draft(adapter, request)
             else:
                 assert request.role in {AgentRole.QA, AgentRole.REVIEWER}
+                assert request in prepare_calls
+                assert any(item[0] == request for item in evidence_calls)
                 assert adapter._interruption_control is None
                 with pytest.raises(WorkspacePolicyError):
                     policy.authorize_write("hello.txt")
@@ -323,6 +407,29 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
             output.write_text(artifact.model_dump_json())
             return CodexInvocationResult(returncode=0)
 
+        def run_observed(
+            self,
+            argv: tuple[str, ...],
+            *,
+            cwd: Path,
+            environment: Mapping[str, str],
+            stdin: str,
+            timeout_seconds: float,
+            observer: Callable[[CodexInvocationResult], None],
+        ) -> CodexInvocationResult:
+            # The fixture still executes its real owned child through ``run``;
+            # this forwarding seam lets CodexCliAgentAdapter publish the same
+            # native stop observer used by the production runner.
+            result = self.run(
+                argv,
+                cwd=cwd,
+                environment=environment,
+                stdin=stdin,
+                timeout_seconds=timeout_seconds,
+            )
+            observer(result)
+            return result
+
     class ObservedCodex(CodexCliAgentAdapter):
         def run(self, request: AgentRequest) -> AgentResult:
             self._runner = Runner(self, request)
@@ -337,7 +444,7 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
         default_project_name="Test Project",
         model_routes=tuple(
             ProviderRouteConfig(provider="codex", model=model, kind=ModelProviderKind.CODEX_CLI)
-            for model in ("gpt-primary", "gpt-fallback")
+            for model in (("gpt-primary",) if recover_delivery else ("gpt-primary", "gpt-fallback"))
         ),
         live_model_execution=True,
     )
@@ -377,25 +484,102 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
             approval_reference="exact-native-product-approval",
         )
     )
-    assert approved.checkpoint.stage is DeliveryStage.DONE, (
-        approved.checkpoint.failure_summary,
-        approved.checkpoint.failure_code,
-        [(result.role, result.error) for result in results],
-    )
-    assert isinstance(approved.delivery, RetryDeliveryResult)
-    task = approved.delivery.task
+    original_task: Task | None = None
+    original_events: tuple[StateEvent, ...] = ()
+    original_workspace = None
+    original_bytes: dict[str, bytes] = {}
+    delivery: RetryResult | None
+    if recover_delivery:
+        failed = approved.checkpoint
+        assert failed.stage is DeliveryStage.BLOCKED
+        original = NativeRecoverySourceReader(config, host._environment).discover_failed_coder(
+            RecoveryScope(
+                team_id=config.team_id,
+                repository_id=failed.repository_id,
+                repository_root=str(repository),
+                delivery_id=failed.delivery_id,
+            )
+        )
+        original_task = original.task
+        with MySqlTaskRepository(mysql_dsn) as task_repository:
+            original_events = task_repository.list_events(original.task.id)
+        original_workspace = calls[0].workspace
+        original_bytes = {
+            str(path.relative_to(original_workspace)): path.read_bytes()
+            for path in original_workspace.rglob("*")
+            if path.is_file()
+        }
+        original_continuation = FileContinuationStore(
+            host.projects()[0].root
+            / "repositories"
+            / failed.repository_id
+            / "state/continuations"
+            / original.task.id,
+            task_id=original.task.id,
+        )
+        original_start = original_continuation.capture_start(original.source.failed_run_id)
+        original_stop = original_continuation.capture_stop(original.source.failed_run_id)
+        assert original_stop.capture_start_sha256 == original_start.start_sha256
+        assert original_stop.process_stop.kind == "failed"
+        assert original_stop.original_error_code is AgentErrorCode.AUTHENTICATION_ERROR
+        (repository / "platform-fix.txt").write_text("independent platform fix\n")
+        _git("add", "platform-fix.txt", cwd=repository)
+        _git("commit", "-m", "platform baseline fix", cwd=repository)
+        source = _git_output("rev-parse", "HEAD", cwd=repository)
+        recovery = host.recovery_entry()
+        plan, plan_path = recovery.propose(
+            repository_root=str(repository),
+            delivery_id=failed.delivery_id,
+            failed_run_id=original.source.failed_run_id,
+            failed_context_id=original.source.failed_context_id,
+        )
+        authority = plan.target_authorization
+        assert authority is not None
+        assert plan.workspace_snapshot is not None
+        assert plan.workspace_snapshot.capture_start_sha256 == original_start.start_sha256
+        assert plan.workspace_snapshot.capture_stop_sha256 == original_stop.observation_sha256
+        assert authority.source_retry_policy == original.task.retry_policy
+        assert authority.source_max_attempts == original.task.max_attempts
+        with pytest.raises(RecoveryRejected):
+            recovery.execute(plan_path)
+        with pytest.raises(RecoveryRejected):
+            recovery.approve(plan_path, confirmed_plan="0" * 64, reference="wrong-plan")
+        recovery.approve(
+            plan_path, confirmed_plan=plan.plan_sha256, reference="exact-recovery-plan"
+        )
+        recovery_store, _ = recovery.open_plan(plan_path)
+        sealed = recovery_store.get_task_record(plan.plan_sha256)
+        assert sealed.task.engineering_policy == authority.engineering_policy
+        assert (
+            sealed.task.interruption_continuation_policy
+            == authority.interruption_continuation_policy
+        )
+        recovery_started = True
+        delivery = recovery.execute(plan_path)
+        assert delivery.task.id == plan.new_task_id
+        active_calls, active_results = calls[1:], results[1:]
+    else:
+        assert approved.checkpoint.stage is DeliveryStage.DONE, (
+            approved.checkpoint.failure_summary,
+            approved.checkpoint.failure_code,
+            [(result.role, result.error) for result in results],
+        )
+        delivery = approved.delivery
+        active_calls, active_results = calls, results
+    assert isinstance(delivery, RetryDeliveryResult)
+    task = delivery.task
     assert task.status is TaskStatus.DONE
     assert task.attempts == 2 and task.work_attempt == 2
     assert task.interruption_continuation_policy is not None
     assert task.transient_failures(AgentRole.CODER) == 0
     assert not task.retry_failures
-    assert [call.request.role for call in calls] == [
+    assert [call.request.role for call in active_calls] == [
         AgentRole.CODER,
         AgentRole.CODER,
         AgentRole.QA,
         AgentRole.REVIEWER,
     ]
-    first, continued, qa, review = calls
+    first, continued, qa, review = active_calls
     assert first.request.run_id != continued.request.run_id
     assert first.request.context_manifest_id != continued.request.context_manifest_id
     assert first.claim.lease.id != continued.claim.lease.id
@@ -405,7 +589,7 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
     assert first.workspace == continued.workspace
     assert first.branch == continued.branch == task.branch_name
     assert first.input_head == continued.input_head == source
-    assert len({call.claim.lease.id for call in calls}) == 4
+    assert len({call.claim.lease.id for call in active_calls}) == 4
     assert (
         len(
             {
@@ -417,8 +601,9 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
         == 3
     )
     assert len({call.workspace for call in (continued, qa, review)}) == 3
-    assert results[0].error is not None and results[0].error.code is AgentErrorCode.WORK_INTERRUPTED
-    assert all(result.status is AgentRunStatus.SUCCEEDED for result in results[1:])
+    assert active_results[0].error is not None
+    assert active_results[0].error.code is AgentErrorCode.WORK_INTERRUPTED
+    assert all(result.status is AgentRunStatus.SUCCEEDED for result in active_results[1:])
     sidecar = host.projects()[0].root / "repositories" / str(approved.checkpoint.repository_id)
     store = FileContinuationStore(sidecar / "state/continuations" / task.id, task_id=task.id)
     receipt = store.get_receipt(first.request.run_id)
@@ -439,8 +624,12 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
     assert admission.policy_sha256 == task.interruption_continuation_policy.policy_sha256
     artifacts = FileArtifactStore(sidecar / "artifacts", read_only=True).list_for_task(task.id)
     implementation = next(a for a in artifacts if isinstance(a, ImplementationReportArtifact))
-    candidate = approved.checkpoint.candidate_revision
+    candidate = implementation.content.commit_sha
     assert candidate and candidate != source
+    if not recover_delivery:
+        assert approved.checkpoint.candidate_revision == candidate
+    else:
+        assert approved.checkpoint.candidate_revision is None
     assert implementation.source_revision == implementation.content.commit_sha == candidate
     assert qa.input_head == review.input_head == candidate
     assert qa.request.source_revision == review.request.source_revision == candidate
@@ -448,7 +637,7 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
     assert (repository / "hello.txt").read_text() == "hello\n"
     assert _git_output("show", f"{candidate}:hello.txt", cwd=repository) == "hello from the team"
     route_store = FileModelRouteAttemptStore(model_route_root(sidecar), read_only=True)
-    for call in calls:
+    for call in active_calls:
         attempts = route_store.list_for_run(call.request.run_id)
         assert len(attempts) == 1 and attempts[0].route_index == 1
         assert attempts[0].model == "gpt-primary"
@@ -457,3 +646,21 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
     )
     assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
     assert not (repository / ".ase").exists()
+    assert {request.role for request in prepare_calls} == {AgentRole.QA, AgentRole.REVIEWER}
+    assert {request.role for request, _, _ in evidence_calls} == {AgentRole.QA, AgentRole.REVIEWER}
+    for request, root, claim in evidence_calls:
+        assert request.task_id == task.id
+        assert root == (qa.workspace if request.role is AgentRole.QA else review.workspace)
+        assert claim.lease.id == (
+            qa.claim.lease.id if request.role is AgentRole.QA else review.claim.lease.id
+        )
+    if original_task is not None:
+        with MySqlTaskRepository(mysql_dsn) as task_repository:
+            assert task_repository.get(original_task.id) == original_task
+            assert task_repository.list_events(original_task.id) == original_events
+        assert original_workspace is not None
+        assert {
+            str(path.relative_to(original_workspace)): path.read_bytes()
+            for path in original_workspace.rglob("*")
+            if path.is_file()
+        } == original_bytes

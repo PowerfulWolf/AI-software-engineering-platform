@@ -1,5 +1,58 @@
 # Console incremental polling
 
+## Product 讨论草稿与当前提交资格分离（2026-10-10）
+
+Scope：`app.js::requestOperation` 中 Product 讨论表单。暂时无法读取 Team 时，用户仍需
+阅读、复制和整理草稿；保留草稿不代表允许发送。其他交付操作继续采用原控制门禁。
+
+```javascript
+discussionKeyFor(request) -> string
+discussionFactsCurrent(form) -> boolean
+discussionFormCaches: Map<identity, {key, form, dispose, dirty, syncAvailability}>
+```
+
+- identity/key 显式绑定 Team、Project、Requirement；key 还包括精确 checkpoint、stage、
+  scoped active Operation、source drift 和 stage budget。暂时读取失败不进入 key，不能
+  仅因 busy/unavailable/timeout 移除同一个表单。复用时只同步就近的暂停发送说明，原
+  textarea、截图 DOM、文字、焦点、选区和预览保持，可编辑/复制。新的精确事实仍按
+  既有失效规则重新核对，不能暗中把旧草稿发送给另一 Project 或 checkpoint。
+- 冻结讨论的 Team/Project/Requirement/checkpoint/stage。每个写请求前检查中央控制资格、
+  当前选中 Project、当前相同 Requirement/key、预算、无 active Operation、DOM连接和
+  缓存所有权。所有截图上传之前、每次 await 返回后的下一个写请求之前，以及最终
+  `PRODUCT_REPLY` 之前都重验；请求仅使用冻结身份。旧 callback 与原地 facts 变化也
+  fail closed，不能仅依靠按钮 disabled 或重绘清除事件。
+- Product Reply 使用既有 `onFormSubmit`/`runUiAction`。`PRODUCT_DISCOVERY` 中断后的
+  `CONTINUE_DELIVERY` click 也必须通过同一 form 的 `runUiAction`，防止受理响应回来前
+  重复 POST；受理后的 exact active Operation 继续阻止重复。只在真正受理回复后清除
+  原草稿，截图上传成功不等于回复已受理。控制资格变化后保留草稿并说明重新核对。
+- 中文说明明确“暂时暂停发送，草稿仍可编辑、复制和整理”；不把读取失败说成开发失败，
+  不要求用户理解缓存、Lease或hash。无新 API、Schema、状态或审批权限。
+
+| 场景 | 必须展示和验证 |
+| --- | --- |
+| 相同讨论事实，Team busy/503/读取超时 | 同 form/textarea/截图、焦点选区保留，可编辑；零旧 callback POST |
+| 相同事实重新读取成功 | 保留草稿并恢复原提交资格，无自动发送 |
+| Project/checkpoint/stage/cache改变或DOM断开 | 旧 click/submit 不上传截图、不提交 Operation |
+| 第一张截图上传期间资格或 active Operation 变化 | 不上传第二张、不提交回复；文字与截图仍可读 |
+| 回复或继续按钮 pending/已受理后重复事件 | 只发一个 Operation，同 form 命令所有权保持 |
+
+Good：网络读取故障时用户仍能整理说明，重新核对后自主发送。Base：正常讨论与既有
+预算/审批保持。Bad：缓存里保存了文字却移除编辑器，或只禁用按钮仍让旧事件继续上传。
+Wrong：`if (!canControlCurrentTeam()) return` 同时决定草稿可见性和提交权。
+Correct：保留同事实讨论 DOM，在每次写请求前独立核对当前资格。
+
+增量 `tests/team_view/browser/product-discussion-draft.test.cjs` 覆盖上述真实 Chrome DOM、
+截图异步边界、两类 pending 去重与390/1440布局；相关 interactions/polling-state/
+notifications 继续验证。存量无需改库：空闲维护边界加载兼容资产后刷新原需求。
+回滚表单分支和资产，不改 Task、Operation、审批、历史或工作区。
+
+测试fixture必须区分计时器触发和异步刷新结束：当前 interval callback 不返回refresh
+Promise，Node harness触发后应await真实 `refreshFlight` 再断言DOM。模拟DOM需提供真实
+连接/断开语义，不能把旧按钮默认为可提交；checkpoint变更后应先验证旧callback零POST，
+再取得当前按钮提交。当前Task阅读fixture必须绑定DELIVERING父需求与current scope；
+历史Task应保留“当次执行结果”。删除需求只移除当前卡片，历史Project操作标题仍应可读。
+这些边界由 `ui.test.cjs` 和 `browser/task-detail-reading.test.cjs` 覆盖。
+
 ## 详情就近标明保留数据的读取情况（2026-10-10）
 
 Scope：需求标题区与 Task 固定阅读工具栏。浏览器保留的交付状态可以继续阅读，但

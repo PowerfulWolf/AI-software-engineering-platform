@@ -2580,6 +2580,17 @@ function stageFailureGuidance(operation) {
   };
 }
 
+function knowledgePreparationTimeoutRole(value) {
+  const match = String(value || "").trim().match(
+    /^(?:TRANSIENT_INFRA:\s*)?(coder|qa|reviewer) knowledge preparation reached local time limit$/i,
+  );
+  return match ? {coder: "Coder", qa: "QA", reviewer: "Reviewer"}[match[1].toLowerCase()] : null;
+}
+function isStoppedCoderKnowledgeTimeout(request, node = requestNodeExecution(request)) {
+  return request.stage === "BLOCKED" && node.state === "blocked" && !node.requiresEngineeringCheck &&
+    !node.currentApproval && request.execution?.state === "STOPPED" &&
+    knowledgePreparationTimeoutRole(node.reason) === "Coder";
+}
 function requestBlockingSummary(request) {
   if (requestPresentation(request).group !== "blocked") return null;
   const node = requestNodeExecution(request);
@@ -2588,6 +2599,19 @@ function requestBlockingSummary(request) {
     const historyReason = terminalBlockedRequestTask(request)?.blocker || request.blocker || request.execution?.reason;
     return {reasons: historyReason ? [{reason: historyReason, scopes: []}] : [], operationReason: null,
       approval, currentApproval: true, currentReason: node.reason, suggestedAction: node.nextAction,
+      approvedKnowledge: false, responsibility: "engineering"};
+  }
+  if (isStoppedCoderKnowledgeTimeout(request, node)) {
+    const unavailable = deliveryControlUnavailableReason();
+    const active = activeOperation(request.id, request.project_id);
+    return {reasons: [{reason: node.reason, scopes: []}], operationReason: null, approval: null,
+      suggestedAction: unavailable ? unavailable.reason + " " + unavailable.next_action
+        : active ? active.status === "QUEUED"
+          ? "本次继续请求已排队，请等待平台检查并返回结果，不要重复提交。"
+          : "平台正在处理本次继续请求，请等待操作结果，不要重复提交。"
+        : !consoleSupportsOperation("CONTINUE_DELIVERY")
+          ? "当前服务不支持继续交付。请在服务空闲时加载支持此操作的版本，再刷新原需求。"
+          : "点击本页“继续交付”，由平台检查并准备保留进度的恢复方案；方案准备好后再核对并批准继续。",
       approvedKnowledge: false, responsibility: "engineering"};
   }
   if (node.requiresEngineeringCheck)
@@ -2857,13 +2881,9 @@ function humanizeBlockingText(value) {
       .filter(Boolean);
     return `${roleFailure[1]} 第 ${roleFailure[2]} 次执行失败：${reason}${facts.length ? `；${facts.join("；")}` : ""}。`;
   }
-  const localKnowledgeTimeout = text.match(
-    /^(?:TRANSIENT_INFRA:\s*)?(coder|qa|reviewer) knowledge preparation reached local time limit$/i,
-  );
-  if (localKnowledgeTimeout) {
-    const roles = { coder: "Coder", qa: "QA", reviewer: "Reviewer" };
-    return `${roles[localKnowledgeTimeout[1].toLowerCase()]} 知识准备达到本地执行时限，尚未开始该角色执行；请检查并批准精确恢复计划。`;
-  }
+  const localKnowledgeTimeout = knowledgePreparationTimeoutRole(text);
+  if (localKnowledgeTimeout)
+    return `${localKnowledgeTimeout} 知识准备达到本次执行时限，本轮尚未开始该角色的代码执行或验证；已有交付进度与历史保留。`;
   const knowledgeFailure = text.match(
     /^(?:(?:TRANSIENT_INFRA|BUDGET_EXHAUSTED|POLICY_VIOLATION):\s*)?(Coder|QA|Reviewer) knowledge (preparation|assessment|intent) failed:\s*([A-Z0-9_:-]+)$/i,
   );
@@ -4686,7 +4706,12 @@ function requestCard(request) {
   return card;
 }
 function requestOperation(panel, request, discussionSection) {
-  if (!canControlCurrentTeam()) return;
+  const isProductDiscussion = productDiscussionStages.has(request.stage);
+  // Product discussion is a read/write draft surface, not an authority surface. Keep
+  // the exact draft visible while Team facts are unavailable; its submit path below
+  // still rechecks the live control gate before every network write. Other operations
+  // retain the original top-level gate and are not rendered while control is stale.
+  if (!canControlCurrentTeam() && !isProductDiscussion) return;
   const appendOperation = (content, normalContinuation = false) => {
     const section = el(
       "section",
@@ -4706,15 +4731,16 @@ function requestOperation(panel, request, discussionSection) {
     else appendOperation(content);
   };
   const running = activeOperation(request.id);
-  const isProductDiscussion = productDiscussionStages.has(request.stage);
   const sourceRevisionDrift = isSourceRevisionDrift(
     latestOperation(request.id),
   );
-  const discussionKey = JSON.stringify([
-    request.project_id, request.id, request.checkpoint_sha256, request.stage,
-    running?.operation_id || null, sourceRevisionDrift, request.stage_budget,
+  const discussionKeyFor = candidate => JSON.stringify([
+    snapshot?.team_id, candidate.project_id, candidate.id, candidate.checkpoint_sha256, candidate.stage,
+    activeOperation(candidate.id, candidate.project_id)?.operation_id || null,
+    isSourceRevisionDrift(latestOperation(candidate.id)), candidate.stage_budget,
   ]);
-  const identity = JSON.stringify([request.project_id, request.id]);
+  const discussionKey = discussionKeyFor(request);
+  const identity = JSON.stringify([snapshot?.team_id, request.project_id, request.id]);
   let discussionFormCache = discussionFormCaches.get(identity);
   if (discussionFormCache && discussionFormCache.key !== discussionKey) {
     discussionFormCache.dispose();
@@ -4834,9 +4860,34 @@ function requestOperation(panel, request, discussionSection) {
     // Unrelated polling must not replace unsent text, pasted files or an in-flight submit.
     // Reuse only for the exact Requirement checkpoint and execution gate.
     if (discussionFormCache?.key === discussionKey) {
+      discussionFormCache.syncAvailability();
       appendDiscussionContent(discussionFormCache.form);
       return;
     }
+    const boundDiscussion = {
+      team_id: snapshot?.team_id || null,
+      project_id: request.project_id,
+      delivery_id: request.id,
+      checkpoint_sha256: request.checkpoint_sha256,
+      stage: request.stage,
+    };
+    const discussionFactsCurrent = (form = null) => {
+      const current = snapshot?.requests?.find(item => item.id === boundDiscussion.delivery_id);
+      return Boolean(
+        form?.isConnected &&
+        discussionFormCaches.get(identity)?.form === form &&
+        discussionFormCaches.get(identity)?.key === discussionKey &&
+        canControlCurrentTeam() &&
+        snapshot?.team_id === boundDiscussion.team_id &&
+        currentProjectId() === boundDiscussion.project_id &&
+        current && current.project_id === boundDiscussion.project_id &&
+        current.checkpoint_sha256 === boundDiscussion.checkpoint_sha256 &&
+        current.stage === boundDiscussion.stage &&
+        discussionKeyFor(current) === discussionKey &&
+        !designBudgetExhausted(current) &&
+        !activeOperation(boundDiscussion.delivery_id, boundDiscussion.project_id),
+      );
+    };
     const form = el("form", undefined, "discussion-form");
     const message = el("textarea");
     let discussionTitle = "等待 Product Agent 回复";
@@ -4877,6 +4928,16 @@ function requestOperation(panel, request, discussionSection) {
     message.setAttribute("aria-label", discussionTitle);
     message.placeholder = messagePlaceholder;
     const feedback = el("p", "", "form-feedback");
+    const availability = el("p", undefined, "discussion-availability muted");
+    availability.setAttribute("role", "status");
+    const syncAvailability = () => {
+      const unavailable = deliveryControlUnavailableReason();
+      availability.hidden = !unavailable;
+      availability.textContent = unavailable
+        ? "暂时暂停发送。当前交付状态暂时无法核对；草稿仍可编辑、复制和整理。页面重新核对成功后恢复提交。"
+        : "";
+    };
+    syncAvailability();
     let selectedScreenshots = [];
     let screenshotPreviewUrls = [];
     const screenshotSection = el("div", undefined, "pasted-screenshot-section");
@@ -4983,23 +5044,29 @@ function requestOperation(panel, request, discussionSection) {
     );
     form.append(
       discussionField,
+      availability,
       screenshotSection,
       feedback,
       submit,
     );
     if (request.stage === "PRODUCT_DISCOVERY" && !running) {
-      submit.addEventListener("click", () =>
-        submitOperation({
+      submit.addEventListener("click", () => runUiAction(form, () => {
+        if (!discussionFactsCurrent(form)) return;
+        return submitOperation({
           action: "CONTINUE_DELIVERY",
-          project_id: request.project_id,
-          delivery_id: request.id,
-          expected_checkpoint_sha256: request.checkpoint_sha256,
-        }),
-      );
+          project_id: boundDiscussion.project_id,
+          delivery_id: boundDiscussion.delivery_id,
+          expected_checkpoint_sha256: boundDiscussion.checkpoint_sha256,
+        });
+      }));
     }
     onFormSubmit(form, async (event) => {
       event.preventDefault();
-      if (!replyEnabled) return;
+      if (!replyEnabled || !discussionFactsCurrent(form)) {
+        feedback.className = "form-feedback error";
+        feedback.textContent = "当前团队数据暂不可核对，草稿仍保留；恢复读取后请重新核对并提交。";
+        return;
+      }
       if (!message.value.trim() && !selectedScreenshots.length) {
         feedback.className = "form-feedback error";
         feedback.textContent = "请填写需求说明或添加至少一张截图。";
@@ -5013,15 +5080,17 @@ function requestOperation(panel, request, discussionSection) {
       try {
         const uploaded = [];
         for (const item of selectedScreenshots) {
+          if (!discussionFactsCurrent(form))
+            throw new Error("当前需求事实已变化，截图未继续提交；请重新核对后再发送。");
           const attachment = await adminFetch(
             "/api/v1/admin/projects/" +
-              encodeURIComponent(request.project_id) +
+              encodeURIComponent(boundDiscussion.project_id) +
               "/requirements/" +
-              encodeURIComponent(request.id) +
+              encodeURIComponent(boundDiscussion.delivery_id) +
               "/screenshots?filename=" +
               encodeURIComponent(item.name) +
               "&checkpoint=" +
-              encodeURIComponent(request.checkpoint_sha256),
+              encodeURIComponent(boundDiscussion.checkpoint_sha256),
             {
               method: "POST",
               headers: { "Content-Type": "application/octet-stream" },
@@ -5030,12 +5099,14 @@ function requestOperation(panel, request, discussionSection) {
           );
           uploaded.push(attachment.id);
         }
+        if (!discussionFactsCurrent(form))
+          throw new Error("当前需求事实已变化，回复未提交；草稿仍保留，请重新核对后再发送。");
         feedback.textContent = "已提交，等待 Product Agent…";
         const accepted = await submitOperation({
           action: "PRODUCT_REPLY",
-          project_id: request.project_id,
-          delivery_id: request.id,
-          expected_checkpoint_sha256: request.checkpoint_sha256,
+          project_id: boundDiscussion.project_id,
+          delivery_id: boundDiscussion.delivery_id,
+          expected_checkpoint_sha256: boundDiscussion.checkpoint_sha256,
           message: message.value.trim(),
           screenshot_ids: uploaded,
         });
@@ -5052,7 +5123,7 @@ function requestOperation(panel, request, discussionSection) {
       }
     });
     discussionFormCaches.set(identity, {
-      key: discussionKey, form, dispose: revokeScreenshotPreviews,
+      key: discussionKey, form, dispose: revokeScreenshotPreviews, syncAvailability,
       dirty: () => Boolean(message.value.trim() || selectedScreenshots.length),
     });
     appendDiscussionContent(form);
@@ -5109,7 +5180,7 @@ function requestOperation(panel, request, discussionSection) {
         }),
       "primary",
     );
-    appendOperation(action);
+    appendOperation(action, isStoppedCoderKnowledgeTimeout(request));
   }
 }
 function deliveryResult(panel, request) {

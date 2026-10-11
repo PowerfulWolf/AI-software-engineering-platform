@@ -27,8 +27,11 @@ class Element {
     this.children.push(...nodes);
   }
   replaceChildren(...nodes) {
-    this.children = nodes;
+    for (const node of this.children) if (typeof node !== "string") node.parentElement = null;
+    this.children = [];
+    this.append(...nodes);
   }
+  get isConnected() { return Boolean(this.rootConnected || this.parentElement?.isConnected); }
   addEventListener(key, fn) {
     this.events[key] = fn;
   }
@@ -42,7 +45,10 @@ class Element {
       ? node.className.split(/\s+/).includes(name)
       : node.tag === selector.toLowerCase()) || null;
   }
-  remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this); }
+  remove() {
+    if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this);
+    this.parentElement = null;
+  }
   removeAttribute(key) {
     delete this.attributes[key];
   }
@@ -188,7 +194,11 @@ test("Product discussion does not add empty feedback spacing", () => {
 test("team, multi-directory requests, detail, refresh preservation and stale errors", async () => {
   const nodes = new Map();
   const get = (id) => {
-    if (!nodes.has(id)) nodes.set(id, new Element("div"));
+    if (!nodes.has(id)) {
+      const root = new Element("div");
+      root.rootConnected = true;
+      nodes.set(id, root);
+    }
     return nodes.get(id);
   };
   const malicious = '<img src=x onerror="alert(1)">';
@@ -934,7 +944,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     },
     clearTimeout: () => {},
     setInterval: (fn, ms) => {
-      interval = { fn, ms };
+      interval = { fn: async () => {
+        fn();
+        await vm.runInContext("refreshFlight", context);
+      }, ms };
     },
     AbortController,
     structuredClone,
@@ -1023,7 +1036,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       'humanizeBlockingText("TRANSIENT_INFRA: coder knowledge preparation reached local time limit")',
       context,
     ),
-    "Coder 知识准备达到本地执行时限，尚未开始该角色执行；请检查并批准精确恢复计划。",
+    "Coder 知识准备达到本次执行时限，本轮尚未开始该角色的代码执行或验证；已有交付进度与历史保留。",
   );
   assert.match(
     vm.runInContext(
@@ -2468,7 +2481,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await interval.fn();
   vm.runInContext('showDetail("request","r1")', context);
   assert.match(text(get("detail")), /批准 Coder 启动前重启/);
-  assert.match(text(get("detail")), /新 Task 重启计划/);
+  assert.match(text(get("detail")), /请工程授权者核对下方执行重启方案/);
   assert.ok(visibleDescend(get("detail")).find(
     (node) => node.tag === "button" && node.textContent === "批准并继续",
   ), "a current exact decision must be visible under native disclosure rules");
@@ -2505,20 +2518,36 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   fixture.requests[0].checkpoint_sha256 = "a".repeat(64);
   storedOperations[1].result.checkpoint_sha256 = "a".repeat(64);
   await interval.fn();
+  const currentScopeBlockerSection = descend(get("detail")).find((node) =>
+    node.className.includes("request-blocking-section"),
+  );
+  const currentApproveScope = visibleDescend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "批准文件范围",
+  );
+  assert.ok(currentScopeBlockerSection.isConnected);
   assert.ok(
-    descend(scopeBlockerSection).includes(approveScope),
+    descend(currentScopeBlockerSection).includes(currentApproveScope),
     "the pending recovery action is rendered beside the blocker instead of below the discussion",
   );
   assert.doesNotMatch(
-    text(scopeBlockerSection),
+    text(currentScopeBlockerSection),
     /Coder failed at attempt 1|Codex worktree changes violated the machine policy/,
     "a successful continue operation must not look like the original failure happened again",
   );
-  assert.match(text(scopeBlockerSection), /原始阻塞.*文件改动超出原任务授权范围/s);
+  assert.match(text(currentScopeBlockerSection), /待工程确认.*Coder 申请补充文件范围/s);
+  assert.match(text(currentScopeBlockerSection), /原执行历史.*执行记录 run_fixture/s);
   assert.match(text(get("detail")), /src\/pkg\/__init__\.py/);
   assert.match(text(get("detail")), /不会启动 Agent.*仍需审批恢复计划/);
   assert.doesNotMatch(text(get("detail")), /c{64}/);
+  const beforeStaleScopeClick = submittedIntents.length;
   await approveScope.events.click();
+  assert.equal(submittedIntents.length, beforeStaleScopeClick,
+    "a scope action disconnected by a checkpoint change cannot submit");
+  await descend(get("notification")).find(
+    (node) => node.tag === "button" && node.textContent === "知道了",
+  ).events.click();
+  assert.ok(currentApproveScope);
+  await currentApproveScope.events.click();
   assert.deepEqual(submittedIntents[2], {
     action: "CONTINUE_DELIVERY",
     project_id: "project_fixture",
@@ -3208,5 +3237,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   };
   fixture.requests = [];
   await interval.fn();
-  assert.doesNotMatch(text(get("content")), /更新后的需求/);
+  assert.equal(descend(get("content")).filter(node =>
+    node.className.split(/\s+/).includes("request")).length, 0,
+    "deleted Requirements are absent from the current list while Project operation history remains readable");
+  assert.match(text(get("content")), /项目操作记录.*更新后的需求/s);
 });

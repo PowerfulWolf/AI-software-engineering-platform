@@ -793,6 +793,12 @@ substitute for QA/Review verdicts. See `.trellis/spec/core/verification-environm
 - `delivery-recovery.schema.json`：RecoveryScopeSupplement / RecoveryPlan / RecoveryAuthorization；
   先精确绑定人类批准的遗漏文件路径，再绑定获准捕获的基线与修改。
 - `recovery-task-record.schema.json`：封存重新绑定 preparation 的 Request 与 NEW Task。
+
+新恢复计划可选 `RecoveryPlan.target_authorization` 精确绑定原Task完整SHA、冻结预算、
+注册Team/Project/Repository/root及可信工程主体签发的固定工程/续跑策略。它进入新plan
+摘要，新批准后才复制到后继Task；旧计划缺省字段在递归序列化中省略，旧Task不追补。
+当前配置不能在旧摘要下扩额，授权不替代真实停止、现场核验或独立QA/Review。
+完整错误矩阵、Schema和存量路径见恢复规范“新恢复计划冻结目标执行授权”。
 - `pre-execution-restart.schema.json`：首次 Coder 启动前上下文失败的独立重启计划，绑定原
   Task/事件/dispatch/审批链、冻结父上下文和当前预算；不包含虚构的 Coder Run 或代码 capture。
   精确批准后生成 `continuation_kind=pre_execution_restart` 的新 Task，原终态记录保持不变。

@@ -20,10 +20,17 @@ from pydantic import (
 from ai_software_engineer.domain import AgentPermissions, AgentRole
 from ai_software_engineer.domain.artifact import ArtifactId
 from ai_software_engineer.domain.branch import BranchName
+from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringPolicy,
+    EngineeringScope,
+    LocalOperatorPrincipal,
+)
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import StageSha256
-from ai_software_engineer.domain.task import TaskId
+from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy
+from ai_software_engineer.domain.task import AttemptLimit, Task, TaskId
 from ai_software_engineer.git.capture import (
     MAX_CAPTURE_BYTES,
     MAX_CAPTURE_FILES,
@@ -340,6 +347,96 @@ class RecoveryPathRebinding(DomainModel):
         return self
 
 
+class RecoveryTargetAuthorization(DomainModel):
+    """New successor authority, frozen in an exact newly approved recovery plan."""
+
+    kind: Literal["recovery_target_authorization"] = "recovery_target_authorization"
+    schema_version: Literal["v1"] = "v1"
+    source_task_id: TaskId
+    source_task_sha256: StageSha256
+    source_max_attempts: AttemptLimit
+    source_retry_policy: DeliveryRetryPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    engineering_policy: EngineeringPolicy
+    interruption_continuation_policy: InterruptionContinuationPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def validate_bounded_authority(self) -> Self:
+        policy = self.engineering_policy
+        if policy != EngineeringPolicy.bounded_local(
+            scope=policy.scope, principal=policy.issued_by
+        ):
+            raise ValueError("recovery engineering authority must use the fixed bounded policy")
+        retry = self.source_retry_policy
+        expected_continuation = None
+        if retry is not None:
+            if self.source_max_attempts != retry.execution_limit:
+                raise ValueError("recovery execution allowance differs from frozen source budget")
+            expected_continuation = InterruptionContinuationPolicy.for_retry_budget(
+                max_work_attempts=retry.max_work_attempts,
+                max_coder_transient_failures=retry.transient_limit(AgentRole.CODER),
+            )
+        if self.interruption_continuation_policy != expected_continuation:
+            raise ValueError("recovery continuation authority must equal the frozen source budget")
+        return self
+
+    def validate_source(self, source: RecoverySource) -> None:
+        scope = self.engineering_policy.scope
+        if (
+            self.source_task_id != source.task_id
+            or self.source_task_sha256 != source.task_sha256
+            or scope.team_id != source.scope.team_id
+            or scope.repository_id != source.scope.repository_id
+            or scope.repository_root != source.scope.repository_root
+        ):
+            raise RecoveryRejected("recovery target authority differs from its exact source")
+
+    def validate_current(
+        self, *, source: RecoverySource, task: Task, scope: EngineeringScope
+    ) -> None:
+        self.validate_source(source)
+        if (
+            self.source_task_id != task.id
+            or self.source_task_sha256 != digest(task.to_wire())
+            or self.source_max_attempts != task.max_attempts
+            or self.source_retry_policy != task.retry_policy
+            or self.engineering_policy.scope != scope
+            or task.repository != scope.repository_root
+        ):
+            raise RecoveryRejected("recovery target authority no longer matches registered facts")
+
+    @classmethod
+    def issue(
+        cls,
+        *,
+        source: RecoverySource,
+        task: Task,
+        scope: EngineeringScope,
+        principal: LocalOperatorPrincipal,
+    ) -> Self:
+        retry = task.retry_policy
+        result = cls(
+            source_task_id=task.id,
+            source_task_sha256=digest(task.to_wire()),
+            source_max_attempts=task.max_attempts,
+            source_retry_policy=retry,
+            engineering_policy=EngineeringPolicy.bounded_local(scope=scope, principal=principal),
+            interruption_continuation_policy=(
+                InterruptionContinuationPolicy.for_retry_budget(
+                    max_work_attempts=retry.max_work_attempts,
+                    max_coder_transient_failures=retry.transient_limit(AgentRole.CODER),
+                )
+                if retry is not None
+                else None
+            ),
+        )
+        result.validate_current(source=source, task=task, scope=scope)
+        return result
+
+
 class RecoveryPlan(DomainModel):
     kind: Literal["recovery_plan"] = "recovery_plan"
     schema_version: Literal["v0.1"] = "v0.1"
@@ -361,6 +458,9 @@ class RecoveryPlan(DomainModel):
     )
     target_base_revision: FullCommit
     target_preparation_sha256: StageSha256
+    target_authorization: RecoveryTargetAuthorization | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     target_branch_name: BranchName | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -378,6 +478,15 @@ class RecoveryPlan(DomainModel):
     denied_paths: tuple[str, ...]
     created_at: AwareDatetime
     plan_sha256: StageSha256
+
+    @model_validator(mode="after")
+    def validate_target_authorization(self) -> Self:
+        if self.target_authorization is not None:
+            try:
+                self.target_authorization.validate_source(self.source)
+            except RecoveryRejected as error:
+                raise ValueError(str(error)) from error
+        return self
 
     @model_validator(mode="after")
     def validate_workspace_snapshot(self) -> Self:

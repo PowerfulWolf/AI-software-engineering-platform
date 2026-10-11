@@ -1941,6 +1941,7 @@ def test_resume_recovers_admitted_coder_after_legacy_inconclusive_remediation(
         remediation.source.stages.product,
         remediation.source.stages.design,
         remediation.source.stages.plan,
+        requirement_id=plan.scope.delivery_id,
         extra_context=remediation.context_sources,
     )
     terminal = entry.finish_continuation(

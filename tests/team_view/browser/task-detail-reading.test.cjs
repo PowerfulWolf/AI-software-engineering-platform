@@ -28,6 +28,10 @@ const taskFixture = () => ({
 async function openTask(t) {
   const h = await ui(t);
   const task = taskFixture();
+  Object.assign(h.team.requests[0], {
+    stage: "DELIVERING",
+    scopes: [{...task.scope, delivery_id: task.id, reference_only: false}],
+  });
   h.team.tasks.push(task);
   await h.tick();
   await h.page.evaluate(() => showDetail("task", "task_reading"));

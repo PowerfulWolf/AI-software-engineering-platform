@@ -760,12 +760,14 @@ def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(
 @pytest.mark.parametrize("semantic", [False, True])
 @pytest.mark.parametrize("quarantine", [False, True])
 @pytest.mark.parametrize("audited", [False, True])
+@pytest.mark.parametrize("target_authority", [False, True])
 def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_entry(
     tmp_path: Path,
     joint: bool,
     semantic: bool,
     quarantine: bool,
     audited: bool,
+    target_authority: bool,
 ) -> None:
     adapter, host, entry = _adapter(tmp_path)
     plan = make_plan(tmp_path / "project")
@@ -808,6 +810,37 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
             }
         )
         plan = RecoveryPlan.create(**{**plan.to_wire(), "workspace_snapshot": snapshot})
+    if target_authority:
+        from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
+        from ai_software_engineer.domain.engineering_authority import (
+            EngineeringPolicy,
+            EngineeringScope,
+            LocalOperatorPrincipal,
+        )
+        from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy
+        from ai_software_engineer.recovery.models import RecoveryTargetAuthorization
+
+        retry = DeliveryRetryPolicy()
+        authority = RecoveryTargetAuthorization(
+            source_task_id=plan.source.task_id,
+            source_task_sha256=plan.source.task_sha256,
+            source_max_attempts=retry.execution_limit,
+            source_retry_policy=retry,
+            engineering_policy=EngineeringPolicy.bounded_local(
+                scope=EngineeringScope(
+                    team_id=plan.source.scope.team_id,
+                    project_id=PROJECT_ID,
+                    repository_id=plan.source.scope.repository_id,
+                    repository_root=plan.source.scope.repository_root,
+                ),
+                principal=LocalOperatorPrincipal.trusted_local(),
+            ),
+            interruption_continuation_policy=InterruptionContinuationPolicy.for_retry_budget(
+                max_work_attempts=retry.max_work_attempts,
+                max_coder_transient_failures=retry.transient_limit(AgentRole.CODER),
+            ),
+        )
+        plan = RecoveryPlan.create(**{**plan.to_wire(), "target_authorization": authority})
     store = FileRecoveryStore.initialize(tmp_path / "recovery", scope=plan.source.scope)
     store.put_plan(plan)
     plan_path = tmp_path / "recovery" / f"plan-{plan.plan_sha256}.json"
@@ -862,6 +895,11 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
     assert result.approval.title == "保留开发进度，继续原需求"  # noqa: RUF001
     assert any("不会新建同名需求" in fact for fact in result.approval.facts)
     assert any("独立 QA 和 Reviewer" in fact for fact in result.approval.facts)
+    assert (
+        any("本次批准包含有界工程处理授权" in fact for fact in result.approval.facts)
+        is target_authority
+    )
+    assert any("原任务已冻结额度" in fact for fact in result.approval.facts) is target_authority
     assert any(fact.startswith("源任务 ") for fact in result.approval.technical_facts)
     assert any("已核验本轮开发执行确已停止" in fact for fact in result.approval.facts) is audited
     assert any("不会复制到恢复工作区" in fact for fact in result.approval.facts) is audited
