@@ -1,0 +1,14 @@
+{
+  "name": "dynamic-credential-fixture",
+  "status": "in_progress",
+  "phase": "verified_pending_review",
+  "base_commit": "e4023c47b7194513a3ab3bb1b05951f89baf58f5",
+  "allowlist": [
+    "src/ai_software_engineer/redaction.py",
+    "tests/context/test_dynamic_credential_source.py",
+    "tests/git/test_mutation_capture.py",
+    ".trellis/spec/core/dynamic-credential-source.md",
+    ".trellis/spec/core/index.md",
+    ".trellis/tasks/10-11-dynamic-credential-fixture/"
+  ]
+}

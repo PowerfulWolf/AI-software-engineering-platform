@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`dynamic-credential-source.md`](dynamic-credential-source.md): exact AST provenance for
+  runtime-generated negative security test input, unchanged generic secret detection and full captures.
+
 - [`coder-cache-isolation.md`](coder-cache-isolation.md): run-owned default mypy cache,
   fixed bootstrap rebinding, unchanged workspace inventory and explicit containment limits.
 - [`workspace-inventory.md`](workspace-inventory.md): complete ignored-file observation,
