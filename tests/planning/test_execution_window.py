@@ -19,6 +19,7 @@ from ai_software_engineer.domain import (
     Task,
     TaskStatus,
 )
+from ai_software_engineer.domain.coder_work import CoderSliceRejectionCode
 from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure, DeliveryRetryPolicy
 from ai_software_engineer.planning.execution_window import (
@@ -222,8 +223,9 @@ def test_partial_slice_cannot_publish_a_complete_implementation_report() -> None
         progress=None,
     )
     assert work is not None and work.later_step_ids
-    with pytest.raises(CoderSliceRejected, match="complete candidate"):
+    with pytest.raises(CoderSliceRejected, match="complete candidate") as rejected:
         validate_coder_slice_output(work, make_implementation_artifact())
+    assert rejected.value.code is CoderSliceRejectionCode.PARTIAL_CANDIDATE
 
 
 def test_current_reservation_and_progress_partition_must_be_exact() -> None:

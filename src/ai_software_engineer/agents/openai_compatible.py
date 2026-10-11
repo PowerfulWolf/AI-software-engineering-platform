@@ -368,6 +368,35 @@ def _progress_output_guidance(request: AgentRequest) -> str:
     )
 
 
+def _coder_slice_output_guidance(request: AgentRequest) -> str:
+    """Explain the typed partition without treating a retained draft as completion."""
+    if request.role is not AgentRole.CODER or request.work_slice is None:
+        return ""
+    output_kind = (
+        "This slice has deferred steps: return coder-progress, even if all selected steps are "
+        "finished. Do not return implementation-report for this slice. "
+        if request.work_slice.later_step_ids
+        else "This slice has no deferred steps: return implementation-report only after the "
+        "complete implementation and required verification have finished; otherwise return "
+        "coder-progress with remaining work and concrete next actions. "
+    )
+    return (
+        "\nCODER_WORK_SLICE_GUIDANCE: Follow the frozen work_slice supplied in this request. "
+        "It limits the current execution; the full plan remains the complete approved scope. "
+        + output_kind
+        + "For coder-progress, work_slice.completed_step_ids are inherited completed steps and "
+        "must remain in content.completed_step_ids. Newly completed steps must come only from "
+        "work_slice.selected_step_ids, and only when established complete in this execution. "
+        "Keep every work_slice.later_step_ids entry in content.remaining_step_ids; unfinished "
+        "selected steps must also remain there. The completed and remaining IDs must be "
+        "disjoint and partition the complete approved step set, with no missing or foreign IDs. "
+        "Existing files or a recovered draft do not prove deferred steps complete. "
+        "Report the complete retained dirty-file inventory, including earlier legal changes; "
+        "step selection does not authorize dropping retained paths or expanding write permissions. "
+        "Keep progress at the exact input source revision and do not create a candidate commit."
+    )
+
+
 def _negative_credential_test_guidance(request: AgentRequest) -> str:
     if request.role not in {AgentRole.CODER, AgentRole.QA} or not request.permissions.write_paths:
         return ""
@@ -417,6 +446,7 @@ class RequestPromptBuilder:
             "output_contract.supersedes_by_kind; "
             "input_artifact_ids are context dependencies, not necessarily direct parents."
             + _progress_output_guidance(request)
+            + _coder_slice_output_guidance(request)
             + _negative_credential_test_guidance(request)
             + _PROJECT_OBSERVATION_GUIDANCE
         )
@@ -480,6 +510,7 @@ class ContextPromptBuilder:
             "input_artifact_ids are context dependencies, not necessarily direct parents.\n"
             f"MACHINE_POLICY={policy_sections[0]}"
             + _progress_output_guidance(request)
+            + _coder_slice_output_guidance(request)
             + _negative_credential_test_guidance(request)
             + _PROJECT_OBSERVATION_GUIDANCE
         )

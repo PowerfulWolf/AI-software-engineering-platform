@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from math import ceil
 
 from ai_software_engineer.domain.artifact import (
@@ -14,8 +15,31 @@ from ai_software_engineer.domain.execution_window import CoderWorkSlice
 from ai_software_engineer.domain.task import Task
 
 
+class CoderSliceRejectionCode(StrEnum):
+    """Fixed gate classes; never derive a diagnostic from model text or step IDs."""
+
+    INPUT_CONTRACT = "INPUT_CONTRACT"
+    TASK_BINDING = "TASK_BINDING"
+    PARTIAL_CANDIDATE = "PARTIAL_CANDIDATE"
+    OUTPUT_KIND = "OUTPUT_KIND"
+    SOURCE_REVISION = "SOURCE_REVISION"
+    STEP_PARTITION = "STEP_PARTITION"
+    PRIOR_COMPLETION = "PRIOR_COMPLETION"
+    UNSELECTED_COMPLETION = "UNSELECTED_COMPLETION"
+    DEFERRED_STEPS = "DEFERRED_STEPS"
+
+
 class CoderSliceRejected(ValueError):
     """The input/output cannot prove the frozen step partition."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: CoderSliceRejectionCode = CoderSliceRejectionCode.INPUT_CONTRACT,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def select_coder_work_slice(
@@ -71,26 +95,48 @@ def select_coder_work_slice(
 
 def validate_coder_slice_output(work: CoderWorkSlice, artifact: Artifact) -> None:
     if artifact.task_id != work.task_id:
-        raise CoderSliceRejected("Coder output belongs to another work slice")
+        raise CoderSliceRejected(
+            "Coder output belongs to another work slice", code=CoderSliceRejectionCode.TASK_BINDING
+        )
     if isinstance(artifact, ImplementationReportArtifact):
         if work.later_step_ids:
-            raise CoderSliceRejected("a bounded partial slice cannot publish a complete candidate")
+            raise CoderSliceRejected(
+                "a bounded partial slice cannot publish a complete candidate",
+                code=CoderSliceRejectionCode.PARTIAL_CANDIDATE,
+            )
         return
     if not isinstance(artifact, CoderProgressArtifact):
-        raise CoderSliceRejected("work slice requires implementation-report or coder-progress")
+        raise CoderSliceRejected(
+            "work slice requires implementation-report or coder-progress",
+            code=CoderSliceRejectionCode.OUTPUT_KIND,
+        )
     if artifact.source_revision != work.source_revision:
-        raise CoderSliceRejected("progress changed the slice source revision")
+        raise CoderSliceRejected(
+            "progress changed the slice source revision",
+            code=CoderSliceRejectionCode.SOURCE_REVISION,
+        )
     completed = set(artifact.content.completed_step_ids)
     remaining = set(artifact.content.remaining_step_ids)
     expected = set((*work.completed_step_ids, *work.selected_step_ids, *work.later_step_ids))
     if completed | remaining != expected or completed & remaining:
-        raise CoderSliceRejected("progress must partition the exact complete approved step set")
+        raise CoderSliceRejected(
+            "progress must partition the exact complete approved step set",
+            code=CoderSliceRejectionCode.STEP_PARTITION,
+        )
     if not set(work.completed_step_ids) <= completed:
-        raise CoderSliceRejected("progress cannot erase previously completed steps")
+        raise CoderSliceRejected(
+            "progress cannot erase previously completed steps",
+            code=CoderSliceRejectionCode.PRIOR_COMPLETION,
+        )
     if not completed <= set((*work.completed_step_ids, *work.selected_step_ids)):
-        raise CoderSliceRejected("progress completed steps outside the current bounded slice")
+        raise CoderSliceRejected(
+            "progress completed steps outside the current bounded slice",
+            code=CoderSliceRejectionCode.UNSELECTED_COMPLETION,
+        )
     if not set(work.later_step_ids) <= remaining:
-        raise CoderSliceRejected("progress cannot omit deferred plan steps")
+        raise CoderSliceRejected(
+            "progress cannot omit deferred plan steps", code=CoderSliceRejectionCode.DEFERRED_STEPS
+        )
 
 
 def successor_coder_work_slice(work: CoderWorkSlice, *, consume_work: bool) -> CoderWorkSlice:
