@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ase.local/schemas/console-operation-query.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "project_id": {
+      "anyOf": [
+        {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "delivery_id": {
+      "anyOf": [
+        {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delivery Id"
+    },
+    "page_size": {
+      "default": 25,
+      "maximum": 50,
+      "minimum": 1,
+      "title": "Page Size",
+      "type": "integer"
+    },
+    "cursor": {
+      "anyOf": [
+        {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cursor"
+    }
+  },
+  "title": "OperationSummaryQuery",
+  "type": "object"
+}

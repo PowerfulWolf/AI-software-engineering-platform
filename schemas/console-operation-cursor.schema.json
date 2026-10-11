@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ase.local/schemas/console-operation-cursor.schema.json",
+  "$defs": {
+    "OperationSummaryScope": {
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "anyOf": [
+            {
+              "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "delivery_id": {
+          "anyOf": [
+            {
+              "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Id"
+        }
+      },
+      "title": "OperationSummaryScope",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "inventory_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Inventory Sha256",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/OperationSummaryScope"
+    },
+    "page_size": {
+      "maximum": 50,
+      "minimum": 1,
+      "title": "Page Size",
+      "type": "integer"
+    },
+    "sort": {
+      "const": "requested_at_desc_operation_id_desc",
+      "default": "requested_at_desc_operation_id_desc",
+      "title": "Sort",
+      "type": "string"
+    },
+    "after_requested_at": {
+      "format": "date-time",
+      "title": "After Requested At",
+      "type": "string"
+    },
+    "after_operation_id": {
+      "pattern": "^operation_[a-f0-9]{32}$",
+      "title": "After Operation Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "inventory_sha256",
+    "scope",
+    "page_size",
+    "after_requested_at",
+    "after_operation_id"
+  ],
+  "title": "OperationSummaryCursor",
+  "type": "object"
+}

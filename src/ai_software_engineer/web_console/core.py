@@ -21,6 +21,7 @@ from .models import ConsoleCommandResult, ConsoleIntent, ConsoleOperation
 from .preparation_store import InMemoryPreparationProgressStore, PreparationProgressStore
 from .shutdown import ShutdownResult, ShutdownState, shutdown_deadline
 from .store import ConsoleOperationError, ConsoleOperationStore
+from .summary_models import OperationSummaryPage, OperationSummaryQuery
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -89,6 +90,9 @@ class ProjectConsole:
 
     def list_operations(self) -> tuple[ConsoleOperation, ...]:
         return self._store.list_current()
+
+    def summary_page(self, query: OperationSummaryQuery) -> OperationSummaryPage:
+        return self._store.summary_page(query)
 
     def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]:
         return self._store.model_calls(operation_id)
