@@ -4,7 +4,11 @@ import hashlib
 import json
 from typing import Protocol, runtime_checkable
 
-from ai_software_engineer.context.execution_baseline import ExecutionBaselineContext
+from ai_software_engineer.context.execution_baseline import (
+    ExecutionBaselineContext,
+    PreservedWorktreeBaselineContext,
+    parse_execution_baseline_context,
+)
 from ai_software_engineer.context.models import ContextBundle, ContextSection, ContextSource
 from ai_software_engineer.context.native import validate_native_rule_epoch_context
 from ai_software_engineer.context.ports import (
@@ -20,6 +24,7 @@ from ai_software_engineer.domain.artifact import (
 )
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.execution_baseline import (
+    BaselineInputMode,
     CoderExecutionInput,
     ExecutionBaselineBinding,
 )
@@ -59,7 +64,7 @@ class NativeRuleEpochResolver(Protocol):
 
 
 class BaselineRunContextBuilder:
-    """Append the complete verified patch after ordinary/native/knowledge Context.
+    """Append mode-aware verified inputs after ordinary/native/knowledge Context.
 
     The underlying builder stays unchanged. This required section is atomically
     persisted with a new Context digest and never shortened to fit a token budget.
@@ -126,7 +131,23 @@ class BaselineRunContextBuilder:
             value.complete_patch
         ):
             raise ContextSourceError("complete execution baseline body is missing or sensitive")
-        content = json.dumps(value.to_wire(), ensure_ascii=False, sort_keys=True)
+        # A finalized historical Context must keep its original complete body,
+        # not be rewritten into a new projection after consultation.
+        try:
+            historical = (
+                parse_execution_baseline_context(existing[0].content)
+                if len(existing) == 1
+                else None
+            )
+        except ValueError as error:
+            raise ContextSourceError("已封存的执行基线上下文与当前可信完整输入不一致") from error
+        payload = (
+            value
+            if isinstance(historical, ExecutionBaselineContext)
+            or source.baseline.input_mode is BaselineInputMode.CODER_REAPPLY
+            else PreservedWorktreeBaselineContext.from_complete(value)
+        )
+        content = json.dumps(payload.to_wire(), ensure_ascii=False, sort_keys=True)
         tokens = (len(content) + 3) // 4
         section = ContextSection(
             name="execution.baseline",

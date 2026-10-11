@@ -1,0 +1,33 @@
+{
+  "name": "baseline-context-projection",
+  "title": "保留草稿的执行基线上下文采用有界阅读投影",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "5d1ebc7",
+  "allowlist": [
+    "src/ai_software_engineer/context/execution_baseline.py",
+    "src/ai_software_engineer/orchestration/execution_baseline.py",
+    "src/ai_software_engineer/manager/execution_baseline.py",
+    "src/ai_software_engineer/agents/candidate_binding.py",
+    "src/ai_software_engineer/manager/native_verification_facts.py",
+    "src/ai_software_engineer/recovery/baseline_source.py",
+    "src/ai_software_engineer/manager/production_delivery.py",
+    "src/ai_software_engineer/manager/production_backend.py",
+    "tests/manager/test_execution_baseline_context.py",
+    "tests/manager/test_production_execution_baseline.py",
+    "tests/manager/test_legacy_rescue_delivery.py",
+    "tests/context/test_baseline_projection.py",
+    "tests/recovery/test_terminal_baseline_context.py",
+    ".trellis/spec/core/baseline-context-projection.md",
+    ".trellis/spec/core/execution-baseline.md",
+    ".trellis/spec/core/index.md",
+    "docs/architecture/context-routing.md",
+    ".trellis/tasks/10-12-baseline-context-projection/"
+  ],
+  "constraints": [
+    "Incremental tests only; no production SQL, model, service or main-checkout changes",
+    "Preserve complete immutable patch and authority evidence, coder_reapply full input",
+    "Versioned projection; full store verifier required; v1 content hashes unchanged"
+  ],
+  "rollback": "Retain v2 readers once used; disable projection generation while idle, never rewrite existing Context/approval/source facts."
+}

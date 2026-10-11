@@ -13,7 +13,10 @@ from ai_software_engineer.agents.models import AgentRequest
 from ai_software_engineer.agents.openai_compatible import ContextResolver
 from ai_software_engineer.artifacts import artifact_digest
 from ai_software_engineer.context.builder import estimate_input_tokens
-from ai_software_engineer.context.execution_baseline import execution_baseline_from_context
+from ai_software_engineer.context.execution_baseline import (
+    ExecutionBaselineContextVerifier,
+    execution_baseline_from_context,
+)
 from ai_software_engineer.domain import AgentRole, Task
 from ai_software_engineer.domain.artifact import (
     Artifact,
@@ -175,8 +178,14 @@ def validate_candidate_artifact_lineage(
 class BoundCandidateSource:
     """Compile source after all other prompt additions, enforcing the original input budget."""
 
-    def __init__(self, resolver: ContextResolver) -> None:
+    def __init__(
+        self,
+        resolver: ContextResolver,
+        *,
+        baseline_verifier: ExecutionBaselineContextVerifier | None = None,
+    ) -> None:
         self._resolver = resolver
+        self._baseline_verifier = baseline_verifier
 
     def append(self, request: AgentRequest, root: Path, prompt: str) -> str:
         context = self._resolver.get_context(request.context_manifest_id)
@@ -256,7 +265,9 @@ class BoundCandidateSource:
                             ) from error
         validate_candidate_artifact_lineage(task, plans[0], implementations[0], artifacts_by_id)
         try:
-            baseline = execution_baseline_from_context(context, request, task)
+            baseline = execution_baseline_from_context(
+                context, request, task, verifier=self._baseline_verifier
+            )
         except ValueError as error:
             raise WorkspacePolicyError(
                 "candidate source execution baseline binding differs"

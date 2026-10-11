@@ -171,8 +171,11 @@ duplicate plan reads without changing an execution or approval.
   Pre-publication execution still requires exact plan/facts and Git state. Replaying the operation
   and queue consumer must be independently idempotent across their crash boundary.
 - Coder, QA and Reviewer requests carry the same exact baseline digest and execution base.
-  Required Context contains the verified binding and complete retained patch, with SHA/byte
-  checks. It is never shortened to fit a budget; insufficient input capacity becomes an
+  Required Context uses the versioned [mode-aware baseline reading contract](baseline-context-projection.md).
+  New `preserve_draft` inputs carry the complete binding and exact retained-patch reference after
+  full store/authority/body validation; every v2 consumer requires that independent complete-store
+  verifier. `coder_reapply` and historical v1 contexts retain the entire old patch and SHA/byte
+  checks. Required information is never truncated to fit; insufficient input capacity becomes an
   actionable engineering wait.
 - Insert this required baseline section before knowledge consultation so consultation binds
   the complete engineering input. The outer runtime guard must recognize the exact already

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import sys
@@ -30,7 +31,11 @@ from ai_software_engineer.agents.codex_cli import (
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import FileContextStore
-from ai_software_engineer.context.execution_baseline import ExecutionBaselineContext
+from ai_software_engineer.context.execution_baseline import (
+    ExecutionBaselineContext,
+    PreservedWorktreeBaselineContext,
+    parse_execution_baseline_context,
+)
 from ai_software_engineer.context.native import validate_native_rule_epoch_context
 from ai_software_engineer.domain import (
     AgentDefinition,
@@ -386,24 +391,23 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
 
             assert request.execution_baseline_sha256 == expected_binding
             assert request.execution_base_ref == execution_base
-            assert "complete_patch" in stdin
-            if not provider_failure:
-                assert "+retained draft" in stdin
             context = FileContextStore(sidecar / "contexts").get(request.context_manifest_id)
             (section,) = tuple(s for s in context.sections if s.name == "execution.baseline")
             assert not section.truncated
-            trusted = ExecutionBaselineContext.model_validate_json(section.content)
+            trusted = parse_execution_baseline_context(section.content)
             assert trusted.binding.binding_sha256 == expected_binding
             assert trusted.binding.execution_base_ref == execution_base
-            assert (
-                hashlib.sha256(trusted.complete_patch.encode()).hexdigest()
-                == trusted.binding.retained_patch.sha256
-            )
-            assert (
-                trusted.complete_patch == ""
-                if provider_failure
-                else trusted.complete_patch.endswith("+retained draft\n")
-            )
+            if isinstance(trusted, PreservedWorktreeBaselineContext):
+                assert trusted.retained_patch == trusted.binding.retained_patch
+                assert "complete_patch" not in json.loads(section.content)
+                if not provider_failure and request.role is AgentRole.CODER:
+                    assert (cwd / "hello.txt").read_text() == "retained draft\n"
+            else:
+                assert isinstance(trusted, ExecutionBaselineContext)
+                assert hashlib.sha256(trusted.complete_patch.encode()).hexdigest() == (
+                    trusted.binding.retained_patch.sha256
+                )
+                assert "+retained draft" in trusted.complete_patch
             if native_pause:
                 assert expected_epoch is not None
                 assert trusted.binding.native_rule_epoch_sha256 == expected_epoch.epoch_sha256
