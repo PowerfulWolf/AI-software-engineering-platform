@@ -13,13 +13,24 @@ from threading import Event
 
 import pytest
 
-from ai_software_engineer.agents import AgentRequest, AgentResult
+from ai_software_engineer.agents import (
+    AgentErrorCode,
+    AgentFailure,
+    AgentRequest,
+    AgentResult,
+    AgentRunStatus,
+)
 from ai_software_engineer.agents.execution import current_execution_guard
 from ai_software_engineer.agents.structured import StructuredModelResult
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.artifacts.ordering import ArtifactOrderingError
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import AgentRole, RiskTier, StateEvent, TaskStatus, WorkItemStatus
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringPolicy,
+    EngineeringScope,
+    LocalOperatorPrincipal,
+)
 from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy
 from ai_software_engineer.domain.workforce import TaskLease
 from ai_software_engineer.knowledge.gaps import (
@@ -35,7 +46,12 @@ from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager import MySqlDispatchAuthority
 from ai_software_engineer.manager.production_backend import _terminal_delivery_result
 from ai_software_engineer.manager.queue_capacity import production_role_queue
-from ai_software_engineer.orchestration import FileRunContextBuilder, RetryDeliveryResult
+from ai_software_engineer.orchestration import (
+    BlockedResult,
+    FileRunContextBuilder,
+    RetryClassification,
+    RetryDeliveryResult,
+)
 from ai_software_engineer.orchestration.state_machine import build_event
 from ai_software_engineer.orchestration.steps import BoundedRunControl, RoleRunBoundary
 from ai_software_engineer.runtime import (
@@ -70,6 +86,7 @@ from ai_software_engineer.work_queue.worker import (
     AcceptedArtifactStore,
     DeliveryWaiting,
     QueuedDeliverySupervisor,
+    WorkerDeliveryFailureControl,
     WorkerExecutionGuard,
     WorkerKnowledgeWait,
     WorkerLease,
@@ -206,6 +223,7 @@ def runtime_fixture(
     *,
     knowledge_clients: KnowledgeRoleClients | None = None,
     retry_policy: DeliveryRetryPolicy | None = None,
+    engineering_policy: EngineeringPolicy | None = None,
 ) -> Iterator[tuple[RuntimeSession, QueuedDeliverySupervisor]]:
     root = tmp_path / "repository"
     root.mkdir(exist_ok=True)
@@ -269,11 +287,14 @@ def runtime_fixture(
         repository_root=root,
         artifact_store=accepted,
         context_builder=knowledge,
+        delivery_failure_control=WorkerDeliveryFailureControl(guard),
     ) as runtime:
         try:
             runtime.task_repository.get("task_domain_001")
         except TaskNotFound:
-            task = make_task().model_copy(update={"repository": str(root)})
+            task = make_task().model_copy(
+                update={"repository": str(root), "engineering_policy": engineering_policy}
+            )
             if retry_policy is not None:
                 assert task.constraints is not None
                 task = task.model_copy(
@@ -323,6 +344,109 @@ def test_frozen_policy_retry_has_distinct_real_claims(mysql_dsn: str, tmp_path: 
             AgentRole.REVIEWER,
         ]
         assert len({lease for _, lease in adapter.invocation_claims}) == 4
+
+
+@pytest.mark.parametrize("role", [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER])
+@pytest.mark.parametrize("work_limit", [1, 3])
+def test_nontransient_failure_uses_real_work_budget_and_releases_claim(
+    mysql_dsn: str, tmp_path: Path, role: AgentRole, work_limit: int
+) -> None:
+    queue = MySqlRoleQueue(mysql_dsn)
+
+    class FailedAdapter(ObservedAdapter):
+        def run(self, request: AgentRequest) -> AgentResult:
+            result = super().run(request)
+            if request.role is not role:
+                return result
+            return AgentResult(
+                run_id=request.run_id,
+                task_id=request.task_id,
+                role=request.role,
+                attempt=request.attempt,
+                source_revision=request.source_revision,
+                context_manifest_id=request.context_manifest_id,
+                status=AgentRunStatus.FAILED,
+                error=AgentFailure(
+                    code=AgentErrorCode.PROVIDER_UNAVAILABLE,
+                    message="fixture unknown native exit",
+                    transient=False,
+                ),
+            )
+
+    adapter = FailedAdapter(queue)
+    engineering = EngineeringPolicy.bounded_local(
+        scope=EngineeringScope(
+            team_id="team_worker",
+            project_id="project_worker",
+            repository_id=REPOSITORY_ID,
+            repository_root=str(tmp_path / "repository"),
+        ),
+        principal=LocalOperatorPrincipal.trusted_local(),
+    )
+    with runtime_fixture(
+        tmp_path,
+        mysql_dsn,
+        queue,
+        adapter,
+        retry_policy=DeliveryRetryPolicy(max_work_attempts=work_limit),
+        engineering_policy=engineering,
+    ) as (runtime, supervisor):
+
+        def deliver() -> BlockedResult | RetryDeliveryResult:
+            return supervisor.run(
+                runtime,
+                "task_domain_001",
+                terminal_result=lambda: _terminal_delivery_result(
+                    runtime.task_repository, supervisor.artifacts, "task_domain_001"
+                ),
+                close_worktrees=lambda: None,
+            )
+
+        if work_limit == 3:
+            with pytest.raises(DeliveryWaiting) as waiting:
+                deliver()
+            decision = waiting.value.disposition
+            assert decision.facts.classification == "NONTRANSIENT_INFRA"
+            assert decision.facts.budget_available
+            assert decision.action.value == "INVESTIGATE_EXECUTION"
+            (item,) = tuple(
+                item
+                for item in queue.items_for_task("task_domain_001")
+                if item.status is not WorkItemStatus.CLOSED
+            )
+            assert item.wait_disposition == decision
+            assert item.status is WorkItemStatus.WAITING_DEPENDENCY
+            requests = tuple(adapter.requests)
+            with pytest.raises(DeliveryWaiting):
+                deliver()
+            assert tuple(adapter.requests) == requests
+            assert queue.get(item.id) == item
+            assert (
+                runtime.task_repository.get(item.task_id).status
+                is {
+                    AgentRole.CODER: TaskStatus.IMPLEMENTING,
+                    AgentRole.QA: TaskStatus.QA,
+                    AgentRole.REVIEWER: TaskStatus.REVIEW,
+                }[role]
+            )
+        else:
+            result = deliver()
+            assert isinstance(result, BlockedResult)
+            assert result.classification is RetryClassification.NONTRANSIENT_INFRA
+            assert result.task.status is TaskStatus.BLOCKED
+            assert all(
+                item.status is WorkItemStatus.CLOSED
+                for item in queue.items_for_task("task_domain_001")
+            )
+        current = runtime.task_repository.get("task_domain_001")
+        assert current.attempts == current.work_attempt == 1
+        assert current.retry_failures is None
+        assert not queue.list_active_leases(now=datetime.now(UTC))
+        assert supervisor.guard.lease is None
+        assert sum(request.role is role for request in adapter.requests) == 1
+        assert len({lease for _, lease in adapter.invocation_claims}) == len(
+            adapter.invocation_claims
+        )
 
 
 @pytest.mark.parametrize(

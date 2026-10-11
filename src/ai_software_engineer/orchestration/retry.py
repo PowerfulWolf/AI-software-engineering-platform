@@ -53,6 +53,7 @@ class RetryClassification(StrEnum):
     """Stable categories used by the v0.1 routing policy."""
 
     TRANSIENT_INFRA = "TRANSIENT_INFRA"
+    NONTRANSIENT_INFRA = "NONTRANSIENT_INFRA"
     INVALID_OUTPUT = "INVALID_OUTPUT"
     QA_FINDING = "QA_FINDING"
     VERIFICATION_INCONCLUSIVE = "VERIFICATION_INCONCLUSIVE"
@@ -650,7 +651,7 @@ class RetryingOrchestrator(SerialOrchestrator):
                     self._repository.get(task.id),
                     RetryClassification.BUDGET_EXHAUSTED
                     if isinstance(error, InterruptionBudgetExhausted)
-                    else RetryClassification.TRANSIENT_INFRA,
+                    else RetryClassification.NONTRANSIENT_INFRA,
                     "工程中断现场不满足安全续跑条件。草稿和历史已保留。需要工程处理。",
                     attempt,
                     (),
@@ -931,6 +932,7 @@ class RetryingOrchestrator(SerialOrchestrator):
                 RetryClassification.PLATFORM_BUG,
                 RetryClassification.INVALID_OUTPUT,
                 RetryClassification.TRANSIENT_INFRA,
+                RetryClassification.NONTRANSIENT_INFRA,
             }
         ):
             self._delivery_failure_control.wait(
@@ -1009,10 +1011,13 @@ class RetryingOrchestrator(SerialOrchestrator):
         if next_attempt is not None:
             return next_attempt
         events = self._repository.list_events(task.id)
-        classification = {
-            AgentErrorCode.INVALID_OUTPUT: RetryClassification.INVALID_OUTPUT,
-            AgentErrorCode.POLICY_VIOLATION: RetryClassification.POLICY_VIOLATION,
-        }.get(error.code, RetryClassification.TRANSIENT_INFRA)
+        classification = (
+            # Keep the legacy local-window checkpoint route; current sealed
+            # KnowledgePreparationLocalLimit uses its dedicated wait above.
+            RetryClassification.TRANSIENT_INFRA
+            if error.expandable_timeout
+            else _failure_classification(error.code, transient=error.transient)
+        )
         if error.retryable and current.retry_policy is not None:
             classification = RetryClassification.BUDGET_EXHAUSTED
         return self._blocked(
@@ -1211,14 +1216,21 @@ def _retryable(error: AgentRunFailed) -> bool:
 
 
 def _classification(error: AgentRunFailed) -> RetryClassification:
-    if error.result.error is not None and error.result.error.code is AgentErrorCode.INVALID_OUTPUT:
+    failure = error.result.error
+    if failure is None:
+        return RetryClassification.NONTRANSIENT_INFRA
+    return _failure_classification(failure.code, transient=failure.transient)
+
+
+def _failure_classification(code: AgentErrorCode, *, transient: bool) -> RetryClassification:
+    """Classification cannot grant an outage refund that the retry gate rejects."""
+    if code is AgentErrorCode.INVALID_OUTPUT:
         return RetryClassification.INVALID_OUTPUT
-    if (
-        error.result.error is not None
-        and error.result.error.code is AgentErrorCode.POLICY_VIOLATION
-    ):
+    if code is AgentErrorCode.POLICY_VIOLATION:
         return RetryClassification.POLICY_VIOLATION
-    return RetryClassification.TRANSIENT_INFRA
+    if transient and code in TRANSIENT_CODES:
+        return RetryClassification.TRANSIENT_INFRA
+    return RetryClassification.NONTRANSIENT_INFRA
 
 
 __all__ = [

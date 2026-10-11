@@ -98,10 +98,17 @@ def _blocked_failure_code(delivery: BlockedResult) -> DeliveryFailureCode:
         return DeliveryFailureCode.PERMISSION_DENIED
     if delivery.classification is RetryClassification.PLATFORM_BUG:
         return DeliveryFailureCode.INVARIANT_VIOLATION
+    if delivery.classification is RetryClassification.NONTRANSIENT_INFRA:
+        return (
+            DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+            if delivery.task.work_budget_exhausted
+            else DeliveryFailureCode.RESOURCE_UNAVAILABLE
+        )
     if delivery.classification is RetryClassification.TRANSIENT_INFRA:
         return (
             DeliveryFailureCode.RESOURCE_UNAVAILABLE
             if delivery.reason.endswith(" knowledge preparation reached local time limit")
+            or delivery.reason == "知识准备达到本次执行时限, 原执行与工作现场保留。"
             else DeliveryFailureCode.TRANSIENT_PROVIDER_FAILURE
         )
     return DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED

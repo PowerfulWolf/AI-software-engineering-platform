@@ -234,6 +234,8 @@ class WorkerDeliveryFailureControl:
                             < task.retry_policy.transient_limit(item.role)
                         )
                         if classification == "TRANSIENT_INFRA"
+                        # Unknown/permanent execution failures consume ordinary
+                        # work, even when their provider code allows outages.
                         else not task.work_budget_exhausted
                     )
                 ),

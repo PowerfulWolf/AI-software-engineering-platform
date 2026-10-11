@@ -18,7 +18,12 @@ from ai_software_engineer.domain.retry_policy import (
     DeliveryRetryPolicy,
     TransientRetryPolicy,
 )
-from ai_software_engineer.orchestration import FileRunContextBuilder, RetryingOrchestrator
+from ai_software_engineer.orchestration import (
+    BlockedResult,
+    FileRunContextBuilder,
+    RetryClassification,
+    RetryingOrchestrator,
+)
 from ai_software_engineer.orchestration.steps import BoundedRunControl, RoleRunPending
 from ai_software_engineer.store import SqliteTaskRepository, StoreError
 from tests.orchestration.test_retry import AttemptIdentityFactory, ScriptedAdapter
@@ -177,31 +182,118 @@ def test_exhausted_failure_survives_crash_before_blocking(
         assert len(adapter.requests) == count, "restart cannot grant a free invocation"
 
 
-def test_unknown_or_nontransient_failure_is_not_refunded(tmp_path: Path) -> None:
+@pytest.mark.parametrize("role", [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER])
+@pytest.mark.parametrize(
+    ("code", "transient"),
+    [
+        *(
+            (AgentErrorCode(code), False)
+            for code in (
+                "TIMEOUT",
+                "QUOTA_EXHAUSTED",
+                "RATE_LIMITED",
+                "PROVIDER_UNAVAILABLE",
+                "PROVIDER_ERROR",
+            )
+        ),
+        (AgentErrorCode.AUTHENTICATION_ERROR, False),
+        (AgentErrorCode.AUTHENTICATION_ERROR, True),
+        (AgentErrorCode.WORK_INTERRUPTED, False),
+    ],
+)
+@pytest.mark.parametrize("work_limit", [1, 3])
+def test_unknown_or_nontransient_failure_is_not_refunded(
+    tmp_path: Path, role: AgentRole, code: AgentErrorCode, transient: bool, work_limit: int
+) -> None:
     class NonTransient(TemporaryFailureAdapter):
         def run(self, request: AgentRequest) -> AgentResult:
             result = super().run(request)
             if result.error is not None:
                 return result.model_copy(
-                    update={"error": result.error.model_copy(update={"transient": False})}
+                    update={
+                        "status": AgentRunStatus.FAILED,
+                        "error": result.error.model_copy(
+                            update={"code": code, "transient": transient}
+                        ),
+                    }
                 )
             return result
 
-    task = budget_task(tmp_path / "project", DeliveryRetryPolicy())
+    adapter = NonTransient(role)
+    task = budget_task(tmp_path / "project", DeliveryRetryPolicy(max_work_attempts=work_limit))
     with SqliteTaskRepository(tmp_path / "state.sqlite") as repository:
         repository.create(task)
         result = RetryingOrchestrator(
             repository=repository,
             artifact_store=FileArtifactStore(tmp_path / "artifacts"),
             context_builder=FileRunContextBuilder(Path(task.repository)),
-            agent_adapter=NonTransient(AgentRole.CODER),
+            agent_adapter=adapter,
             agent_definitions=_definitions(),
             identities=AttemptIdentityFactory(),
             clock=_clock,
         ).run_task(task.id)
         assert result.task.status is TaskStatus.BLOCKED
+        assert isinstance(result, BlockedResult)
+        expected_classification = (
+            RetryClassification.BUDGET_EXHAUSTED
+            if role is AgentRole.CODER
+            and code is AgentErrorCode.WORK_INTERRUPTED
+            and work_limit == 1
+            else RetryClassification.NONTRANSIENT_INFRA
+        )
+        assert result.classification is expected_classification
         assert result.task.attempts == 1
         assert result.task.retry_failures is None
+        assert sum(request.role is role for request in adapter.requests) == 1
+        assert repository.list_events(task.id)[-1].reason.startswith(expected_classification + ":")
+        from ai_software_engineer.manager.delivery import _blocked_failure_code
+        from ai_software_engineer.manager.delivery_checkpoint import DeliveryFailureCode
+
+        assert _blocked_failure_code(result) is (
+            DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+            if work_limit == 1
+            else DeliveryFailureCode.RESOURCE_UNAVAILABLE
+        )
+
+
+@pytest.mark.parametrize("role", [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER])
+@pytest.mark.parametrize(
+    "code", [AgentErrorCode.PROVIDER_UNAVAILABLE, AgentErrorCode.AUTHENTICATION_ERROR]
+)
+def test_nontransient_knowledge_failure_has_no_refund_or_role_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role: AgentRole, code: AgentErrorCode
+) -> None:
+    from ai_software_engineer.agents import StructuredModelError
+
+    task = budget_task(tmp_path / "project", DeliveryRetryPolicy())
+    builder = FileRunContextBuilder(Path(task.repository))
+    build = builder.build
+    adapter = ScriptedAdapter()
+
+    def build_or_fail(*args, **kwargs):  # type: ignore[no-untyped-def]
+        if args[1].role is role:
+            raise StructuredModelError(
+                code, "fixture nontransient knowledge failure", transient=False
+            )
+        return build(*args, **kwargs)
+
+    monkeypatch.setattr(builder, "build", build_or_fail)
+    with SqliteTaskRepository(tmp_path / "state.sqlite") as repository:
+        repository.create(task)
+        result = RetryingOrchestrator(
+            repository=repository,
+            artifact_store=FileArtifactStore(tmp_path / "artifacts"),
+            context_builder=builder,
+            agent_adapter=adapter,
+            agent_definitions=_definitions(),
+            identities=AttemptIdentityFactory(),
+            clock=_clock,
+        ).run_task(task.id)
+        assert isinstance(result, BlockedResult)
+        assert result.classification is RetryClassification.NONTRANSIENT_INFRA
+        assert result.task.retry_failures is None
+        assert result.task.attempts == 1
+        assert all(request.role is not role for request in adapter.requests)
 
 
 def test_maximum_policy_and_legacy_wire_compatibility(tmp_path: Path) -> None:
@@ -293,7 +385,7 @@ def test_knowledge_error_has_typed_budget_and_no_fabricated_run(
 
             assert isinstance(result, BlockedResult)
             assert result.classification is RetryClassification.TRANSIENT_INFRA
-            assert result.reason == "coder knowledge preparation reached local time limit"
+            assert result.reason == "知识准备达到本次执行时限, 原执行与工作现场保留。"
             assert _blocked_failure_code(result) is DeliveryFailureCode.RESOURCE_UNAVAILABLE
             assert result.task.attempts == 1 and result.task.retry_failures is None
             assert [request.role for request in adapter.requests] == [AgentRole.ORCHESTRATOR]

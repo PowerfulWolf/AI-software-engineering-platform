@@ -1717,7 +1717,7 @@ function engineeringStoppedProviderRetryFacts(request, task, step) {
   const proof = engineeringWaitProof(request, step);
   const plan = engineeringBaselinePlan(request, task, step, "stopped_provider_retry");
   if (!bound || step.wait_disposition.facts.classification === "EXECUTION_BASELINE_PAUSED" ||
-      !["TRANSIENT_INFRA", "PLATFORM_BUG", "EXECUTION_UNCERTAIN"].includes(step.wait_disposition.facts.classification) ||
+      !["TRANSIENT_INFRA", "NONTRANSIENT_INFRA", "PLATFORM_BUG", "EXECUTION_UNCERTAIN"].includes(step.wait_disposition.facts.classification) ||
       proof?.knowledge_preparation || proof?.rejected_output || proof?.interruption_receipt_sha256 ||
       proof?.permitted_resolutions?.length || proof?.missing?.includes("BUDGET_EXHAUSTED") ||
       !plan && (proof?.provider_failure_code !== "AUTHENTICATION_ERROR" ||
@@ -1826,7 +1826,7 @@ function engineeringCompletedOutputRescueFacts(request, task, step) {
   if (!bound || step.wait_disposition?.facts.classification === "EXECUTION_BASELINE_PAUSED" ||
       proof?.provider_failure_code === "AUTHENTICATION_ERROR" ||
       engineeringBaselinePlan(request, task, step, "stopped_provider_retry") ||
-      !["TRANSIENT_INFRA", "PLATFORM_BUG", "EXECUTION_UNCERTAIN"].includes(step.wait_disposition?.facts.classification) ||
+      !["TRANSIENT_INFRA", "NONTRANSIENT_INFRA", "PLATFORM_BUG", "EXECUTION_UNCERTAIN"].includes(step.wait_disposition?.facts.classification) ||
       proof?.knowledge_preparation || proof?.rejected_output || proof?.interruption_receipt_sha256 ||
       proof?.permitted_resolutions?.length || proof?.retry_cause && proof.retry_cause !== "completed_output_unavailable" ||
       proof?.missing?.includes("BUDGET_EXHAUSTED") || !plan && engineeringLegacyRescueFacts(request, task, step, proof)) return null;
@@ -3306,7 +3306,7 @@ function humanizeBlockingText(value) {
     return `代码仓库 ${repository[1]} 已阻塞；请检查该仓库的交付检查点。`;
   }
   const roleFailure = text.match(
-    /^(?:(?:TRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|VERIFICATION_INCONCLUSIVE|WORK_INTERRUPTED):\s*)?(Coder|QA|Reviewer) failed at attempt (\d+): (.*)$/,
+    /^(?:(?:TRANSIENT_INFRA|NONTRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|VERIFICATION_INCONCLUSIVE|WORK_INTERRUPTED):\s*)?(Coder|QA|Reviewer) failed at attempt (\d+): (.*)$/,
   );
   if (roleFailure) {
     const detail = roleFailure[3];
@@ -3355,7 +3355,7 @@ function humanizeBlockingText(value) {
   if (localKnowledgeTimeout)
     return `${localKnowledgeTimeout} 知识准备达到本次执行时限，本轮尚未开始该角色的代码执行或验证；已有交付进度与历史保留。`;
   const knowledgeFailure = text.match(
-    /^(?:(?:TRANSIENT_INFRA|BUDGET_EXHAUSTED|POLICY_VIOLATION):\s*)?(Coder|QA|Reviewer) knowledge (preparation|assessment|intent) failed:\s*([A-Z0-9_:-]+)$/i,
+    /^(?:(?:TRANSIENT_INFRA|NONTRANSIENT_INFRA|BUDGET_EXHAUSTED|POLICY_VIOLATION):\s*)?(Coder|QA|Reviewer) knowledge (preparation|assessment|intent) failed:\s*([A-Z0-9_:-]+)$/i,
   );
   if (knowledgeFailure) {
     const phases = { preparation: "准备", assessment: "评估", intent: "意图分析" };

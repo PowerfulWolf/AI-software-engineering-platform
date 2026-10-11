@@ -44,6 +44,7 @@ class DeliveryFailureFacts(DomainModel):
     role: AgentRole
     classification: Literal[
         "TRANSIENT_INFRA",
+        "NONTRANSIENT_INFRA",
         "INVALID_OUTPUT",
         "QA_FINDING",
         "VERIFICATION_INCONCLUSIVE",
@@ -179,6 +180,7 @@ def decide_delivery_disposition(facts: DeliveryFailureFacts) -> DeliveryDisposit
         and reason_code
         in {
             "TRANSIENT_INFRA",
+            "NONTRANSIENT_INFRA",
             "QA_FINDING",
             "REVIEW_FINDING",
             "INVALID_OUTPUT",
@@ -212,6 +214,13 @@ def decide_delivery_disposition(facts: DeliveryFailureFacts) -> DeliveryDisposit
             "点击“让平台处理知识准备”; ASE 核验原执行结束和剩余额度后, "
             "按原授权扩大下一次知识准备窗口。缺少工程授权时由工程授权者确认。"
         )
+    elif reason_code == "NONTRANSIENT_INFRA":
+        action, condition = (
+            DeliveryNextAction.INVESTIGATE_EXECUTION,
+            "verified_execution_resolution",
+        )
+        reason = "本次执行失败, 尚无可信的临时故障事实, 不能自动重试; 现场和原失败记录保留。"
+        next_action = "让平台核验原执行、输出和保留进度; 按检查结果准备精确恢复方案后再确认继续。"
     elif reason_code in {"EXECUTION_UNCERTAIN", "PLATFORM_BUG", "INVALID_OUTPUT"}:
         action, condition = (
             DeliveryNextAction.INVESTIGATE_EXECUTION,

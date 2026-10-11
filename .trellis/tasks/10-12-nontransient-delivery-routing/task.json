@@ -1,0 +1,26 @@
+{
+  "name": "nontransient-delivery-routing",
+  "title": "以真实临时故障标记区分执行失败并按普通工作额度结束交付等待",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "3d3130b56aea0570a12bcd14ab91795432dde47d",
+  "allowlist": [
+    "src/ai_software_engineer/orchestration/retry.py",
+    "src/ai_software_engineer/work_queue/worker.py",
+    "src/ai_software_engineer/domain/delivery_disposition.py",
+    "src/ai_software_engineer/manager/delivery.py",
+    "src/ai_software_engineer/team_view/app.js",
+    "src/ai_software_engineer/team_view/blocker_text.py",
+    "schemas/",
+    "tests/",
+    ".trellis/spec/core/nontransient-delivery-routing.md",
+    ".trellis/tasks/10-12-nontransient-delivery-routing/"
+  ],
+  "constraints": [
+    "Incremental tests only; no production SQL, service, model or main checkout mutation",
+    "Preserve all historical result/stop/retry/budget facts and independent QA/Review gates",
+    "No refund or automatic invocation for nontransient/unknown failures",
+    "Root owns existing-wait settlement and domain/delivery_resolution.py"
+  ],
+  "rollback": "Revert code/assets only while service is idle; retain append-only NONTRANSIENT_INFRA facts and compatible readers. Do not restore a reader which cannot decode consumed new facts."
+}

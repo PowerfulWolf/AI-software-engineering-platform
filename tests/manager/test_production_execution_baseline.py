@@ -49,6 +49,7 @@ from ai_software_engineer.domain import (
 )
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.coordination import ManagerCoordinationDraft
 from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal, OperatorDuty
 from ai_software_engineer.domain.execution_baseline import (
     BaselineContinuationMode,
@@ -77,7 +78,7 @@ from ai_software_engineer.manager.delivery import (
     ResumeProjectDelivery,
     StartProjectDelivery,
 )
-from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
+from ai_software_engineer.manager.delivery_checkpoint import DeliveryFailureCode, DeliveryStage
 from ai_software_engineer.manager.production_agents import ExecutionPlanDraft, TechnicalDesignDraft
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.multi_directory.models import JointDeliveryResult
@@ -173,6 +174,8 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     completed_output: bool,
     same_base: bool,
     provider_failure: bool = False,
+    unknown_failure: bool = False,
+    work_limit: int = 3,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -204,6 +207,19 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
         title = output_schema.get("title")
+        if title == "ManagerCoordinationDraft":
+            assert unknown_failure and work_limit == 1
+            assert "WAITING_HUMAN" in cast(list[str], input_payload["advertised_actions"])
+            return StructuredModelResult(
+                payload=ManagerCoordinationDraft(
+                    action="WAITING_HUMAN",
+                    summary="原生调用失败且已授权工作额度耗尽, 原记录和现场保留。",
+                    next_action="先核验原失败与完整现场, 再通过原需求准备精确恢复授权。",
+                    responsible_actor="ASE 平台与工程授权者",
+                    resume_condition="原需求的精确恢复计划已批准。",
+                ).to_wire(),
+                duration_ms=0,
+            )
         if title in {"JointTechnicalDesign", "JointExecutionPlan"}:
             scope = DirectoryScope.model_validate(input_payload["scope"])
             (unit,) = scope.units
@@ -319,6 +335,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                     else "import sys; sys.stdin.read(); "
                     "sys.stderr.write('Error: HTTP 401 Unauthorized\\n'); sys.exit(1)"
                     if provider_failure
+                    else "import sys; sys.stdin.read(); "
+                    "sys.stdout.write('truncated native transcript'); sys.exit(1)"
+                    if unknown_failure
                     else "from pathlib import Path; import sys,time; "
                     "sys.stdin.read(); Path('hello.txt').write_text('retained draft\\n'); "
                     "time.sleep(30)"
@@ -333,9 +352,13 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                     cwd=cwd,
                     environment=environment,
                     stdin=stdin,
-                    timeout_seconds=min(timeout_seconds, 5 if provider_failure else 0.5),
+                    timeout_seconds=min(
+                        timeout_seconds, 5 if provider_failure or unknown_failure else 0.5
+                    ),
                 )
-                assert outcome.timed_out is not (completed_output or provider_failure)
+                assert outcome.timed_out is not (
+                    completed_output or provider_failure or unknown_failure
+                )
                 assert outcome.process_stop is not None
                 outcome.process_stop.validate_integrity()
                 with pytest.raises(ProcessLookupError):
@@ -349,10 +372,12 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                         process_stop=outcome.process_stop,
                         output_present=completed_output,
                         cause=None
-                        if completed_output or provider_failure
+                        if completed_output or provider_failure or unknown_failure
                         else "local_execution_limit",
                         original_error_code=AgentErrorCode.AUTHENTICATION_ERROR
                         if provider_failure
+                        else AgentErrorCode.PROVIDER_UNAVAILABLE
+                        if unknown_failure
                         else None
                         if completed_output
                         else AgentErrorCode.TIMEOUT,
@@ -576,7 +601,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                 kind=ModelProviderKind.CODEX_CLI,
             ),
         ),
-        execution_retry_policy=ExecutionRetryPolicy(coder=StageRetryPolicy(max_attempts=3)),
+        execution_retry_policy=ExecutionRetryPolicy(
+            coder=StageRetryPolicy(max_attempts=work_limit)
+        ),
     )
     environment = {
         "ASE_MYSQL_DSN": mysql_dsn,
@@ -647,7 +674,10 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         if isinstance(approved, JointDeliveryResult)
         else approved.checkpoint
     )
-    assert pending.stage is DeliveryStage.DELIVERING, (
+    expected_stage = (
+        DeliveryStage.BLOCKED if unknown_failure and work_limit == 1 else DeliveryStage.DELIVERING
+    )
+    assert pending.stage is expected_stage, (
         pending.failure_code,
         pending.failure_summary,
     )
@@ -667,7 +697,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     if capture_pending:
         assert receipt_store.receipts_for_task(pending.task_id) == ()
         assert capture_refusals == (
-            [] if completed_output or provider_failure else [calls[0].request.run_id]
+            []
+            if completed_output or provider_failure or unknown_failure
+            else [calls[0].request.run_id]
         )
         receipt_store.capture_start(calls[0].request.run_id).validate_integrity()
         receipt_store.capture_stop(calls[0].request.run_id).validate_integrity()
@@ -694,6 +726,36 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         frozen_task = tasks.get(pending.task_id)
         frozen_revision = tasks.current_revision(pending.task_id)
+    if unknown_failure:
+        assert results[0].status is AgentRunStatus.FAILED
+        assert results[0].artifact is None and results[0].error is not None
+        assert results[0].error.code is AgentErrorCode.PROVIDER_UNAVAILABLE
+        assert not results[0].error.transient
+        stop = receipt_store.capture_stop(calls[0].request.run_id)
+        assert stop.process_stop.kind == "failed" and stop.process_stop.returncode == 1
+        assert not stop.output_present and stop.cause is None
+        assert stop.original_error_code is AgentErrorCode.PROVIDER_UNAVAILABLE
+        assert frozen_task.attempts == frozen_task.work_attempt == 1
+        assert frozen_task.retry_failures is None
+        items = host.work_queue.items_for_task(frozen_task.id)
+        if work_limit == 1:
+            assert frozen_task.status is TaskStatus.BLOCKED
+            assert pending.failure_code is DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+            assert all(item.status is WorkItemStatus.CLOSED for item in items)
+        else:
+            assert frozen_task.status is TaskStatus.IMPLEMENTING
+            (waiting,) = tuple(item for item in items if item.status is not WorkItemStatus.CLOSED)
+            assert waiting.status is WorkItemStatus.WAITING_DEPENDENCY
+            assert waiting.wait_disposition is not None
+            assert waiting.wait_disposition.facts.classification == "NONTRANSIENT_INFRA"
+            assert waiting.wait_disposition.facts.budget_available
+            assert waiting.wait_disposition.action.value == "INVESTIGATE_EXECUTION"
+        assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
+        assert len(calls) == 1 and len(results) == 1
+        current = host.requirement_entry().status(public_delivery_id).checkpoint
+        assert current.children[0].checkpoint == pending
+        assert (repository / "hello.txt").read_text() == "hello\n"
+        return
     (current_item,) = tuple(
         item
         for item in host.work_queue.items_for_task(pending.task_id)
@@ -703,7 +765,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     if capture_pending:
         assert current_item.wait_disposition is not None
         assert current_item.wait_disposition.facts.classification == (
-            "TRANSIENT_INFRA" if completed_output or provider_failure else "EXECUTION_UNCERTAIN"
+            "NONTRANSIENT_INFRA" if completed_output or provider_failure else "EXECUTION_UNCERTAIN"
         )
     else:
         assert not host.work_queue.claims_for_work_item(current_item.id)
@@ -1516,4 +1578,24 @@ def test_public_stopped_provider_retry_preserves_failure_then_delivers_with_inde
         completed_output=False,
         same_base=same_base,
         provider_failure=True,
+    )
+
+
+@pytest.mark.mysql
+@pytest.mark.parametrize("work_limit", [1, 3])
+def test_public_unknown_native_exit_preserves_failure_and_routes_by_ordinary_budget(
+    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, work_limit: int
+) -> None:
+    test_public_baseline_updates_original_workspace_then_completes_independent_delivery(
+        tmp_path,
+        mysql_dsn,
+        monkeypatch,
+        mode=BaselineInputMode.PRESERVE_DRAFT,
+        reject_after_baseline=False,
+        native_pause=False,
+        capture_pending=True,
+        completed_output=False,
+        same_base=True,
+        unknown_failure=True,
+        work_limit=work_limit,
     )

@@ -35,6 +35,7 @@ def facts(
     "classification",
     [
         "EXECUTION_UNCERTAIN",
+        "NONTRANSIENT_INFRA",
         "PLATFORM_BUG",
         "INVALID_OUTPUT",
         "VERIFICATION_INCONCLUSIVE",
@@ -81,6 +82,22 @@ def test_true_policy_violation_cannot_be_cleaned_by_retry_authority() -> None:
     decision = decide_delivery_disposition(facts("POLICY_VIOLATION", authorized=True))
     assert decision.action is DeliveryNextAction.TERMINATE
     assert decision.resume_condition == "none"
+
+
+@pytest.mark.parametrize("authorized", [False, True])
+def test_nontransient_failure_uses_ordinary_budget_without_automatic_retry(
+    authorized: bool,
+) -> None:
+    waiting = decide_delivery_disposition(facts("NONTRANSIENT_INFRA", authorized=authorized))
+    assert waiting.action is DeliveryNextAction.INVESTIGATE_EXECUTION
+    assert waiting.responsibility is DeliveryResponsibility.ENGINEERING
+    assert waiting.resume_condition == "verified_execution_resolution"
+    assert "不能自动重试" in waiting.reason
+    exhausted = decide_delivery_disposition(
+        facts("NONTRANSIENT_INFRA", authorized=authorized, budget=False)
+    )
+    assert exhausted.action is DeliveryNextAction.TERMINATE
+    assert exhausted.resume_condition == "none"
 
 
 def test_tampered_facts_or_model_fields_cannot_change_a_sealed_disposition() -> None:
