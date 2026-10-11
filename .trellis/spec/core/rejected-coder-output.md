@@ -19,6 +19,10 @@ verify_rejected_workspace(record, git, task) -> None
 MySqlRoleQueue.resolve_wait(resolution: DeliveryResolution) -> QueuedWorkItem
 MySqlRoleQueue.rejected_output_retry(work_item_id) -> RejectedCoderOutputEvidence | None
 MySqlRoleQueue.rejected_output_artifact_ids(task_id) -> frozenset[str]
+MySqlRoleQueue.retired_rejected_outputs(task_id, *, cursor=None) \
+    -> tuple[RejectedCoderOutputEvidence, ...]
+is_retired_rejected_publication(publication, retired, *, current_work_item_id,
+                               current_run_id, checkpoint_sequence) -> bool
 RejectedCoderOutputAdmission.authorize(request, workspace_root) -> None
 ConfiguredDeliveryRouteAdapterFactory.wrap_initial_workspace_admission(wrapper) -> factory
 workspace_admission_for_request(admission, request) -> InitialWorkspaceAdmission | None
@@ -89,6 +93,17 @@ Only a consumed decision can retire the exact rejected artifact from execution r
 it filters only that ID. Do not apply a supersedes ancestor closure or drop the valid
 previous checkpoint. Historical UI/evidence readers keep all original records.
 
+`AcceptedRoleArtifact.checkpoint_sequence` records the publication claim's input boundary,
+not an output StateEvent revision. A later rejected Coder attempt can share it with an
+earlier already-retired publication. Collection, transactional rejected-output retry and
+stopped-budget settlement all use the same pure exact-identity predicate. Retirement
+requires a typed consumed `WAIT_RESOLVED` resolution with validated digest, closed original
+work and deterministic successor ID. Match task/work/lease/dispatch/checkpoint/run/context/
+source/artifact ID/SHA; current work/Run and genuinely later checkpoints never qualify.
+The SQL consumers read retirement using their current authority-fenced cursor; collector
+readers without this capability fail closed with no retirement exception. No input/adoption
+rule changes: an old rejected receipt is not reintroduced into the current invocation inputs.
+
 The production selector resolves `ConditionalWorkspaceAdmission` per current request.
 No matching consumed successor returns original delegate or None, preserving the
 normal dirty-workspace checks. A selected rejected-output admission requires the exact
@@ -125,6 +140,8 @@ complete history, and never imply independent QA/Review passed.
 | Exact decision replay / changed decision | One consumption / reject conflict |
 | No current consumed successor decision | Original workspace admission/default dirty gate applies |
 | Evidence disappears after selection | Fail closed before model call |
+| Two rejected completed Coder attempts share input checkpoint; first exact resolution consumed | Preserve first publication and allow second exact capture/consume; each costs one ordinary attempt |
+| Unconsumed or mismatched retired receipt, current work/Run, genuinely later checkpoint | Reject independent publication; no broad retired-ID or ancestor exception |
 | UI foreign/missing/stale evidence | No continue control, detached callback makes zero writes |
 
 Good: a new claim reuses the complete legal draft and valid earlier progress, then generates
@@ -141,6 +158,10 @@ must exercise real provider dirty checks with no consumed decision and exact suc
 reopen/authorization. `tests/team_view/engineering-wait.test.cjs` and its Chrome counterpart
 cover visible plan, exact evidence, old closures and complete history. Include public
 Continue/adoption → HANDLE → resolve → claimed new Coder, retaining same Requirement/Task.
+`tests/work_queue/test_rejected_output_mysql.py` must consume two genuine rounds sharing
+the checkpoint and verify both immutable publications, claims and Task event prefix remain.
+`tests/manager/test_retired_rejected_publications.py` covers two complete offline native
+rounds through collection/inspection and negative full-identity/consumption cases.
 
 ## Existing data, rollout and rollback
 

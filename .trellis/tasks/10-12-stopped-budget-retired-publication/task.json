@@ -1,0 +1,18 @@
+{
+  "name": "stopped-budget-retired-publication",
+  "title": "精确已消费被拒产出不阻断同 checkpoint 后续恢复与额度收尾",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "bc49a07",
+  "allowlist": [
+    "src/ai_software_engineer/work_queue/execution_store.py",
+    "src/ai_software_engineer/manager/wait_fact_collection.py",
+    "tests/work_queue/test_stopped_budget_settlement_mysql.py",
+    "tests/work_queue/test_rejected_output_mysql.py",
+    ".trellis/spec/core/stopped-budget-settlement.md",
+    ".trellis/spec/core/rejected-coder-output.md",
+    ".trellis/tasks/10-12-stopped-budget-retired-publication/"
+  ],
+  "constraints": ["Incremental tests only", "No production SQL or model calls", "No history rewrite, retry refund or approval bypass"],
+  "rollback": "Revert the code commit; preserve consumed resolution history, all drafts, typed readers and terminal settlement records."
+}
