@@ -15,3 +15,10 @@
 ## 存量处置与回滚
 
 未直接修改生产数据。本提交部署后，原K1通过公开HANDLE精确结束已实际停止且普通预算耗尽的旧Task，再用原Requirement的正常恢复提案和精确批准继续。保持旧failure/attempt/claim/stop/历史字节以及全部草稿。已有新增记录后保留typed readers；不能删除历史或把旧Task复活。
+
+## 集成验证
+
+- 与非临时故障路由、baseline v2 reading projection、最终输入 preflight 和当前 source 方案 UI 合并后：56 项离线/契约测试、4 项真实 MySQL/公开 Host 测试通过。
+- 16 个合并源文件 strict mypy、49 个变更 Python 文件 Ruff/format、独立交汇审查通过。
+- 按完整 Schema 生成顺序同步新 settlement Schema 中的 NONTRANSIENT_INFRA enum；保持旧 provider guard。
+- 存量尚未操作；部署后使用原 Requirement 的公开 HANDLE，不改写旧错误或额度账。
