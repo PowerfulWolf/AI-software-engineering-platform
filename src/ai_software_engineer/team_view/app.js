@@ -2668,7 +2668,8 @@ function appendEngineeringBaseline(target, request, task, step) {
   }
   if (executed) {
     fold.append(el("p", "此精确计划已执行，后续进度和验收以新的执行记录为准。", "muted"));
-  } else if (canControlCurrentTeam() && engineeringRejectedOutputWait(step) && !consoleSupportsCompletedOutputRescue(true)) {
+  } else if (canControlCurrentTeam() && (engineeringRejectedOutputWait(step) || completedOutputRejected(plan)) &&
+      !consoleSupportsCompletedOutputRescue(true)) {
     fold.append(el("p", "当前服务不支持报告被拒后的基线恢复。请在服务空闲时更新并重启，再刷新原需求。", "muted"));
   } else if (canControlCurrentTeam() && consoleSupportsPausedBaseline() && !active) {
     const form = viewBlock(el("div", undefined, "engineering-baseline-form"), "engineering-baseline-controls",

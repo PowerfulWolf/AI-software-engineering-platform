@@ -2218,6 +2218,15 @@ test('current exact completed draft facts supersede older stopped but incomplete
   assert.doesNotMatch(text(current), /尚未形成可安全复用|原开发文件.*仍需平台核对/);
 });
 
+for (const version of [5, 6]) test(`rejected proof with legacy generic wait classification shows no doomed SOURCE approval on v${version}`, () => {
+  const h = harness(); unacceptedDraftFixture(h, version); unacceptedDraftPlan(h, true);
+  h.step.wait_disposition.facts.classification = 'PLATFORM_BUG';
+  const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
+  assert.equal(control(box, '批准更新基线，保持暂停'), undefined);
+  assert.equal(control(box, '调查并保留原草稿'), undefined);
+  assert.match(text(box), /当前服务不支持/);
+});
+
 test('completed output preparation is visible, target-free and promises only a platform check', async () => {
   const h = harness(); completedRescueFixture(h);
   const box = h.run('engineeringWaitBox(data.request, data.task, data.step)');
