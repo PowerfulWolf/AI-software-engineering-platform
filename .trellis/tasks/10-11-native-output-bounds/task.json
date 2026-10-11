@@ -1,0 +1,16 @@
+{
+  "name": "native-output-bounds",
+  "title": "在 native 运行期间限制 stdout/stderr 内存",
+  "status": "in_progress",
+  "phase": "verified_awaiting_idle_deployment",
+  "created_at": "2026-10-11",
+  "source_revision": "fa8ffee",
+  "allowlist": [
+    "src/ai_software_engineer/agents/codex_cli.py",
+    "src/ai_software_engineer/agents/_native_output.py",
+    "tests/agents",
+    ".trellis/spec/core/production-team-host.md",
+    ".trellis/spec/core/persistent-work-queue.md",
+    ".trellis/tasks/10-11-native-output-bounds"
+  ]
+}
