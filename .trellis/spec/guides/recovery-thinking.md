@@ -24,6 +24,26 @@ Before adding another recovery exception, read
 This is a design checklist, not an authorization to change current state contracts. Historical
 terminal Tasks remain immutable and use the verified successor compatibility path.
 
+### Completed rejected reports and current presentation (2026-10-12)
+
+Separate a completed process, accepted report and complete retained draft. A genuine zero-exit
+stop with output can still yield INVALID_OUTPUT; do not replay it as a candidate or call it a
+provider outage. Its lawful draft may support an exact ordinary-work new execution through the
+existing baseline prepare → engineering PAUSE → independent RESUME, while the original failure
+and counters stay intact. Derive the recovery reason from the sealed typed error; callers cannot
+assert stop, validate their own draft or exchange rejected/unavailable budget causes.
+
+Read-side current facts and copied reports must use the same current validated plan. Historical
+CHECKPOINT_UNAVAILABLE/OUTCOME_REJECTED records remain history and cannot override a later complete
+draft capture. New fixed WORK_SLICE diagnostics retain their observed reason; old GIT_CONTRACT
+without a specific saved subcause remains unknown. Never infer historical raw JSON from a later
+test reproducing one possible violation. Check frontend capability again when retained controls
+are clicked; old compatible display is not permission to submit a new purpose/reason.
+
+Actual public native fixture coverage should include original rejection → exact plan → independent
+human PAUSE → RESUME → new claim/Context → candidate/QA/Review. A collector-only or queue-model
+test misses the Manager diagnosis, original output gate and all-role execution lineage seams.
+
 ### Legacy missing facts and crash boundaries (2026-10-08)
 
 Do not mistake a successful investigation report for a completed recovery path. Classify whether

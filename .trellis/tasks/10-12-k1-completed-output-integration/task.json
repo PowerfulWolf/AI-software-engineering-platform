@@ -1,0 +1,20 @@
+{
+  "name": "k1-completed-output-integration",
+  "title": "原 K1 报告拒绝后的受控接续集成",
+  "status": "in_progress",
+  "created_at": "2026-10-12",
+  "base_commit": "770c02e85e4bafa01fcef3d69e1d409869848251",
+  "allowlist": [
+    ".trellis/spec/core/index.md",
+    ".trellis/spec/guides/recovery-thinking.md",
+    ".trellis/tasks/10-12-stopped-budget-retired-publication/verification.md",
+    ".trellis/tasks/10-12-k1-completed-output-integration/",
+    "tests/team_view/engineering-wait.test.cjs",
+    "tests/team_view/stopped-provider-retry.test.cjs",
+    "tests/team_view/test_blocker_text.py",
+    "src/ai_software_engineer/team_view/app.js"
+  ],
+  "component_tasks": ["coder-slice-output-guidance", "operation-result-scope-compat", "unaccepted-coder-draft-resume", "unaccepted-coder-draft-ui"],
+  "constraints": ["Only independently reviewed component commits", "Incremental tests only", "No raw production SQL mutations or history rewriting", "No active runtime replacement"],
+  "rollback": "Controlled stop; preserve all immutable facts, compatible readers and already consumed exact decisions."
+}

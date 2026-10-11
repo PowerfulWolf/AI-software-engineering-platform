@@ -166,6 +166,7 @@ def test_coder_output_read_side_diagnostic_has_fixed_chinese_and_browser_parity(
         "output_sha256=" + "a" * 64 + "; output_bytes=10529; run_original"
     )
     localized = localize_blocking_text(original)
+    assert localized is not None
     assert expected in localized
     assert "执行记录 run_original" in localized
     assert "证据摘要 " + "a" * 64 in localized

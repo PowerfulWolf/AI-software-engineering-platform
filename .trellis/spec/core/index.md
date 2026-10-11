@@ -149,10 +149,14 @@
   checkpoint preservation and terminal boundaries.
 - [`delivery-preflight.md`](delivery-preflight.md): frozen execution windows, serial work slices,
   registered verification and claimed preparation before model invocation.
+- [`coder-slice-output-guidance.md`](coder-slice-output-guidance.md): shared prior/selected/deferred
+  output guidance and fixed native rejection diagnostics without relaxing candidate gates.
 - [`execution-baseline.md`](execution-baseline.md): same-Task source rebinding, complete retained
   patches, exact engineering decisions and historical source/queue accounting.
 
 - [`rejected-coder-output.md`](rejected-coder-output.md): complete legal draft preservation and same-Task exact retry for stopped rejected Coder progress, with no result rewrite or transient refund.
-- [`completed-coder-output-unavailable.md`](completed-coder-output-unavailable.md): separately verified native completion with an unknown unaccepted output, full same-Task baseline capture and ordinary-work PAUSE/RESUME.
+- [`completed-coder-output-unavailable.md`](completed-coder-output-unavailable.md): separately verified native completion with unavailable or rejected output, full same-Task capture and proof-bound ordinary-work PAUSE/RESUME.
+- [`unaccepted-coder-draft-ui.md`](unaccepted-coder-draft-ui.md): versioned rejected-output controls,
+  exact current SOURCE/same-base plans, Chinese diagnostics and retained original findings.
 - [`stopped-provider-retry.md`](stopped-provider-retry.md): exact permanent provider prerequisite failure, original lawful draft, human prerequisite confirmation and ordinary-work same-Task PAUSE/RESUME.
 - [`stopped-provider-ui.md`](stopped-provider-ui.md): typed provider-failure preparation, exact human confirmation and retained controls during polling.

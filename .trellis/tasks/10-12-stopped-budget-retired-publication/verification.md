@@ -180,3 +180,52 @@ force-kill the service to deploy, equate service restart with original Run stop,
 reuse an unsealed dirty seed as a successful receipt. Continue monitoring the same
 Run, use actual outcomes/waits and independent candidate-bound QA/Review, then deploy
 maintenance at a genuine idle boundary. No full test suite was run by maintenance.
+
+## Real Coder rejection and safe runtime deployment — 2026-10-12
+
+The original Run `run_cd17fc4c9d254fdf8ae13f19d0cc1fe9` finished with a genuine
+native completed stop at `2026-10-11T23:05:22.278533Z`, returncode 0 and output present.
+Stop digest is `003759142ac5d3da6717ce457e28c335ea4b2463583a9e48a75ba7349541efb9`.
+The original result is FAILED / INVALID_OUTPUT / nontransient / no Artifact,
+duration 2082576 ms. Native diagnostic recorded GIT_CONTRACT, output digest
+`43e3d373e4df98707542e06bb468aa05269a55ceff2dff2196d2b8b6a7753fec`
+and 10529 bytes; the precise historical validation subcause was not preserved.
+Ephemeral raw output no longer exists, so later slice tests cannot establish its
+specific historic cause. Outcome digest:
+`7576ef54a4ff31cc2f22f2df0589288e3d841c753a916a7705b9221bf476a090`.
+
+The real lease was RELEASED at `23:05:30.177671Z`. Operation
+`operation_062c258f7ca2307dc9c75fde02a57c11` finished SUCCEEDED at
+`23:06:13.561468Z`; this records successful command settlement, not K1 delivery.
+The original successor Task remains IMPLEMENTING, attempt 1, revision 2. Its
+Coder WorkItem remains WAITING_DEPENDENCY, with budget available and retry not
+authorized. Original base is still 1769977. The same original branch retains
+approximately 30 legal dirty paths, unstaged, with no candidate. Old terminal
+Task `task_recovery_8ca06fa0aec236ab940597ad1482bfc8` and all 11 attempts remain
+unchanged.
+
+Read-only consistent SQL found no ACTIVE claims or RUNNING work. Controlled
+stop then produced exact READY, drained and saved all operations, and confirmed
+old PID 82883 exited. Only afterwards the main runtime fast-forwarded to
+770c02e, `uv sync --locked` retained dependencies, origin/main push succeeded,
+and a new service PID 54268 started. Public console/admin report ready,
+CONNECTED MySQL, available Codex and no restart required. Registered repository
+source, Task source, Coder HEAD and all approvals were deliberately unchanged:
+runtime deployment is not permission for a source rebind.
+
+The public scoped operation summary returned 503 under the real 330-operation
+history. Investigation identified five valid DELETE no-resource results and
+54 historical CONTINUE operations returning a different native child delivery
+ID under a parent intent. Typed original bytes and chains are intact. New summary
+projection incorrectly rejected that legitimate old history. Compatibility is
+being fixed in its own task without guessing parent-child authority or rewriting
+records. This deployment therefore does not establish complete UI readiness.
+
+Current K1 investigation has CHECKPOINT_UNAVAILABLE / OUTCOME_REJECTED and no
+permitted resolution. The native stop is trustworthy; this is not timeout,
+provider outage, expired lease or an unknown live process. Existing recovery
+supported unavailable WORK_INTERRUPTED and one specialized rejected progress
+case, leaving this ordinary stopped INVALID_OUTPUT without a complete user path.
+The new uniform proof/cause, human PAUSE, fresh RESUME and ordinary work recovery
+is being validated separately. No production SQL fact was manually changed,
+no duplicate Requirement created, and no QA/Review/Handoff or DONE claimed.
