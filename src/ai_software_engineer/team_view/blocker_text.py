@@ -86,12 +86,12 @@ _EXACT: dict[str, str] = {
 
 _REPOSITORY_BLOCKED = re.compile(r"^Repository (?P<repository>.+?) is BLOCKED; (?P<detail>.*)$")
 _ROLE_FAILURE = re.compile(
-    r"^(?:(?:TRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|"
+    r"^(?:(?:TRANSIENT_INFRA|NONTRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|"
     r"VERIFICATION_INCONCLUSIVE|WORK_INTERRUPTED):\s*)?(?P<role>Coder|QA|Reviewer) failed at attempt "
     r"(?P<attempt>\d+): (?P<detail>.*)$"
 )
 _KNOWLEDGE_FAILURE = re.compile(
-    r"^(?:(?:TRANSIENT_INFRA|BUDGET_EXHAUSTED|POLICY_VIOLATION):\s*)?"
+    r"^(?:(?:TRANSIENT_INFRA|NONTRANSIENT_INFRA|BUDGET_EXHAUSTED|POLICY_VIOLATION):\s*)?"
     r"(?P<role>coder|qa|reviewer) knowledge "
     r"(?P<phase>preparation|assessment|intent) failed:\s*"
     r"(?P<code>[A-Z0-9_:-]+)$",

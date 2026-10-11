@@ -11,7 +11,7 @@ async function waitingCoder(t) {
     reason: "执行结果未接纳，原现场保留。", next_action: "核验原执行及完整开发进度。", action_required: true};
   request.scopes = [{delivery_id: "delivery_coder", root: "/fixture/repository", selected_paths: ["."]}];
   const facts = {task_id: "task_coder", work_item_id: "work_coder", role: "coder", task_intent_sha256: "b".repeat(64),
-    source_revision: "c".repeat(40), checkpoint_sequence: 4, classification: "TRANSIENT_INFRA"};
+    source_revision: "c".repeat(40), checkpoint_sequence: 4, classification: "NONTRANSIENT_INFRA"};
   const step = {work_item_id: facts.work_item_id, role: "coder", status: "WAITING_DEPENDENCY",
     wait_disposition_sha256: "d".repeat(64), wait_disposition: {facts, responsibility: "engineering",
       reason: request.execution.reason, next_action: request.execution.next_action}};

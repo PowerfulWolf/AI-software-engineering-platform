@@ -80,9 +80,8 @@ def test_browser_and_reader_agree_on_fixed_upstream_stage_actions() -> None:
 const fs = require("node:fs");
 const vm = require("node:vm");
 const context = vm.createContext({document: {getElementById: () => ({addEventListener() {}})}});
-const source = fs.readFileSync(process.argv[1], "utf8")
-  .replace(/\nrefresh\(\);\nsetInterval\(refresh, 5000\);\s*$/, "\n");
-vm.runInContext(source, context);
+const source = fs.readFileSync(process.argv[1], "utf8");
+vm.runInContext(source.slice(0, source.indexOf('for (const target of ["team"')), context);
 context.messages = JSON.parse(fs.readFileSync(0, "utf8"));
 process.stdout.write(JSON.stringify(vm.runInContext("messages.map(humanizeBlockingText)", context)));
 """
@@ -131,9 +130,10 @@ def test_localizes_repository_blocker_but_keeps_opaque_identity() -> None:
     )
 
 
-def test_localizes_role_failure_and_keeps_run_and_evidence_ids() -> None:
+@pytest.mark.parametrize("classification", ["TRANSIENT_INFRA", "NONTRANSIENT_INFRA"])
+def test_localizes_role_failure_and_keeps_run_and_evidence_ids(classification: str) -> None:
     value = (
-        "TRANSIENT_INFRA: Reviewer failed at attempt 3: reviewer run run_abc123 failed: "
+        f"{classification}: Reviewer failed at attempt 3: reviewer run run_abc123 failed: "
         "Codex CLI provider execution failed; stdout_sha256="
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     )
@@ -142,6 +142,15 @@ def test_localizes_role_failure_and_keeps_run_and_evidence_ids() -> None:
     assert localized.startswith("Reviewer 第 3 次执行失败：Codex CLI 模型服务执行失败")
     assert "run_abc123" in localized
     assert "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" in localized
+
+
+def test_localizes_nontransient_knowledge_failure_without_inventing_a_diagnosis() -> None:
+    assert (
+        localize_blocking_text(
+            "NONTRANSIENT_INFRA: coder knowledge preparation failed: PROVIDER_UNAVAILABLE"
+        )
+        == "Coder 知识准备失败（原因代码：PROVIDER_UNAVAILABLE），请检查模型服务后再继续。"
+    )
 
 
 def test_localizes_policy_classified_role_failure() -> None:

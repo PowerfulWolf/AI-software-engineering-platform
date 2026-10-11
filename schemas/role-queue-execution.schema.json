@@ -186,6 +186,7 @@
         "classification": {
           "enum": [
             "TRANSIENT_INFRA",
+            "NONTRANSIENT_INFRA",
             "INVALID_OUTPUT",
             "QA_FINDING",
             "VERIFICATION_INCONCLUSIVE",

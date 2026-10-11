@@ -16,9 +16,9 @@ const descendants = node => [node, ...node.children.filter(child => typeof child
 const text = node => descendants(node).map(child => child.textContent).join(" ");
 const button = (node, name) => descendants(node).find(child => child.tagName === "BUTTON" && child.textContent === name);
 
-function fixture(planReady = false) {
+function fixture(planReady = false, classification = "TRANSIENT_INFRA") {
   const facts = {task_id: "task_current", work_item_id: "work_current", role: "coder", task_intent_sha256: "b".repeat(64),
-    source_revision: "c".repeat(40), checkpoint_sequence: 4, classification: "TRANSIENT_INFRA"};
+    source_revision: "c".repeat(40), checkpoint_sequence: 4, classification};
   const step = {work_item_id: facts.work_item_id, role: "coder", status: "WAITING_DEPENDENCY", lease_liveness: "UNKNOWN",
     wait_disposition_sha256: "d".repeat(64), wait_disposition: {facts, responsibility: "engineering"}};
   const request = {id: "request_current", project_id: "project_current", checkpoint_sha256: "a".repeat(64), stage: "DELIVERING",
@@ -59,6 +59,26 @@ function fixture(planReady = false) {
     result: {checkpoint_sha256: data.request.checkpoint_sha256, execution_baseline_plan: data.plan}});`);
   return {run, ...data};
 }
+
+test("nontransient classification retains exact provider proof and explicit approval gates", async () => {
+  const h = fixture(true, "NONTRANSIENT_INFRA");
+  const panel = h.run('const panel = document.createElement("section"); appendEngineeringStoppedProviderRetry(panel, data.request, data.task, data.step); panel');
+  const approve = button(panel, "确认前提已修复，保留进度");
+  assert.ok(approve.disabled);
+  await approve.events.click(); assert.equal(h.run("submitted.length"), 0);
+  const confirmation = descendants(panel).find(child => child.tagName === "INPUT");
+  confirmation.checked = true; confirmation.events.change();
+  h.run('data.plan.facts.stopped_provider_failure.capture_stop.process_stop.kind = "unknown"');
+  await approve.events.click(); assert.equal(h.run("submitted.length"), 0);
+  h.run('data.plan.facts.stopped_provider_failure.capture_stop.process_stop.kind = "failed"');
+  await approve.events.click(); assert.equal(h.run("submitted[0].confirm_provider_prerequisites_repaired"), true);
+});
+
+test("new failure prefix is localized without treating unknown exits as authentication failures", () => {
+  const h = fixture();
+  assert.match(h.run('humanizeBlockingText("NONTRANSIENT_INFRA: Coder failed at attempt 1: coder run run_original failed: Codex CLI provider execution failed")'), /Coder 第 1 次执行失败.*原始诊断|Coder 第 1 次执行失败.*模型服务执行失败/);
+  assert.equal(h.run('humanizeBlockingText("NONTRANSIENT_INFRA: coder knowledge preparation failed: PROVIDER_UNAVAILABLE")'), "Coder 知识准备失败（原因代码：PROVIDER_UNAVAILABLE），请检查模型服务后再继续。");
+});
 
 test("provider preparation uses one target-free check without claiming the prerequisites fixed", async () => {
   const h = fixture();
