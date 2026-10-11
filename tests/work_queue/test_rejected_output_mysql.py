@@ -1,9 +1,18 @@
 """Completed rejected output preserves publication and consumes one new work attempt."""
 
+from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
+from ai_software_engineer.artifacts import FileArtifactStore
+from ai_software_engineer.artifacts.store import seal_artifact
+from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.delivery_disposition import (
+    DeliveryFailureFacts,
+    decide_delivery_disposition,
+)
 from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
     DeliveryResolutionKind,
@@ -13,6 +22,7 @@ from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemSta
 from ai_software_engineer.knowledge.preparation_retry import claim_identity_sha256
 from ai_software_engineer.orchestration.state_machine import build_event
 from ai_software_engineer.work_queue.ports import QueueConflict
+from tests.domain.factories import make_coder_progress_artifact
 from tests.work_queue.test_wait_resolution_mysql import (
     SOURCE,
     WaitingFixture,
@@ -21,6 +31,7 @@ from tests.work_queue.test_wait_resolution_mysql import (
 from tests.work_queue.test_wait_resolution_mysql import (
     waiting as waiting,
 )
+from tests.work_queue.test_worker_mysql import TOKEN, dispatcher
 
 pytestmark = [
     pytest.mark.mysql,
@@ -32,7 +43,11 @@ def rejected_resolution(waiting: WaitingFixture) -> DeliveryResolution:
     task = waiting.repository.get(waiting.step.boundary.task_id)
     policy = task.engineering_policy
     assert policy is not None
-    publication = waiting.queue.accepted(task.id)[0]
+    publication = next(
+        item
+        for item in waiting.queue.accepted(task.id)
+        if item.work_item_id == waiting.step.work_item.id
+    )
     evidence = RejectedCoderOutputEvidence(
         scope=policy.scope,
         requirement_id="requirement_rejected_fixture",
@@ -45,7 +60,7 @@ def rejected_resolution(waiting: WaitingFixture) -> DeliveryResolution:
         checkpoint_sequence=waiting.step.boundary.checkpoint_sequence,
         previous_run_id=publication.run_id,
         previous_context_manifest_id=publication.context_manifest_id,
-        source_revision=SOURCE,
+        source_revision=waiting.step.boundary.source_revision,
         invocation_start_sha256="1" * 64,
         invocation_outcome_sha256="2" * 64,
         rejected_artifact_id=publication.receipt.artifact_id,
@@ -58,7 +73,10 @@ def rejected_resolution(waiting: WaitingFixture) -> DeliveryResolution:
         checkpoint_sha256="6" * 64,
     )
     return reseal(
-        waiting.resolution(DeliveryResolutionKind.RESUME_UNINVOKED),
+        reseal(
+            waiting.resolution(DeliveryResolutionKind.RESUME_UNINVOKED),
+            expected_source_revision=waiting.step.boundary.source_revision,
+        ),
         resolution_kind=DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,
         rejected_output=evidence.to_wire(),
     )
@@ -88,6 +106,81 @@ def test_rejected_retry_is_atomic_idempotent_and_keeps_original_publication(
         (publications[0].receipt.artifact_id,)
     )
     assert waiting.queue.rejected_output_retry(waiting.step.work_item.id) is None
+
+
+def test_second_rejected_round_preserves_first_consumed_publication(
+    waiting: WaitingFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = rejected_resolution(waiting)
+    next_item = waiting.queue.resolve_wait(first)
+    step = waiting.queue.step(next_item.id)
+    tick = dispatcher(waiting.queue).tick(
+        now=next_item.created_at + timedelta(seconds=1), work_item_id=step.work_item.id
+    )
+    assert tick.claim is not None
+    claim = tick.claim
+    store = FileArtifactStore(tmp_path / "artifacts")
+    progress = make_coder_progress_artifact()
+    progress = progress.model_copy(
+        update={
+            "artifact_id": "art_progress_second",
+            "task_id": next_item.task_id,
+            "source_revision": SOURCE,
+            "context_manifest_id": "ctx_" + "d" * 64,
+            "producer": progress.producer.model_copy(
+                update={"agent_id": claim.assignment.agent_id, "run_id": "run_second_rejected"}
+            ),
+            "content": progress.content.model_copy(update={"checkpoint_sequence": 9}),
+        }
+    )
+    waiting.queue.accept_artifact(
+        claim, TOKEN, store, seal_artifact(progress, validated_at=waiting.now)
+    )
+    task = waiting.repository.get(next_item.task_id)
+    disposition = decide_delivery_disposition(
+        DeliveryFailureFacts.model_validate(
+            {
+                **waiting.disposition.facts.to_wire(),
+                "work_item_id": next_item.id,
+                "task_intent_sha256": task_intent_sha256(task),
+            }
+        )
+    )
+    waiting.queue.wait(
+        next_item.id,
+        lease_id=claim.lease.id,
+        owner_token=TOKEN,
+        status=WorkItemStatus.WAITING_HUMAN,
+        reason=disposition.reason,
+        disposition=disposition,
+        now=next_item.created_at + timedelta(seconds=2),
+    )
+    second = replace(
+        waiting,
+        step=step,
+        claim=claim,
+        disposition=disposition,
+        now=next_item.created_at,
+    )
+    monkeypatch.setattr(
+        waiting.queue, "_clock", lambda: next_item.created_at + timedelta(seconds=3)
+    )
+    publications = waiting.queue.accepted(task.id)
+    claims = waiting.queue.claims_for_work_item(next_item.id)
+    events = waiting.repository.list_events(task.id)
+    decision = rejected_resolution(second)
+    successor = waiting.queue.resolve_wait(decision)
+    assert successor.attempt == 3
+    assert successor.checkpoint_sequence == step.boundary.checkpoint_sequence
+    assert waiting.queue.accepted(task.id) == publications
+    assert waiting.queue.claims_for_work_item(next_item.id) == claims
+    assert waiting.repository.list_events(task.id) == events
+    assert waiting.repository.get(task.id).retry_failures == task.retry_failures
+    assert waiting.queue.rejected_output_artifact_ids(task.id) == frozenset(
+        item.receipt.artifact_id for item in publications
+    )
+    assert waiting.queue.resolve_wait(decision) == successor
+    assert second.resolution_events() == 1
 
 
 @pytest.mark.parametrize("drift", ["claim", "scope", "publication"])

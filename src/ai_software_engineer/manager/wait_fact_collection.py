@@ -35,7 +35,12 @@ from ai_software_engineer.orchestration.continuation_models import (
     ExecutionCaptureStop,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
-from ai_software_engineer.work_queue.execution_store import AcceptedRoleArtifact, QueuedRoleStep
+from ai_software_engineer.work_queue.execution_store import (
+    AcceptedRoleArtifact,
+    QueuedRoleStep,
+    RetiredRejectedOutputReader,
+    is_retired_rejected_publication,
+)
 from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationOutcome,
     DeliveryInvocationStart,
@@ -336,15 +341,30 @@ class DeliveryWaitFactCollector:
             != self.queue.original_claim(start.lease_id).work_item.dispatch_sequence
         ):
             raise ContinuationRejected("被拒产出的原领取派发身份已变化")
+        retired = (
+            self.queue.retired_rejected_outputs(task.id)
+            if isinstance(self.queue, RetiredRejectedOutputReader)
+            else ()
+        )
         for accepted in self.queue.accepted(task.id):
-            if accepted.checkpoint_sequence >= start.checkpoint_sequence and (
-                accepted.work_item_id != start.work_item_id
-                or accepted.lease_id != start.lease_id
-                or accepted.run_id != start.request.run_id
-                or accepted.context_manifest_id != start.request.context_manifest_id
-                or accepted.source_revision != start.request.source_revision
-                or accepted.receipt.artifact_id != artifact.artifact_id
-                or accepted.receipt.sha256 != artifact_digest(artifact)
+            if (
+                accepted.checkpoint_sequence >= start.checkpoint_sequence
+                and not is_retired_rejected_publication(
+                    accepted,
+                    retired,
+                    current_work_item_id=start.work_item_id,
+                    current_run_id=start.request.run_id,
+                    checkpoint_sequence=start.checkpoint_sequence,
+                )
+                and (
+                    accepted.work_item_id != start.work_item_id
+                    or accepted.lease_id != start.lease_id
+                    or accepted.run_id != start.request.run_id
+                    or accepted.context_manifest_id != start.request.context_manifest_id
+                    or accepted.source_revision != start.request.source_revision
+                    or accepted.receipt.artifact_id != artifact.artifact_id
+                    or accepted.receipt.sha256 != artifact_digest(artifact)
+                )
             ):
                 raise ContinuationRejected("被拒产出之后已有独立交付结果, 不能作为开发草稿重试")
 

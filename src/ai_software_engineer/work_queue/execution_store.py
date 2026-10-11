@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, Self, cast
+from typing import TYPE_CHECKING, Literal, Protocol, Self, cast, runtime_checkable
 
 from pydantic import TypeAdapter, ValidationError, model_validator
 from pymysql.cursors import DictCursor
@@ -118,6 +118,56 @@ class AcceptedRoleArtifact(DomainModel):
     receipt: QueueArtifactReceipt
 
 
+@runtime_checkable
+class RetiredRejectedOutputReader(Protocol):
+    def retired_rejected_outputs(self, task_id: str) -> tuple[RejectedCoderOutputEvidence, ...]: ...
+
+
+def is_retired_rejected_publication(
+    publication: AcceptedRoleArtifact,
+    retired: tuple[RejectedCoderOutputEvidence, ...],
+    *,
+    current_work_item_id: str,
+    current_run_id: str | None,
+    checkpoint_sequence: int,
+) -> bool:
+    """Exclude only the exact publication retired by a consumed typed decision."""
+    if (
+        publication.work_item_id == current_work_item_id
+        or current_run_id is None
+        or publication.run_id == current_run_id
+        or publication.checkpoint_sequence > checkpoint_sequence
+    ):
+        return False
+    return any(
+        (
+            publication.task_id,
+            publication.work_item_id,
+            publication.lease_id,
+            publication.dispatch_sequence,
+            publication.checkpoint_sequence,
+            publication.run_id,
+            publication.context_manifest_id,
+            publication.source_revision,
+            publication.receipt.artifact_id,
+            publication.receipt.sha256,
+        )
+        == (
+            evidence.task_id,
+            evidence.work_item_id,
+            evidence.original_lease_id,
+            evidence.original_dispatch_sequence,
+            evidence.checkpoint_sequence,
+            evidence.previous_run_id,
+            evidence.previous_context_manifest_id,
+            evidence.source_revision,
+            evidence.rejected_artifact_id,
+            evidence.rejected_artifact_sha256,
+        )
+        for evidence in retired
+    )
+
+
 class _RejectedOutputResolutionDetail(DomainModel):
     resolution_sha256: Sha256
     next_work_item_id: WorkItemId
@@ -177,22 +227,26 @@ def read_queue_workforce(cursor: DictCursor, now: datetime) -> WorkforceFacts:
 
 
 class MySqlRoleQueue(MySqlPersistentWorkQueue):
-    def _rejected_output_decisions(self, task_id: str) -> tuple[DeliveryResolution, ...]:
+    def _rejected_output_decisions(
+        self, task_id: str, *, cursor: DictCursor | None = None
+    ) -> tuple[DeliveryResolution, ...]:
         """Only consumed decisions retire an exact rejected publication from execution."""
-        with (
-            closing(open_mysql_connection(self._dsn)) as connection,
-            connection.cursor(DictCursor) as cursor,
-        ):
-            cursor.execute(
-                "SELECT e.payload_json FROM work_queue_events e JOIN work_queue_items i "
-                "ON e.work_item_id=i.id WHERE i.task_id=%s "
-                "AND e.event_type='WAIT_RESOLVED' "
-                "AND JSON_UNQUOTE(JSON_EXTRACT(e.payload_json,"
-                "'$.detail.resolution.resolution_kind'))=%s "
-                "ORDER BY e.sequence LIMIT 513",
-                (task_id, DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT.value),
-            )
-            rows = cursor.fetchall()
+        if cursor is None:
+            with (
+                closing(open_mysql_connection(self._dsn)) as connection,
+                connection.cursor(DictCursor) as owned_cursor,
+            ):
+                return self._rejected_output_decisions(task_id, cursor=owned_cursor)
+        cursor.execute(
+            "SELECT e.payload_json FROM work_queue_events e JOIN work_queue_items i "
+            "ON e.work_item_id=i.id WHERE i.task_id=%s "
+            "AND e.event_type='WAIT_RESOLVED' "
+            "AND JSON_UNQUOTE(JSON_EXTRACT(e.payload_json,"
+            "'$.detail.resolution.resolution_kind'))=%s "
+            "ORDER BY e.sequence LIMIT 513",
+            (task_id, DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT.value),
+        )
+        rows = cursor.fetchall()
         if len(rows) > 512:
             raise QueueCorruption("被拒产出恢复历史超过有界读取上限")
         decisions = []
@@ -253,6 +307,15 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
         return frozenset(
             decision.rejected_output.rejected_artifact_id
             for decision in self._rejected_output_decisions(task_id)
+            if decision.rejected_output is not None
+        )
+
+    def retired_rejected_outputs(
+        self, task_id: str, *, cursor: DictCursor | None = None
+    ) -> tuple[RejectedCoderOutputEvidence, ...]:
+        return tuple(
+            decision.rejected_output
+            for decision in self._rejected_output_decisions(task_id, cursor=cursor)
             if decision.rejected_output is not None
         )
 
@@ -348,9 +411,22 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             "WHERE task_id=%s FOR UPDATE",
             (task.id,),
         )
+        accepted = tuple(_decode(value, AcceptedRoleArtifact) for value in cursor.fetchall())
+        retired = self.retired_rejected_outputs(task.id, cursor=cursor)
         if any(
-            _decode(value, AcceptedRoleArtifact).checkpoint_sequence >= proof.checkpoint_sequence
-            for value in cursor.fetchall()
+            publication.work_item_id == proof.work_item_id
+            or publication.run_id == proof.original_run_id
+            or (
+                publication.checkpoint_sequence >= proof.checkpoint_sequence
+                and not is_retired_rejected_publication(
+                    publication,
+                    retired,
+                    current_work_item_id=proof.work_item_id,
+                    current_run_id=proof.original_run_id,
+                    checkpoint_sequence=proof.checkpoint_sequence,
+                )
+            )
+            for publication in accepted
         ):
             raise QueueConflict("原失败调用之后已有接纳产物, 暂不能额度收尾")
         if previous_event is not None:
@@ -896,8 +972,16 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     publications = tuple(
                         _decode(row, AcceptedRoleArtifact) for row in cursor.fetchall()
                     )
+                    retired = self.retired_rejected_outputs(task.id, cursor=cursor)
                     if any(
                         publication.checkpoint_sequence >= current.checkpoint_sequence
+                        and not is_retired_rejected_publication(
+                            publication,
+                            retired,
+                            current_work_item_id=current.id,
+                            current_run_id=rejected.previous_run_id,
+                            checkpoint_sequence=current.checkpoint_sequence,
+                        )
                         and (
                             publication.work_item_id != current.id
                             or publication.lease_id != rejected.original_lease_id
