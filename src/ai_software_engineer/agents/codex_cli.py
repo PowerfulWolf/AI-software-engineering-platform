@@ -1797,8 +1797,14 @@ def _classify_cli_failure(
     ):
         # Missing provenance cannot establish a retryable provider failure.
         return AgentErrorCode.PROVIDER_UNAVAILABLE, False
-    code = recognized or AgentErrorCode.PROVIDER_UNAVAILABLE
-    return code, code not in {AgentErrorCode.AUTHENTICATION_ERROR, AgentErrorCode.INVALID_OUTPUT}
+    if recognized is None:
+        # A nonzero exit and a generic fallback code do not prove a provider
+        # outage. Preserve unknown failures for investigation without refund.
+        return AgentErrorCode.PROVIDER_UNAVAILABLE, False
+    return recognized, recognized not in {
+        AgentErrorCode.AUTHENTICATION_ERROR,
+        AgentErrorCode.INVALID_OUTPUT,
+    }
 
 
 def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode | None:
@@ -1820,6 +1826,10 @@ def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode
         for marker in ("unauthorized", "authentication", "sign in", "login", "missing api key")
     ) or re.search(r"\b(?:401|403)\b", text):
         return AgentErrorCode.AUTHENTICATION_ERROR
+    if re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+(?:408|500|502|503|504)\b", text, re.IGNORECASE) or (
+        re.search(r"\bconnection (?:failed|refused|reset|timed out)\b", text)
+    ):
+        return AgentErrorCode.PROVIDER_UNAVAILABLE
     return None
 
 
