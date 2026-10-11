@@ -186,6 +186,44 @@ duplicate plan reads without changing an execution or approval.
 - Coder cannot change verdicts. QA PASS and Review APPROVE are independent and use the same final
   candidate SHA. Upstream baseline changes must not be mistaken for Coder changes or new findings.
 
+### Sealed provider failure accounting
+
+`ProductionBaselineFactCollector._reservation(task, item, receipts, ...) ->
+BaselineExecutionReservation` may classify a sealed original outcome with no interruption receipt
+as `provider_transient` only when both `outcome.result.error.transient is True` and
+`outcome.result.error.code.value in TRANSIENT_CODES`. The error category alone is insufficient:
+`PROVIDER_UNAVAILABLE / transient=false`, including an unclassified truncated native diagnostic,
+cannot reserve a successor or append `DeliveryRetryFailure` through a source update.
+
+This check preserves the independently verified interruption-receipt and stopped-provider-proof
+paths. It grants no extra work allowance and does not reinterpret the original result. Every
+proposal still verifies real Task/claim/source/stop/workspace facts before accounting. The ordinary
+wait investigation and baseline accounting must agree about a direct outcome's transient flag.
+
+| Original sealed outcome without receipt | Required result |
+| --- | --- |
+| Allowlisted error, transient=true, remaining frozen service-fault allowance | Exact provider reservation; work count unchanged; replay adds no second debit |
+| Allowlisted error, transient=false, work remaining or exhausted | Refuse; preserve original Task/outcome/files; no provider reservation |
+| Nonallowlisted error, transient=true | Refuse; the flag cannot expand the error allowlist |
+| No original outcome or legal stopped-provider proof | Existing exact continuation contract; do not invent failure classification |
+
+Good: a typed transient provider outage keeps its own bounded accounting even at the ordinary work
+limit. Base: existing local interruption receipts consume ordinary work exactly as before. Bad:
+use a source-rebind approval to refund an unknown nontransient failed call.
+
+`tests/manager/test_execution_baseline_reservation.py` seals real typed outcomes and reads them
+through the production collector's reservation path. It checks all four allowed codes, true/false
+flags, exhausted/remaining ordinary work, unsupported codes, exact retry replay, unchanged original
+Task/retry facts and immutable saved bytes. Existing invocation and stopped-provider tests retain
+their independently checked authority boundaries.
+
+存量数据处置: no SQL migration or historical rewrite. Loading this guard while idle prevents new
+misclassified reservations; it does not retroactively refund or repair a published reservation.
+The current nontransient stopped K1 execution retains its original failure and exhausted frozen
+budget and requires its own exact authorized engineering disposition. Reverting this guard leaves
+wire records compatible but reintroduces unsafe code-only classification; do not use rollback to
+resume a rejected failure.
+
 ### Accepted artifact order and retained candidates
 
 `compare_artifact_order()` and `latest_accepted_artifact()` are the shared write/read-side

@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from ai_software_engineer.agents.models import AgentErrorCode
+from ai_software_engineer.agents.models import (
+    AgentErrorCode,
+    AgentFailure,
+    AgentResult,
+    AgentRunStatus,
+)
 from ai_software_engineer.domain import AgentRole, Task, TaskStatus
 from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy, TransientRetryPolicy
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
@@ -12,7 +17,10 @@ from ai_software_engineer.manager.baseline_models import BaselineExecutionFacts
 from ai_software_engineer.manager.baseline_production import ProductionBaselineFactCollector
 from ai_software_engineer.orchestration.continuation_models import ExecutionInterruptionReceipt
 from ai_software_engineer.recovery.models import digest
-from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
+from ai_software_engineer.work_queue.invocation import (
+    DeliveryInvocationOutcome,
+    DeliveryInvocationStart,
+)
 from ai_software_engineer.work_queue.models import QueuedWorkItem
 from tests.domain.factories import NOW, make_task
 from tests.manager.test_execution_baseline import authorize, setup
@@ -100,6 +108,95 @@ def test_provider_baseline_reserves_one_exact_debit_and_replay_never_duplicates(
     assert replay.next_execution_attempt == 2
     assert replay.retry_failure is not None
     assert reserved.with_retry_failure(replay.retry_failure) == reserved
+
+
+def _sealed_failure(
+    root: Path, item: QueuedWorkItem, *, code: AgentErrorCode, transient: bool
+) -> DeliveryInvocationOutcome:
+    records = KnowledgeRecordStore(root / "invocations")
+    start = records.get("invocation-starts", item.id, DeliveryInvocationStart)
+    request = start.request
+    result = AgentResult(
+        run_id=request.run_id,
+        task_id=request.task_id,
+        role=request.role,
+        attempt=request.attempt,
+        source_revision=request.source_revision,
+        context_manifest_id=request.context_manifest_id,
+        status=AgentRunStatus.TIMED_OUT
+        if code is AgentErrorCode.TIMEOUT
+        else AgentRunStatus.FAILED,
+        error=AgentFailure(code=code, transient=transient, message="sealed provider failure"),
+    )
+    outcome = DeliveryInvocationOutcome(start=start, result=result, outcome_sha256="0" * 64)
+    outcome = outcome.model_copy(
+        update={
+            "outcome_sha256": digest(outcome.model_dump(mode="json", exclude={"outcome_sha256"}))
+        }
+    )
+    records.put("invocation-outcomes", item.id, outcome)
+    return outcome
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        AgentErrorCode.TIMEOUT,
+        AgentErrorCode.QUOTA_EXHAUSTED,
+        AgentErrorCode.RATE_LIMITED,
+        AgentErrorCode.PROVIDER_UNAVAILABLE,
+    ],
+)
+@pytest.mark.parametrize("transient", [False, True])
+@pytest.mark.parametrize("work_limit", [1, 3])
+def test_sealed_failure_requires_code_and_transient_before_provider_accounting(
+    tmp_path: Path, code: AgentErrorCode, transient: bool, work_limit: int
+) -> None:
+    collector, task, item, _ = reservation_fixture(tmp_path, work_limit=work_limit)
+    outcome = _sealed_failure(tmp_path, item, code=code, transient=transient)
+    original_task = task.to_wire()
+    original_files = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    assert task.work_budget_exhausted is (work_limit == 1)
+    if transient:
+        reservation = collector._reservation(task, item, ())
+        assert reservation.retry_cause == "provider_transient"
+        assert reservation.retry_failure is not None
+        assert reservation.retry_failure.code == code.value
+        assert reservation.current_invocation_outcome_sha256 == outcome.outcome_sha256
+        reserved = task.with_retry_failure(reservation.retry_failure)
+        assert reserved.attempts == task.attempts + 1
+        assert reserved.work_attempt == task.work_attempt
+        replay = collector._reservation(reserved, item, ())
+        assert replay.reservation_already_applied
+        assert replay.next_execution_attempt == reserved.attempts
+        assert replay.retry_failure == reservation.retry_failure
+    else:
+        with pytest.raises(ValueError, match="明确、可预算"):
+            collector._reservation(task, item, ())
+    assert task.to_wire() == original_task and task.retry_failures is None
+    assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == original_files
+    assert (
+        KnowledgeRecordStore(tmp_path / "invocations").get(
+            "invocation-outcomes", item.id, DeliveryInvocationOutcome
+        )
+        == outcome
+    )
+
+
+def test_transient_flag_cannot_admit_a_nonallowlisted_error_code(tmp_path: Path) -> None:
+    collector, task, item, _ = reservation_fixture(tmp_path)
+    outcome = _sealed_failure(
+        tmp_path, item, code=AgentErrorCode.AUTHENTICATION_ERROR, transient=True
+    )
+    with pytest.raises(ValueError, match="明确、可预算"):
+        collector._reservation(task, item, ())
+    assert task.retry_failures is None
+    assert (
+        KnowledgeRecordStore(tmp_path / "invocations").get(
+            "invocation-outcomes", item.id, DeliveryInvocationOutcome
+        )
+        == outcome
+    )
 
 
 @pytest.mark.parametrize("provider", [False, True])
