@@ -189,6 +189,9 @@ class BaselineExecutionFacts(DomainModel):
     stopped_provider_failure: StoppedProviderFailureProof | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    context_capacity_receipt_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     permissions: AgentPermissions
     denied_paths: tuple[NonEmptyStr, ...]
     facts_sha256: Sha256
@@ -219,6 +222,16 @@ class BaselineExecutionFacts(DomainModel):
             if identity is not None and identity not in self.source_artifact_ids:
                 raise ValueError("baseline source artifact is absent from complete facts")
         containment, reservation = self.legacy_containment, self.continuation
+        if self.context_capacity_receipt_sha256 is not None and (
+            reservation is None
+            or reservation.retry_cause != "uninvoked"
+            or reservation.current_attempt != self.task.attempts
+            or not reservation.reservation_already_applied
+            or self.legacy_containment is not None
+            or self.completed_output is not None
+            or self.stopped_provider_failure is not None
+        ):
+            raise ValueError("容量恢复必须绑定未调用的当前工作预留, 不退款或新增已执行身份")
         if containment is not None:
             containment.validate_integrity()
             request = containment.original_start.request

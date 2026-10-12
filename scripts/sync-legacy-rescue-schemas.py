@@ -556,6 +556,30 @@ def guards(node: dict[str, object]) -> None:
     if title == "BaselineExecutionFacts":
         existing = node.get("allOf", [])
         assert isinstance(existing, list)
+        capacity_gate = {
+            "if": {
+                "required": ["context_capacity_receipt_sha256"],
+                "properties": {"context_capacity_receipt_sha256": {"type": "string"}},
+            },
+            "then": {
+                "required": ["continuation"],
+                "properties": {
+                    "continuation": {
+                        "type": "object",
+                        "required": ["retry_cause", "reservation_already_applied"],
+                        "properties": {
+                            "retry_cause": {"const": "uninvoked"},
+                            "reservation_already_applied": {"const": True},
+                        },
+                    },
+                    "legacy_containment": {"type": "null"},
+                    "completed_output": {"type": "null"},
+                    "stopped_provider_failure": {"type": "null"},
+                },
+            },
+        }
+        if capacity_gate not in existing:
+            existing.append(capacity_gate)
         for cause, code in (
             ("completed_output_unavailable", "WORK_INTERRUPTED"),
             ("completed_output_rejected", "INVALID_OUTPUT"),

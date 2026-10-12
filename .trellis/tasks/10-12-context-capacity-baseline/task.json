@@ -1,0 +1,20 @@
+{
+  "id": "context-capacity-baseline",
+  "title": "Coder 未调用容量等待的原 Task 精确基线 PAUSE/RESUME",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "base_commit": "7624fe9",
+  "allowlist": [
+    "src/ai_software_engineer/manager/baseline_models.py",
+    "src/ai_software_engineer/manager/baseline_production.py",
+    "scripts/sync-legacy-rescue-schemas.py",
+    "schemas/console-operation.schema.json",
+    "schemas/execution-baseline-plan.schema.json",
+    "schemas/execution-baseline-queue-consumption.schema.json",
+    "tests/manager/test_public_context_capacity_baseline.py",
+    "tests/contracts/test_context_capacity_baseline_schema.py",
+    ".trellis/spec/core/execution-baseline.md",
+    ".trellis/tasks/10-12-context-capacity-baseline/"
+  ],
+  "rollback": "保持原需求、Task、claim、容量 receipt 和基线历史。新绑定已写入后保留 additive readers，使用前进修复；不得改写生产 SQL 或清空工作区。"
+}

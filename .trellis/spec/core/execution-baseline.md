@@ -1,5 +1,51 @@
 # Same-Task execution baseline contract
 
+## Claimed final-input capacity and same-Task PAUSE/RESUME (2026-10-12)
+
+`BaselineExecutionFacts.context_capacity_receipt_sha256: Sha256 | None` is an additive,
+absent-by-default digest. `BaselineInvocationProof.proof_kind=claimed_context_capacity` retains
+every exact historical capacity receipt without fabricating an invocation or native stop.
+`ProductionBaselineFactCollector` reads the complete sealed final-input Context, immutable
+original claim and historical queue step, original Task intent and source, and the full latest
+baseline authorized before that claim. Prior bindings are read and validated in full; a later
+binding cannot replace the original Run input. Original preflight READY remains READY.
+
+The no-start check rejects any exact Run invocation/outcome, provider route, accepted artifact,
+native capture-start/stop, receipt or admission. Corrupt/orphan native records and inaccessible,
+symlink or non-directory ledger roots fail closed; absence is never inferred from unreadable
+records. Historical lease expiry is not a stop proof and cannot serve as an observation upper
+bound because heartbeats renew the live lease without rewriting the original immutable claim.
+
+The current queue disposition must reference the unique latest receipt for its actual dispatch
+sequence and exact Task snapshot/revision/source. Public `propose_execution_baseline` then uses
+the existing source-rebind plan with a different trusted target source, full draft/inventory and
+native rules. Capacity facts require an already-applied `uninvoked` work reservation with the
+same Task attempt. Public execute requires exact PAUSE; ordinary explicit continue rechecks the
+latest complete binding and releases only that held work generation. The new dispatch has a new
+claim, Context and Run, no refund or attempt increment. Independent QA/Review remain mandatory.
+
+| Facts / command | Expected result |
+| --- | --- |
+| Exact Coder no-start receipt and complete Context/claim/source/baseline | Original Task plan; PAUSE before explicit RESUME |
+| One or repeated capacity waits, each followed by a different approved target source | Same Task/attempt/branch; new claim/Run per resume; immutable prior receipts |
+| Missing/foreign/re-sealed receipt, missing Context or conflicting invocation/native record | Refuse; unchanged Task/events/queue/workspace/history |
+| Immediate RESUME execute or another recovery proof mixed with capacity | Refuse before queue/source mutation |
+| Old Facts/proof without new optional digests | Original serialized bytes and digests unchanged |
+
+Good: preserve the original capacity receipt and lawful draft, inspect an exact target-source
+plan, approve PAUSE and explicitly continue the held generation. Base: historical preflight or
+real stopped invocation proofs retain their prior behavior. Bad: relabel READY preparation as
+WAIT, infer no-start from a missing start while a stop/receipt exists, or refund uninvoked work.
+
+Incremental tests: `tests/manager/test_public_context_capacity_baseline.py` uses a real isolated
+MySQL claim and public Host flow through different Coder/QA/Reviewer to DONE; schema/model
+negative tests in `tests/contracts/test_context_capacity_baseline_schema.py` and canonical fresh
+regeneration tests preserve every embedded guard. No production SQL migration or history rewrite
+is required. Existing exact nonterminal capacity waits use a reviewed source update proposal,
+PAUSE approval and explicit continue after loading the compatible idle runtime. Older BLOCKED
+Tasks need their separate terminal recovery contract. Retain the additive reader after any new
+binding or decision is published; use a forward fix instead of erasing records or resetting Git.
+
 ## Scope and signatures
 
 This contract covers an engineering-controlled source update after Coder execution has begun.
