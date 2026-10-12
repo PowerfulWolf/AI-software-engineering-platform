@@ -358,9 +358,10 @@ def test_localizes_knowledge_preparation_failure_and_keeps_error_code() -> None:
     ) == ("上下文预算已用尽，平台不会自动重试模型；请缩小精确验证范围后再继续。")
 
 
-def test_localizes_context_capacity_without_calling_it_work_budget_exhaustion() -> None:
+@pytest.mark.parametrize("code", ("CONTEXT_BUDGET_EXHAUSTED", "CONTEXT_CAPACITY"))
+def test_localizes_context_capacity_without_calling_it_work_budget_exhaustion(code: str) -> None:
     localized = localize_blocking_text(
-        "CONTEXT_BUDGET_EXHAUSTED: final provider input exceeds the configured Context budget "
+        f"{code}: final provider input exceeds the configured Context budget "
         "(255325 > 252000)"
     )
     assert localized == (
@@ -369,7 +370,8 @@ def test_localizes_context_capacity_without_calling_it_work_budget_exhaustion() 
     )
 
 
-def test_browser_localizes_context_capacity_with_the_same_read_side_copy() -> None:
+@pytest.mark.parametrize("code", ("CONTEXT_BUDGET_EXHAUSTED", "CONTEXT_CAPACITY"))
+def test_browser_localizes_context_capacity_with_the_same_read_side_copy(code: str) -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is required for the browser/reader wording contract")
@@ -386,7 +388,7 @@ process.stdout.write(vm.runInContext("humanizeBlockingText(message)", context));
     # Keep the same boundary text used by the Python presentation contract; the
     # numeric detail is deliberately ignored by both read-side adapters.
     value = (
-        "CONTEXT_BUDGET_EXHAUSTED: final provider input exceeds the configured Context budget "
+        f"{code}: final provider input exceeds the configured Context budget "
         "(255325 > 252000)"
     )
     result = subprocess.run(
