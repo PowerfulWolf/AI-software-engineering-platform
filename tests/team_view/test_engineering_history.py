@@ -34,6 +34,7 @@ from ai_software_engineer.domain.engineering_authority import (
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.execution_baseline import (
     BaselineContinuationMode,
+    BaselinePurpose,
     ExecutionBaselineBinding,
 )
 from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
@@ -43,6 +44,8 @@ from ai_software_engineer.knowledge.models import KnowledgeError, KnowledgeSnaps
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
+    BaselineExecutionFacts,
+    BaselineExecutionReservation,
     BaselineOperatorAuthorization,
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
@@ -1122,3 +1125,90 @@ def test_paused_baseline_history_records_continue_decision_without_inventing_exe
         assert decision.details["source_revision"] == binding.execution_source_revision
         assert "已启动" not in decision.summary and "已通过" not in decision.summary
     assert before == _bytes(sidecar)
+
+
+@pytest.mark.parametrize("continued", [False, True])
+def test_capacity_history_keeps_original_code_and_separates_pause_from_execution(
+    tmp_path: Path, continued: bool
+) -> None:
+    ports = import_module("tests.manager.test_execution_baseline")
+    fixture = ports.setup(tmp_path)
+    original_facts: BaselineExecutionFacts = fixture.collector.facts
+    task = original_facts.task
+    # The isolated trusted collector supplies typed unit inputs. This projection
+    # test does not claim to produce or independently verify a capacity receipt.
+    facts = BaselineExecutionFacts.model_validate(
+        {
+            **original_facts.to_wire(),
+            "target_native_rules_sha256": original_facts.source_native_rules_sha256,
+            "implementation_artifact_id": None,
+            "continuation": BaselineExecutionReservation(
+                current_attempt=task.attempts,
+                next_execution_attempt=task.attempts,
+                retry_cause="uninvoked",
+                reservation_already_applied=True,
+            ).to_wire(),
+            "context_capacity_receipt_sha256": "c" * 64,
+        }
+    )
+    facts = facts.model_copy(
+        update={"facts_sha256": digest(facts.model_dump(mode="json", exclude={"facts_sha256"}))}
+    )
+    fixture.collector.facts = facts
+    sidecar = tmp_path / "sidecar"
+    store = FileExecutionBaselineStore(sidecar / "state" / "execution-baselines" / task.id)
+    fixture.service.store = store
+    plan = fixture.service.propose(None, purpose=BaselinePurpose.CONTEXT_CAPACITY_RESUME)
+    authority = BaselineOperatorAuthorization.for_plan(
+        plan,
+        principal=LocalOperatorPrincipal.trusted_local(),
+        reference="保留原代码与容量等待进度, 明确保持暂停",
+        submitted_at=NOW,
+        continuation_mode=BaselineContinuationMode.PAUSE,
+    )
+    binding = fixture.service.execute(plan.plan_sha256, authority=authority)
+    continuation = BaselineContinueAuthorization.create(
+        scope=binding.scope,
+        task_id=task.id,
+        task_intent_sha256=task_intent_sha256(task),
+        task_revision=plan.facts.task_revision,
+        work_item_id=plan.facts.work_item_id,
+        execution_baseline_sha256=binding.binding_sha256,
+        expected_source_revision=binding.execution_source_revision,
+        checkpoint_sequence=plan.facts.task_revision,
+        expected_disposition_sha256="e" * 64,
+        inventory_sha256=binding.after_inventory_sha256,
+        principal=LocalOperatorPrincipal.trusted_local(),
+        reference="单独批准继续原需求",
+        submitted_at=binding.completed_at + timedelta(seconds=1),
+    )
+    if continued:
+        store.records.put("baseline-continuations", binding.binding_sha256, continuation)
+    before = _bytes(sidecar)
+    workspace_before = _bytes(fixture.worktree.path)
+    history = engineering_history(sidecar, task, facts.scope, "delivery_history")
+
+    assert len(history) == (4 if continued else 3)
+    authorization = next(
+        entry for entry in history if entry.source_sha256 == authority.authorization_sha256
+    )
+    started = next(
+        entry for entry in history if entry.details["kind"] == "baseline_operation_start"
+    )
+    paused = next(entry for entry in history if entry.details["kind"] == binding.kind)
+    assert "容量" in authorization.summary and "暂停" in authorization.summary
+    assert "原代码" in authorization.summary and "基线更新" not in authorization.summary
+    assert "容量" in started.summary and "尚未启动" in started.summary
+    assert "基线更新" not in started.summary
+    assert "原代码" in paused.summary and "进度" in paused.summary and "暂停" in paused.summary
+    assert "可先更新基线" not in paused.summary
+    assert paused.details["purpose"] == "context_capacity_resume"
+    assert paused.details["execution_base_ref"] == task.base_ref
+    assert paused.details["execution_source_revision"] == fixture.worktree.head_revision
+    if continued:
+        decision = next(entry for entry in history if entry.details["kind"] == continuation.kind)
+        assert "后续执行记录确认启动与验收" in decision.summary
+        assert "已启动" not in decision.summary and "已通过" not in decision.summary
+    assert all(entry.task_id == task.id for entry in history)
+    assert before == _bytes(sidecar)
+    assert workspace_before == _bytes(fixture.worktree.path)
