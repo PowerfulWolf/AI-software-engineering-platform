@@ -369,6 +369,57 @@ def test_localizes_context_capacity_without_calling_it_work_budget_exhaustion(co
     )
 
 
+_LEGACY_CAPACITY_REASON = (
+    "Required context exceeds the configured input budget; no automatic retry."
+)
+_LEGACY_CAPACITY_COPY = (
+    "所需上下文超过平台输入容量，交付已暂停。"
+    "请由平台调整输入装配后，为原需求准备保留完整开发进度的恢复方案。"
+)
+_LEGACY_CAPACITY_CASES: tuple[tuple[str, str], ...] = (
+    (_LEGACY_CAPACITY_REASON, _LEGACY_CAPACITY_COPY),
+    (f"用户引用：{_LEGACY_CAPACITY_REASON}", f"用户引用：{_LEGACY_CAPACITY_REASON}"),
+    (f"{_LEGACY_CAPACITY_REASON} User detail.", f"{_LEGACY_CAPACITY_REASON} User detail."),
+    ("RETRY_BUDGET_EXHAUSTED", "RETRY_BUDGET_EXHAUSTED"),
+    (
+        "BUDGET_EXHAUSTED: Coder work attempts exhausted.",
+        "BUDGET_EXHAUSTED: Coder work attempts exhausted.",
+    ),
+)
+
+
+@pytest.mark.parametrize(("original", "expected"), _LEGACY_CAPACITY_CASES)
+def test_legacy_capacity_translation_keeps_exact_match_and_normal_budget_semantics(
+    original: str, expected: str
+) -> None:
+    assert localize_blocking_text(original) == expected
+
+
+def test_browser_and_reader_agree_on_exact_legacy_capacity_translation() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for the browser/reader wording contract")
+    app = Path(__file__).parents[2] / "src/ai_software_engineer/team_view/app.js"
+    script = r"""
+const fs = require("node:fs");
+const vm = require("node:vm");
+const context = vm.createContext({document: {getElementById: () => ({addEventListener() {}})}});
+const source = fs.readFileSync(process.argv[1], "utf8");
+vm.runInContext(source.slice(0, source.indexOf('for (const target of ["team"')), context);
+context.messages = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(vm.runInContext("messages.map(humanizeBlockingText)", context)));
+"""
+    result = subprocess.run(
+        (node, "-e", script, str(app)),
+        input=json.dumps([original for original, _ in _LEGACY_CAPACITY_CASES]),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    assert json.loads(result.stdout) == [expected for _, expected in _LEGACY_CAPACITY_CASES]
+
+
 @pytest.mark.parametrize("code", ("CONTEXT_BUDGET_EXHAUSTED", "CONTEXT_CAPACITY"))
 def test_browser_localizes_context_capacity_with_the_same_read_side_copy(code: str) -> None:
     node = shutil.which("node")

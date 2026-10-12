@@ -1,0 +1,25 @@
+{
+  "id": "legacy-capacity-chinese-20261012",
+  "title": "历史输入容量停止原因的中文读侧展示",
+  "status": "completed",
+  "owner": "codex",
+  "baseline": "9cccb5b",
+  "scope": [
+    "team_view/blocker_text.py 的精确历史文本映射",
+    "team_view/app.js 的 humanizeBlockingText 精确映射",
+    "对应增量回归、规范和交付说明"
+  ],
+  "acceptance": [
+    "精确历史英文容量停止原因展示为中文，并说明平台调整输入和保留完整开发进度的恢复方案",
+    "Python 与浏览器映射一致",
+    "普通预算错误、用户引用和未知诊断不被重新分类",
+    "不修改 Task、Requirement、failure_code、预算、审批、Operation 或历史事件"
+  ],
+  "verification": [
+    "pytest tests/team_view/test_blocker_text.py -q",
+    "ruff check/format --check; strict mypy for changed Python files",
+    "node --check src/ai_software_engineer/team_view/app.js",
+    "git diff --check; independent read-only review"
+  ],
+  "rollback": "回滚本次读侧映射提交并刷新页面；保留全部存量事实，不重置 Task 或修改数据库。"
+}

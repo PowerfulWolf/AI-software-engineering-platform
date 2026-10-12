@@ -43,6 +43,10 @@ _EXACT: dict[str, str] = {
     (
         "Required context exceeds the configured input budget; no model retry."
     ): "所需上下文超过配置的输入上限，不能重试模型。",
+    ("Required context exceeds the configured input budget; no automatic retry."): (
+        "所需上下文超过平台输入容量，交付已暂停。"
+        "请由平台调整输入装配后，为原需求准备保留完整开发进度的恢复方案。"
+    ),
     (
         "BUDGET_EXHAUSTED: Required context exceeds the configured input budget; "
         "no automatic retry."

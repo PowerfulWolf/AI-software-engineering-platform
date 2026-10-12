@@ -115,6 +115,28 @@ Coder adaptation and the independent QA/Review gates. Empty clean capture cannot
 “保留 0 文件”, nor can the page claim that this uninvoked Coder ran and stopped. Existing counters
 remain actual historical values; section/Operation preparation success is not delivery success.
 
+### Exact historical English compatibility
+
+`team_view.blocker_text.localize_blocking_text(value: str | None) -> str | None` and
+`team_view/app.js::humanizeBlockingText(value)` translate the exact historical sentence
+`Required context exceeds the configured input budget; no automatic retry.` to
+“所需上下文超过平台输入容量，交付已暂停。请由平台调整输入装配后，为原需求准备保留完整开发进度的恢复方案。”
+This is a read-side translation of `RequestView.blocker`/`TaskView.blocker` and operation text,
+not a change to the original failure classification. Historical `RETRY_BUDGET_EXHAUSTED`
+remains unchanged; the sentence alone proves neither provider absence nor unconsumed allowance.
+
+| Input | Result |
+| --- | --- |
+| Exact legacy sentence | Same Chinese text in Python and browser; platform input adjustment and complete-progress recovery next step |
+| Plain `RETRY_BUDGET_EXHAUSTED` or ordinary work-budget diagnostic | Existing semantics; no capacity reclassification |
+| User quotation or extra diagnostic text around the legacy sentence | Preserve the complete text; no substring replacement |
+
+Regression points: `tests/team_view/test_blocker_text.py::test_legacy_capacity_translation_keeps_exact_match_and_normal_budget_semantics`
+and `test_browser_and_reader_agree_on_exact_legacy_capacity_translation`, including Node execution.
+No SQL/journal rewrite, failure-code update, approval, budget adjustment or recovery permission is
+introduced. Load the compatible presentation adapters to re-render existing records; rollback
+only these mappings and retain all historical facts.
+
 ## Existing data and rollback
 
 Existing Task, Requirement, baseline, Context, queue, invocation and Operation records remain
