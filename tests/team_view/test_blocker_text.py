@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from ai_software_engineer.team_view.blocker_text import localize_blocking_text
+from ai_software_engineer.team_view.blocker_text import (
+    _coder_output_diagnostic,
+    localize_blocking_text,
+)
 
 _UPSTREAM_STAGE_ACTIONS: tuple[tuple[str, str], ...] = (
     ("Prepare every selected directory.", "准备所有已选择的代码目录。"),
@@ -157,12 +160,14 @@ def test_historical_designer_rejection_is_localized_without_inventing_the_cause(
         ),
     ),
 )
+@pytest.mark.parametrize("wrapped", (False, True), ids=("direct", "real_run_envelope"))
 def test_coder_output_read_side_diagnostic_has_fixed_chinese_and_browser_parity(
-    diagnostic: str, expected: str
+    diagnostic: str, expected: str, wrapped: bool
 ) -> None:
     original = (
         "INVALID_OUTPUT: Coder failed at attempt 1: "
-        f"Codex CLI returned invalid structured output; {diagnostic}; "
+        + ("coder run run_original failed: " if wrapped else "")
+        + f"Codex CLI returned invalid structured output; {diagnostic}; "
         "output_sha256=" + "a" * 64 + "; output_bytes=10529; run_original"
     )
     localized = localize_blocking_text(original)
@@ -191,6 +196,42 @@ process.stdout.write(JSON.stringify(vm.runInContext("messages.map(humanizeBlocki
         timeout=10,
     )
     assert json.loads(result.stdout) == [localized]
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    (
+        "quoted ",
+        "qa run run_original failed: ",
+        "coder run run_Original failed: ",
+        "coder run run_original failed:  ",
+        "coder run run_original failed: coder run run_second failed: ",
+    ),
+)
+def test_coder_diagnostic_does_not_recognize_arbitrary_or_nested_envelopes(prefix: str) -> None:
+    detail = prefix + "Codex CLI returned invalid structured output; cause=GIT_CONTRACT"
+    assert _coder_output_diagnostic(detail) is None
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for browser wording parity")
+    app = Path(__file__).parents[2] / "src/ai_software_engineer/team_view/app.js"
+    script = r"""
+const fs = require("node:fs"), vm = require("node:vm");
+const context = vm.createContext({document: {getElementById: () => ({addEventListener() {}})}});
+const source = fs.readFileSync(process.argv[1], "utf8");
+vm.runInContext(source.slice(0, source.indexOf('for (const target of ["team"')), context);
+context.detail = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(vm.runInContext("coderOutputDiagnostic(detail)", context)));
+"""
+    result = subprocess.run(
+        (node, "-e", script, str(app)),
+        input=json.dumps(detail),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    assert json.loads(result.stdout) is None
 
 
 def test_localizes_stable_recovery_and_manager_blockers() -> None:

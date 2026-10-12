@@ -40,6 +40,10 @@ structured-output prefix plus delimited `WORK_SLICE/validation_rule` tokens. Kno
 get fixed Chinese. Unknown values remain neutral; GIT_CONTRACT says its old specific subcause
 was not saved. Do not reflect provider JSON or arbitrary exception text. Run/digest locators
 remain secondary audit references. Python and shipped JS have parity tests.
+The real native result may wrap that prefix once as `coder run run_<lowercase alnum> failed: `.
+Both readers remove only this anchored single envelope before the existing fixed-prefix/token
+checks. Foreign roles, nested wrappers, arbitrary preceding prose, malformed run IDs and
+delimiter-like token suffixes do not acquire this diagnostic. Historical raw records stay intact.
 
 Good: report rejected, complete draft sealed, explicit ordinary cost and QA/Review explained.
 Base: unknown pre-check offers a check, not an approval or success claim. Bad: tell users the

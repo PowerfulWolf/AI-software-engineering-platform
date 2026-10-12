@@ -2847,6 +2847,7 @@ function deliveryPhase(item, node = null) {
     QUEUED: "实现", DELIVERING: "实现", VERIFY_QA: "候选测试", VERIFY_REVIEW: "候选评审", INTEGRATING: "联合验收"}[status] || label(status);
 }
 function coderOutputDiagnostic(detail) {
+  detail = detail.replace(/^coder run run_[0-9a-z]+ failed: /, "");
   if (!detail.startsWith("Codex CLI returned invalid structured output;")) return null;
   if (/(?:^|;\s*)cause=GIT_CONTRACT(?:;|$)/.test(detail))
     return "开发报告未通过代码与工作区校验，具体旧校验子因未保存，不能据此认定开发完成";

@@ -121,6 +121,7 @@ def _repository_blocker(text: str) -> str | None:
 
 
 def _coder_output_diagnostic(detail: str) -> str | None:
+    detail = re.sub(r"^coder run run_[0-9a-z]+ failed: ", "", detail, count=1)
     if not detail.startswith("Codex CLI returned invalid structured output;"):
         return None
     if re.search(r"(?:^|;\s*)cause=GIT_CONTRACT(?:;|$)", detail):
