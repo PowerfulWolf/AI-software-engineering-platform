@@ -21,6 +21,7 @@ from urllib.request import Request as UrlRequest
 
 from pydantic import Field
 
+from ai_software_engineer.agents.context_rendering import render_context_section
 from ai_software_engineer.agents.model_diagnostics import safe_request_id
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
@@ -508,6 +509,12 @@ class ContextPromptBuilder:
             "supersedes value selected by the returned Artifact kind from "
             "output_contract.supersedes_by_kind; "
             "input_artifact_ids are context dependencies, not necessarily direct parents.\n"
+            "A section with content_format=json contains the complete JSON values from its "
+            "sealed text, rendered as structured data. content_format=knowledge-read-v1 "
+            "retains complete READ evidence and chunk text while omitting only chunk.terms, "
+            "the verified lexical index deterministically derived from that text. "
+            "Section SHA-256 and source_content_sha256 identify the original sealed Context "
+            "bytes, not the reading projection. Neither format changes authority or evidence.\n"
             f"MACHINE_POLICY={policy_sections[0]}"
             + _progress_output_guidance(request)
             + _coder_slice_output_guidance(request)
@@ -518,12 +525,26 @@ class ContextPromptBuilder:
         for section in context.sections:
             if section.name == "policy":
                 continue
+            rendered = render_context_section(section)
             sections.append(
                 {
                     "name": section.name,
                     "uri": section.uri,
                     "sha256": section.sha256,
-                    "content": section.content,
+                    "content": rendered.content if rendered is not None else section.content,
+                    **(
+                        {
+                            "content_format": rendered.content_format,
+                            "source_content_sha256": rendered.source_content_sha256,
+                            **(
+                                {"omitted_derived_fields": list(rendered.omitted_derived_fields)}
+                                if rendered.omitted_derived_fields
+                                else {}
+                            ),
+                        }
+                        if rendered is not None
+                        else {}
+                    ),
                 }
             )
         for artifact_id in request.input_artifact_ids:
