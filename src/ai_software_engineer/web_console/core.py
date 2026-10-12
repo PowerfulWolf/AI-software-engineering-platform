@@ -19,7 +19,7 @@ from ai_software_engineer.recovery.preparation_progress import (
 
 from .models import ConsoleCommandResult, ConsoleIntent, ConsoleOperation
 from .preparation_store import InMemoryPreparationProgressStore, PreparationProgressStore
-from .shutdown import ShutdownResult, ShutdownState, shutdown_deadline
+from .shutdown import ShutdownRefusal, ShutdownResult, ShutdownState, shutdown_deadline
 from .store import ConsoleOperationError, ConsoleOperationStore
 from .summary_models import OperationSummaryPage, OperationSummaryQuery
 
@@ -321,7 +321,18 @@ class ProjectConsole:
             state = ShutdownState.DRAINING
             summary = "已停止接收新操作, 正在等待当前操作保存结果并收尾。"
         return ShutdownResult(
-            state=state, safe_summary=summary, active_operations=self._active_operations
+            state=state,
+            safe_summary=summary,
+            active_operations=self._active_operations,
+            refusal=(
+                ShutdownRefusal(
+                    component="CONSOLE",
+                    reason="UNCONFIRMED" if self._shutdown_failure is not None else "TIMEOUT",
+                    active_count=self._active_operations,
+                )
+                if state is ShutdownState.REFUSED
+                else None
+            ),
         )
 
     def _run(self) -> None:

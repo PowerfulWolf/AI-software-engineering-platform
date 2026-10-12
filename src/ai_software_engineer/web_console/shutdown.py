@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from enum import StrEnum
 from threading import Condition, Lock
 from time import monotonic
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -26,6 +27,34 @@ class ShutdownState(StrEnum):
     REFUSED = "REFUSED"
 
 
+class ShutdownRefusal(DomainModel):
+    """Safe, bounded explanation for a refused drain; never contains raw errors."""
+
+    component: Literal["WRITE_GATE", "CONSOLE", "KNOWLEDGE_INDEX", "OWNED_PROCESSES", "LIFECYCLE"]
+    reason: Literal["TIMEOUT", "UNCONFIRMED", "COMPONENT_ERROR"]
+    active_count: int | None = Field(default=None, ge=0)
+
+    @property
+    def safe_summary(self) -> str:
+        subjects = {
+            "WRITE_GATE": "现有写入",
+            "CONSOLE": "交付操作及执行调度",
+            "KNOWLEDGE_INDEX": "知识索引",
+            "OWNED_PROCESSES": "服务拥有的执行进程与记录",
+            "LIFECYCLE": "服务生命周期记录",
+        }
+        subject = subjects[self.component]
+        if self.reason == "TIMEOUT":
+            return (
+                f"{subject}仍在收尾, 已达到本次等待时限。"
+                "工作结束后可重试停止; 也可解除本次安全停止。"
+            )
+        return (
+            f"{subject}的完整收尾尚未核验, 服务保持只读。"
+            "重复等待不能补齐事实; 需核对执行停止与记录保存。"
+        )
+
+
 class ShutdownResult(DomainModel):
     """Readiness of one component; the Host must verify every component."""
 
@@ -33,11 +62,14 @@ class ShutdownResult(DomainModel):
     safe_summary: NonEmptyStr
     active_operations: int = Field(default=0, ge=0)
     active_writes: int = Field(default=0, ge=0)
+    refusal: ShutdownRefusal | None = None
 
     @model_validator(mode="after")
     def ready_requires_no_active_work(self) -> ShutdownResult:
         if self.state is ShutdownState.READY and (self.active_operations or self.active_writes):
             raise ValueError("shutdown readiness cannot contain active operation or write facts")
+        if self.refusal is not None and self.state is not ShutdownState.REFUSED:
+            raise ValueError("shutdown refusal may only explain REFUSED")
         return self
 
 
@@ -156,7 +188,14 @@ class ServiceWriteGate:
         else:
             state = ShutdownState.DRAINING
             summary = "已停止接收新写入, 正在等待现有写入收尾。"
-        return ShutdownResult(state=state, safe_summary=summary, active_writes=self._active)
+        refusal = (
+            ShutdownRefusal(component="WRITE_GATE", reason="TIMEOUT", active_count=self._active)
+            if state is ShutdownState.REFUSED
+            else None
+        )
+        return ShutdownResult(
+            state=state, safe_summary=summary, active_writes=self._active, refusal=refusal
+        )
 
 
 __all__ = [
