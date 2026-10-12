@@ -649,7 +649,7 @@ class DeliveryWaitService:
                             "当前任务的冻结工程授权不包括自动处理此等待。",
                         )
                     store = FileRecoveryStore.initialize(
-                        self.sidecar_state / "delivery-wait-authority",
+                        self.sidecar_state / ("delivery-wait-authority-" + digest(task.id)),
                         scope=RecoveryScope(
                             team_id=self.scope.team_id,
                             repository_id=self.scope.repository_id,

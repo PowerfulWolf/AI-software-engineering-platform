@@ -1,5 +1,41 @@
 # 工程授权与非终态等待处置
 
+## Task 隔离的等待授权存储（2026-10-12）
+
+`DeliveryWaitService._resolve(command, automatic=True)` 的本地 `FileRecoveryStore`
+固定使用 `sidecar_state / ("delivery-wait-authority-" + digest(task.id))`。Task ID 来自
+已核验的真实 repository/queue Task；模型、请求参数和异常文本不能提供目录。
+RecoveryScope 继续精确绑定 Team/Repository/root 与 `delivery_wait_<task.id>`；目录是现有
+sidecar state 的单个私有子目录，仍执行 no-follow、inode、scope envelope/SHA 校验。
+
+原 `state/delivery-wait-authority/` 绑定单个 Task，不能复用于同仓库后续 Task 或覆写 scope。
+旧固定目录完整保留且不作为新授权来源；已保存 resolution/handling 的嵌入 admission 仍正常
+重放。当前 Task 的权威预算来源仍是 `EngineeringAuthority` 在 Team 的 Task 隔离账本。
+若旧流程已保存共享 admission，而本地副本/decision 尚未保存，exact plan/facts/capabilities
+重放取得原 admission 的序号、时间和 SHA，再保存到新本地目录；不得再次计费或退款。
+
+| 场景 | 行为 |
+|---|---|
+| 旧固定目录属于另一个 Task | 不读写旧记录；当前 Task 独立 scope、原冻结 policy 和共享预算 |
+| 同 Task 共享账本已保存、旧 local publication 中断 | 新目录保存原 exact admission；共享/旧本地 bytes 不变 |
+| 已保存 resolution/handling 再提交 | 原幂等消费，不新建 admission/claim 或退预算 |
+| 当前新目录错 scope、symlink 或损坏 | 拒绝；不回退旧目录或覆盖文件，不消费 queue |
+
+Good: 同仓库旧 Task 的恢复历史不阻断新 Task 已获授权的工程等待处理。
+Base: exact 同决定重放保持已有证据和预算。Bad: 把 repository-local root 当成 Task identity，
+覆盖旧 scope，或从“新目录为空”推断新额度。
+
+增量回归 `tests/manager/test_delivery_wait.py` 的 Task isolation、legacy partial publication、
+invalid current-root，以及既有 handling/crash/replay/policy 测试，使用真实 immutable stores、
+Task/queue service 和已有停止 fixture，不调用生产模型或生产数据库。
+
+存量数据处置：无需 SQL 迁移、旧记录移动或 Task 状态重置。原 K1 的基线更新和明确继续决定
+已经封存，继续操作在自动处理验证等待时因旧固定 scope 冲突失败；该失败 Operation 保留。
+空闲受控发布后 fresh 读取原 Task 的当前等待，使用原“让平台处理中断”入口重新核验前提。
+只有完整 proof 和冻结 policy/预算允许时才继续，新 claim/Context/Run 仍走原独立交付 gates。
+旧未知结果、verdict 和审批不回填。新目录开始写入后保留兼容 reader/writer 和历史，优先
+forward fix；回滚不删除新记录或退预算。
+
 ## Scope / Trigger
 
 修改新 Task 的工程 policy、Manager 自动工程动作、恢复授权、人工主体、Console 工程调查或
