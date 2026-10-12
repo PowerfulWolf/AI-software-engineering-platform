@@ -28,6 +28,13 @@ Exact allowed models are `ExecutionBaselinePlan`, `BaselineOperationStart`, and
 `ContextBundle`. Subclasses, authority records and current Task/READY/facts models cannot
 register themselves by claiming another kind.
 
+Native Requirement history additionally uses the fixed internal compact-edge port from
+[recovery-history-observation.md](recovery-history-observation.md). Its `_VerifiedJointEdge`
+receipts share this owner and budget. Public `RecordKind`/`decode_verified_record` stay
+restricted to the three models above; callers cannot submit arbitrary Journal models or
+validators through those ports. The observer derives receipts after the original complete
+JointCheckpoint codec and successor checks.
+
 ## Validation and freshness contracts
 
 Every store consumer opens and reads the complete original file again, checking its regular
@@ -63,8 +70,11 @@ Task status, usable claim or a successful recovery/READY conclusion.
 
 ## Ownership, capacity and execution lifecycle
 
-The capacity is aggregate across all roots and namespaces: at most 512 entries and 32 MiB of
-summed complete raw plus typed serialization footprints, path keys and digest overhead.
+The capacity is aggregate across all roots and namespaces: at most 512 entries and 32 MiB.
+Baseline/Context entries count complete raw plus typed serialization footprints, path keys
+and digest overhead. Compact native Journal edge receipts count compact serialized facts,
+path/identity and fixed metadata within the same limits; they retain neither full historical
+models nor raw prefix bytes. There is no additional Journal cache pool.
 This is an optimization accounting bound, not a claim about total Python heap or process RSS.
 Overflow returns the fully decoded/validated result without retaining it or evicting evidence.
 No prefix read, truncation, mtime-only identity or forced GC substitutes for validation.

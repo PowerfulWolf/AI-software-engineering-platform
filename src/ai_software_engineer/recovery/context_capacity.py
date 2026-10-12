@@ -52,6 +52,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     FileProjectDeliveryCheckpointStore,
 )
+from ai_software_engineer.multi_directory.history_observation import NativeHistoryJournal
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.read_record_scope import recovery_record_read_scope
@@ -235,7 +236,7 @@ class LegacyContextCapacitySourceReader:
     ) -> NativeRecoverySource:
         team = self._team(scope)
         project, repository = team.project_registry().locate_repository(scope.repository_id)
-        parent_journals[project.requirements_root] = JointJournal(
+        parent_journals[project.requirements_root] = NativeHistoryJournal(
             project.requirements_root, read_only=True
         )
         _require_native_active(

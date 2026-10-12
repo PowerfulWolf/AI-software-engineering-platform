@@ -1,38 +1,48 @@
 {
   "name": "recovery-history-observation",
-  "title": "恢复准备完整历史的compact验证receipt与真实service红测设计",
-  "status": "design_review",
+  "title": "恢复准备完整历史的compact验证receipt与真实service契约",
+  "status": "completed",
   "created_at": "2026-10-12",
   "base_commit": "3723a0b",
-  "phase": "research_and_design_only",
+  "phase": "implementation_reviewed_awaiting_parent_deployment",
   "allowlist": [
-    ".trellis/tasks/10-12-recovery-history-observation/"
-  ],
-  "proposed_implementation_paths": [
-    "src/ai_software_engineer/recovery/requirement_history_observer.py",
-    "src/ai_software_engineer/recovery/context_capacity.py",
+    "src/ai_software_engineer/multi_directory/history_observation.py",
+    "src/ai_software_engineer/multi_directory/retirement.py",
     "src/ai_software_engineer/read_record_scope.py",
+    "src/ai_software_engineer/recovery/context_capacity.py",
+    "src/ai_software_engineer/recovery/native.py",
+    "tests/recovery/test_capacity_parent_journal_scope.py",
     "tests/recovery/test_requirement_history_observer.py",
     "tests/recovery/test_requirement_history_service_scope.py",
-    ".trellis/spec/core/recovery-history-observation.md"
-  ],
-  "pending_bridge_review": [
-    "src/ai_software_engineer/multi_directory/retirement.py: optional internal typed compact history port, preserving full history fallback and all decisions",
-    "src/ai_software_engineer/recovery/native.py: internal parent history adapter only, preserving complete parent search and authority checks"
+    "tests/recovery/test_requirement_history_successors.py",
+    ".trellis/spec/core/recovery-history-observation.md",
+    ".trellis/spec/core/recovery-record-read-scope.md",
+    ".trellis/spec/core/index.md",
+    ".trellis/tasks/10-12-recovery-history-observation/"
   ],
   "constraints": [
-    "Documentation only until root and independent design review; no implementation now",
+    "Fixed compact observer only; no public JointJournal history/current behavior changes",
     "No production operation, model call, Host initialization, service restart or database access",
     "Not alone; never revert or commit other authors' edits",
     "Shared owner aggregate 512 records and 32MiB accounted bytes; complete overflow fallback",
     "Fresh full bytes/hash/path/inventory and all authorization SQL Task claim lease Git checks remain",
     "No public JointJournal.history semantics change, no current/head/READY cache",
     "Separate preparation performance from provider outage; no cross-HTTP or pre-model retained cache",
-    "Incremental tests only after implementation is explicitly assigned"
+    "Incremental tests only; independent implementation review before commit"
   ],
   "review_targets": [
     "/root",
     "/root/summary_result_scope_compat"
   ],
-  "rollback": "No implementation or durable data change in design phase. Future rollback restores ordinary full history decoding without rewriting approvals or recreating requirements."
+  "rollback": "Revert internal compact observer composition and shared receipts; preserve all durable records, approvals, attempts and worktrees. Deploy only through controlled idle maintenance.",
+  "authorization": "Root authorized minimal implementation after independent design PASS, including optional retirement/native typed bridge.",
+  "verification": {
+    "author_tests": "126 passed in 59.79s",
+    "independent_tests": "69 passed in 73.57s",
+    "review": "PASS by /root/summary_result_scope_compat",
+    "ruff": "owned9 PASS",
+    "mypy": "source5 strict PASS; owned9 strict follow-imports=silent PASS",
+    "diff_check": "PASS",
+    "production_actions": "none"
+  }
 }

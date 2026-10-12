@@ -30,6 +30,10 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
+from ai_software_engineer.multi_directory.history_observation import (
+    NativeHistoryJournal,
+    NativeRequirementPrefix,
+)
 from ai_software_engineer.multi_directory.models import JointCheckpoint
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.recovery import context_capacity as module
@@ -229,6 +233,9 @@ def test_capacity_observation_decodes_parent_prefix_once_but_reads_each_time(
 
     monkeypatch.setattr(Path, "read_bytes", read)
     monkeypatch.setattr("ai_software_engineer.recovery.native._read_regular", preflight)
+    monkeypatch.setattr(
+        "ai_software_engineer.multi_directory.history_observation._read_regular", preflight
+    )
     with patch.object(
         JointCheckpoint, "model_validate_json", wraps=JointCheckpoint.model_validate_json
     ) as decode:
@@ -237,7 +244,7 @@ def test_capacity_observation_decodes_parent_prefix_once_but_reads_each_time(
         assert source.capacity_input.patch == "retained complete development\n"
         assert counts == Counter({path: 3 for path in paths})
         assert preflights == counts
-        assert decode.call_count == len(paths)
+        assert decode.call_count == 7, "one ancestor, plus two fresh heads in three observations"
         assert (
             f.sql.call_count,
             f.claims.call_count,
@@ -247,7 +254,7 @@ def test_capacity_observation_decodes_parent_prefix_once_but_reads_each_time(
         f.reader.discover(f.scope)
         assert counts == Counter({path: 6 for path in paths})
         assert preflights == counts
-        assert decode.call_count == 2 * len(paths)
+        assert decode.call_count == 14, "the next public observation starts cold"
 
 
 @pytest.mark.parametrize("fault", ["body", "missing", "symlink", "resealed", "retirement"])
@@ -335,14 +342,14 @@ def test_capacity_final_parent_read_observes_a_new_valid_tail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     f = fixture(tmp_path, monkeypatch)
-    original = JointJournal.current
+    original = NativeHistoryJournal.native_prefix
     sequences: list[int] = []
     reads = 0
 
-    def current(store: JointJournal, delivery_id: str) -> JointCheckpoint | None:
+    def current(store: NativeHistoryJournal, delivery_id: str) -> NativeRequirementPrefix:
         result = original(store, delivery_id)
-        if delivery_id == f.current.delivery_id and result is not None:
-            sequences.append(result.sequence)
+        if delivery_id == f.current.delivery_id and result.current is not None:
+            sequences.append(result.current.sequence)
         return result
 
     def inspect(
@@ -367,7 +374,7 @@ def test_capacity_final_parent_read_observes_a_new_valid_tail(
             f.journal.append(appended, expected=f.current.checkpoint_sha256)
         return result
 
-    monkeypatch.setattr(JointJournal, "current", current)
+    monkeypatch.setattr(NativeHistoryJournal, "native_prefix", current)
     monkeypatch.setattr(module, "_parent", inspect)
     f.reader.discover(f.scope)
     assert sequences[-1] == 2 and 1 in sequences

@@ -51,6 +51,10 @@ from ai_software_engineer.manager.dispatch import DeliveryAllocation, DispatchCo
 from ai_software_engineer.manager.mysql_dispatch_authority import _decode_allocation
 from ai_software_engineer.manager.production_backend import _designer_run_id
 from ai_software_engineer.manager.store import FileProjectPreparationStore
+from ai_software_engineer.multi_directory.history_observation import (
+    JointRecordFacts,
+    NativeHistoryJournal,
+)
 from ai_software_engineer.multi_directory.models import JointCheckpoint
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
 from ai_software_engineer.multi_directory.retirement import (
@@ -708,9 +712,10 @@ class _NativeRequirementHistory:
     """Keep only private latest checkpoints during one ownership observation.
 
     Every new observation creates a new instance and rereads every journal byte.
-    Only the underlying Journal's existing exact-byte validation cache is shared.
-    Full histories are returned to their immediate consumer and never retained.
-    Consumers must inspect all returned models without mutating nested data.
+    The compact native port shares only scoped exact-byte edge receipts; ordinary
+    Journal callers retain their existing full-history behavior. Historical child
+    projections and full heads are private observation-local results, never cached
+    current ownership or authorization conclusions.
     """
 
     journal: JointJournal
@@ -728,10 +733,20 @@ class _NativeRequirementHistory:
         self._currents[delivery_id] = history[-1] if history else None
         return history
 
+    def native_child_history(self, delivery_id: str) -> tuple[JointRecordFacts, ...]:
+        if isinstance(self.journal, NativeHistoryJournal):
+            prefix = self.journal.native_prefix(delivery_id)
+            self._currents[delivery_id] = prefix.current
+            return prefix.records
+        return tuple(JointRecordFacts.from_checkpoint(item) for item in self.history(delivery_id))
+
     def current(self, delivery_id: str) -> JointCheckpoint | None:
         if delivery_id not in self._currents:
-            self._preflight(delivery_id)
-            self._currents[delivery_id] = self.journal.current(delivery_id)
+            if isinstance(self.journal, NativeHistoryJournal):
+                self._currents[delivery_id] = self.journal.native_prefix(delivery_id).current
+            else:
+                self._preflight(delivery_id)
+                self._currents[delivery_id] = self.journal.current(delivery_id)
         return self._currents[delivery_id]
 
 

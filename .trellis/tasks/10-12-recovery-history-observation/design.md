@@ -1,16 +1,16 @@
-# Compact verified-prefix receipts 设计提案
+# Compact verified-prefix receipts 设计与实现契约
 
-本文件是待审查设计，不是已接受spec或已实现契约。先完成静态设计review，再写正确service
-seam的红测；不得先添加缓存后仅在浅层helper上验证。
+root 与独立 reviewer 已通过静态设计审查并授权实现。实际 Allocator service 红测先证明
+祖先重复解码32次，再接固定 compact receipt。实现与验证见 verification.md 和
+`.trellis/spec/core/recovery-history-observation.md`；生产部署由 root 单独管理。
 
 ## 1. 接口与固定typed projection
 
-建议新内部模块 `recovery/requirement_history_observer.py`。它不接受调用方decoder/validator，
+新内部模块 `multi_directory/history_observation.py`。它不接受调用方decoder/validator，
 不持有模型、数据库、写store或执行权限；只有生产composition和测试端口可构造。
 
 ```python
-class VerifiedJointRecordFacts(DomainModel):
-    codec_version: Literal["native-joint-prefix-v1"]
+class JointRecordFacts(DomainModel):
     delivery_id: DeliveryId
     sequence: int                         # >= 1
     checkpoint_sha256: Sha256
@@ -21,25 +21,27 @@ class VerifiedJointRecordFacts(DomainModel):
     project_manifest_sha256: Sha256
     child_delivery_ids: tuple[DeliveryId, ...]  # 本条 children 的精确ID投影
 
-@dataclass(frozen=True)
-class VerifiedJointEdge:
+class _VerifiedJointEdge(DomainModel):
     # 所有值只能由固定完整codec在校验成功后生成，不接受caller登记。
-    payload_sha256: str
+    codec_version: Literal["native-joint-prefix-v1"]
     predecessor_payload_sha256: str | None
-    facts: VerifiedJointRecordFacts
-    retained_bytes: int
+    facts: JointRecordFacts
 
 @dataclass(frozen=True)
 class NativeRequirementPrefix:
     current: JointCheckpoint | None
-    records: tuple[VerifiedJointRecordFacts, ...]
+    records: tuple[JointRecordFacts, ...]
 
 def observe_native_requirement_prefix(
-    root: Path, delivery_id: DeliveryId,
+    root: Path, delivery_id: str,
 ) -> NativeRequirementPrefix: ...
+
+class NativeHistoryJournal(JointJournal):
+    def native_prefix(self, delivery_id: str) -> NativeRequirementPrefix: ...
 ```
 
-owner内部key还包含绝对root/path、固定model/codec和delivery+序号身份。不能只按checkpoint
+owner内部key还包含绝对root/path、固定model/codec和delivery身份，序号由路径与固定facts约束。
+完整payload SHA保存于既有 `_VerifiedRecord`，retained_bytes由共享owner记账。不能只按checkpoint
 摘要索引；不同Project、路径或codec不能共享receipt。`child_delivery_ids`保持完整，不给它
 静默截断；非常大的合法投影无法注册时走完整fallback，仍返回准确结果。
 
@@ -52,7 +54,8 @@ receipt只记固定原始字节及精确前边校验，不保存完整JointCheck
 每次observe都执行原有完整regular-file preflight和Journal读取/byte SHA；不把两次完整读
 合并为一次。新模块必须复用现有安全path/file read端口，不能以resolve先吞掉symlink信息。
 
-1. fresh枚举所有record名并排序；保留完整inventory和原来的first/sequence规则，不缓存glob。
+1. preflight与Journal独立fresh枚举所有record名，第二次排序；保留完整inventory和原来的
+   first/sequence规则，不缓存glob，也不把preflight清单当作第二次fresh枚举。
    root、各ancestor和每个record的symlink/regular约束与完整字节读取均照常执行。
 2. 每文件完整payload SHA与**本轮刚读取的**preceding payload SHA形成exact edge key。
 3. **冷读/未命中**：固定 `JointCheckpoint.model_validate_json`、`validate_integrity`、文件名/
@@ -61,9 +64,13 @@ receipt只记固定原始字节及精确前边校验，不保存完整JointCheck
 4. **温读命中**：只有path/codec/delivery/sequence/fullbytes/predecessor fullbytes均精确相同
    时，复用曾由完整codec完成的内在与successor校验；返回private projection copy。head仍
    完整解码/校验，从未返回旧的current对象。不能只比较mtime/size/semantic摘要。
-5. 若前一条温读没有保留完整model而当前需要完整successor校验，重新完整读前条、比较与本轮
-   已观察SHA、完整解码前条后调用原 `_validate_successor`。若重读时字节变化，本轮拒绝；
-   不用compact投影模拟 `_validate_successor` 的全部复杂规则。
+   head内在完整model/integrity与edge-successor分别计数：exact edge命中只允许复用后者，
+   head内在校验从不跳过；head edge未命中仍调用原 `_validate_successor`。
+5. 单次observer只暂持**上一条本轮刚完整读取的rawbytes**，最多原preflight的8MiB限额，
+   不登记到跨观察owner、不留全prefix bytes。若前一条温读没有保留完整model而当前需要完整
+   successor校验，直接完整解码这份前条rawbytes后调用原 `_validate_successor`；不额外重读，
+   不用compact投影模拟其复杂规则。处理完当前条后释放旧payload，只移交本轮当前payload。
+   原来的before/after source观察仍再次完整读取，用于发现观察期间事实变化。
 6. 本轮任何文件消失、错误名/身份、祖先重封、错误predecessor、symlink或混合prefix均拒绝。
    缺first/中间文件由原完整successor规则拒绝。新增tail全部读取并验证后返回新head。
 7. 扫描必须完整结束后才返回prefix。既有source/nativefacts before/after再次observe的次数
@@ -81,13 +88,13 @@ receipt只记固定原始字节及精确前边校验，不保存完整JointCheck
 最后验证replacement。parent helper对全部需求调用current，检查owner及联合批准delegation。
 这些判定必须复用原实现；不能在新observer复制一套略不同的授权逻辑。
 
-建议增加内部可选能力：
+增加内部可选能力：
 
 ```python
 class NativeChildHistoryReader(RequirementCheckpointReader, Protocol):
     def native_child_history(
         self, delivery_id: str,
-    ) -> tuple[VerifiedJointRecordFacts, ...]: ...
+    ) -> tuple[JointRecordFacts, ...]: ...
 ```
 
 退休checker获得该能力时，对完整每条projection扫描 `child_delivery_ids`；否则继续使用原
@@ -100,9 +107,8 @@ JointCheckpoint，用现有owner/hash/plan/replacement规则处理。测试必�
 initial/parent观察创建新adapter，重新full read/inventory。跨观察仅共享固定edge receipts。
 `_parent` 的完整搜索、DerivedStageInputs、native ancestry、operator/rationale、歧义拒绝全部保留。
 
-这个桥接需要 `multi_directory/retirement.py` 和 `recovery/native.py` 的极小内部改动，超出
-root初始代码ownership。**本阶段只指出缺少的seam；必须先由root/reviewer决定范围。**
-如果范围不能扩大，下一阶段只能完成observer/红测与安全局部接入，不能伪称已优化完整退休链。
+root 与独立 reviewer 已批准 `multi_directory/retirement.py` 和 `recovery/native.py` 的
+内部桥接改动；普通Journal `history/current` 语义不变，不暴露Agent可调用的缓存登记权限。
 
 ## 4. 作用域、总预算与private copy
 
@@ -122,6 +128,8 @@ decoder暂存和调用栈中的既有NativeFacts不属于retained缓存，仍需
 projection使用frozen typed字段，无mutable dict；仍返回private copies，不把owner中的对象
 给调用方。完整head深拷贝，嵌套attempts改变不能污染后续current。跨thread/async拷贝ContextVar
 不得继承父owner的复用或关闭权限。保留异常traceback也不能保留owner内旧receipt/model图。
+observer清除自己的完整工作引用，但不声称原validator异常frame中所有输入模型都会消失；
+返回值与既有调用栈不属于retained预算。
 
 scope复用固定在现有同步窗口：公开准备/approve、`NativeRecoveryEntry._execute` 的 admission
 阶段、首次Coder `seed.authorize`的独立短scope。`entry.py:1085` 的
@@ -135,10 +143,16 @@ NativeFacts结构与OfflineAuthority；结合 `test_capacity_parent_journal_scop
 Team/Project/retirement/replacement/journal/native checkpoint fixture。只替换SQL、claim、
 no-start、Git capture/target事实为显式typed/计数fake，不mock新的observer或rawcodec。
 
-首次allocate仍有32次source观察；整entry在分配前两次Builder另16次。对小fixture断言完整
+首次allocate仍有32次source观察；部署旧整entry在分配前两次Builder另16次。对小fixture断言完整
 每路径read/hash/inventory次数与旧链相同，全部freshfact/capture/authorization和两个fence
 次数不变，祖先的fulltypeddecode次数仅按cold/miss计算，head每次完整解码不能被误算为失败。
-先在当前代码跑红：32次观察仍重复解码同祖先；再实现固定receipt。无flaky时间阈值。
+先在当时基线代码跑红：32次观察仍重复解码同祖先；再实现固定receipt。无flaky时间阈值。
+
+Allocator fixture的容量source观察作为明确side-effect装入真实分配链，返回的目标facts来自
+独立offline preparation fixture，不能宣称两者同一source/plan绑定。另增真实
+`NativeRecoveryFactsVerifier.inspect → _read_source → LegacyContextCapacitySourceReader.inspect`
+测试，精确持久化fixture receipt，保留其source/policy/complete patch比对；只有target
+Git/compiler端口fake。source/receipt/policy/history变化均拒绝。
 
 | 场景 | 必须验收 |
 | --- | --- |
@@ -148,6 +162,11 @@ no-start、Git capture/target事实为显式typed/计数fake，不mock新的obse
 | 第二独立allocate/Operation | 冷读完整验证，无跨HTTP复用 |
 | 相同length/mtime的历史篡改 | fullbytes SHA miss并拒绝；不发布dispatch |
 | 历史祖先重新封hash，successor仍旧 | exact predecessor变化触发完整successor并拒绝 |
+| warm后变更coordination/source_facts | 重新完整原successor校验，错误的unchanged-source绑定拒绝 |
+| warm后错误integration_retry批准 | 原精确candidate/attempt/previous批准规则拒绝 |
+| warm后改变已批准ProductSpec/approval | 原approved product immutability拒绝 |
+| warm后错误knowledge_recheck | 原完整gap/source/scope与阶段后继规则拒绝 |
+| warm后在DONE journal追加record | 原 `_validate_successor` 禁止已完成需求追加 |
 | first/中间记录缺失、错文件名/身份、symlink | 完整prefix拒绝，不能复用缓存head绕过 |
 | warm后合法追加tail | 全部新增bytes/edge完整验证，新head立即可见 |
 | 新退休/坏退休hash/replacement缺失 | fresh retirement读取拒绝或正确撤销，旧receipt不成为授权 |

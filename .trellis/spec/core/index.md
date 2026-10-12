@@ -93,6 +93,9 @@
 - [Recovery record read scope](recovery-record-read-scope.md): fixed complete-byte Plan/Start/
   Context decoding reuse, fresh authority/facts, bounded synchronous ownership and pre-model release.
 
+- [Recovery history observation](recovery-history-observation.md): scoped compact exact-byte
+  journal edge receipts, fresh complete heads and unchanged retirement/successor rules.
+
 - [Recovery admission facts](recovery-admission-facts.md): local typed facts from a complete
   authorization gate, final fresh Plan/facts comparison and unchanged custom validation paths.
 

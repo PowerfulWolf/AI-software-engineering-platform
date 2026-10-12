@@ -1,6 +1,6 @@
 # 恢复准备的有界历史验证复用
 
-状态：**设计提案，等待 root 和独立 reviewer 审查；本阶段只写文档，不实现。**
+状态：**实现、作者126项增量验证和独立69项验证/review已完成；等待root按运行状态安排部署。**
 
 ## 问题与目标
 
@@ -24,15 +24,16 @@
 5. 实际Allocator→sealing→Builder→NativeFacts service链红测，保持两个fence和全读取计数；
    正常、异常、被保留traceback、跨thread/async和pre-model释放验证。
 
-允许实现文件的建议：新 `recovery/requirement_history_observer.py`、必要
+允许实现文件：新 `multi_directory/history_observation.py`、必要
 `recovery/context_capacity.py` 接入、`read_record_scope.py` 的固定注册/共同预算，以及专用
 recovery测试/spec。不得修改team_view、app、生产数据或JointJournal.history公共语义。
 
-**待设计review决定的额外桥接范围：**现有退休checker的 typed port 只有完整
+**设计 review 已批准的额外桥接范围：**现有退休checker的 typed port 只有完整
 `history() -> tuple[JointCheckpoint, ...]`，compact投影不能冒充这个结果。推荐在
 `multi_directory/retirement.py` 增加可选内部typed compact-history能力，原完整history fallback
 保留；在 `recovery/native.py` 的内部parent adapter接入该能力。两处只桥接数据投影，复用原
-退休/parent判定，不复制授权逻辑。root 当前ownership未包含这两处；review前不实现或扩范围。
+退休/parent判定，不复制授权逻辑。完整字段投影放在 multi_directory 下层，不使退休模块
+反向依赖 recovery composition。
 
 ## 验收标准
 
@@ -49,7 +50,7 @@ recovery测试/spec。不得修改team_view、app、生产数据或JointJournal.
 ## 非目标
 
 不承诺仅此优化解决所有准备热点；不变更Schema、持久化receipt、操作审批、Task状态机、
-provider fallback、上游knowledge预算、UI、merge或交付业务代码。本阶段仅给可review设计。
+provider fallback、上游knowledge预算、UI、merge或交付业务代码。
 
 ## 存量数据处置和回滚
 

@@ -10,13 +10,14 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated, Literal, Protocol, Self
+from typing import Annotated, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId, Sha256
+from ai_software_engineer.multi_directory.history_observation import JointRecordFacts
 from ai_software_engineer.multi_directory.models import JointCheckpoint
 
 RetirementReason = Literal["deleted", "replaced"]
@@ -33,6 +34,13 @@ class RequirementHistoryReader(RequirementCheckpointReader, Protocol):
     """Read complete verified prefixes for historical native-child ownership."""
 
     def history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]: ...
+
+
+@runtime_checkable
+class NativeChildHistoryReader(RequirementCheckpointReader, Protocol):
+    """Optional complete verified projection; current remains a complete checkpoint."""
+
+    def native_child_history(self, delivery_id: str) -> tuple[JointRecordFacts, ...]: ...
 
 
 class RequirementRetirementError(RuntimeError):
@@ -185,18 +193,26 @@ class RequirementRetirementStore:
         record = self.retirement()
         is_retired = False
         for entry in record.entries:
-            history = journal.history(entry.delivery_id)
-            self._validate_retirement_entry(entry, history[-1] if history else None)
-            if any(
-                child.checkpoint.delivery_id == delivery_id
-                for parent in history
-                for child in parent.children
-            ):
+            if isinstance(journal, NativeChildHistoryReader):
+                compact = journal.native_child_history(entry.delivery_id)
+                parent = journal.current(entry.delivery_id)
+                historical_children = tuple(
+                    child_id for item in compact for child_id in item.child_delivery_ids
+                )
+                del compact
+            else:
+                history = journal.history(entry.delivery_id)
+                parent = history[-1] if history else None
+                historical_children = tuple(
+                    child.checkpoint.delivery_id for item in history for child in item.children
+                )
+                del history
+            self._validate_retirement_entry(entry, parent)
+            if delivery_id in historical_children:
                 is_retired = True
-            parent = history[-1]
+            assert parent is not None
             # Parent discovery needs only the validated latest checkpoint. Do
             # not retain every retired prefix while reading the next one.
-            del history
             if is_retired or parent.plan is None:
                 continue
             # Lazy imports keep the retirement storage contract independent of

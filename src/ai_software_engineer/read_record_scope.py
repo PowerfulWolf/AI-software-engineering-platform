@@ -11,12 +11,15 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from threading import get_ident
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from ai_software_engineer.domain.model import DomainModel
 
 RecordKind = Literal["baseline-plan", "baseline-start", "context"]
-type _RecordKey = tuple[str, RecordKind, type[DomainModel], str]
+type _RecordKey = tuple[str, str, type[DomainModel], str]
+
+if TYPE_CHECKING:
+    from ai_software_engineer.multi_directory.history_observation import _VerifiedJointEdge
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +51,61 @@ class RecoveryRecordReads:
         self._records.clear()
         self.retained_bytes = 0
         self.closed = True
+
+    def _joint_edge(
+        self,
+        path: Path,
+        delivery_id: str,
+        payload_sha256: str,
+        predecessor_payload_sha256: str | None,
+    ) -> _VerifiedJointEdge | None:
+        from ai_software_engineer.multi_directory.history_observation import _VerifiedJointEdge
+
+        if (
+            self.closed
+            or self.owner_thread != get_ident()
+            or self.owner_async_task != _async_task_identity()
+        ):
+            return None
+        key: _RecordKey = (str(path.absolute()), "joint-history", _VerifiedJointEdge, delivery_id)
+        saved = self._records.get(key)
+        if saved is None:
+            return None
+        if (
+            saved.payload_sha256 != payload_sha256
+            or not isinstance(saved.value, _VerifiedJointEdge)
+            or saved.value.predecessor_payload_sha256 != predecessor_payload_sha256
+        ):
+            del self._records[key]
+            self.retained_bytes -= saved.serialized_bytes
+            return None
+        return saved.value.model_copy(deep=True)
+
+    def _remember_joint_edge(
+        self, path: Path, delivery_id: str, payload_sha256: str, edge: _VerifiedJointEdge
+    ) -> None:
+        from ai_software_engineer.multi_directory.history_observation import _VerifiedJointEdge
+
+        if type(edge) is not _VerifiedJointEdge or edge.facts.delivery_id != delivery_id:
+            raise ValueError("joint validation receipt has another fixed identity")
+        if (
+            self.closed
+            or self.owner_thread != get_ident()
+            or self.owner_async_task != _async_task_identity()
+            or len(self._records) >= self.maximum_entries
+        ):
+            return
+        key: _RecordKey = (str(path.absolute()), "joint-history", _VerifiedJointEdge, delivery_id)
+        # Compact metadata is retained; complete fresh payloads are never retained.
+        size = (
+            len(edge.model_dump_json().encode())
+            + len(key[0].encode())
+            + len(delivery_id.encode())
+            + 128
+        )
+        if self.retained_bytes + size <= self.maximum_bytes:
+            self._records[key] = _VerifiedRecord(payload_sha256, edge.model_copy(deep=True), size)
+            self.retained_bytes += size
 
     def decode[T: DomainModel](
         self,

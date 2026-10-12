@@ -28,7 +28,16 @@ metadata 和单文件微基准。调查未暂停服务、提交恢复操作、�
 root 后续报告：真实 `knowledge_intent` 已成功调用；第一轮 `knowledge_assessment` 的 native
 代理 exit 1 与两个 HTTP 504 被记录为 `PROVIDER_UNAVAILABLE`；第二轮 assessment 的 Astra
 fallback 成功。模型提供方故障与本文件中的准备慢是独立问题，不得互相归因。该后续状态由
-root 提供，本次子任务没有重新操作或检查 provider。
+root 提供，本次子任务没有重新操作 provider。root 后续已确认主 Coder 于 **03:17:01 UTC**
+实际开始执行，隔离工作区出现K1开发变更；不能继续用较早的完成调用列表推断未启动。
+
+随后按 root 授权只读核对精确 `KnowledgeInvocationOutcome` 和 `ConsoleModelCall`：native
+第一轮记录只含 returncode=1、kind=failed、stdout/stderr SHA，没有持久化可核实的详细错误
+正文；模型调用安全摘要仅为退出1和“本地代理错误详情已隐藏”。部署
+`agents/structured.py` 的proxy分支主动隐藏本地错误，`structured_execution.py`仅保存hash，
+ephemeral结构化临时输出已被清理。因此无法从既有证据确定该native exit1的具体原因；后续
+HTTP504属于独立fallback receipt，不能据此推断native也遇到504。本调查未输出raw日志、
+prompt或密钥，也未重复模型调用。
 
 ## 部署代码中的静态调用次数
 
@@ -126,10 +135,12 @@ PID 43582 在一次 `ps` 观察时运行 41 分 28 秒、CPU 21.2%、RSS 595664 
 `78e10ca` + `3723a0b` 在一次 legacy source 观察中复用同一个现有 JointJournal，消除三处
 Journal 构造造成的重复解码；仍保留全部完整读取、退休检查和前后事实。真实小 fixture 中
 9 次 decode 降至3次，已完成59项增量测试及独立review。它们尚未部署到此次生产运行。
+后续本任务compact实现要求每轮head重新完整解码，因此同一小fixture三次观察为7次decode
+（1条祖先一次、两个head各三次），与前述局部缓存实现的3次指标属于不同契约。
 
 这不能消除48次独立 source 遍历，且 JointJournal 现有512项限制不是32MiB字节预算。
 直接延长完整 typed map 生命周期会保留约308MB原始字节对应的模型图；现有32MiB record
 scope 无法容纳全部历史，不能声称只扩大该map就已解决用户等待。
 
-方案与真实service红测见 [design.md](design.md)、[prd.md](prd.md)。本研究阶段没有实现新缓存
-契约，没有新增生产审批、数据迁移或新需求。
+方案与真实service红测见 [design.md](design.md)、[prd.md](prd.md)。本文只读调查未新增生产
+审批、数据迁移或新需求；后续授权实现的验证独立记录于 verification.md。
