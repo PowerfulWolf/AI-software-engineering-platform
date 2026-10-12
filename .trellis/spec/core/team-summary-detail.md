@@ -64,6 +64,10 @@ sidecar 的 Project/repository binding、原 request/preparation、Product check
 claim 校验并装配 documents/runs；已核验的工程状态来自同一 exact projection，不能跨 transaction
 或 HTTP 复用。本文后面的“全新当前摘要 fence”指同一当前来源计算，不能解释成可缓存授权。
 
+Standalone native candidate verification 没有 joint owner 时，选中详情和最终 source fence
+仍从已核验的当前 native checkpoint 构造其真实 Request owner；不能因跳过其他 Task 装配
+而遗漏 owner，也不能用 query 自报归属代替真实 source Task 与 native history 的核验。
+
 摘要从装配开始跳过未选中 pretty documents/dialogue、run 展示与历史 Task 完整 hydration，
 禁止先 full snapshot 再 strip。摘要仍完整核验当前 Task 所需 accepted artifact、evaluation、
 engineering disposition、continuation 和 exact receipt，不能删掉决定安全恢复与终态的事实读取。

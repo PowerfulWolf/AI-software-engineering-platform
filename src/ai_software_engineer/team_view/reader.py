@@ -899,6 +899,19 @@ class ProductionTeamReader:
                     resource_states[base.id] = _native_task_read_state(native, base, route_attempts)
                 projected_native_views.append((native, base))
 
+        if selected_verification:
+            # A standalone verification still has a native Requirement owner.
+            # Its source Task was validated by _read_verifications; use the
+            # current native checkpoint for the owner without projecting Tasks
+            # that are not part of this selected response or its source fence.
+            selected_source_deliveries = {view.source_delivery_id for view in tasks}
+            projected_native_views.extend(
+                (native, base)
+                for native, base in native_views
+                if native.checkpoint.delivery_id in selected_source_deliveries
+                and native.checkpoint.delivery_id not in ownership
+            )
+
         if projected_native_views:
             assert selected is not None
             for native, view in projected_native_views:

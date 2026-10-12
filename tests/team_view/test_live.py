@@ -1811,3 +1811,18 @@ def test_active_candidate_verification_is_visible_as_qa_work(tmp_path: Path) -> 
     qa = next(agent for agent in snapshot.agents if agent.id == "agent_team_qa")
     assert verification.id in qa.assigned_delivery_ids
     assert verification.id in qa.current_stage_delivery_ids
+
+    from ai_software_engineer.team_view.read_models import TaskDetail, TeamDetailQuery
+
+    reader = ProductionTeamReader(config, environment)
+    before = _bytes(Path(config.platform_root))
+    summary = reader.summary()
+    compact = next(task for task in summary.tasks if task.id == verification.id)
+    owner = next(request for request in summary.requests if request.id == compact.request_id)
+    assert owner.id == completed.delivery_id
+    query = TeamDetailQuery.from_source(compact.detail_source)
+    detail = reader.detail(query)
+    assert isinstance(detail, TaskDetail)
+    assert detail.scope == compact.detail_source
+    assert detail.resource == verification
+    assert _bytes(Path(config.platform_root)) == before

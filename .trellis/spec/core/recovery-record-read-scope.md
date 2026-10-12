@@ -72,8 +72,11 @@ facts admission continues to translate validation failure to its existing `Recov
 Embedded historical Task, source captures and authority hashes are historical data only.
 Every consumer independently reruns current SQL/Task/lease/Git/process/inventory and
 before/after capture checks. `BaselineOperatorAuthorization`, `EngineeringAdmission`,
-HumanAction and native rule epochs are fresh normal reads/decodes. Bindings are not cached;
-their predecessor and currently available authorization chains remain fully checked.
+HumanAction and current native-rule epoch selection/authority remain fresh normal reads.
+Immutable historical epoch decoding may reuse the fixed port above only after complete
+fresh byte reads; current epoch references and `require_epoch` checks never reuse authority.
+Bindings are not cached; their predecessor and currently available authorization chains
+remain fully checked.
 Do not cache `NativeRecoveryFacts`, current permission, terminal stop proof, approved receipt,
 Task status, usable claim or a successful recovery/READY conclusion.
 

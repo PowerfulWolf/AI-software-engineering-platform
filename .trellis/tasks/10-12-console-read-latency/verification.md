@@ -33,6 +33,25 @@
   permission against the dedicated test database, never the production DB.
 - No full test suite or real model execution ran.
 
+## Independent review and corrective verification
+
+Standards review identified a valid standalone candidate verification whose selected
+detail omitted its native Requirement owner, plus inconsistent wording about epoch
+decoding reuse. Spec review independently identified the same missing-owner regression.
+The selected verification now derives its owner from validated native/source facts for
+both body assembly and the independent final source fence, without unrelated Task reads.
+Fresh current authority and complete byte reads remain distinct from immutable decoding.
+
+- Extended `test_live.py::test_active_candidate_verification_is_visible_as_qa_work`
+  from full snapshot to public summary → exact detail. Before correction it failed at
+  the missing-owner locator check; after correction: **1 passed** against the isolated
+  test database. Complete detail equals the original full snapshot, the exact source
+  matches, and persisted filesystem bytes are unchanged.
+- Follow-up detail latency/summary-detail selection: **23 passed**; final body/source/
+  epoch selection: **16 passed**; Node summary read tests: **32 passed**.
+- Ruff on the two changed Python files, strict reader mypy and diff check passed.
+- Both independent reviews found no remaining material issue in the corrective diff.
+
 ## Bounded production measurements
 
 Sequential fresh-process complete K1 read with no profiler: main **13.206s**;
