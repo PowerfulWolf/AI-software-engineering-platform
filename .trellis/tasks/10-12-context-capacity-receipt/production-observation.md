@@ -186,3 +186,55 @@ uv sync --locked通过，PID38551受控start，注册源码clean后fetch/ff同�
 06:10:59.037389Z FAILED/COMMAND_REJECTED：容量停止记录与真实 claim、原权限或工程输入不一致。
 此轮越过原历史知识记录缺口，尚未生成可批准计划；无PAUSE/RESUME、Git移动或模型调用。
 继续按真实capacity receipt7881...逐字段只读诊断claim/权限/工程输入，不能删除校验让它通过。
+
+## 不可变 claim 修复发布与真实提案通过（07:06 UTC）
+
+`f91f33a857b34fb5e3f613f655559f676df8a466` 经独立审查和增量验证后已推送 origin/main。
+发布前全局339条Operation，`active_complete=true, active=[]`；PID38551经受控stop保存
+全部操作与写入、确认执行器及索引结束后退出。维护main ff-only、uv sync --locked通过，
+受控start得到PID802。注册源码checkout原clean，fetch/ff-only同步同一提交。
+没有手工更改原Coder工作区、业务草稿、旧Task/审批或生产SQL。
+
+原父checkpoint ea13981...、原Task revision2、attempt3 work、source9cccb5b，公开
+PROPOSE_EXECUTION_BASELINE `operation_6950c8cbfc6b0b6b9bdf60df2bf373ce`，
+idempotency_key `k1-20261012-baseline-f91f33a-preserve-v1`。07:06:20.186341Z
+SUCCEEDED，封存方案 `27a27e4202c1759f785ada2770e71dae1fb689daffcabcac8a130fec9cf1e7a1`。
+完整typed model与integrity校验通过，target与prepared source均f91f33a、preserve_draft、
+conflicted=false；原12个合法草稿文件、Task/branch/worktree保留。精确capacity receipt仍7881...，
+continuation current=next attempt3、uninvoked、reservation_already_applied=true，没有退款。
+
+规范变更为11个Trellis文件，change SHA
+`ed09b4178a2b3930fd81548ac06716828bfb30343dcd22585e7fb97d7c112b25`。
+需核对完整公开规则正文后执行精确PAUSE，再独立RESUME。此时仅提案通过，尚无本轮执行批准、
+Git移动或新主Coder调用，K1未交付；不以Operation成功代替独立QA/Review。
+
+独立只读最终审查通过：原SQL Task/revision/唯一等待/no-active-claim、完整quiescence与
+capacity、两份真实Gitcapture和全inventory、sealedepoch全Git正文，以及11条公开规范
+GET完整before/after/delta均一致。检查脚本
+`/tmp/ase-k1-f91f33a-plan-readonly-review-20261012.py`；无生产写、审批或模型调用。
+
+依用户既有代理工程审批授权，公开EXECUTE_EXECUTION_BASELINE
+`operation_c80e807fc4eff430e0f58aebc2b50017`，精确plan27a27e42...、规范change ed09b417...、
+continuation_mode=pause；07:16:02.204246Z SUCCEEDED。绑定
+`733f0ada672a8c3deace417ef2e77cca0398d7d3de5d65a10bec635c74d2c052`，原分支/工作区保持，
+新source=f91f33a。fresh公开summary确认Task仍IMPLEMENTING/revision2，原attempt3 work
+WAITING_HUMAN/EXECUTION_BASELINE_PAUSED，disposition
+`41a71f3b6f52e1132ba356901ea092c5d2f51bfee7d137a6cf50802b921efd66`；没有因此启动Coder。
+
+独立明确继续使用fresh binding/disposition/source，公开RESUME_EXECUTION_BASELINE
+`operation_9d60ce47bda23ddc9dd58813b43ad721`，07:18:19.022027Z受理，07:18:26.156345Z
+RUNNING。这只是继续操作进入处理，主角色调用、输入容量、候选与独立QA/Review尚待核实。
+
+07:21:50.178959Z该RESUME FAILED/COMMAND_REJECTED，原错误
+`recovery record already has different content`。真实公开knowledge_intent路由
+gpt-6.1-sol于07:19:57.948196Z开始、91405ms后SUCCEEDED；不能将其当成主Coder开发。
+07:21:35的preflight WAIT_ENGINEERING显示注册MySQL镜像当前不可用；随后两次独立重查
+READY。这只能证明各次观察，不能反推首次等待不合理。07:20附近一次summary
+503 TEAM_UNAVAILABLE，独立随后只读重放25Task/2Request PASS；无原堆栈，不宣称固定reader缺陷。
+
+独立SELECT-only确认确定写侧缺陷是 `_resolve(automatic=True)` 使用仓库固定
+`delivery-wait-authority`；其scope.json已合法绑定旧Task8ca06...，新Task455883...冲突。
+scope旧SHA0d73eca6...、当前7ee97ec6...，唯一delivery_id不同；旧文件不能覆盖。
+独立Trellis10-12-task-wait-authority真实复现同RecoveryConflict RED5.57s，再以Task hash
+隔离本地root，保持共享Team账本计费和exact replay。8增量PASS29.72s、静态/独立审查PASS，
+提交ad898e5。原审批、基线绑定、失败Operation、Task和草稿完整保留，发布后从原等待入口处理。
