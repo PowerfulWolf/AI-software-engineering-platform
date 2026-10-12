@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`terminal-context-capacity-recovery.md`](terminal-context-capacity-recovery.md): exact legacy
+  no-start Context observations, complete retained patch and same-Requirement human approval.
+
 - [`console-idle-backoff.md`](console-idle-backoff.md): finite idle dispatch backoff,
   immediate durable-submission and stop wakeups, unchanged complete claim validation.
 

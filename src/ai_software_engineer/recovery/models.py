@@ -26,6 +26,7 @@ from ai_software_engineer.domain.engineering_authority import (
     EngineeringScope,
     LocalOperatorPrincipal,
 )
+from ai_software_engineer.domain.execution_baseline import RetainedExecutionPatch
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import StageSha256
@@ -233,7 +234,7 @@ class RecoverySource(DomainModel):
     approval_sha256: StageSha256
     technical_design_sha256: StageSha256
     execution_plan_sha256: StageSha256
-    failed_run_id: RunId
+    failed_run_id: RunId | None = Field(default=None, exclude_if=lambda value: value is None)
     failed_context_id: ContextId
     base_revision: FullCommit
     # The approved Task base is immutable.  A same-Task engineering baseline may
@@ -245,6 +246,9 @@ class RecoverySource(DomainModel):
     execution_base_revision: FullCommit | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    context_capacity_receipt_sha256: StageSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     parent_delivery_id: DeliveryId | None = None
     parent_checkpoint_sha256: StageSha256 | None = None
 
@@ -254,6 +258,15 @@ class RecoverySource(DomainModel):
             raise ValueError("parent identity and digest must appear together")
         if (self.execution_baseline_sha256 is None) != (self.execution_base_revision is None):
             raise ValueError("execution baseline digest and base must appear together")
+        if self.failed_run_id is None and self.context_capacity_receipt_sha256 is None:
+            raise ValueError("ordinary failed-Coder recovery requires its original Run")
+        if self.context_capacity_receipt_sha256 is not None and self.failed_run_id is not None:
+            raise ValueError("legacy capacity observation must not invent an original Run")
+        if (
+            self.context_capacity_receipt_sha256 is not None
+            and self.execution_baseline_sha256 is None
+        ):
+            raise ValueError("legacy capacity observation requires the exact retained baseline")
         return self
 
     @property
@@ -437,6 +450,28 @@ class RecoveryTargetAuthorization(DomainModel):
         return result
 
 
+class ContextCapacityRecoveryInput(DomainModel):
+    """One complete retained baseline patch, separately from a clean worktree capture."""
+
+    execution_baseline_sha256: StageSha256
+    retained_patch: RetainedExecutionPatch
+    patch: Annotated[str, StringConstraints(max_length=MAX_CAPTURE_BYTES)]
+
+    @model_validator(mode="after")
+    def validate_complete_patch(self) -> Self:
+        body = self.patch.encode("utf-8")
+        if (
+            len(body) != self.retained_patch.bytes
+            or len(body) > MAX_CAPTURE_BYTES
+            or hashlib.sha256(body).hexdigest() != self.retained_patch.sha256
+            or "\0" in self.patch
+            or "GIT binary patch" in self.patch
+            or patch_secret_occurrences(self.patch)
+        ):
+            raise ValueError("capacity recovery must retain the complete safe baseline patch")
+        return self
+
+
 class RecoveryPlan(DomainModel):
     kind: Literal["recovery_plan"] = "recovery_plan"
     schema_version: Literal["v0.1"] = "v0.1"
@@ -453,6 +488,9 @@ class RecoveryPlan(DomainModel):
     )
     source: RecoverySource
     capture: CapturedChanges
+    context_capacity_input: ContextCapacityRecoveryInput | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     workspace_snapshot: RecoveryWorkspaceSnapshot | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -478,6 +516,23 @@ class RecoveryPlan(DomainModel):
     denied_paths: tuple[str, ...]
     created_at: AwareDatetime
     plan_sha256: StageSha256
+
+    @model_validator(mode="after")
+    def validate_context_capacity(self) -> Self:
+        capacity = self.context_capacity_input
+        if (capacity is None) != (self.source.context_capacity_receipt_sha256 is None):
+            raise ValueError("capacity recovery input and exact receipt must appear together")
+        if capacity is not None and (
+            self.input_mode != "coder_reapply"
+            or self.capture.patch
+            or self.capture.files
+            or self.workspace_snapshot is not None
+            or capacity.execution_baseline_sha256 != self.source.execution_baseline_sha256
+            or self.scope_supplement is not None
+            or self.quarantined_paths is not None
+        ):
+            raise ValueError("capacity recovery requires a clean exact baseline reapplication")
+        return self
 
     @model_validator(mode="after")
     def validate_target_authorization(self) -> Self:

@@ -270,12 +270,22 @@ def recovery_context_sources(plan: RecoveryPlan) -> tuple[ContextSource, ...]:
     )
     if not reapply:
         return (origin,)
+    patch = (
+        plan.context_capacity_input.patch
+        if plan.context_capacity_input is not None
+        else plan.capture.patch
+    )
+    patch_sha256 = (
+        plan.context_capacity_input.retained_patch.sha256
+        if plan.context_capacity_input is not None
+        else plan.capture.capture_sha256
+    )
     return (
         origin,
         ContextSource(
             source_id="recovery.patch",
-            uri=f"recovery://{plan.plan_sha256}/patch/{plan.capture.capture_sha256}",
-            content=plan.capture.patch,
+            uri=f"recovery://{plan.plan_sha256}/patch/{patch_sha256}",
+            content=patch,
             roles=(AgentRole.CODER,),
             required=True,
             priority=11,
@@ -295,6 +305,7 @@ def validate_reapply_context(plan: RecoveryPlan, context: ContextBundle) -> None
         or sections[0].truncated
         or sections[0].uri != expected.uri
         or sections[0].content != expected.content
-        or sections[0].sha256 != hashlib.sha256(plan.capture.patch.encode("utf-8")).hexdigest()
+        or sections[0].sha256
+        != hashlib.sha256((expected.content or "").encode("utf-8")).hexdigest()
     ):
         raise RecoveryRejected("Coder context lacks the complete approved recovery patch")
