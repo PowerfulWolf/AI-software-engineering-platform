@@ -85,6 +85,35 @@ class PreservedWorktreeBaselineContext(DomainModel):
         )
 
 
+class ReappliedBaselineReferenceContext(DomainModel):
+    """Typed reference to a complete ``recovery.patch`` Context section.
+
+    ``coder_reapply`` must receive the complete historical patch, but it must
+    not receive that same body once as ``recovery.patch`` and once again inside
+    ``execution.baseline``.  The recovery section remains the sole patch body;
+    this section carries the independently verified baseline binding and the
+    exact section URI/length/digest needed to join the two inputs.
+    """
+
+    schema_version: Literal["v3"] = "v3"
+    binding: ExecutionBaselineBinding
+    instructions: NonEmptyStr
+    patch_input: Literal["recovery_patch"] = "recovery_patch"
+    complete_patch_uri: NonEmptyStr
+    retained_patch: RetainedExecutionPatch
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> Self:
+        self.binding.validate_integrity()
+        if self.binding.input_mode is not BaselineInputMode.CODER_REAPPLY:
+            raise ValueError("重应用基线引用必须绑定 coder_reapply")
+        if self.retained_patch != self.binding.retained_patch:
+            raise ValueError("重应用基线引用与完整旧补丁摘要不一致")
+        if not self.complete_patch_uri.startswith("recovery://"):
+            raise ValueError("重应用基线引用必须指向 recovery.patch")
+        return self
+
+
 @runtime_checkable
 class ExecutionBaselineContextVerifier(Protocol):
     """Trusted complete-store validation, never a model-supplied permission."""
@@ -94,11 +123,15 @@ class ExecutionBaselineContextVerifier(Protocol):
 
 def parse_execution_baseline_context(
     content: str,
-) -> ExecutionBaselineContext | PreservedWorktreeBaselineContext:
-    """Read v1 unchanged and v2 explicitly; an invalid version never falls back."""
+) -> (
+    ExecutionBaselineContext | PreservedWorktreeBaselineContext | ReappliedBaselineReferenceContext
+):
+    """Read the immutable v1/v2/v3 forms; an invalid version never falls back."""
     value = json.loads(content)
     if isinstance(value, dict) and value.get("schema_version") == "v2":
         return PreservedWorktreeBaselineContext.model_validate(value)
+    if isinstance(value, dict) and value.get("schema_version") == "v3":
+        return ReappliedBaselineReferenceContext.model_validate(value)
     return ExecutionBaselineContext.model_validate(value)
 
 
@@ -151,6 +184,26 @@ def execution_baseline_from_context(
         raise ValueError("执行基线上下文与精确工程绑定不一致")
     if isinstance(value, PreservedWorktreeBaselineContext) and verifier is None:
         raise ValueError("保留工作区投影缺少完整执行基线证据校验")
+    if isinstance(value, ReappliedBaselineReferenceContext):
+        if verifier is None:
+            raise ValueError("重应用基线引用缺少完整执行基线证据校验")
+        patch_sections = tuple(
+            item
+            for item in context.sections
+            if item.name == "source:recovery.patch"
+        )
+        if len(patch_sections) != 1:
+            raise ValueError("重应用基线引用缺少唯一完整的 recovery.patch")
+        patch = patch_sections[0]
+        body = patch.content.encode("utf-8")
+        if (
+            patch.truncated
+            or patch.uri != value.complete_patch_uri
+            or len(body) != value.retained_patch.bytes
+            or hashlib.sha256(body).hexdigest() != value.retained_patch.sha256
+            or patch.sha256 != value.retained_patch.sha256
+        ):
+            raise ValueError("重应用基线引用与完整 recovery.patch 不一致")
     if verifier is not None:
         verifier.require_current(baseline, task)
     return baseline

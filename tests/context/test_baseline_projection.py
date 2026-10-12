@@ -8,10 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from ai_software_engineer.agents.models import AgentRequest
-from ai_software_engineer.context import ContextBudget, InMemoryContextStore
+from ai_software_engineer.context import ContextBudget, ContextSource, InMemoryContextStore
 from ai_software_engineer.context.execution_baseline import (
     ExecutionBaselineContext,
     PreservedWorktreeBaselineContext,
+    ReappliedBaselineReferenceContext,
     execution_baseline_from_context,
     parse_execution_baseline_context,
 )
@@ -207,7 +208,7 @@ def test_projection_cannot_replace_full_evidence_or_change_source_authority(
 
 
 def test_coder_reapply_keeps_complete_old_patch(tmp_path: Path) -> None:
-    f, context, request, resolver = _bound(tmp_path, mode=BaselineInputMode.CODER_REAPPLY)
+    _f, context, _request, _resolver = _bound(tmp_path, mode=BaselineInputMode.CODER_REAPPLY)
     section = next(s for s in context.sections if s.name == "execution.baseline")
     value = parse_execution_baseline_context(section.content)
     assert isinstance(value, ExecutionBaselineContext)
@@ -216,6 +217,103 @@ def test_coder_reapply_keeps_complete_old_patch(tmp_path: Path) -> None:
         hashlib.sha256(value.complete_patch.encode()).hexdigest()
         == value.binding.retained_patch.sha256
     )
+
+
+def test_coder_reapply_deduplicates_complete_patch_when_recovery_source_is_present(
+    tmp_path: Path,
+) -> None:
+    """The recovery patch remains complete, while baseline carries only its typed binding."""
+    f = setup(tmp_path)
+    source = f.worktree.path / "src/app.py"
+    source.write_text(source.read_text() + "\nDATA = (\n" + "    '" + "x" * 400 + "'\n")
+    with source.open("a") as stream:
+        for _ in range(1300):
+            stream.write("    '" + "x" * 400 + "'\n")
+        stream.write(")\n")
+    plan = f.service.propose(f.target, input_mode=BaselineInputMode.CODER_REAPPLY)
+    binding = f.service.execute(plan.plan_sha256, authority=authorize(plan))
+    task = f.collector.facts.task
+    resolver = StoredCoderExecutionInputResolver(f.service.store)
+    complete = resolver.required_context(resolver.current(task, implementation=None, progress=None))
+    assert complete is not None and len(complete) > 500_000
+    patch = complete.split("完整旧补丁:\n", 1)[1]
+    recovery = ContextSource(
+        source_id="recovery.patch",
+        uri="recovery://fixture/patch/capture",
+        content=patch,
+        roles=(AgentRole.CODER,),
+        required=True,
+        priority=11,
+    )
+    contexts = InMemoryContextStore()
+    context = BaselineRunContextBuilder(
+        FileRunContextBuilder(
+            f.repository,
+            sources=(recovery,),
+            budget=ContextBudget(max_input_tokens=256_000, reserved_output_tokens=4_000),
+        ),
+        contexts,
+        resolver,
+    ).build(
+        task,
+        _definitions()[AgentRole.CODER],
+        attempt=1,
+        candidate_revision=binding.execution_source_revision,
+    )
+    baseline = next(item for item in context.sections if item.name == "execution.baseline")
+    value = parse_execution_baseline_context(baseline.content)
+    assert isinstance(value, ReappliedBaselineReferenceContext)
+    patch_section = next(item for item in context.sections if item.name == "source:recovery.patch")
+    assert patch_section.content == patch
+    assert value.complete_patch_uri == patch_section.uri
+    assert "\"complete_patch\":" not in baseline.content
+    # The one full body fits the production budget; two copies would not.
+    assert context.budget.used_input_tokens < 256_000
+    request = _request(
+        AgentRole.CODER,
+        source_revision=binding.execution_source_revision,
+        context_manifest_id=context.context_id,
+    ).model_copy(
+        update={
+            "task_id": task.id,
+            "execution_baseline_sha256": binding.binding_sha256,
+            "execution_base_ref": binding.execution_base_ref,
+        }
+    )
+    assert (
+        execution_baseline_from_context(context, request, task, verifier=resolver)
+        == binding
+    )
+
+    missing = context.model_copy(
+        update={
+            "sections": tuple(
+                item for item in context.sections if item.name != "source:recovery.patch"
+            )
+        }
+    )
+    with pytest.raises(ValueError, match=r"recovery\.patch"):
+        execution_baseline_from_context(
+            missing,
+            request.model_copy(update={"context_manifest_id": missing.context_id}),
+            task,
+            verifier=resolver,
+        )
+    changed = patch_section.model_copy(update={"content": patch + "changed"})
+    changed_context = context.model_copy(
+        update={
+            "sections": tuple(
+                changed if item == patch_section else item for item in context.sections
+            )
+        }
+    )
+    with pytest.raises(ValueError):
+        execution_baseline_from_context(
+            changed_context,
+            request.model_copy(update={"context_manifest_id": changed_context.context_id}),
+            task,
+            verifier=resolver,
+        )
     assert (
         execution_baseline_from_context(context, request, f.collector.facts.task, verifier=resolver)
         == value.binding

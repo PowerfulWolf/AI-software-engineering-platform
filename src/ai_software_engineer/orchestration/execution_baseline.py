@@ -7,6 +7,7 @@ from typing import Protocol, runtime_checkable
 from ai_software_engineer.context.execution_baseline import (
     ExecutionBaselineContext,
     PreservedWorktreeBaselineContext,
+    ReappliedBaselineReferenceContext,
     parse_execution_baseline_context,
 )
 from ai_software_engineer.context.models import ContextBundle, ContextSection, ContextSource
@@ -141,12 +142,43 @@ class BaselineRunContextBuilder:
             )
         except ValueError as error:
             raise ContextSourceError("已封存的执行基线上下文与当前可信完整输入不一致") from error
-        payload = (
+        payload: (
+            ExecutionBaselineContext
+            | PreservedWorktreeBaselineContext
+            | ReappliedBaselineReferenceContext
+        ) = (
             value
             if isinstance(historical, ExecutionBaselineContext)
             or source.baseline.input_mode is BaselineInputMode.CODER_REAPPLY
             else PreservedWorktreeBaselineContext.from_complete(value)
         )
+        # A recovery dispatch already carries the complete patch in its
+        # required ``recovery.patch`` section. Keep that immutable body as the
+        # single source for coder_reapply, and retain this section as the typed
+        # binding/epoch reference. Other modes and historical contexts keep
+        # their original bytes and projection semantics.
+        recovery_sections = tuple(
+            item
+            for item in context.sections
+            if item.name == "source:recovery.patch"
+        )
+        if (
+            source.baseline.input_mode is BaselineInputMode.CODER_REAPPLY
+            and len(recovery_sections) == 1
+            and not recovery_sections[0].truncated
+            and recovery_sections[0].content == value.complete_patch
+        ):
+            payload = ReappliedBaselineReferenceContext(
+                binding=source.baseline,
+                retained_patch=source.baseline.retained_patch,
+                complete_patch_uri=recovery_sections[0].uri,
+                instructions=(
+                    "平台已校验当前目标基线、原生规范版本和完整旧补丁。"
+                    "完整旧补丁只在 recovery.patch 输入中提供; 本引用不重复携带正文,"
+                    "Coder 必须读取该唯一正文并在当前基线上适配。"
+                    "旧执行结果不是候选或验收通过证明, 新候选仍须独立 QA 和 Review."
+                ),
+            )
         content = json.dumps(payload.to_wire(), ensure_ascii=False, sort_keys=True)
         tokens = (len(content) + 3) // 4
         section = ContextSection(

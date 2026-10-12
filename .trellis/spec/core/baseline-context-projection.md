@@ -79,3 +79,17 @@ public continuation path for K1. Deploy only at a controlled idle service bounda
 Rollback before any v2 Context exists can revert the feature. Once v2 exists, retain its read
 support and complete-evidence verifier while disabling new v2 generation; do not remove durable
 contexts or treat a digest as the omitted evidence body.
+
+### Coder reapply with an existing recovery patch
+
+When a `coder_reapply` Context already contains the complete required
+`source:recovery.patch`, the required `execution.baseline` section uses schema
+`v3` and carries only the exact binding, retained patch digest/byte count, and
+`complete_patch_uri`. The recovery section remains the sole complete patch body.
+`execution_baseline_from_context` requires a complete-store verifier and checks
+that one recovery section is non-truncated and matches the reference URI, bytes,
+and SHA-256. Missing or altered sections are refused before candidate admission.
+If no recovery section is present, the existing coder-reapply v1 body remains
+unchanged. This rule prevents duplicate required input without truncating or
+summarizing the historical patch, and does not alter v1/v2 or preserve-draft
+contexts.
