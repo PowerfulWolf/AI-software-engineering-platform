@@ -16,7 +16,7 @@ from ai_software_engineer.context.execution_baseline import (
     execution_baseline_from_context,
     parse_execution_baseline_context,
 )
-from ai_software_engineer.context.models import ContextBundle
+from ai_software_engineer.context.models import ContextBundle, ContextSection
 from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.domain.execution_baseline import (
     BaselineInputMode,
@@ -208,7 +208,7 @@ def test_projection_cannot_replace_full_evidence_or_change_source_authority(
 
 
 def test_coder_reapply_keeps_complete_old_patch(tmp_path: Path) -> None:
-    _f, context, _request, _resolver = _bound(tmp_path, mode=BaselineInputMode.CODER_REAPPLY)
+    f, context, request, resolver = _bound(tmp_path, mode=BaselineInputMode.CODER_REAPPLY)
     section = next(s for s in context.sections if s.name == "execution.baseline")
     value = parse_execution_baseline_context(section.content)
     assert isinstance(value, ExecutionBaselineContext)
@@ -216,6 +216,48 @@ def test_coder_reapply_keeps_complete_old_patch(tmp_path: Path) -> None:
     assert (
         hashlib.sha256(value.complete_patch.encode()).hexdigest()
         == value.binding.retained_patch.sha256
+    )
+    assert (
+        execution_baseline_from_context(context, request, f.collector.facts.task, verifier=resolver)
+        == value.binding
+    )
+
+
+def test_historical_v1_reapply_stays_unchanged_with_matching_recovery_patch(tmp_path: Path) -> None:
+    f, context, request, resolver = _bound(tmp_path, mode=BaselineInputMode.CODER_REAPPLY)
+    baseline = next(s for s in context.sections if s.name == "execution.baseline")
+    value = parse_execution_baseline_context(baseline.content)
+    assert isinstance(value, ExecutionBaselineContext)
+    patch = ContextSection(
+        name="source:recovery.patch",
+        uri="recovery://fixture/patch/capture",
+        content=value.complete_patch,
+        sha256=value.binding.retained_patch.sha256,
+        tokens=(len(value.complete_patch) + 3) // 4,
+        priority=11,
+    )
+    historical = _replace_body(
+        context.model_copy(update={"sections": (*context.sections, patch)}), baseline.content
+    )
+    before = historical.to_wire()
+    checked = BaselineRunContextBuilder(
+        SimpleNamespace(build=lambda *args, **kwargs: historical),
+        InMemoryContextStore(),
+        resolver,
+    ).build(
+        f.collector.facts.task,
+        _definitions()[AgentRole.CODER],
+        attempt=1,
+    )
+    assert checked.to_wire() == before
+    assert (
+        execution_baseline_from_context(
+            checked,
+            request.model_copy(update={"context_manifest_id": checked.context_id}),
+            f.collector.facts.task,
+            verifier=resolver,
+        )
+        == value.binding
     )
 
 
@@ -314,10 +356,6 @@ def test_coder_reapply_deduplicates_complete_patch_when_recovery_source_is_prese
             task,
             verifier=resolver,
         )
-    assert (
-        execution_baseline_from_context(context, request, f.collector.facts.task, verifier=resolver)
-        == value.binding
-    )
 
 
 def test_historical_v1_body_and_finalized_context_stay_unchanged(tmp_path: Path) -> None:
