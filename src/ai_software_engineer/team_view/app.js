@@ -80,8 +80,8 @@ function validTeamDetailSource(source, item, kind, teamId, projectId) {
     ["work_kind", "task_id", "task_revision", "task_intent_sha256", "source_task_id", "verification_plan_sha256"]
       .every(field => source[field] == null);
   if (source.request_id !== item.request_id || source.work_kind !== item.work_kind ||
-      source.task_id !== (item.task_id ?? null) || source.task_revision !== (item.task_revision ?? null) ||
-      source.task_intent_sha256 !== (item.task_intent_sha256 ?? null)) return false;
+      (source.task_id ?? null) !== (item.task_id ?? null) || (source.task_revision ?? null) !== (item.task_revision ?? null) ||
+      (source.task_intent_sha256 ?? null) !== (item.task_intent_sha256 ?? null)) return false;
   if (source.work_kind === "candidate_verification") return Boolean(source.task_id && source.source_task_id &&
     source.task_id !== source.source_task_id && source.source_task_id === item.source_task_id &&
     source.verification_plan_sha256 === item.plan_sha256 && sha(source.verification_plan_sha256) &&
@@ -147,8 +147,8 @@ function verifiedTeamDetail(value, source) {
       item.project_id !== source.project_id ||
       kind === "request" && item.checkpoint_sha256 !== source.resource_checkpoint_sha256 ||
       kind === "task" && (item.request_id !== source.request_id || item.work_kind !== source.work_kind ||
-        (item.task_id ?? null) !== source.task_id || (item.task_revision ?? null) !== source.task_revision ||
-        (item.task_intent_sha256 ?? null) !== source.task_intent_sha256 ||
+        (item.task_id ?? null) !== (source.task_id ?? null) || (item.task_revision ?? null) !== (source.task_revision ?? null) ||
+        (item.task_intent_sha256 ?? null) !== (source.task_intent_sha256 ?? null) ||
         source.work_kind === "candidate_verification" && (item.source_task_id !== source.source_task_id ||
           item.plan_sha256 !== source.verification_plan_sha256)) ||
       teamBodyFields(kind).some(field => !Array.isArray(item[field]))) throw new Error("invalid detail");

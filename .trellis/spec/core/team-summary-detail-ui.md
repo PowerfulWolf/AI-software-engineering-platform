@@ -115,3 +115,23 @@ abort只结束浏览器等待，之后若后端仍忙仍遵循同一固定busy�
 无数据库、journal、Task、Operation、审批、预算、Context或工作区迁移。全部历史保留，
 原需求加载兼容资产后即可读取；服务资产在空闲受控维护窗口部署。回滚新增客户端读取
 模式可用旧v0.2full，既有精确授权、完整事实与独立验收不改变。
+
+## Canonical nullable identity wire (2026-10-12)
+
+`DomainModel.to_wire()` omits None fields. Browser source/body comparisons for `task_id`,
+`task_revision`, `task_intent_sha256` must normalize **both** operands with `?? null` in
+`validTeamDetailSource` and `verifiedTeamDetail`; comparing undefined against one normalized null
+rejects a valid full Team summary and leaves the entire page unavailable.
+
+Legacy delivery/remediation may omit the whole Task identity triple; candidate verification has
+real task/source-task/plan identity but omits SQL revision and intent digest. Identified delivery
+and remediation keep their complete exact triple, including valid revision 0. Missing and explicit
+null are equivalent only for nullable fields; real values, partial triples, owner, resource,
+checkpoint, candidate source/plan mismatches remain rejected. No fallback full snapshot or relaxed
+approval is added. `teamDetailSourceKey` already applies the same null normalization.
+
+Regression: `tests/team_view/test_nullable_wire_ui.py` builds real typed Python summary/details
+and calls `.to_wire()`, then feeds their exact JSON into shipped JS via
+`tests/team_view/fixtures/nullable-wire.cjs`. It proves omitted keys before invoking JS and tests
+both null representations and actual identity mismatches. Handwritten all-null JavaScript fixtures
+alone are insufficient for this cross-language contract. No schema/store/data migration is needed.
