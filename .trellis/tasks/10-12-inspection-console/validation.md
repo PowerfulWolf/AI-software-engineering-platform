@@ -24,3 +24,25 @@ Existing data treatment: all Operation versions, RUNNING state, model calls and 
 byte-identical across inspection startup, read APIs, mutation rejections and shutdown in fixtures.
 Missing Operation/preparation directories remained missing. No migration or repair of historical
 execution proof is performed. Rollback requires controlled service stop and preserves the marker.
+
+## Actual retirement marker integration
+
+`tests/web_console/test_inspection_fault_boundary.py`: 4 passed (2026-10-12).
+The test uses real isolated subprocess `_host`, `prepare_fault_retirement`, and the actual
+`execute_fault_retirement` to produce sealed plans, receipts, archived log and inspection marker.
+It does not mock `inspection_required` or synthesize the marker. Configuration and Team/Operation
+fixtures are prepared before the exact maintenance plan is captured.
+
+- Valid real marker + explicit normal mode -> production inspection composition.
+- Writer constructors/index/start are assertion traps; none is reached.
+- Existing RUNNING Operation remains RUNNING; operation summary/detail/model-call/preparation GETs
+  succeed; HTTP POST is rejected before parsing; platform and old lifecycle bytes remain identical
+  through the new read-only lifespan and shutdown.
+- Corrupt marker, archived log or archived lifecycle -> FaultRetirementError before any writer,
+  while platform bytes stay unchanged.
+
+The first integrated run exposed lsof's macOS return code 1 with a real positive sentinel and empty
+stderr; peer maintenance worker repaired its strict survey handling and its own suite passed before
+these 4 integration cases were repeated successfully. No survey gate was mocked or bypassed here.
+This closes the fixture integration gap above; live replacement acceptance remains a root task.
+Peer module/test copies are temporary dependencies only and excluded from this test commit.
