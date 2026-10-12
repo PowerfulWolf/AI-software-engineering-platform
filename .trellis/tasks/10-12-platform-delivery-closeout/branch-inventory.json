@@ -1,0 +1,1021 @@
+{
+  "base": "bf3f3a80c6aeffeaac9423ffde7105d785a83d3a",
+  "branches": [
+    {
+      "ref": "ai/bugfix/coder-knowledge-recovery",
+      "head": "d87f0bb399b0c1906e0715be9b07c50c70df54fe",
+      "ahead": 0,
+      "behind": 275,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/t018-organization-workforce/attempt-1",
+      "head": "da5b70df1104adb948561c47e00ed76893a603bb",
+      "ahead": 0,
+      "behind": 417,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t001_python_cli/attempt-1",
+      "head": "4b7902590815ff54e5e9831e34ac4371af4057c2",
+      "ahead": 0,
+      "behind": 453,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t002_domain_models/attempt-1",
+      "head": "fc1fd77538b3125021adc296dde077a1ff45098a",
+      "ahead": 0,
+      "behind": 452,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t003_sqlite_repository/attempt-1",
+      "head": "2e7ed76ad422d000d07d67ebfa5798f3a782fdc8",
+      "ahead": 0,
+      "behind": 451,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t004_state_machine/attempt-1",
+      "head": "e6c869fcd806f4320b398bc1f58fceecd747fd5a",
+      "ahead": 0,
+      "behind": 450,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t005_artifact_store/attempt-1",
+      "head": "b08ab8cf68543be72e0b373f61efe6c9ed3e768e",
+      "ahead": 0,
+      "behind": 449,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t006_git_worktree/attempt-1",
+      "head": "bd52bc4e7e998a987835e0ee001034123f352ecd",
+      "ahead": 0,
+      "behind": 448,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t007_context/attempt-1",
+      "head": "402c49fd9726e47c3a322a8df65d6ca91c5b3b48",
+      "ahead": 0,
+      "behind": 447,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t008_fake_agent/attempt-1",
+      "head": "7143b46752469651ecf4ec3721588dc0251e9ffe",
+      "ahead": 0,
+      "behind": 446,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t009_orchestrator/attempt-1",
+      "head": "3ea3523bd9b6c9a4ca726fc058701a21910f5524",
+      "ahead": 0,
+      "behind": 445,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t010_retry/attempt-1",
+      "head": "4f3ed83343a66eb92d25df8c8c085f6ea0d62134",
+      "ahead": 0,
+      "behind": 440,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t011_real_agent/attempt-1",
+      "head": "52ee828482543dbd489d0b39394ab20d7b7ca2d6",
+      "ahead": 0,
+      "behind": 438,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t012_evaluation_handoff/attempt-1",
+      "head": "e2ecaf4101ece1cfa94b6bdc40023bba752e815d",
+      "ahead": 0,
+      "behind": 436,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t013_cli_runtime/attempt-1",
+      "head": "601ffb3b2c1631da2693d73c917bcb8ede2219d7",
+      "ahead": 0,
+      "behind": 434,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t014_runtime_run/attempt-1",
+      "head": "905b5ef64d5dbdf813cc11c141b8cadc92d1ed6a",
+      "ahead": 0,
+      "behind": 432,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t014_runtime_run/format-fix",
+      "head": "4235021e3d3fb0873e15dcd5d9fd63c4e79731e1",
+      "ahead": 0,
+      "behind": 430,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t014_runtime_run/verification",
+      "head": "3a8db3b2971dc10019ef18c11ea922b48797bed5",
+      "ahead": 0,
+      "behind": 428,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t015_command_executor/attempt-1",
+      "head": "3dfef7d05658c2fbe551345ace779d7a2ace9ae7",
+      "ahead": 0,
+      "behind": 426,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t016_role_worktree_execution/attempt-1",
+      "head": "174426ba404e660ec739d3f1515815ed6e9c1965",
+      "ahead": 0,
+      "behind": 424,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "ai/task_t017_project_workspace/attempt-1",
+      "head": "1d7393d0661df123271782dca660b3d9d5ada993",
+      "ahead": 0,
+      "behind": 422,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "codex/baseline-read-performance-20261011",
+      "head": "b812c4d0d785b0bc485f6e66cf049a8db4167de6",
+      "ahead": 0,
+      "behind": 125,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "codex/console-readiness-20260919",
+      "head": "c280310062240b9fb673b8ca6cc25bedb310ec4d",
+      "ahead": 0,
+      "behind": 326,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "codex/console-reading-identity-20261012",
+      "head": "bf3f3a80c6aeffeaac9423ffde7105d785a83d3a",
+      "ahead": 0,
+      "behind": 0,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "codex/docs-cleanup-20260919",
+      "head": "1879792eb43536389b9ffe69d623f1f85b0b4ec3",
+      "ahead": 0,
+      "behind": 325,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "codex/inspection-console",
+      "head": "f9ac032c2e5f1c7611ed8e526d2026dd272858ef",
+      "ahead": 1,
+      "behind": 6,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- f9ac032c2e5f1c7611ed8e526d2026dd272858ef fix(console): accept canonical omitted nullable reading identities"
+      ]
+    },
+    {
+      "ref": "codex/k1-fixture-maintenance-20261011",
+      "head": "8c7cafa4a11617ec3e32169549233919dd4ee99a",
+      "ahead": 0,
+      "behind": 123,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "codex/maintenance-completion-20261012",
+      "head": "daa96b7c3f97a11c624fee8c67e196dec3b40227",
+      "ahead": 1,
+      "behind": 0,
+      "classification": "needs_review",
+      "unique_commits": [
+        "+ daa96b7c3f97a11c624fee8c67e196dec3b40227 feat(console): add controlled maintenance completion and normal-mode admission"
+      ]
+    },
+    {
+      "ref": "codex/native-output-bounds-20261011",
+      "head": "fba82f3adba1fb1f11c015b809beae65d9c37de4",
+      "ahead": 1,
+      "behind": 126,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- fba82f3adba1fb1f11c015b809beae65d9c37de4 fix(runtime): bound native process output while execution is running"
+      ]
+    },
+    {
+      "ref": "codex/negative-token-guidance-20261011",
+      "head": "00494263bffb20073faaa8563870ee3f02e1c6f3",
+      "ahead": 1,
+      "behind": 124,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 00494263bffb20073faaa8563870ee3f02e1c6f3 fix(agents): guide negative credential tests with dynamic fixtures"
+      ]
+    },
+    {
+      "ref": "codex/platform-delivery-closeout-20261012",
+      "head": "daa96b7c3f97a11c624fee8c67e196dec3b40227",
+      "ahead": 1,
+      "behind": 0,
+      "classification": "needs_review",
+      "unique_commits": [
+        "+ daa96b7c3f97a11c624fee8c67e196dec3b40227 feat(console): add controlled maintenance completion and normal-mode admission"
+      ]
+    },
+    {
+      "ref": "codex/provenance-recovery-fix",
+      "head": "892f87e92e26575159c1770216ea46979968b2e3",
+      "ahead": 0,
+      "behind": 284,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "codex/requirement-git-error-20260920",
+      "head": "0c5d0bb9cf42ae75ce5d43acbfa11379a58db124",
+      "ahead": 0,
+      "behind": 322,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "codex/t046-worker-integration-20260919",
+      "head": "9c21431300386225a043d4d40d917202fe65d2c7",
+      "ahead": 0,
+      "behind": 323,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "codex/t047-t049-20260918",
+      "head": "977a9c20f0506fd16a6e000fbc728fe74d75fa3b",
+      "ahead": 0,
+      "behind": 332,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "codex/team-read-performance-20261011",
+      "head": "fa8ffee1ca5379c7bbf6cdc97d11bc356eb90b03",
+      "ahead": 0,
+      "behind": 126,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "docs/doc001-readme-stage-archive",
+      "head": "3da45b323805fbc46b6dbc1ac1f635488bece4c2",
+      "ahead": 0,
+      "behind": 420,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "feat/t044-coder-reapply",
+      "head": "100090e12e8c2182b3fce9d61f0d2163ce4b1e44",
+      "ahead": 0,
+      "behind": 387,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "feat/t044-native-recovery-facts",
+      "head": "33164d3c624c78a2d6cd6b259d351cea95ebcdf7",
+      "ahead": 0,
+      "behind": 392,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "feat/t044-recovery-capture",
+      "head": "6ae060897303ad98ce9b8e6851a326979c5eafe5",
+      "ahead": 0,
+      "behind": 394,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "feat/t044-recovery-current-facts",
+      "head": "dea60abea1dfb709b284b331617864722e32a058",
+      "ahead": 0,
+      "behind": 390,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "feat/t044-recovery-execution",
+      "head": "b2d211d57c91188cf443109f59850a805e68c48d",
+      "ahead": 0,
+      "behind": 388,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "feat/t044-recovery-records",
+      "head": "70bcb299d664e39e9439e26840b4aad252127b94",
+      "ahead": 0,
+      "behind": 393,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "feat/t044-recovery-seed",
+      "head": "8e907cf9d27ade77e555ebc37ef82e9406063717",
+      "ahead": 0,
+      "behind": 391,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "feat/t044-recovery-task-record",
+      "head": "581432eb27a4a7f5fc5596a3d9a63fa0c7a48c24",
+      "ahead": 0,
+      "behind": 389,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "fix/bounded-delivery-context",
+      "head": "68f8f8c3226a043dba37ddc30429fa17e35d8e89",
+      "ahead": 0,
+      "behind": 396,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "fix/cli-failure-classification",
+      "head": "3a1f6d4924ec09089d5a35f90bd74559cc7d8aa2",
+      "ahead": 1,
+      "behind": 110,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 3a1f6d4924ec09089d5a35f90bd74559cc7d8aa2 fix(agents): isolate native CLI failure diagnostics"
+      ]
+    },
+    {
+      "ref": "fix/coder-completion-budget",
+      "head": "94c35e66df3114ae624cacc37c5ef79e492130c4",
+      "ahead": 0,
+      "behind": 384,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "fix/codex-failure-diagnostics",
+      "head": "b8fce54ee0f382f374f9b07d7ece842b3e504b38",
+      "ahead": 0,
+      "behind": 395,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "fix/current-receipt-projection",
+      "head": "36972a9db61b9e281d9ae57b8b4d940e94c4b573",
+      "ahead": 1,
+      "behind": 111,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 36972a9db61b9e281d9ae57b8b4d940e94c4b573 fix(console): bind current receipt to exact execution work"
+      ]
+    },
+    {
+      "ref": "fix/final-input-preflight",
+      "head": "f6e8c94efb4600ccc111f6f8441848134c490184",
+      "ahead": 1,
+      "behind": 107,
+      "classification": "needs_review",
+      "unique_commits": [
+        "+ f6e8c94efb4600ccc111f6f8441848134c490184 fix(runtime): prepare final provider input before invocation start"
+      ]
+    },
+    {
+      "ref": "fix/integration-planner-command-contract",
+      "head": "4f97deb65a4a6468c9fce0a5447a4b2dd9e62a7b",
+      "ahead": 0,
+      "behind": 398,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "fix/model-policy-revisions",
+      "head": "400dab7dcc2fbf90cf3fe43d9c3409eff21f213c",
+      "ahead": 0,
+      "behind": 386,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "fix/owned-session-stop",
+      "head": "60a619c5307642ced162e2dacfa8c0b5e03005f5",
+      "ahead": 2,
+      "behind": 116,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 2273dc92c3facbb5474859deb90ddebd27d60e73 fix(execution): verify owned session stop before durable finalization",
+        "- 60a619c5307642ced162e2dacfa8c0b5e03005f5 fix(runtime): verify Darwin PID absence after short birth query"
+      ]
+    },
+    {
+      "ref": "fix/planner-coverage-feedback",
+      "head": "cfca1e2938af7879dede8a89ad8d89cfc6b46fb7",
+      "ahead": 0,
+      "behind": 399,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "fix/production-role-timeouts",
+      "head": "006054da3393c5e35268f6279c5779db2b582e7c",
+      "ahead": 0,
+      "behind": 385,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "fix/provider-source-plan-ui",
+      "head": "c97c077e5a6a7900e5e3c245d75b634d866e08c8",
+      "ahead": 1,
+      "behind": 107,
+      "classification": "needs_review",
+      "unique_commits": [
+        "+ c97c077e5a6a7900e5e3c245d75b634d866e08c8 fix(console): select current stopped provider recovery plan"
+      ]
+    },
+    {
+      "ref": "fix/versioned-project-preparation",
+      "head": "831587b4ac971cee09a85382716bec1afc8d8d70",
+      "ahead": 0,
+      "behind": 397,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/baseline-context-projection",
+      "head": "9a747944973511ddd34c5c5c7c574c86c190c7e0",
+      "ahead": 1,
+      "behind": 107,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 9a747944973511ddd34c5c5c7c574c86c190c7e0 fix(context): bound preserved baseline reading input"
+      ]
+    },
+    {
+      "ref": "task/baseline-read-scope",
+      "head": "b7ddfa53b306069436f50209211e6f0a585d87d0",
+      "ahead": 1,
+      "behind": 108,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- b7ddfa53b306069436f50209211e6f0a585d87d0 perf(recovery): scope full baseline consumption source checks"
+      ]
+    },
+    {
+      "ref": "task/baseline-transient-guard",
+      "head": "2bd78e59887078c02c9628afa5353423c09d622e",
+      "ahead": 3,
+      "behind": 107,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 3d3130b56aea0570a12bcd14ab91795432dde47d fix(delivery): require explicit transient baseline retry fact",
+        "- 3cab12da9bbf13b1a1ae727aa1217ba3a3d4835a fix(agents): reject transient defaults for unknown native exits",
+        "- 2bd78e59887078c02c9628afa5353423c09d622e fix(delivery): route nontransient failures by frozen work budget"
+      ]
+    },
+    {
+      "ref": "task/capacity-failure-route",
+      "head": "e254074ff25b8e2d029110834d0b32eb28e85e1d",
+      "ahead": 3,
+      "behind": 67,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 17263d27dffce396c86d18a8379f8c3ea98cb5a0 fix(delivery): preserve checkpoints on input capacity rejection",
+        "- 7624fe95900f73e7c2095cd79d8bcc7b386d12e2 fix(delivery): seal claimed input capacity stops before model admission",
+        "- e254074ff25b8e2d029110834d0b32eb28e85e1d fix(delivery): resume claimed coder capacity waits through exact baselines"
+      ]
+    },
+    {
+      "ref": "task/capacity-receipt",
+      "head": "87459275327de3662c0d8a03f3d4631035eecde3",
+      "ahead": 0,
+      "behind": 26,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/coder-slice-output-guidance",
+      "head": "050faba9033bbbe61135ea4113e2a065dde35175",
+      "ahead": 1,
+      "behind": 77,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 050faba9033bbbe61135ea4113e2a065dde35175 fix(agents): align bounded Coder output guidance and rejection diagnostics"
+      ]
+    },
+    {
+      "ref": "task/console-idle-backoff",
+      "head": "eed6dce0b4910f8bc075e87e148c11508f367f82",
+      "ahead": 1,
+      "behind": 97,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- eed6dce0b4910f8bc075e87e148c11508f367f82 fix(console): back off idle dispatch with immediate wake"
+      ]
+    },
+    {
+      "ref": "task/console-operation-summary-ui",
+      "head": "657f6ea28fd296b5e6037ad53f572b5e05c71217",
+      "ahead": 1,
+      "behind": 97,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 657f6ea28fd296b5e6037ad53f572b5e05c71217 perf(console): poll operation summaries and bound full detail reads"
+      ]
+    },
+    {
+      "ref": "task/context-capacity-delivery",
+      "head": "7ef2425427a122aeb4a9282d9fd32da063c8ee25",
+      "ahead": 0,
+      "behind": 67,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/context-capacity-projection",
+      "head": "d4d51151af96d20e4e981f09eb6ee8519f93e5df",
+      "ahead": 3,
+      "behind": 67,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 99fcb9f654644146fa69929a58653b20661d2ca8 fix(console): explain context capacity stops",
+        "- 5679cb8a90b2ba11b008b2348f9730d4f1b0791a docs(recovery): define context capacity recovery boundary",
+        "- d4d51151af96d20e4e981f09eb6ee8519f93e5df fix(console): recognize context capacity classification"
+      ]
+    },
+    {
+      "ref": "task/delivery-input-recovery-integration",
+      "head": "770c02e85e4bafa01fcef3d69e1d409869848251",
+      "ahead": 0,
+      "behind": 77,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/dynamic-credential-fixture",
+      "head": "1ef4fcfecaf2157dcacf7b6fdf945959c0c5c3a9",
+      "ahead": 1,
+      "behind": 116,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 1ef4fcfecaf2157dcacf7b6fdf945959c0c5c3a9 fix(recovery): recognize proven dynamic credential test source"
+      ]
+    },
+    {
+      "ref": "task/faulted-service-maintenance",
+      "head": "fc6854664302346a583a787c09e7d25dc06fd136",
+      "ahead": 1,
+      "behind": 11,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- fc6854664302346a583a787c09e7d25dc06fd136 fix(console): report inspection-only service status accurately"
+      ]
+    },
+    {
+      "ref": "task/k1-completed-output-integration",
+      "head": "ead05e7d8b5c55345b6d346bd4704db8dfd35400",
+      "ahead": 0,
+      "behind": 68,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/k1-deployment-verification-closeout",
+      "head": "e0cd6d5f9b5a5db33b9cab2633cd4cdfa59c777d",
+      "ahead": 2,
+      "behind": 67,
+      "classification": "needs_review",
+      "unique_commits": [
+        "+ beaa43a0d12319b3bf85321bf8159511afe9d8f4 docs(delivery): record controlled deployment and queued K1 source check",
+        "+ e0cd6d5f9b5a5db33b9cab2633cd4cdfa59c777d docs(recovery): record exact K1 reapply approval and resume preparation"
+      ]
+    },
+    {
+      "ref": "task/native-coder-diagnostic-envelope",
+      "head": "8cfa9d27715b93a733b0251dc9ba0c6ace08eacb",
+      "ahead": 4,
+      "behind": 67,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- a4384a4317356f19dc1eb5c87d045cc98e08d3e1 Deduplicate coder reapply patch context",
+        "- 7fe76e0970950595b97f68010fa3eb435d58ccfc Keep historical reapply contexts immutable",
+        "- 5896dc2ebb3ad3b88253ca84882217750a794989 Verify deduplicated reapply with recovery gate",
+        "- 8cfa9d27715b93a733b0251dc9ba0c6ace08eacb Render complete context within final provider budget"
+      ]
+    },
+    {
+      "ref": "task/offline-native-recovery-fixtures",
+      "head": "54ed9fe8875150c9783ddeceb9ff0b04324bf39e",
+      "ahead": 0,
+      "behind": 31,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/operation-result-scope-compat",
+      "head": "edf5c77f852227e477c9adbb878140e991f89337",
+      "ahead": 2,
+      "behind": 77,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 20d1ff75493e6bf32091579afdafe762dcd2c3ba fix(console): scope independent command results without blocking history",
+        "- edf5c77f852227e477c9adbb878140e991f89337 fix(console): preserve exact edited requirement navigation"
+      ]
+    },
+    {
+      "ref": "task/operation-summary-read",
+      "head": "621a035c1cc4a913dac611ed5193c28c5d4a1f7b",
+      "ahead": 2,
+      "behind": 97,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- e7f0d19ac24d324a70262f2dc371d50bdd15314e perf(console): add bounded verified operation summary reads",
+        "- 621a035c1cc4a913dac611ed5193c28c5d4a1f7b docs(console): complete bounded operation read task contract"
+      ]
+    },
+    {
+      "ref": "task/owned-verification-diagnosis",
+      "head": "30d898e021cca0d0c46225e132a3d0131ef3598f",
+      "ahead": 1,
+      "behind": 26,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 30d898e021cca0d0c46225e132a3d0131ef3598f fix(manager): preserve owned verification discovery uncertainty"
+      ]
+    },
+    {
+      "ref": "task/product-approval-linear-read",
+      "head": "51985fb0a70cf3135948d62e2bdc72bd91a52db2",
+      "ahead": 1,
+      "behind": 88,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 51985fb0a70cf3135948d62e2bdc72bd91a52db2 perf(product): validate approval spec history once per lookup"
+      ]
+    },
+    {
+      "ref": "task/recovery-admission-facts",
+      "head": "f301e27c4a1ecf5b5f8b01e12bf6a8b0021fa94d",
+      "ahead": 1,
+      "behind": 88,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- f301e27c4a1ecf5b5f8b01e12bf6a8b0021fa94d perf(recovery): derive Task from fresh authorization facts"
+      ]
+    },
+    {
+      "ref": "task/recovery-facts-window",
+      "head": "0f08eca808ae0c9b2625f306ceebfc1ccb866a03",
+      "ahead": 2,
+      "behind": 84,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 22baea3374a03b89bdd19e411614c95938a16974 fix(recovery): preserve stronger trusted authorization gates",
+        "- 0f08eca808ae0c9b2625f306ceebfc1ccb866a03 perf(recovery): inspect complete terminal facts in one owned window"
+      ]
+    },
+    {
+      "ref": "task/recovery-progress-ui",
+      "head": "d319dee7549b5ed7eaec6a438ade09a8a25c8849",
+      "ahead": 1,
+      "behind": 81,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- d319dee7549b5ed7eaec6a438ade09a8a25c8849 fix(console): preserve current recovery progress in summary views"
+      ]
+    },
+    {
+      "ref": "task/recovery-record-read-scope",
+      "head": "aeca8a92c854d10249f8ea05a373736a398b014f",
+      "ahead": 1,
+      "behind": 97,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- aeca8a92c854d10249f8ea05a373736a398b014f perf(recovery): reuse verified immutable decoding within synchronous gates"
+      ]
+    },
+    {
+      "ref": "task/same-source-capacity",
+      "head": "9825b8bccdce2e7a9ff23b78b88070ccfa82efab",
+      "ahead": 0,
+      "behind": 16,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/shutdown-diagnostics",
+      "head": "a528047910d35498103e8269bc8864317ce09e4e",
+      "ahead": 0,
+      "behind": 15,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/stopped-budget-planner-lineage",
+      "head": "1ddc7d42a7f30200c177c9ff6a583c439a6a79b2",
+      "ahead": 1,
+      "behind": 99,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 1ddc7d42a7f30200c177c9ff6a583c439a6a79b2 fix(recovery): honor exact consumed rejected publications"
+      ]
+    },
+    {
+      "ref": "task/stopped-exhausted-settlement",
+      "head": "edaac21b0c06598e772c12209b5918db6f03f9cb",
+      "ahead": 1,
+      "behind": 107,
+      "classification": "needs_review",
+      "unique_commits": [
+        "+ edaac21b0c06598e772c12209b5918db6f03f9cb fix(delivery): settle stopped exhausted legacy waits atomically"
+      ]
+    },
+    {
+      "ref": "task/stopped-provider-retry",
+      "head": "90f3dbedab2a49401602022a1a91aeb62800e72b",
+      "ahead": 1,
+      "behind": 110,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 90f3dbedab2a49401602022a1a91aeb62800e72b fix(delivery): preserve progress after stopped provider prerequisite failure"
+      ]
+    },
+    {
+      "ref": "task/task-wait-authority",
+      "head": "ad898e5f045d0d5ec5befb6b4ba0fd0f01278e8e",
+      "ahead": 0,
+      "behind": 26,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/team-read-coordination",
+      "head": "133a5a051c0b12798a23c06f883954102d29f423",
+      "ahead": 0,
+      "behind": 15,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/terminal-context-capacity-recovery",
+      "head": "01b765ae80884c345456c3b21dd2ecca2bb46ab0",
+      "ahead": 4,
+      "behind": 67,
+      "classification": "needs_review",
+      "unique_commits": [
+        "- 5af7a305bf3c64f2998b4fed9c94d38a14357db7 fix(delivery): seal claimed input capacity stops before model admission",
+        "- 3c032c686ec0c45d81d1cc10353819aa719c15ae fix(recovery): preserve progress after terminal input capacity stop",
+        "- adc790cf01d2ffc1595067c4dba18fd18f51ae75 fix(recovery): require nonnull capacity source baseline in schema",
+        "+ 01b765ae80884c345456c3b21dd2ecca2bb46ab0 fix(recovery): verify exact legacy capacity source and clean removal"
+      ]
+    },
+    {
+      "ref": "task/trusted-query-spawn-gate",
+      "head": "35a50d8b315410ee69c29ac7d76d2a90a39999c4",
+      "ahead": 0,
+      "behind": 11,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "task/unaccepted-coder-draft-resume",
+      "head": "896132dbaa73c013d1d5b86e616a063f1874c5fa",
+      "ahead": 1,
+      "behind": 77,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 896132dbaa73c013d1d5b86e616a063f1874c5fa fix(manager): resume rejected completed coder drafts safely"
+      ]
+    },
+    {
+      "ref": "task/unaccepted-coder-draft-ui",
+      "head": "fe70ea81c512f59c6d053e38a1eb050af30325ca",
+      "ahead": 2,
+      "behind": 77,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 0423ba0ad504c1d597e4ce401ba674afb33f6be1 fix(console): explain and gate preserved rejected Coder draft recovery",
+        "- fe70ea81c512f59c6d053e38a1eb050af30325ca fix(console): hide unsupported source approvals from sealed rejected proofs"
+      ]
+    },
+    {
+      "ref": "test/retired-rejected-publications",
+      "head": "99e94aaee3ac26c66dec8c051a4ceeec300d271e",
+      "ahead": 1,
+      "behind": 99,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- 99e94aaee3ac26c66dec8c051a4ceeec300d271e test(delivery): cover repeated rejected progress recovery"
+      ]
+    },
+    {
+      "ref": "origin/ai/task_t001_python_cli/attempt-1",
+      "head": "4b7902590815ff54e5e9831e34ac4371af4057c2",
+      "ahead": 0,
+      "behind": 453,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t002_domain_models/attempt-1",
+      "head": "fc1fd77538b3125021adc296dde077a1ff45098a",
+      "ahead": 0,
+      "behind": 452,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t003_sqlite_repository/attempt-1",
+      "head": "2e7ed76ad422d000d07d67ebfa5798f3a782fdc8",
+      "ahead": 0,
+      "behind": 451,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t004_state_machine/attempt-1",
+      "head": "e6c869fcd806f4320b398bc1f58fceecd747fd5a",
+      "ahead": 0,
+      "behind": 450,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t005_artifact_store/attempt-1",
+      "head": "b08ab8cf68543be72e0b373f61efe6c9ed3e768e",
+      "ahead": 0,
+      "behind": 449,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t006_git_worktree/attempt-1",
+      "head": "bd52bc4e7e998a987835e0ee001034123f352ecd",
+      "ahead": 0,
+      "behind": 448,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t007_context/attempt-1",
+      "head": "402c49fd9726e47c3a322a8df65d6ca91c5b3b48",
+      "ahead": 0,
+      "behind": 447,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t008_fake_agent/attempt-1",
+      "head": "7143b46752469651ecf4ec3721588dc0251e9ffe",
+      "ahead": 0,
+      "behind": 446,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t009_orchestrator/attempt-1",
+      "head": "3ea3523bd9b6c9a4ca726fc058701a21910f5524",
+      "ahead": 0,
+      "behind": 445,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t010_retry/attempt-1",
+      "head": "4f3ed83343a66eb92d25df8c8c085f6ea0d62134",
+      "ahead": 0,
+      "behind": 440,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t011_real_agent/attempt-1",
+      "head": "52ee828482543dbd489d0b39394ab20d7b7ca2d6",
+      "ahead": 0,
+      "behind": 438,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t012_evaluation_handoff/attempt-1",
+      "head": "e2ecaf4101ece1cfa94b6bdc40023bba752e815d",
+      "ahead": 0,
+      "behind": 436,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/ai/task_t013_cli_runtime/attempt-1",
+      "head": "601ffb3b2c1631da2693d73c917bcb8ede2219d7",
+      "ahead": 0,
+      "behind": 434,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/codex/baseline-read-performance-20261011",
+      "head": "b812c4d0d785b0bc485f6e66cf049a8db4167de6",
+      "ahead": 0,
+      "behind": 125,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/codex/maintenance-completion-20261012",
+      "head": "daa96b7c3f97a11c624fee8c67e196dec3b40227",
+      "ahead": 1,
+      "behind": 0,
+      "classification": "needs_review",
+      "unique_commits": [
+        "+ daa96b7c3f97a11c624fee8c67e196dec3b40227 feat(console): add controlled maintenance completion and normal-mode admission"
+      ]
+    },
+    {
+      "ref": "origin/codex/native-output-bounds-20261011",
+      "head": "fba82f3adba1fb1f11c015b809beae65d9c37de4",
+      "ahead": 1,
+      "behind": 126,
+      "classification": "patch_equivalent",
+      "unique_commits": [
+        "- fba82f3adba1fb1f11c015b809beae65d9c37de4 fix(runtime): bound native process output while execution is running"
+      ]
+    },
+    {
+      "ref": "origin/codex/t046-worker-integration-20260919",
+      "head": "9c21431300386225a043d4d40d917202fe65d2c7",
+      "ahead": 0,
+      "behind": 323,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/codex/team-read-performance-20261011",
+      "head": "fa8ffee1ca5379c7bbf6cdc97d11bc356eb90b03",
+      "ahead": 0,
+      "behind": 126,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/task/capacity-receipt",
+      "head": "bdab7bf1cae9fcb1e39927b3c518929b5ffd6ce5",
+      "ahead": 0,
+      "behind": 30,
+      "classification": "ancestor",
+      "unique_commits": []
+    },
+    {
+      "ref": "origin/task/delivery-input-recovery-integration",
+      "head": "770c02e85e4bafa01fcef3d69e1d409869848251",
+      "ahead": 0,
+      "behind": 77,
+      "classification": "ancestor",
+      "unique_commits": []
+    }
+  ]
+}

@@ -4,6 +4,10 @@
 import json
 from pathlib import Path
 
+from ai_software_engineer.web_console.fault_log_retention import (
+    ArchivedLogPurgeIntent,
+    ArchivedLogPurgeReceipt,
+)
 from ai_software_engineer.web_console.fault_retirement import (
     FaultRetirementPlan,
     FaultRetirementReceipt,
@@ -24,6 +28,8 @@ for name, model in (
     ("console-fault-retirement-intent", TerminationIntent),
     ("console-fault-retirement-signal", SignalSent),
     ("console-inspection", InspectionMarker),
+    ("console-archived-log-purge-intent", ArchivedLogPurgeIntent),
+    ("console-archived-log-purge-receipt", ArchivedLogPurgeReceipt),
     ("console-maintenance-completion-plan", MaintenanceCompletionPlan),
     ("console-maintenance-completion-receipt", MaintenanceCompletionReceipt),
     ("console-maintenance-admission", MaintenanceNormalAdmission),

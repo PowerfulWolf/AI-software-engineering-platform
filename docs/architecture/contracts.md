@@ -1122,3 +1122,9 @@ initialization or reconciliation. Runnable work/operations and every ACTIVE clai
 Exact local confirmation appends immutable receipt lineage; first normal startup rechecks before
 any TeamHost constructor. HTTP inspection remains strictly readonly. See
 `.trellis/spec/core/maintenance-completion.md` for fields, file paths, errors and contract tests.
+
+Maintenance startup and completion validate the immutable fault-retirement control chain only.
+Retired diagnostic logs have independent retention: removal/content changes never grant or revoke
+normal-mode authority. The retirement executor still seals their full historical digest. Local
+`purge-archived-log --confirm-delete-archived-log` publishes exact purge intent and absent receipt
+without modifying the current log, marker, lifecycle or Requirement facts.

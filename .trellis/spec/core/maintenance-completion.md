@@ -9,7 +9,7 @@ Local trusted engineering channel, independent of Requirement/Run recovery and v
 ## Contracts
 Current successor must have an exact READY instance/SHUTDOWN request/READY result, aware ordered
 publication times and actual current kernel PID absence. It must differ from the faulted predecessor.
-Keep console-inspection.json and the entire original archive. Append immutable private plan,
+Keep console-inspection.json and the original control-record archive. Diagnostic log retention is independent and never a startup/completion precondition. Append immutable private plan,
 completion receipt and first-normal-admission; no caller-provided queue/liveness/approval facts.
 Plan records include digest-bound original marker/retirement receipt, current lifecycle, selected
 config and Team identity, complete queue inventory digest and safe counts/IDs.
@@ -32,11 +32,11 @@ External writers against the same DB are outside the local service lock: operato
 fresh checks detect observed drift but do not claim a distributed DB fence.
 
 ## Validation matrix / test points
-Good: stopped inspection, intact full archive, idle complete queue -> exact local confirmation ->
+Good: stopped inspection, intact control-record archive, idle complete queue -> exact local confirmation ->
 receipt -> fresh normal admission; marker/archive and old UNKNOWN/REFUSED byte-identical.
 Base: waiting human/dependency preserved; no automatic Requirement continuation.
 Bad: live/recycled PID, foreign/stale lifecycle, wrong digest/no confirmation, changed config/queue,
-ACTIVE expired claim, future retry, partial SQL schema/invalid JSON/unknown status, damaged archive,
+ACTIVE expired claim, future retry, partial SQL schema/invalid JSON/unknown status, damaged control archive,
 symlink/unsafe permission -> refuse before normal writers. Partial publication retry only same plan.
 Schemas generated from models and parity tested. Exercise CLI, script entry and production gate.
 

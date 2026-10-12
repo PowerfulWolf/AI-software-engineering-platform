@@ -24,7 +24,7 @@ LIFECYCLE_PYTHON="$PROJECT_ROOT/.venv/bin/python"
 SHUTDOWN_TIMEOUT=${ASE_SHUTDOWN_TIMEOUT_SECONDS:-300}
 
 usage() {
-  echo "Usage: $0 {start|stop|restart|resume|status|logs|prepare-maintenance-completion|complete-maintenance PLAN_SHA256 --confirm-restore-normal}"
+  echo "Usage: $0 {start|stop|restart|resume|status|logs|prepare-maintenance-completion|complete-maintenance PLAN_SHA256 --confirm-restore-normal|purge-archived-log --confirm-delete-archived-log}"
 }
 
 lifecycle() {
@@ -624,6 +624,10 @@ maintenance_command() {
 }
 
 case "${1:-}" in
+  purge-archived-log)
+    [ "$#" -eq 2 ] && [ "$2" = --confirm-delete-archived-log ] || { usage >&2; exit 2; }
+    maintenance_command purge-archived-log --confirm-delete-archived-log
+    ;;
   prepare-maintenance-completion)
     [ "$#" -eq 1 ] || { usage >&2; exit 2; }
     if [ ! -e "$SERVICE_STATE_DIR/console-inspection.json" ]; then

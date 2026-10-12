@@ -100,7 +100,7 @@ def test_actual_retirement_marker_forces_inspection_without_rewriting_history(
         }
 
 
-@pytest.mark.parametrize("corrupt", ["marker", "archived_log", "archived_lifecycle"])
+@pytest.mark.parametrize("corrupt", ["marker", "archived_lifecycle"])
 def test_actual_corrupt_retirement_chain_refuses_before_any_writer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corrupt: str
 ) -> None:
@@ -115,12 +115,7 @@ def test_actual_corrupt_retirement_chain_refuses_before_any_writer(
         target = (
             root / MARKER_NAME
             if corrupt == "marker"
-            else archive
-            / (
-                "ase-console.log"
-                if corrupt == "archived_log"
-                else "console-service-shutdown.result.json"
-            )
+            else archive / "console-service-shutdown.result.json"
         )
         target.write_bytes(target.read_bytes() + b"tampered")
         _forbid_writers(monkeypatch)

@@ -1,0 +1,79 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "title": "Recorded At",
+      "type": "string"
+    },
+    "record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Record Sha256",
+      "type": "string"
+    },
+    "kind": {
+      "const": "archived_console_log_purge_intent",
+      "default": "archived_console_log_purge_intent",
+      "title": "Kind",
+      "type": "string"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "retirement_receipt_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Retirement Receipt Sha256",
+      "type": "string"
+    },
+    "principal_uid": {
+      "minimum": 0,
+      "title": "Principal Uid",
+      "type": "integer"
+    },
+    "log_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Log Sha256",
+      "type": "string"
+    },
+    "log_byte_count": {
+      "minimum": 0,
+      "title": "Log Byte Count",
+      "type": "integer"
+    },
+    "initial_observation": {
+      "enum": [
+        "PRESENT",
+        "ALREADY_ABSENT"
+      ],
+      "title": "Initial Observation",
+      "type": "string"
+    },
+    "requirement_action": {
+      "const": "NONE",
+      "default": "NONE",
+      "title": "Requirement Action",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recorded_at",
+    "record_sha256",
+    "plan_sha256",
+    "retirement_receipt_sha256",
+    "principal_uid",
+    "log_sha256",
+    "log_byte_count",
+    "initial_observation"
+  ],
+  "title": "ArchivedLogPurgeIntent",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

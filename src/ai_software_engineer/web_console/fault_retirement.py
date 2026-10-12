@@ -954,10 +954,20 @@ def _verified_marker(root: Path) -> tuple[FaultRetirementPlan, FaultRetirementRe
         body = _read(archive, ref.name, bound=8192)
         if len(body) != ref.byte_count or _sha(body) != ref.sha256:
             raise FaultRetirementError(_ERROR)
+    # Logs are diagnostic retention, not startup or delivery authority. Their full
+    # digest was sealed at retirement; a separate explicit audit can read them.
+    return plan, receipt
+
+
+def verify_retired_log(environment: Mapping[str, str]) -> FaultRetirementReceipt:
+    """Explicit diagnostic audit; never a startup or maintenance-completion gate."""
+    root = ServiceLifecycleStore.from_environment(environment).root
+    plan, receipt = _verified_marker(root)
+    archive = _archive_root(root, plan.record_sha256)
     _require_archived_log(archive, plan)
     if _hash_log(archive, receipt.log_byte_count) != receipt.log_sha256:
         raise FaultRetirementError(_ERROR)
-    return plan, receipt
+    return receipt
 
 
 def inspection_required(environment: Mapping[str, str]) -> bool:

@@ -15,11 +15,11 @@ Both steps hold the existing `console-service-replacement.lock`; only a trusted 
 this executor after explicit engineering authorization. It is not an Agent/HTTP/tool capability.
 
 `inspection_required(environment: Mapping[str,str]) -> bool` verifies the fixed private
-`console-inspection.json` and complete immutable archive chain. Missing marker returns False; malformed,
-foreign, link, changed chain/log or unsafe permissions raises fixed `FaultRetirementError` before any
+`console-inspection.json` and the immutable control-record archive chain. Missing marker returns False; malformed,
+foreign, link, changed control chain or unsafe permissions raises fixed `FaultRetirementError` before any
 writer is created. `ASE_CONSOLE_MODE=inspection` also permits explicit readonly startup. A marker forces inspection even if the environment says normal until the separate
 [maintenance-completion](maintenance-completion.md) plan/receipt/admission gate succeeds.
-The marker and entire archive are retained. There is no marker deletion or HTTP exit-inspection API.
+The marker and control-record archive are retained; diagnostic logs have independent retention. There is no marker deletion or HTTP exit-inspection API.
 
 `require_inspection_retirement(env, instance, request, result)` is the only dead/initial fallback:
 exact original REFUSED objects/files, complete archive/receipt/marker and fresh original boot/PID absence
@@ -58,8 +58,8 @@ sentinel. Actual Darwin lsof returns0 or1 when other closed files are unmatched;
 empty stderr, bounded complete parsed fields and positive sentinel. Emptyrc1, rc2, unknown/malformed
 fields, missing access/probe or log writers refuse. Each f resets access. Known ancillary holders may
 exit naturally for up to3 seconds; persistent unknown writers block finalize, never get killed.
-The stable full log is streamed through SHA-256; startup revalidates complete log bytes, not only stat.
-Inspection start has a120s lifecycle publication window to allow bounded large archive validation.
+The stable full log is streamed through SHA-256 during retirement. Startup validates only control records; retained log bytes are independent diagnostics.
+Inspection startup uses the lifecycle publication window; it does not scan large diagnostic logs.
 
 ## Durable phases and retry
 
@@ -86,7 +86,8 @@ Marker publication failure is retryable from the receipt; conflicting records re
 | Wrong confirm/digest/config/oldbytes/executable/birth/unfrozen | no signal; refuse |
 | Failure after rename/chmod/signal/hash/receipt/marker | same-plan bounded retry; never signal recycled or unrelated PID |
 | Persistent logwriter, lsof empty/error/malformed/probe missing | refuse finalize; preserve complete archive |
-| Archive log same-size edit, symlink, bad marker/receipt | refuse startup before writer creation |
+| Bad control marker/receipt or control-record symlink | refuse startup before writer creation |
+| Diagnostic log removed or changed after completed retirement | startup authority unchanged; explicit diagnostic audit rejects changed/missing bytes |
 | Environment normal with durable marker | still inspection |
 | Normal READY | unchanged lifecycle behavior |
 
@@ -105,3 +106,20 @@ Rollback must retain compatible marker/receipt readers and the inspection-only g
 marker, delete archives, clear the old failure latch, manufacture READY or start an old normal-only
 binary against this state. Exiting inspection uses the separate reviewed maintenance-completion gate. Safely continuing a retained
 demand still requires its own recovery authorization; neither service action grants it.
+
+## Diagnostic log retention
+
+`fault_retirement._verified_marker(root)` validates control facts only. It never opens, hashes or
+requires `ase-console.log`. Retirement execution still seals the full log digest before its receipt.
+`verify_retired_log(environment)` is an explicit diagnostic audit, separate from startup authority.
+`fault_log_retention.purge_archived_log(environment, confirm_delete_archived_log=True)` requires
+the valid completed retirement and replacement lock. It selects only the marker-bound archive log,
+checks exact original inode/private regular file/no writers, seals `log-purge-intent.json`, unlinks
+the fixed retired log, fsyncs and appends `log-purge-receipt.json` with final_observation=ABSENT.
+Historical log_sha256 describes bytes sealed at retirement, not a fresh audit claim. No log hashing
+is required to delete diagnostic retention. The live state-root log and all control records remain.
+An already absent log is recorded as ALREADY_ABSENT; partial publication retries the same intent.
+Missing confirmation, corrupt control/retention records, symlink/new inode/live writer refuse deletion.
+Tests assert missing/changed/unread logs permit inspection launch, corrupt control records still
+refuse, exact purge idempotence, failed result publication retry, no current-log or marker mutation,
+and static Schema parity.

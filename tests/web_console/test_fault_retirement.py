@@ -264,17 +264,14 @@ def test_every_interrupted_stage_retries_same_plan_without_resignaling(
         assert receipt.signal_sent == ("UNKNOWN" if stage == "signal_ack" else "CONFIRMED")
 
 
-@pytest.mark.parametrize("fault", ("same_size_log", "marker", "archive_symlink", "receipt"))
+@pytest.mark.parametrize("fault", ("marker", "archive_symlink", "receipt"))
 def test_complete_archive_drift_or_forged_marker_refuses(tmp_path: Path, fault: str) -> None:
     with _host(tmp_path) as (env, _):
         plan = prepare_fault_retirement(env)
         _execute(env, plan.record_sha256)
         root = Path(env["ASE_SERVICE_STATE_DIR"])
         archive = root / "console-fault-retirements" / plan.record_sha256
-        if fault == "same_size_log":
-            path = archive / "ase-console.log"
-            path.write_bytes(b"x" * path.stat().st_size)
-        elif fault == "marker":
+        if fault == "marker":
             (root / module.MARKER_NAME).write_text('{"successor_mode":"normal"}')
         elif fault == "archive_symlink":
             path = archive / "ase-console.pid"
@@ -466,3 +463,172 @@ def test_status_explicit_mode_without_marker(tmp_path: Path, mode: str) -> None:
         assert result.returncode != 0
         assert "可以接收新操作" not in result.stdout
     assert (root / "console-service-instance.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("retained", ["missing", "changed", "unread"])
+def test_startup_authority_does_not_depend_on_retained_diagnostic_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retained: str
+) -> None:
+    with _host(tmp_path) as (env, _):
+        plan = prepare_fault_retirement(env)
+        _execute(env, plan.record_sha256)
+        root = Path(env["ASE_SERVICE_STATE_DIR"])
+        log = root / "console-fault-retirements" / plan.record_sha256 / "ase-console.log"
+        if retained == "missing":
+            log.unlink()
+        elif retained == "changed":
+            log.write_bytes(b"retention changed diagnostic content")
+        else:
+
+            def forbidden_read(*args: object) -> str:
+                raise AssertionError("startup must not read archived diagnostic log")
+
+            monkeypatch.setattr(module, "_hash_log", forbidden_read)
+        assert inspection_required(env)
+        assert _cli(env, "launch-mode").stdout.strip() == "inspection"
+
+
+def test_explicit_log_audit_still_rejects_changed_diagnostic_bytes(tmp_path: Path) -> None:
+    with _host(tmp_path) as (env, _):
+        plan = prepare_fault_retirement(env)
+        _execute(env, plan.record_sha256)
+        root = Path(env["ASE_SERVICE_STATE_DIR"])
+        assert module.verify_retired_log(env).plan_sha256 == plan.record_sha256
+        log = root / "console-fault-retirements" / plan.record_sha256 / "ase-console.log"
+        log.write_bytes(b"x" * log.stat().st_size)
+        assert inspection_required(env)
+        with pytest.raises(FaultRetirementError):
+            module.verify_retired_log(env)
+
+
+@pytest.mark.parametrize("absent", [False, True])
+def test_archived_log_purge_preserves_control_and_current_log_and_retries(
+    tmp_path: Path, absent: bool
+) -> None:
+    from ai_software_engineer.web_console import fault_log_retention as retention
+
+    with _host(tmp_path) as (env, _):
+        plan = prepare_fault_retirement(env)
+        _execute(env, plan.record_sha256)
+        root = Path(env["ASE_SERVICE_STATE_DIR"])
+        archive = root / "console-fault-retirements" / plan.record_sha256
+        before = {p.name: p.read_bytes() for p in archive.glob("*.json")}
+        marker = (root / module.MARKER_NAME).read_bytes()
+        (root / "ase-console.log").write_bytes(b"live service log")
+        if absent:
+            (archive / "ase-console.log").unlink()
+        with pytest.raises(module.ServiceLifecycleError, match="确认"):
+            retention.purge_archived_log(env, confirm_delete_archived_log=False)
+        receipt = retention.purge_archived_log(env, confirm_delete_archived_log=True)
+        assert retention.purge_archived_log(env, confirm_delete_archived_log=True) == receipt
+        assert not (archive / "ase-console.log").exists()
+        assert (root / "ase-console.log").read_bytes() == b"live service log"
+        assert (root / module.MARKER_NAME).read_bytes() == marker
+        assert {name: (archive / name).read_bytes() for name in before} == before
+        intent = retention._load(archive, retention._INTENT, retention.ArchivedLogPurgeIntent)
+        assert intent.initial_observation == ("ALREADY_ABSENT" if absent else "PRESENT")
+        assert intent.log_byte_count == plan.log_byte_count
+        assert inspection_required(env)
+
+
+def test_archived_log_purge_after_unlink_retries_original_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_software_engineer.web_console import fault_log_retention as retention
+
+    with _host(tmp_path) as (env, _):
+        plan = prepare_fault_retirement(env)
+        _execute(env, plan.record_sha256)
+        archive = (
+            Path(env["ASE_SERVICE_STATE_DIR"]) / "console-fault-retirements" / plan.record_sha256
+        )
+        real_save = retention._save
+
+        def fail_receipt(root: Path, name: str, record: module._Record) -> None:
+            if name == retention._RECEIPT:
+                raise OSError("injected receipt publication failure")
+            real_save(root, name, record)
+
+        monkeypatch.setattr(retention, "_save", fail_receipt)
+        with pytest.raises(module.ServiceLifecycleError):
+            retention.purge_archived_log(env, confirm_delete_archived_log=True)
+        original_intent = (archive / retention._INTENT).read_bytes()
+        assert not (archive / "ase-console.log").exists()
+        monkeypatch.setattr(retention, "_save", real_save)
+        receipt = retention.purge_archived_log(env, confirm_delete_archived_log=True)
+        assert receipt.final_observation == "ABSENT"
+        assert (archive / retention._INTENT).read_bytes() == original_intent
+
+
+@pytest.mark.parametrize("fault", ["symlink", "different_inode", "intent", "receipt"])
+def test_archived_log_purge_refuses_unsafe_targets_or_retention_records(
+    tmp_path: Path, fault: str
+) -> None:
+    from ai_software_engineer.web_console import fault_log_retention as retention
+
+    with _host(tmp_path) as (env, _):
+        plan = prepare_fault_retirement(env)
+        _execute(env, plan.record_sha256)
+        root = Path(env["ASE_SERVICE_STATE_DIR"])
+        archive = root / "console-fault-retirements" / plan.record_sha256
+        log = archive / "ase-console.log"
+        (root / "ase-console.log").write_bytes(b"live current log")
+        if fault == "symlink":
+            log.unlink()
+            log.symlink_to(root / "ase-console.log")
+        elif fault == "different_inode":
+            log.rename(archive / "retained-original")
+            log.write_bytes(b"x" * plan.log_byte_count)
+            log.chmod(0o600)
+        else:
+            (archive / (retention._INTENT if fault == "intent" else retention._RECEIPT)).write_text(
+                "{}"
+            )
+            (archive / (retention._INTENT if fault == "intent" else retention._RECEIPT)).chmod(
+                0o600
+            )
+        with pytest.raises((module.ServiceLifecycleError, ValueError)):
+            retention.purge_archived_log(env, confirm_delete_archived_log=True)
+        assert log.exists()
+        assert (root / "ase-console.log").read_bytes() == b"live current log"
+        assert inspection_required(env)
+
+
+@pytest.mark.parametrize(
+    ("name", "model"),
+    [
+        ("console-archived-log-purge-intent", "ArchivedLogPurgeIntent"),
+        ("console-archived-log-purge-receipt", "ArchivedLogPurgeReceipt"),
+    ],
+)
+def test_archived_log_purge_schema_parity(name: str, model: str) -> None:
+    from ai_software_engineer.web_console import fault_log_retention as retention
+
+    schema = getattr(retention, model).model_json_schema()
+    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    assert (
+        json.loads((Path(__file__).parents[2] / "schemas" / f"{name}.schema.json").read_text())
+        == schema
+    )
+
+
+def test_archived_log_live_writer_refuses_purge_without_intent(tmp_path: Path) -> None:
+    from ai_software_engineer.web_console import fault_log_retention as retention
+
+    with _host(tmp_path) as (env, _):
+        plan = prepare_fault_retirement(env)
+        _execute(env, plan.record_sha256)
+        archive = (
+            Path(env["ASE_SERVICE_STATE_DIR"]) / "console-fault-retirements" / plan.record_sha256
+        )
+        with (
+            (archive / "ase-console.log").open("ab"),
+            pytest.raises(module.ServiceLifecycleError),
+        ):
+            retention.purge_archived_log(env, confirm_delete_archived_log=True)
+        assert not (archive / retention._INTENT).exists()
+        assert (archive / "ase-console.log").exists()
+        assert (
+            retention.purge_archived_log(env, confirm_delete_archived_log=True).final_observation
+            == "ABSENT"
+        )

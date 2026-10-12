@@ -1,0 +1,18 @@
+{
+  "id": "platform-delivery-closeout-20261012",
+  "title": "解耦归档日志、整合历史分支并恢复 K1 完整交付",
+  "status": "in_progress",
+  "base": "bf3f3a8",
+  "authorized": [
+    "删除历史归档ASE日志",
+    "完成并合并全部分支至main、删除已合入分支",
+    "受控服务维护与恢复普通模式",
+    "通过ASE审批并继续K1"
+  ],
+  "constraints": [
+    "只跑增量测试",
+    "不改写历史执行结果或verdict",
+    "保留Coder开发进度",
+    "不直接改生产SQL"
+  ]
+}

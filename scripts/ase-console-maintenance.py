@@ -12,9 +12,11 @@ from ai_software_engineer.config.runtime_environment import (
     LocalRuntimeEnvironmentStore,
     runtime_environment_path,
 )
+from ai_software_engineer.web_console.fault_log_retention import purge_archived_log
 from ai_software_engineer.web_console.fault_retirement import (
     execute_fault_retirement,
     prepare_fault_retirement,
+    verify_retired_log,
 )
 from ai_software_engineer.web_console.maintenance_completion import (
     complete_maintenance,
@@ -32,6 +34,9 @@ def main() -> int:
     execute = commands.add_parser("execute")
     execute.add_argument("--plan", required=True)
     execute.add_argument("--confirm-fault-retirement", action="store_true")
+    commands.add_parser("verify-archived-log")
+    purge = commands.add_parser("purge-archived-log")
+    purge.add_argument("--confirm-delete-archived-log", action="store_true")
     commands.add_parser("prepare-completion")
     complete = commands.add_parser("complete")
     complete.add_argument("--plan", required=True)
@@ -46,6 +51,15 @@ def main() -> int:
                     os.environ,
                     plan_sha256=args.plan,
                     confirm_fault_retirement=args.confirm_fault_retirement,
+                ).model_dump_json()
+            )
+        elif args.command == "verify-archived-log":
+            print(verify_retired_log(os.environ).model_dump_json())
+        elif args.command == "purge-archived-log":
+            print(
+                purge_archived_log(
+                    os.environ,
+                    confirm_delete_archived_log=args.confirm_delete_archived_log,
                 ).model_dump_json()
             )
         else:

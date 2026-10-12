@@ -147,8 +147,8 @@ def test_exact_plan_drift_refuses(
     elif change == "instance":
         _stopped_successor(maintained)
     else:
-        log = next((root / "console-fault-retirements").glob("*/ase-console.log"))
-        log.write_bytes(b"tampered")
+        control = next((root / "console-fault-retirements").glob("*/console-service-instance.json"))
+        control.write_bytes(b"tampered")
     with pytest.raises((module.MaintenanceCompletionError, RuntimeError, ValueError)):
         _complete(maintained, plan.record_sha256)
     assert not (root / RECEIPT_NAME).exists()
@@ -295,3 +295,20 @@ def test_partial_anchor_then_reprepare_retains_one_complete_confirmation_chain(
     assert receipt.supersedes_receipt_sha256 == anchor.record_sha256
     module.admit_completed_maintenance(maintained)
     assert module.verified_completion(root) == (second, receipt)
+
+
+@pytest.mark.parametrize("removed", [False, True])
+def test_maintenance_completion_and_normal_admission_ignore_diagnostic_log_retention(
+    maintained: dict[str, str], removed: bool
+) -> None:
+    root = Path(maintained["ASE_SERVICE_STATE_DIR"])
+    marker = json.loads((root / "console-inspection.json").read_text())
+    log = root / "console-fault-retirements" / marker["plan_sha256"] / "ase-console.log"
+    if removed:
+        log.unlink()
+    else:
+        log.write_bytes(b"changed diagnostic retention")
+    plan = module.prepare_maintenance_completion(maintained)
+    _complete(maintained, plan.record_sha256)
+    module.admit_completed_maintenance(maintained)
+    assert not inspection_required(maintained)
