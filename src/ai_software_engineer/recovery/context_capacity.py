@@ -52,6 +52,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     FileProjectDeliveryCheckpointStore,
 )
+from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.read_record_scope import recovery_record_read_scope
 from ai_software_engineer.recovery.baseline_source import (
@@ -216,9 +217,30 @@ class LegacyContextCapacitySourceReader:
     def _inspect(
         self, scope: RecoveryScope, receipt: ContextCapacityReceipt | None
     ) -> NativeRecoverySource:
+        parent_journals: dict[Path, JointJournal] = {}
+        try:
+            return self._inspect_source(scope, receipt, parent_journals)
+        finally:
+            # A retained failure traceback may still hold a helper's journal local.
+            # Release its decoded history as well as our observation-local map.
+            for journal in parent_journals.values():
+                journal._verified.clear()
+            parent_journals.clear()
+
+    def _inspect_source(
+        self,
+        scope: RecoveryScope,
+        receipt: ContextCapacityReceipt | None,
+        parent_journals: dict[Path, JointJournal],
+    ) -> NativeRecoverySource:
         team = self._team(scope)
         project, repository = team.project_registry().locate_repository(scope.repository_id)
-        _require_native_active(project, scope.delivery_id)
+        parent_journals[project.requirements_root] = JointJournal(
+            project.requirements_root, read_only=True
+        )
+        _require_native_active(
+            project, scope.delivery_id, journal=parent_journals[project.requirements_root]
+        )
         root = repository.root
         manifest = RepositoryWorkspaceManifest.model_validate_json(
             _read_regular(root / "workspace.json", 64_000)
@@ -304,7 +326,7 @@ class LegacyContextCapacitySourceReader:
             current_capture = _capacity_capture(
                 manager, task, epochs[-1].binding, permissions, denied
             )
-            parent_id, parent_sha = _parent(team, cp, stages.approval)
+            parent_id, parent_sha = _parent(team, cp, stages.approval, journals=parent_journals)
             observed = ContextCapacityReceipt(
                 origin="legacy_terminal_context",
                 task_id=task.id,
@@ -395,7 +417,10 @@ class LegacyContextCapacitySourceReader:
                 raise ValueError("capacity native facts changed while observing")
             if read_approved_stages(
                 self.config, root, scope, cp, task, planner, current_dispatch=dispatch
-            ) != stages or _parent(team, cp, stages.approval) != (parent_id, parent_sha):
+            ) != stages or _parent(team, cp, stages.approval, journals=parent_journals) != (
+                parent_id,
+                parent_sha,
+            ):
                 raise ValueError("capacity approved Requirement changed while observing")
             if self._require_original_plan(root, task, events) != original_plan:
                 raise ValueError("capacity original Plan changed while observing")

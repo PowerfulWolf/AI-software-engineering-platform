@@ -1,0 +1,28 @@
+{
+  "name": "capacity-parent-journal-scope",
+  "title": "Legacy capacity 同步观察内完整 parent journal 解码复用",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "69703f8",
+  "allowlist": [
+    "src/ai_software_engineer/recovery/context_capacity.py",
+    "tests/recovery/test_capacity_parent_journal_scope.py",
+    ".trellis/spec/core/capacity-parent-journal-scope.md",
+    ".trellis/tasks/10-12-capacity-parent-journal-scope/"
+  ],
+  "constraints": [
+    "Incremental tests only; no production, model, service or shared database access",
+    "Retain all complete byte/hash, retirement/parent and source before/after observations",
+    "Only existing JointJournal exact-byte decoding reuse within one synchronous observation",
+    "No current authority, SQL, Task, claim, Git or READY cache; no cross-request lifetime",
+    "Clear local decoded models on normal and exceptional exits"
+  ],
+  "verification_commands": [
+    "PYTHONPATH=src .venv/bin/python -m pytest tests/recovery/test_capacity_parent_journal_scope.py tests/recovery/test_context_capacity_source.py tests/recovery/test_context_capacity_sql.py tests/recovery/test_context_capacity_entry.py tests/multi_directory/test_current_journal_copy.py tests/manager/test_joint_journal_read_reuse.py -q --tb=short",
+    ".venv/bin/python -m ruff check src/ai_software_engineer/recovery/context_capacity.py tests/recovery/test_capacity_parent_journal_scope.py",
+    ".venv/bin/python -m ruff format --check src/ai_software_engineer/recovery/context_capacity.py tests/recovery/test_capacity_parent_journal_scope.py",
+    "PYTHONPATH=src MYPYPATH=src .venv/bin/python -m mypy src/ai_software_engineer/recovery/context_capacity.py tests/recovery/test_capacity_parent_journal_scope.py",
+    "git diff --check"
+  ],
+  "rollback": "Restore prior parent journal construction while execution is idle; preserve all durable facts."
+}
