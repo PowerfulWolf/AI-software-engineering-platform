@@ -993,6 +993,84 @@
         {
           "if": {
             "required": [
+              "verifier_preparation"
+            ],
+            "properties": {
+              "verifier_preparation": {
+                "type": "object",
+                "required": [
+                  "context_capacity_receipt_sha256"
+                ],
+                "properties": {
+                  "context_capacity_receipt_sha256": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "invocation_start_sha256": {
+                "type": "null"
+              },
+              "invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "process_stop_sha256": {
+                "type": "null"
+              },
+              "retry_cause": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "maxItems": 1,
+                "items": {
+                  "const": "RESUME_UNINVOKED"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "role": {
+                        "enum": [
+                          "qa",
+                          "reviewer"
+                        ]
+                      },
+                      "classification": {
+                        "const": "CONTEXT_CAPACITY"
+                      },
+                      "evidence_ids": {
+                        "minItems": 1,
+                        "maxItems": 1,
+                        "items": {
+                          "pattern": "^context-capacity://[a-f0-9]{64}$"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
               "provider_failure_code"
             ],
             "properties": {
@@ -1513,7 +1591,23 @@
         "expansion_number"
       ],
       "title": "KnowledgePreparationRetryEvidence",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "properties": {
+            "role": {
+              "enum": [
+                "coder",
+                "qa",
+                "reviewer"
+              ]
+            },
+            "execution_record_sha256s": {
+              "uniqueItems": true
+            }
+          }
+        }
+      ]
     },
     "LocalOperatorPrincipal": {
       "additionalProperties": false,
@@ -2543,6 +2637,32 @@
           ],
           "default": null,
           "title": "Budget Source"
+        },
+        "context_capacity_receipt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Capacity Receipt Sha256"
+        },
+        "context_capacity_claim_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Capacity Claim Sha256"
         }
       },
       "required": [
@@ -2555,7 +2675,124 @@
         "prerequisite_facts_sha256"
       ],
       "title": "VerifierPreparationEvidence",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "native_execution_state": {
+                "const": "FINISHED"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "native_binding_plan_sha256",
+              "native_started_sha256",
+              "native_finished_sha256"
+            ],
+            "properties": {
+              "native_binding_plan_sha256": {
+                "type": "string"
+              },
+              "native_started_sha256": {
+                "type": "string"
+              },
+              "native_finished_sha256": {
+                "type": "string"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "required": [
+                    "context_capacity_receipt_sha256"
+                  ],
+                  "properties": {
+                    "context_capacity_receipt_sha256": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "budget_source": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "else": {
+                  "required": [
+                    "budget_source"
+                  ],
+                  "properties": {
+                    "budget_source": {
+                      "const": "frozen_work_attempt"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "else": {
+            "properties": {
+              "native_started_sha256": {
+                "type": "null"
+              },
+              "native_finished_sha256": {
+                "type": "null"
+              },
+              "native_failure_code": {
+                "type": "null"
+              },
+              "budget_source": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "context_capacity_receipt_sha256"
+            ],
+            "properties": {
+              "context_capacity_receipt_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "context_capacity_claim_sha256"
+            ],
+            "properties": {
+              "context_capacity_claim_sha256": {
+                "type": "string"
+              },
+              "native_execution_state": {
+                "enum": [
+                  "NOT_STARTED",
+                  "FINISHED"
+                ]
+              },
+              "native_failure_code": {
+                "type": "null"
+              },
+              "budget_source": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "context_capacity_claim_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "additionalProperties": false,

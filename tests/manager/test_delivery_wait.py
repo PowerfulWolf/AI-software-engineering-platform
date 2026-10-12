@@ -528,6 +528,10 @@ class WaitQueue:
         assert work_item_id == self.item.id
         return self.bound
 
+    def step_for_invocation(self, work_item_id: str, baseline_sha256: str | None) -> QueuedRoleStep:
+        assert baseline_sha256 is None
+        return self.step(work_item_id)
+
     def original_claim(self, lease_id: str) -> QueueClaim:
         assert lease_id == self.original.lease.id
         return self.original

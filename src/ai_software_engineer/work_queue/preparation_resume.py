@@ -89,6 +89,7 @@ def preparation_resume_consumed(
     proof = decision.verifier_preparation
     if decision.resolution_kind is not DeliveryResolutionKind.RESUME_UNINVOKED or proof is None:
         return False
+    capacity = proof.context_capacity_receipt_sha256 is not None
     return (
         not event.detail.budget_refund
         and event.detail.resolution_sha256 == decision.resolution_sha256
@@ -119,7 +120,23 @@ def preparation_resume_consumed(
         and decision.task_revision == intent.checkpoint_sequence
         and decision.expected_source_revision == intent.request.source_revision
         and decision.step_sha256 == digest(queue.step_for_claim(original).to_wire())
-        and proof.native_execution_state == "NOT_STARTED"
+        and (
+            proof.native_execution_state == "NOT_STARTED"
+            or (
+                capacity
+                and proof.native_execution_state == "FINISHED"
+                and proof.native_failure_code is None
+                and proof.budget_source is None
+            )
+        )
+        and (
+            not capacity
+            or (
+                proof.context_capacity_claim_sha256 == digest(original.to_wire())
+                and proof.budget_source is None
+                and proof.native_failure_code is None
+            )
+        )
         and proof.request_sha256 == intent.request_sha256
         and proof.previous_run_id == intent.request.run_id
         and proof.previous_context_manifest_id == intent.request.context_manifest_id

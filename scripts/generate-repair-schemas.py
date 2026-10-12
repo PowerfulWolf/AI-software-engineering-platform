@@ -51,7 +51,9 @@ for name in (
     "VerifierPreparationEvidence",
     "KnowledgePreparationRetryEvidence",
 ):
-    definitions[name]["allOf"] = engineering_wire["$defs"][name]["allOf"]
+    for generated in schemas.values():
+        if name in generated.get("$defs", {}):
+            generated["$defs"][name]["allOf"] = engineering_wire["$defs"][name]["allOf"]
 for name in ("CreateRequirementIntent", "UpdateRequirementIntent"):
     roots = definitions[name]["properties"]["repository_roots"]
     roots["uniqueItems"] = True

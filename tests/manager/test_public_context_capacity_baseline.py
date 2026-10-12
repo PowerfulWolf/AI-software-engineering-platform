@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +15,7 @@ import pytest
 from ai_software_engineer.agents import AgentRequest, AgentResult, StructuredModelResult
 from ai_software_engineer.agents.codex_cli import CodexCliAgentAdapter
 from ai_software_engineer.agents.model_input import FinalModelInputCapacityExceeded
+from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import ContextStoreError
 from ai_software_engineer.domain import (
@@ -48,6 +49,7 @@ from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.orchestration.continuation_models import ContinuationRejected
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
+from tests.domain.factories import make_plan_artifact
 from tests.manager.test_production_backend import (
     _git,
     _git_output,
@@ -129,6 +131,31 @@ def _assert_refused_capacity_proposals(
         refuse(ValueError, "原调用结果|模型开始或结果")
     finally:
         start_path.unlink(missing_ok=True)
+    # No SQL acceptance is necessary for a sealed role producer to contradict
+    # claimed no-start. Ordinary accepted-input filtering must not hide this fact.
+    original_plan = make_plan_artifact()
+    stranded = seal_artifact(
+        original_plan.model_copy(
+            update={
+                "artifact_id": "art_stranded_capacity",
+                "task_id": marker.task_id,
+                "source_revision": marker.source_revision,
+                "context_manifest_id": request.context_manifest_id,
+                "producer": original_plan.producer.model_copy(
+                    update={
+                        "run_id": request.run_id,
+                    }
+                ),
+            }
+        ),
+        validated_at=marker.observed_at,
+    )
+    raw_artifacts = FileArtifactStore(sidecar / "artifacts")
+    raw_artifacts.put(stranded)
+    try:
+        refuse(ValueError, "角色产出")
+    finally:
+        (sidecar / "artifacts" / (stranded.artifact_id + ".json")).unlink()
     native_root = sidecar / "state/continuations" / marker.task_id
     assert native_root.is_dir()
     # Orphan or corrupt native records cannot be treated as evidence of no invocation.
@@ -163,21 +190,16 @@ def _assert_refused_capacity_proposals(
     assert json.loads(original_marker_bytes)["record"] == marker.to_wire()
 
 
-@pytest.mark.mysql
-@pytest.mark.parametrize("rounds", [1, 2])
-def test_public_capacity_pause_resume_preserves_one_task_and_independent_delivery(
-    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, rounds: int
-) -> None:
-    repository = tmp_path / "target"
-    repository.mkdir()
-    (repository / "hello.txt").write_text("hello\n")
-    _git("init", "-b", "main", cwd=repository)
-    _git("add", "hello.txt", cwd=repository)
-    _git("commit", "-m", "initial", cwd=repository)
-    source = _git_output("rev-parse", "HEAD", cwd=repository)
-    preparation_requests: list[AgentRequest] = []
-    invoked: list[AgentRequest] = []
-    capacity = True
+def public_capacity_host(
+    *,
+    tmp_path: Path,
+    repository: Path,
+    mysql_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    preparation_requests: list[AgentRequest],
+    invoked: list[AgentRequest],
+    should_reject: Callable[[AgentRequest], bool],
+) -> TeamHost:
     original_complete = _ScriptedStructuredClient.complete
 
     def source_inspection(
@@ -217,7 +239,7 @@ def test_public_capacity_pause_resume_preserves_one_task_and_independent_deliver
     class CapacityThenDelivery(CodexCliAgentAdapter):
         def prepare_input(self, request: AgentRequest) -> None:
             preparation_requests.append(request)
-            if request.role is AgentRole.CODER and capacity:
+            if should_reject(request):
                 assert self._input_budget is not None
                 maximum = self._input_budget._resolver.get_context(
                     request.context_manifest_id
@@ -319,6 +341,33 @@ def test_public_capacity_pause_resume_preserves_one_task_and_independent_deliver
         },
         structured_clients=_ScriptedClientFactory(),
         delivery_route_adapters=production_delivery.ConfiguredDeliveryRouteAdapterFactory(),
+    )
+    return host
+
+
+@pytest.mark.mysql
+@pytest.mark.parametrize("rounds", [1, 2])
+def test_public_capacity_pause_resume_preserves_one_task_and_independent_delivery(
+    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, rounds: int
+) -> None:
+    repository = tmp_path / "target"
+    repository.mkdir()
+    (repository / "hello.txt").write_text("hello\n")
+    _git("init", "-b", "main", cwd=repository)
+    _git("add", "hello.txt", cwd=repository)
+    _git("commit", "-m", "initial", cwd=repository)
+    source = _git_output("rev-parse", "HEAD", cwd=repository)
+    preparation_requests: list[AgentRequest] = []
+    invoked: list[AgentRequest] = []
+    capacity = True
+    host = public_capacity_host(
+        tmp_path=tmp_path,
+        repository=repository,
+        mysql_dsn=mysql_dsn,
+        monkeypatch=monkeypatch,
+        preparation_requests=preparation_requests,
+        invoked=invoked,
+        should_reject=lambda request: request.role is AgentRole.CODER and capacity,
     )
     entry = host.project_entry()
     product = entry.start(

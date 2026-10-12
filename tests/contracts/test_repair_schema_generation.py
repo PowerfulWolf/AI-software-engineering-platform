@@ -47,7 +47,7 @@ def standalone_regenerated(tmp_path_factory: pytest.TempPathFactory) -> dict[str
 
 
 @pytest.fixture(scope="module")
-def regenerated(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+def generated_bundle(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict[str, Any]]:
     root = tmp_path_factory.mktemp("repair-schema-regeneration")
     scripts = root / "scripts"
     scripts.mkdir()
@@ -61,10 +61,40 @@ def regenerated(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     )
     command = (sys.executable, str(scripts / "generate-repair-schemas.py"))
     subprocess.run(command, cwd=ROOT, check=True, capture_output=True, timeout=60)
-    first = (schemas / "console-operation.schema.json").read_bytes()
+    first = {path.name: path.read_bytes() for path in schemas.glob("*.schema.json")}
     subprocess.run(command, cwd=ROOT, check=True, capture_output=True, timeout=60)
-    assert (schemas / "console-operation.schema.json").read_bytes() == first
-    return cast(dict[str, Any], json.loads(first))
+    assert {path.name: path.read_bytes() for path in schemas.glob("*.schema.json")} == first
+    return {name: cast(dict[str, Any], json.loads(body)) for name, body in first.items()}
+
+
+@pytest.fixture(scope="module")
+def regenerated(generated_bundle: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    return generated_bundle["console-operation.schema.json"]
+
+
+@pytest.mark.parametrize("name", ["console-operation", "stopped-failure-budget-settlement"])
+def test_fresh_embedded_capacity_guards_keep_no_refund_and_legacy_finished_budget(
+    generated_bundle: dict[str, dict[str, Any]], name: str
+) -> None:
+    from tests.domain.test_delivery_resolution_schema import _wire, capacity_resolution_wire
+
+    schema = generated_bundle[name + ".schema.json"]
+    canonical = json.loads((ROOT / "schemas/engineering-wait-resolution.schema.json").read_text())
+    for model in ("VerifierPreparationEvidence", "DeliveryWaitInvestigation"):
+        assert schema["$defs"][model]["allOf"] == canonical["$defs"][model]["allOf"]
+    validator = Draft202012Validator(
+        {
+            "$defs": schema["$defs"],
+            "$ref": "#/$defs/VerifierPreparationEvidence",
+        }
+    )
+    capacity = capacity_resolution_wire()["verifier_preparation"]
+    validator.validate(capacity)
+    assert not validator.is_valid({**capacity, "budget_source": "frozen_work_attempt"})
+    assert not validator.is_valid({**capacity, "native_finished_sha256": None})
+    legacy = _wire("RETRY_VERIFIER_PREPARATION")["verifier_preparation"]
+    validator.validate(legacy)
+    assert not validator.is_valid({**legacy, "budget_source": None})
 
 
 def test_regeneration_preserves_every_published_allof_without_requiring_a_previous_output(

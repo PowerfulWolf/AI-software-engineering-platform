@@ -104,11 +104,24 @@ class VerifierPreparationEvidence(DomainModel):
     native_failure_code: NonEmptyStr | None = None
     prerequisite_facts_sha256: DispositionSha256
     budget_source: Literal["frozen_work_attempt"] | None = None
+    context_capacity_receipt_sha256: DispositionSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    context_capacity_claim_sha256: DispositionSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_exact_native_state(self) -> Self:
         finished = self.native_execution_state == "FINISHED"
-        if finished != (self.budget_source == "frozen_work_attempt"):
+        capacity = self.context_capacity_receipt_sha256 is not None
+        if capacity != (self.context_capacity_claim_sha256 is not None):
+            raise ValueError("capacity resume requires its exact receipt and historical claim")
+        if capacity and (self.budget_source is not None or self.native_failure_code is not None):
+            raise ValueError("uninvoked capacity resume cannot refund or retry a native failure")
+        if capacity and self.native_execution_state not in {"NOT_STARTED", "FINISHED"}:
+            raise ValueError("capacity resume requires reliable original verifier preparation")
+        if not capacity and finished != (self.budget_source == "frozen_work_attempt"):
             raise ValueError("only a finished native preparation consumes frozen work allowance")
         if finished and (
             self.native_binding_plan_sha256 is None
@@ -365,6 +378,26 @@ class DeliveryWaitInvestigation(DomainModel):
             or self.invocation_outcome_sha256 is not None
         ):
             raise ValueError("native preparation proof changed its exact pre-model facts")
+        capacity = self.verifier_preparation
+        if (
+            capacity is not None
+            and capacity.context_capacity_receipt_sha256 is not None
+            and (
+                facts.classification != "CONTEXT_CAPACITY"
+                or facts.role not in {AgentRole.QA, AgentRole.REVIEWER}
+                or facts.evidence_ids
+                != ("context-capacity://" + capacity.context_capacity_receipt_sha256,)
+                or self.permitted_resolutions
+                not in ((), (DeliveryResolutionKind.RESUME_UNINVOKED,))
+                or self.original_authority is not None
+                or self.verification_retry is not None
+                or self.knowledge_preparation is not None
+                or self.rejected_output is not None
+                or self.retry_cause is not None
+                or self.process_stop_sha256 is not None
+            )
+        ):
+            raise ValueError("capacity preparation proof changed its exact no-model-start facts")
         if DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION in self.permitted_resolutions and (
             self.knowledge_preparation is None
         ):
@@ -527,6 +560,7 @@ class DeliveryResolution(DomainModel):
             expected_kind = (
                 DeliveryResolutionKind.RESUME_UNINVOKED
                 if self.verifier_preparation.native_execution_state == "NOT_STARTED"
+                or self.verifier_preparation.context_capacity_receipt_sha256 is not None
                 else DeliveryResolutionKind.RETRY_VERIFIER_PREPARATION
             )
             if (

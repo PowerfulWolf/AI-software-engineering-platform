@@ -121,9 +121,28 @@ resolution_schema["$defs"]["DeliveryResolution"]["allOf"] = [
             "then": {
                 "properties": {
                     "verifier_preparation": {
-                        "properties": {
-                            "native_execution_state": {"const": "NOT_STARTED"},
-                        }
+                        "allOf": [
+                            {
+                                "if": {
+                                    "required": ["context_capacity_receipt_sha256"],
+                                    "properties": {
+                                        "context_capacity_receipt_sha256": {"type": "string"}
+                                    },
+                                },
+                                "then": {
+                                    "properties": {
+                                        "native_execution_state": {
+                                            "enum": ["NOT_STARTED", "FINISHED"]
+                                        }
+                                    }
+                                },
+                                "else": {
+                                    "properties": {
+                                        "native_execution_state": {"const": "NOT_STARTED"}
+                                    }
+                                },
+                            }
+                        ]
                     }
                 }
             },
@@ -357,7 +376,6 @@ resolution_schema["$defs"]["VerifierPreparationEvidence"]["allOf"] = [
                 "native_binding_plan_sha256",
                 "native_started_sha256",
                 "native_finished_sha256",
-                "budget_source",
             ],
             "properties": {
                 **{
@@ -368,8 +386,20 @@ resolution_schema["$defs"]["VerifierPreparationEvidence"]["allOf"] = [
                         "native_finished_sha256",
                     )
                 },
-                "budget_source": {"const": "frozen_work_attempt"},
             },
+            "allOf": [
+                {
+                    "if": {
+                        "required": ["context_capacity_receipt_sha256"],
+                        "properties": {"context_capacity_receipt_sha256": {"type": "string"}},
+                    },
+                    "then": {"properties": {"budget_source": {"type": "null"}}},
+                    "else": {
+                        "required": ["budget_source"],
+                        "properties": {"budget_source": {"const": "frozen_work_attempt"}},
+                    },
+                }
+            ],
         },
         "else": {
             "properties": {
@@ -383,7 +413,98 @@ resolution_schema["$defs"]["VerifierPreparationEvidence"]["allOf"] = [
             }
         },
     },
+    {
+        "if": {
+            "required": ["context_capacity_receipt_sha256"],
+            "properties": {"context_capacity_receipt_sha256": {"type": "string"}},
+        },
+        "then": {
+            "required": ["context_capacity_claim_sha256"],
+            "properties": {
+                "context_capacity_claim_sha256": {"type": "string"},
+                "native_execution_state": {"enum": ["NOT_STARTED", "FINISHED"]},
+                "native_failure_code": {"type": "null"},
+                "budget_source": {"type": "null"},
+            },
+        },
+        "else": {"properties": {"context_capacity_claim_sha256": {"type": "null"}}},
+    },
 ]
+capacity_proof = {
+    "required": ["verifier_preparation"],
+    "properties": {
+        "verifier_preparation": {
+            "type": "object",
+            "required": ["context_capacity_receipt_sha256"],
+            "properties": {"context_capacity_receipt_sha256": {"type": "string"}},
+        }
+    },
+}
+resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
+    {
+        "if": capacity_proof,
+        "then": {"properties": {"resolution_kind": {"const": "RESUME_UNINVOKED"}}},
+    }
+)
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"].append(
+    {
+        "if": capacity_proof,
+        "then": {
+            "properties": {
+                **{
+                    field: {"type": "null"}
+                    for field in (
+                        "invocation_start_sha256",
+                        "invocation_outcome_sha256",
+                        "process_stop_sha256",
+                        "retry_cause",
+                        "original_authority",
+                        "verification_retry",
+                        "knowledge_preparation",
+                        "rejected_output",
+                    )
+                },
+                "permitted_resolutions": {"maxItems": 1, "items": {"const": "RESUME_UNINVOKED"}},
+                "disposition": {
+                    "properties": {
+                        "facts": {
+                            "properties": {
+                                "role": {"enum": ["qa", "reviewer"]},
+                                "classification": {"const": "CONTEXT_CAPACITY"},
+                                "evidence_ids": {
+                                    "minItems": 1,
+                                    "maxItems": 1,
+                                    "items": {"pattern": "^context-capacity://[a-f0-9]{64}$"},
+                                },
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    }
+)
+# The canonical wait graph also retains the pre-existing stopped-provider hint.
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"].append(
+    {
+        "if": {
+            "required": ["provider_failure_code"],
+            "properties": {"provider_failure_code": {"type": "string"}},
+        },
+        "then": {
+            "required": ["invocation_start_sha256", "invocation_outcome_sha256", "original_run_id"],
+            "properties": {
+                "invocation_start_sha256": {"type": "string"},
+                "invocation_outcome_sha256": {"type": "string"},
+                "original_run_id": {"type": "string"},
+                "permitted_resolutions": {"maxItems": 0},
+                "disposition": {
+                    "properties": {"facts": {"properties": {"role": {"const": "coder"}}}}
+                },
+            },
+        },
+    }
+)
 (
     Path(__file__).resolve().parents[1] / "schemas/engineering-wait-resolution.schema.json"
 ).write_text(json.dumps(resolution_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

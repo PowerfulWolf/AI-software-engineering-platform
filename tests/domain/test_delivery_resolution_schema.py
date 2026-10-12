@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as SchemaValidationError
 from pydantic import ValidationError
 
+from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.domain.delivery_disposition import decide_delivery_disposition
 from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
@@ -214,3 +215,136 @@ def test_rejected_outcome_missing_fact_and_no_replay_match_published_schema() ->
             DeliveryWaitInvestigation.model_validate(unsafe)
         with pytest.raises(SchemaValidationError):
             validator.validate(unsafe)
+
+
+def capacity_resolution_wire() -> dict[str, Any]:
+    """A capacity stop retains its exact unused model reservation, even after native tests."""
+    wire = _wire("RETRY_VERIFIER_PREPARATION")
+    wire["resolution_kind"] = "RESUME_UNINVOKED"
+    proof = wire["verifier_preparation"]
+    proof.pop("native_failure_code", None)
+    proof.pop("budget_source", None)
+    proof["context_capacity_receipt_sha256"] = "a" * 64
+    proof["context_capacity_claim_sha256"] = "b" * 64
+    return dict(DeliveryResolution.model_validate(wire).to_wire())
+
+
+def capacity_investigation_wire() -> dict[str, Any]:
+    task = make_task().model_copy(update={"base_ref": "c" * 40})
+    original = _proof(task)
+    evidence = capacity_resolution_wire()["verifier_preparation"]
+    disposition = decide_delivery_disposition(
+        original.disposition.facts.model_copy(
+            update={
+                "role": AgentRole.QA,
+                "classification": "CONTEXT_CAPACITY",
+                "evidence_ids": (
+                    "context-capacity://" + evidence["context_capacity_receipt_sha256"],
+                ),
+            }
+        )
+    )
+    wire = {
+        **original.to_wire(),
+        "disposition": disposition.to_wire(),
+        "disposition_sha256": disposition.disposition_sha256,
+        "original_run_id": evidence["previous_run_id"],
+        "prerequisite_facts_sha256": evidence["prerequisite_facts_sha256"],
+        "retry_cause": None,
+        "verifier_preparation": evidence,
+        "permitted_resolutions": ["RESUME_UNINVOKED"],
+    }
+    return dict(DeliveryWaitInvestigation.model_validate(wire).to_wire())
+
+
+@pytest.mark.parametrize(
+    "schema_name",
+    [
+        "engineering-wait-resolution",
+        "console-operation",
+        "stopped-failure-budget-settlement",
+    ],
+)
+def test_capacity_proof_full_shape_and_guard_agree_in_all_embedded_schemas(
+    schema_name: str,
+) -> None:
+    schema = json.loads((SCHEMAS / f"{schema_name}.schema.json").read_text())
+    for model, wire in (
+        ("VerifierPreparationEvidence", capacity_resolution_wire()["verifier_preparation"]),
+        ("DeliveryWaitInvestigation", capacity_investigation_wire()),
+    ):
+        validator = Draft202012Validator({"$defs": schema["$defs"], "$ref": f"#/$defs/{model}"})
+        validator.validate(wire)
+        evidence = wire if model == "VerifierPreparationEvidence" else wire["verifier_preparation"]
+        for field, value in (
+            ("context_capacity_claim_sha256", None),
+            ("context_capacity_receipt_sha256", None),
+            ("native_execution_state", "UNCERTAIN"),
+            ("budget_source", "frozen_work_attempt"),
+            ("native_failure_code", "COMMAND_TIMEOUT"),
+            ("native_finished_sha256", None),
+        ):
+            changed = json.loads(json.dumps(wire))
+            target = (
+                changed
+                if model == "VerifierPreparationEvidence"
+                else changed["verifier_preparation"]
+            )
+            target[field] = value
+            assert not validator.is_valid(changed), (schema_name, model, field)
+        assert evidence["native_execution_state"] == "FINISHED"
+
+
+def test_capacity_resolution_rejects_retry_and_mixed_invocation_proof() -> None:
+    value: Any
+    validator = Draft202012Validator(
+        json.loads((SCHEMAS / "engineering-wait-resolution.schema.json").read_text())
+    )
+    wire = capacity_resolution_wire()
+    validator.validate(wire)
+    for field, value in (
+        ("resolution_kind", "RETRY_VERIFIER_PREPARATION"),
+        ("retry_cause", "provider_transient"),
+    ):
+        unsafe = {**wire, field: value}
+        with pytest.raises(ValidationError):
+            DeliveryResolution.model_validate(unsafe)
+        with pytest.raises(SchemaValidationError):
+            validator.validate(unsafe)
+    wire = capacity_investigation_wire()
+    validator.validate(wire)
+    for field, value in (
+        ("invocation_start_sha256", "c" * 64),
+        ("invocation_outcome_sha256", "d" * 64),
+        ("process_stop_sha256", "e" * 64),
+        ("retry_cause", "local_execution_limit"),
+        ("permitted_resolutions", ["RETRY_VERIFIER_PREPARATION"]),
+    ):
+        unsafe = {**wire, field: value}
+        with pytest.raises(ValidationError):
+            DeliveryWaitInvestigation.model_validate(unsafe)
+        with pytest.raises(SchemaValidationError):
+            validator.validate(unsafe)
+    for field, value in (
+        ("role", "coder"),
+        ("classification", "ENVIRONMENT_UNAVAILABLE"),
+        ("evidence_ids", ["verifier-preparation://" + "a" * 64]),
+    ):
+        unsafe = json.loads(json.dumps(wire))
+        unsafe["disposition"]["facts"][field] = value
+        with pytest.raises(ValidationError):
+            DeliveryWaitInvestigation.model_validate(unsafe)
+        with pytest.raises(SchemaValidationError):
+            validator.validate(unsafe)
+
+
+def test_legacy_verifier_evidence_omits_capacity_fields_and_keeps_digest() -> None:
+    wire = _wire("RETRY_VERIFIER_PREPARATION")
+    evidence = wire["verifier_preparation"]
+    assert "context_capacity_receipt_sha256" not in evidence
+    assert "context_capacity_claim_sha256" not in evidence
+    record = DeliveryResolution.model_validate(wire)
+    assert record.to_wire() == wire
+    assert record.recompute_sha256() == digest(
+        {key: value for key, value in wire.items() if key != "resolution_sha256"}
+    )

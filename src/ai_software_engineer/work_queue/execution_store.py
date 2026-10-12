@@ -1083,6 +1083,47 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             else:
                 if resolution.retry_failure is not None:
                     raise QueueConflict("noninvoking resolution cannot add a retry failure")
+                if disposition.facts.classification == "CONTEXT_CAPACITY":
+                    preparation = resolution.verifier_preparation
+                    expected_stage = (
+                        TaskStatus.QA if current.role is AgentRole.QA else TaskStatus.REVIEW
+                    )
+                    if (
+                        resolution.resolution_kind is not DeliveryResolutionKind.RESUME_UNINVOKED
+                        or current.role not in {AgentRole.QA, AgentRole.REVIEWER}
+                        or preparation is None
+                        or preparation.context_capacity_receipt_sha256 is None
+                        or preparation.context_capacity_claim_sha256 is None
+                        or preparation.native_failure_code is not None
+                        or preparation.budget_source is not None
+                        or disposition.facts.evidence_ids
+                        != ("context-capacity://" + preparation.context_capacity_receipt_sha256,)
+                        or preparation.candidate_revision != step.boundary.source_revision
+                        or current.attempt != task.attempts
+                        or task.status is not expected_stage
+                    ):
+                        raise QueueConflict("容量继续缺少当前验证角色的精确未调用证明")
+                    capacity_claims = tuple(
+                        claim
+                        for claim in self.claims_for_work_item(current.id)
+                        if digest(claim.to_wire()) == preparation.context_capacity_claim_sha256
+                    )
+                    if len(capacity_claims) != 1 or (
+                        capacity_claims[0].work_item.dispatch_sequence != current.dispatch_sequence
+                        or capacity_claims[0].work_item.checkpoint_sequence
+                        != current.checkpoint_sequence
+                        or capacity_claims[0].work_item.role is not current.role
+                        or capacity_claims[0].work_item.attempt != current.attempt
+                    ):
+                        raise QueueConflict("容量继续与原真实 claim 或当前队列世代不一致")
+                    cursor.execute(
+                        "SELECT id FROM work_queue_accepted_artifacts WHERE task_id=%s "
+                        "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.work_item_id'))=%s "
+                        "LIMIT 1 FOR UPDATE",
+                        (task.id, current.id),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("验证角色已有接纳产出, 不能按未调用容量恢复")
                 if resolution.resolution_kind is DeliveryResolutionKind.REPLAY_RECORDED_RESULT:
                     original = resolution.original_authority
                     if original is None:

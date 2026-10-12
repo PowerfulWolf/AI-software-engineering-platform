@@ -255,3 +255,58 @@ production facts reader/accepted artifacts/Context/同候选验收。MySQL 使�
 回滚平台提交保留所有 sidecar records。已启动资源有固定 deadline；未启动过期 owned INTENT
 只在显式受控执行/工程 cleanup 重新核验精确身份后清理。当前 native Run 的 reconciliation
 不会自动遍历之前所有 Run；不能承诺旧 unstarted resources 已被自动全局清理。
+
+## 模型前输入容量等待的原候选继续（2026-10-12）
+
+`manager/capacity_input_reader.py::claimed_verifier_capacity(*, item, task, step,
+prerequisites, state, queue, artifacts) -> VerifierPreparationEvidence` 只读校验当前
+`CONTEXT_CAPACITY` 的 QA/Reviewer 工作项。`CapacityInputReader` 同时供历史 Coder
+基线收集器使用；当前验证角色不得使用历史 marker 的宽限。
+
+- `VerifierPreparationEvidence.context_capacity_receipt_sha256` 与
+  `context_capacity_claim_sha256` 必须同时存在；缺省从 wire 省略以保持旧记录摘要。
+  容量 proof 的 `budget_source/native_failure_code` 必须为 None，只允许
+  `RESUME_UNINVOKED`。普通 FINISHED 准备仍使用 `frozen_work_attempt` 和独立重试规则。
+- 当前工作项/Task/完整原 Task 快照、receipt、Context、原真实 claim、历史 queue step、
+  原 claim 前的最新授权基线必须精确一致。原 verifier intent/checkpoint 必须唯一、READY，
+  `observe_verifier_preparation` 的新鲜完整结果必须与其相同；成功 FINISHED 仍保留真实
+  binding/start/finish 摘要。native 成功命令不是模型调用、QA PASS 或 Review APPROVE。
+- no-start 必须扫描完整 invocation start/outcome、provider route、native capture
+  start/stop/receipt/admission 和原始 ArtifactStore。所有目录禁止 symlink；已存在的匹配
+  artifact/route JSON 必须是有界普通文件（每条最多 8,000,000 字节）并完成 typed/SHA/键校验。
+  不存在目录可视为无记录，损坏、孤立、重复别名、非普通文件和无法读取均拒绝。
+  容量收集不能使用 AcceptedArtifactStore 隐藏未接纳但已经封存的角色产出。
+- same Run、same 原 Context 或 same 原 Lease 事实均否定未调用。当前 QA/Reviewer 对 same
+  WorkItem 的任意调用事实拒绝。不同 Run/Context 不证明不同 claim：相关角色的完整 Context
+  必须携真实 `source:execution.claim`，并与唯一完整调用 start 和队列 original claim 一致。
+  历史 Coder marker 仅允许真实更晚、不同 Lease 的 dispatch/step/source 事实；不能把未知
+  alias 当成之后的合法调用。旧独立 native 验证准备仍来自其自身 ledger，不被当成主模型 start。
+- 调查与消费保留 Task worker lock、队列 authority 和 MySQL Task fence。SQL 再核对当前
+  candidate/attempt/dispatch 和 proof 的唯一真实 claim，拒绝已有该 WorkItem 接纳产出。
+  `preparation_resume_consumed` 必须找到两真实 CLAIMED 之间的 exact WAIT_RESOLVED 决定。
+  继续只增加 dispatch sequence 并领取新 Lease/Run/Context；同 Task、WorkItem、candidate 和
+  attempt 不变、不退款、不添加失败、不改原 READY/native 记录，不跳过独立 QA/Review。
+
+| 场景 | 结果与断言 |
+| --- | --- |
+| READY + NOT_STARTED + 精确容量 receipt | 原候选 RESUME_UNINVOKED；新 claim，attempt 不变 |
+| READY + 真实 FINISHED native 成功 + 模型未开始 | 同上；保留真实原命令，不制造失败或预算退款 |
+| 原 READY 缺失、native finish 缺失/未知/失败/漂移 | 保留等待；不发布可消费继续决定 |
+| start/outcome/native receipt/admission 为 alternate Run 但同原 claim | 拒绝，不因 Run 名称不同放行 |
+| provider route 或未接纳 Artifact 为 alternate Context 但仍同原 claim | 完整 Context/claim 校验后拒绝 |
+| raw Artifact 为 dangling symlink、目录、FIFO、超限文件 | 有界读取前拒绝；不把坏文件跳过成 absence |
+| 两轮容量停止后继续 | 每轮独立真实 claim；原完整 receipt/READY 历史字节保持不变，最终独立 QA/Review |
+| 旧普通 FINISHED verifier retry | 原 frozen_work_attempt 契约、旧 SHA 和原权限保持 |
+
+执行回归为 `tests/manager/test_public_context_capacity_baseline.py`、
+`tests/manager/test_public_verifier_capacity_resume.py`、
+`tests/manager/test_verifier_capacity_input.py` 和
+`tests/domain/test_delivery_resolution_schema.py`。Schema 入口包括 engineering wait、Console
+与 stopped-budget settlement 的嵌入 proof；重新生成同样保留 capacity 与旧 provider/knowledge
+守卫。公开用例使用隔离 MySQL 和 fake 模型/受控执行端口，不访问生产需求或生产数据库。
+
+存量数据处置：无需迁移 SQL 或改写已有 Requirement/Task/Operation/READY/capacity 事实。
+已封存完整容量 receipt 的非终态 QA/Review 在发布后先调查工程等待，再按精确证明继续原候选；
+缺真实事实者保持等待，不补造历史。Coder 使用基线 PAUSE→RESUME 专门路径；旧终态容量任务
+使用独立兼容恢复，不能由此将终态重置。回滚执行逻辑必须保留已发布的新字段只读兼容，
+不得删除已保存 proof 或重写已消费决定。

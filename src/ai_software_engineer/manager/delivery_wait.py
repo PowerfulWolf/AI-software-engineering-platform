@@ -14,6 +14,7 @@ from typing import Literal, Protocol
 from ai_software_engineer.agents.fallback import ModelRouteAttemptStoreError
 from ai_software_engineer.agents.models import AgentErrorCode, AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore, ArtifactStoreError, artifact_digest
+from ai_software_engineer.context import ContextStoreError
 from ai_software_engineer.domain.artifact import (
     ImplementationReportArtifact,
     QaReportArtifact,
@@ -71,6 +72,7 @@ from ai_software_engineer.knowledge.preparation_retry import (
     read_local_limit,
 )
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.manager.capacity_input_reader import claimed_verifier_capacity
 from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightCheckpoint,
     DeliveryPreflightReceipt,
@@ -123,6 +125,9 @@ class DeliveryWaitQueue(Protocol):
     def step(self, work_item_id: str) -> QueuedRoleStep: ...
     def original_claim(self, lease_id: str) -> QueueClaim: ...
     def accepted(self, task_id: str) -> tuple[AcceptedRoleArtifact, ...]: ...
+    def step_for_invocation(
+        self, work_item_id: str, baseline_sha256: str | None
+    ) -> QueuedRoleStep: ...
 
 
 class DeliveryWaitRejected(ValueError):
@@ -961,7 +966,42 @@ class DeliveryWaitService:
                 missing.append(DeliveryProofMissing.BUDGET_EXHAUSTED)
         if rejected_outcome and not permitted:
             missing.append(DeliveryProofMissing.OUTCOME_REJECTED)
-        if item.wait_disposition.facts.classification == "KNOWLEDGE_PREPARATION_LIMIT":
+        if item.wait_disposition.facts.classification == "CONTEXT_CAPACITY":
+            if item.role not in {AgentRole.QA, AgentRole.REVIEWER}:
+                # Coder capacity recovery uses its original exact baseline PAUSE/RESUME path.
+                missing.append(DeliveryProofMissing.VERIFIER_PREPARATION_UNAVAILABLE)
+            elif start is not None or outcome is not None:
+                missing.append(DeliveryProofMissing.INVOCATION_UNRECORDED)
+            elif prerequisites is None or prerequisites.status != "READY":
+                missing.append(DeliveryProofMissing.PREREQUISITES_UNVERIFIED)
+            elif self.artifacts is None or any(
+                accepted.work_item_id == item.id for accepted in self.queue.accepted(task.id)
+            ):
+                missing.append(DeliveryProofMissing.VERIFIER_PREPARATION_UNAVAILABLE)
+            else:
+                try:
+                    verifier_preparation = claimed_verifier_capacity(
+                        item=item,
+                        task=task,
+                        step=step,
+                        prerequisites=prerequisites,
+                        state=self.sidecar_state,
+                        queue=self.queue,
+                        artifacts=self.artifacts,
+                    )
+                    permitted = (DeliveryResolutionKind.RESUME_UNINVOKED,)
+                except (
+                    ValueError,
+                    QueueError,
+                    OSError,
+                    KnowledgeError,
+                    ArtifactStoreError,
+                    ContextStoreError,
+                    ContinuationRejected,
+                    ModelRouteAttemptStoreError,
+                ):
+                    missing.append(DeliveryProofMissing.VERIFIER_PREPARATION_UNAVAILABLE)
+        elif item.wait_disposition.facts.classification == "KNOWLEDGE_PREPARATION_LIMIT":
             if start is not None or outcome is not None:
                 missing.append(DeliveryProofMissing.KNOWLEDGE_PREPARATION_UNAVAILABLE)
             else:
@@ -1587,6 +1627,11 @@ class DeliveryWaitService:
                 "原开发执行已结束, 进度报告的轮次编号不符合本次执行; 完整合法草稿已保留。"
                 "可使用一次原授权工作额度, 由新的开发执行继续原需求并重新生成正确报告。"
                 if permitted == (DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,)
+                else "已核验原验证准备和完整输入, 本次角色模型未启动。平台可保留同一候选和"
+                "原工作预留, 重新领取独立验收; 原执行与容量记录保留, 不退款或增加执行轮次。"
+                if permitted == (DeliveryResolutionKind.RESUME_UNINVOKED,)
+                and verifier_preparation is not None
+                and verifier_preparation.context_capacity_receipt_sha256 is not None
                 else f"知识准备原执行已结束, 主角色尚未开始。可使用一次剩余工作额度, "
                 f"把下次准备窗口扩大到 {knowledge_preparation.next_timeout_seconds} 秒, "
                 "重新领取原任务继续; 原知识记录和执行历史保留。"
