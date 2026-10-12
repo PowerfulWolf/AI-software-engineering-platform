@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -30,8 +31,13 @@ from ai_software_engineer.manager.capacity_input_reader import (
     CapacityInputReader,
     UninvokedClaimBoundary,
 )
+from ai_software_engineer.manager.context_capacity import ContextCapacityReceipt
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
 from ai_software_engineer.team_workspace import _reject_symlinks
+from ai_software_engineer.work_queue.claim_snapshot import (
+    OriginalClaimRecord,
+    require_claim_snapshot,
+)
 from ai_software_engineer.work_queue.execution_store import QueuedRoleStep
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
 
@@ -51,6 +57,8 @@ class KnowledgeProofQueue(Protocol):
 
     def step_for_claim(self, claim: QueueClaim) -> QueuedRoleStep: ...
 
+    def original_claim_record(self, lease_id: str) -> OriginalClaimRecord: ...
+
 
 def read_failed_knowledge_claims(
     *,
@@ -67,16 +75,93 @@ def read_failed_knowledge_claims(
     """Cover only exact failed read-only preparations; unknown claims stay unknown."""
     if not claims:
         return ()
+    by_lease = {claim.lease.id: claim for claim in claims}
+    if len(by_lease) != len(claims):
+        raise ValueError("知识准备调查含重复历史 claim")
+    lanes = _knowledge_lanes(
+        state=state, task=task, item=item, scope=scope, requirement_id=requirement_id
+    )
+    # A returned-only preparation is not this proof family. Leave its claims to
+    # their actual main/preflight/capacity facts instead of inventing failure.
+    if not any(
+        value.state == "FAILED"
+        and value.intent.claim is not None
+        and value.intent.claim.lease.id in by_lease
+        for lane in lanes
+        for value in lane.outcomes
+    ):
+        return ()
+    grouped: dict[str, list[KnowledgeInvocationOutcome]] = {}
+    for value in _validated_knowledge_invocations(
+        state=state, task=task, scope=scope, lanes=lanes, queue=queue, require_step=require_step
+    ):
+        historical, outcome = value.historical, value.outcome
+        if historical.lease.id not in by_lease:
+            continue
+        require_claim_snapshot(by_lease[historical.lease.id], historical)
+        grouped.setdefault(historical.lease.id, []).append(outcome)
+    result = []
+    for lease_id in sorted(grouped):
+        values = sorted(grouped[lease_id], key=lambda v: (v.intent.created_at, v.intent.phase))
+        if not any(value.state == "FAILED" for value in values):
+            raise ValueError("知识准备只有返回结果, 没有可验证的失败边界")
+        if len({digest(value.intent.binding.to_wire()) for value in values}) != 1:
+            raise ValueError("同一历史 claim 的知识准备输入存在不同版本")
+        bound = values[0].intent.binding
+        claim = by_lease[lease_id]
+        no_start_reader.require_claim_not_started(
+            UninvokedClaimBoundary(
+                task_id=task.id,
+                work_item_id=item.id,
+                lease_id=lease_id,
+                role=item.role,
+                attempt=item.attempt,
+                checkpoint_sequence=item.checkpoint_sequence,
+                dispatch_sequence=claim.work_item.dispatch_sequence,
+                observed_at=max(value.completed_at for value in values),
+                run_id=bound.run_id,
+                context_manifest_id=bound.context_manifest_id,
+            ),
+            allow_later_claims=True,
+        )
+        result.append(
+            KnowledgeOnlyClaimProof(
+                lease_id=lease_id,
+                claim_sha256=claim_identity_sha256(claim),
+                intent_sha256s=tuple(value.intent.intent_sha256 for value in values),
+                outcome_sha256s=tuple(value.outcome_sha256 for value in values),
+                execution_record_sha256s=tuple(
+                    record.record_sha256 for value in values for record in value.executions
+                ),
+            )
+        )
+    return tuple(result)
+
+
+@dataclass(frozen=True)
+class _KnowledgeLane:
+    records: KnowledgeRecordStore
+    lane_id: str
+    intents: tuple[KnowledgeInvocationIntent, ...]
+    outcomes: tuple[KnowledgeInvocationOutcome, ...]
+    observations: tuple[KnowledgeExecutionRecord, ...]
+    outcome_map: dict[str, KnowledgeInvocationOutcome]
+
+
+@dataclass(frozen=True)
+class _CompletedKnowledgeInvocation:
+    historical: QueueClaim
+    outcome: KnowledgeInvocationOutcome
+
+
+def _knowledge_lanes(
+    *, state: Path, task: Task, item: QueuedWorkItem, scope: EngineeringScope, requirement_id: str
+) -> tuple[_KnowledgeLane, ...]:
     root = state.parent / "knowledge" / "runs"
     lane_root = root / "invocations"
     if not CapacityInputReader._capacity_ledger_exists(lane_root):
         return ()
-    by_lease = {claim.lease.id: claim for claim in claims}
-    if len(by_lease) != len(claims):
-        raise ValueError("知识准备调查含重复历史 claim")
-    grouped: dict[str, list[KnowledgeInvocationOutcome]] = {}
-    snapshots = KnowledgeRecordStore(root, read_only=True)
-    lanes = []
+    lanes: list[_KnowledgeLane] = []
     # Only the native parent and the documented legacy Task scope are eligible.
     for original_requirement in dict.fromkeys((requirement_id, task.id)):
         lane_id = invocation_scope_lane_sha256(
@@ -118,27 +203,32 @@ def read_failed_knowledge_claims(
             v.intent_sha256 not in intent_map for v in observations
         ):
             raise ValueError("知识准备调查发现没有原始调用的结果或执行记录")
-        lanes.append((records, lane_id, intents, outcomes, observations, outcome_map))
-    # A returned-only preparation is not this proof family. Leave its claims to
-    # their actual main/preflight/capacity facts instead of inventing failure.
-    if not any(
-        value.state == "FAILED"
-        and value.intent.claim is not None
-        and value.intent.claim.lease.id in by_lease
-        for _, _, _, outcomes, _, _ in lanes
-        for value in outcomes
-    ):
-        return ()
-    for records, lane_id, intents, _, observations, outcome_map in lanes:
-        for intent in intents:
+        lanes.append(_KnowledgeLane(records, lane_id, intents, outcomes, observations, outcome_map))
+    return tuple(lanes)
+
+
+def _validated_knowledge_invocations(
+    *,
+    state: Path,
+    task: Task,
+    scope: EngineeringScope,
+    lanes: tuple[_KnowledgeLane, ...],
+    queue: KnowledgeProofQueue,
+    require_step: Callable[[QueuedWorkItem, QueuedRoleStep], None],
+) -> tuple[_CompletedKnowledgeInvocation, ...]:
+    result: list[_CompletedKnowledgeInvocation] = []
+    snapshots = KnowledgeRecordStore(state.parent / "knowledge" / "runs", read_only=True)
+    for lane in lanes:
+        records, lane_id = lane.records, lane.lane_id
+        for intent in lane.intents:
             intent.validate_integrity()
             if invocation_lane_sha256(intent.binding) != lane_id:
                 raise ValueError("知识准备原调用不属于精确组织、项目和需求")
-            outcome = outcome_map.get(intent.intent_sha256)
+            outcome = lane.outcome_map.get(intent.intent_sha256)
             if outcome is None:
                 raise ValueError("知识准备原调用缺少完整结果, 不能证明主岗位未启动")
             KnowledgeInvocationJournal._require_outcome(records, intent, outcome)
-            actual = tuple(v for v in observations if v.intent_sha256 == intent.intent_sha256)
+            actual = tuple(v for v in lane.observations if v.intent_sha256 == intent.intent_sha256)
             if set(v.record_sha256 for v in actual) != set(
                 v.record_sha256 for v in outcome.executions
             ):
@@ -147,10 +237,7 @@ def read_failed_knowledge_claims(
             if claimed is None:
                 raise ValueError("知识准备原调用缺少真实历史 claim")
             historical = queue.original_claim(claimed.lease.id)
-            if historical.lease.id != claimed.lease.id or (
-                claim_identity_sha256(claimed) != claim_identity_sha256(historical)
-            ):
-                raise ValueError("知识准备原调用与真实历史 claim 不一致")
+            require_claim_snapshot(claimed, historical)
             if not outcome.executions:
                 raise ValueError("知识准备原调用缺少独立执行观察, 不能证明主岗位未启动")
             for execution in outcome.executions:
@@ -161,49 +248,49 @@ def read_failed_knowledge_claims(
             _require_context(
                 state, task, historical.work_item, historical, step, intent, snapshots, scope
             )
-            if claimed.lease.id not in by_lease:
-                continue
-            if claim_identity_sha256(by_lease[claimed.lease.id]) != claim_identity_sha256(
-                historical
-            ):
-                raise ValueError("知识准备调查的原 claim 与当前历史索引不一致")
-            grouped.setdefault(claimed.lease.id, []).append(outcome)
-    result = []
-    for lease_id in sorted(grouped):
-        values = sorted(grouped[lease_id], key=lambda v: (v.intent.created_at, v.intent.phase))
-        if not any(value.state == "FAILED" for value in values):
-            raise ValueError("知识准备只有返回结果, 没有可验证的失败边界")
-        if len({digest(value.intent.binding.to_wire()) for value in values}) != 1:
-            raise ValueError("同一历史 claim 的知识准备输入存在不同版本")
-        bound = values[0].intent.binding
-        claim = by_lease[lease_id]
-        no_start_reader.require_claim_not_started(
-            UninvokedClaimBoundary(
-                task_id=task.id,
-                work_item_id=item.id,
-                lease_id=lease_id,
-                role=item.role,
-                attempt=item.attempt,
-                checkpoint_sequence=item.checkpoint_sequence,
-                dispatch_sequence=claim.work_item.dispatch_sequence,
-                observed_at=max(value.completed_at for value in values),
-                run_id=bound.run_id,
-                context_manifest_id=bound.context_manifest_id,
-            ),
-            allow_later_claims=True,
-        )
-        result.append(
-            KnowledgeOnlyClaimProof(
-                lease_id=lease_id,
-                claim_sha256=claim_identity_sha256(claim),
-                intent_sha256s=tuple(value.intent.intent_sha256 for value in values),
-                outcome_sha256s=tuple(value.outcome_sha256 for value in values),
-                execution_record_sha256s=tuple(
-                    record.record_sha256 for value in values for record in value.executions
-                ),
-            )
-        )
+            result.append(_CompletedKnowledgeInvocation(historical, outcome))
     return tuple(result)
+
+
+def read_capacity_claim_snapshot(
+    *,
+    state: Path,
+    task: Task,
+    marker: ContextCapacityReceipt,
+    historical: QueueClaim,
+    scope: EngineeringScope,
+    requirement_id: str,
+    queue: KnowledgeProofQueue,
+    require_step: Callable[[QueuedWorkItem, QueuedRoleStep], None],
+) -> QueueClaim:
+    """Recover exact legacy raw claim bytes; successful knowledge grants no failure authority."""
+    marker.validate_integrity()
+    record = queue.original_claim_record(historical.lease.id)
+    require_claim_snapshot(historical, record.claim)
+    if record.has_immutable_snapshot:
+        raise ValueError("容量停止摘要与不可变首次 claim 不一致, 禁止用知识快照覆盖真实领取记录")
+    lanes = _knowledge_lanes(
+        state=state,
+        task=task,
+        item=historical.work_item,
+        scope=scope,
+        requirement_id=requirement_id,
+    )
+    completed = _validated_knowledge_invocations(
+        state=state, task=task, scope=scope, lanes=lanes, queue=queue, require_step=require_step
+    )
+    selected = tuple(
+        value.outcome for value in completed if value.historical.lease.id == historical.lease.id
+    )
+    if not selected or any(value.completed_at > marker.observed_at for value in selected):
+        raise ValueError("旧容量记录缺少独立封存且已结束的原 claim 完整快照")
+    if len({digest(value.intent.binding.to_wire()) for value in selected}) != 1:
+        raise ValueError("旧容量原知识准备存在不同版本的完整输入")
+    snapshots = tuple(value.intent.claim for value in selected)
+    first = snapshots[0]
+    if first is None or any(value != first for value in snapshots):
+        raise ValueError("旧容量原 claim 完整快照缺失或存在不同版本")
+    return require_claim_snapshot(first, historical, expected_sha256=marker.claim_sha256)
 
 
 def _require_context(

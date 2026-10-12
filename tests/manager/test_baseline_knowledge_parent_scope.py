@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from ai_software_engineer.agents import AgentRequest, StructuredModelResult
+from ai_software_engineer.agents.execution import current_execution_guard
 from ai_software_engineer.agents.model_diagnostics import model_call_phase
 from ai_software_engineer.agents.openai_compatible import HttpResponse
 from ai_software_engineer.agents.structured import (
@@ -20,6 +21,7 @@ from ai_software_engineer.agents.structured import (
 from ai_software_engineer.context import ContextBundle
 from ai_software_engineer.domain import AgentDefinition, AgentRole, Artifact, Task, TeamRole
 from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.enums import TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.execution_baseline import BaselineContinuationMode
 from ai_software_engineer.knowledge.context import snapshot_from_sources
@@ -38,14 +40,18 @@ from ai_software_engineer.manager.baseline_production import (
     BaselineProposeCommand,
     BaselineQuiescenceProof,
 )
+from ai_software_engineer.manager.context_capacity import ContextCapacityReceipt
 from ai_software_engineer.manager.delivery import ApproveProductSpec, ReplyToProduct
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
+from ai_software_engineer.manager.knowledge_invocation_proof import read_capacity_claim_snapshot
 from ai_software_engineer.manager.production_agents import ExecutionPlanDraft, TechnicalDesignDraft
 from ai_software_engineer.multi_directory.models import JointStage
 from ai_software_engineer.multi_directory.models import digest as joint_digest
 from ai_software_engineer.multi_directory.scope import DirectoryScope
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.store import MySqlTaskRepository
+from ai_software_engineer.store.mysql_repository import open_mysql_connection
+from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 from tests.knowledge.test_invocation_native import _http_client, _HttpTransport
 from tests.manager.test_production_backend import (
     _git,
@@ -109,8 +115,9 @@ class _RecordedClients:
 
 
 @pytest.mark.mysql
+@pytest.mark.parametrize("legacy_claim_event", [False, True])
 def test_public_parent_knowledge_failure_then_capacity_recovers_same_task_to_done(
-    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, legacy_claim_event: bool
 ) -> None:
     """Genuine approved parent, claimed 503, capacity, public PAUSE/RESUME, native QA/Review."""
     repository = tmp_path / "target"
@@ -207,6 +214,43 @@ def test_public_parent_knowledge_failure_then_capacity_recovers_same_task_to_don
         raise AssertionError("HTTP 503 preparation must stop before the main Coder invocation")
 
     monkeypatch.setattr(KnowledgeRunContextBuilder, "build", prepare)
+
+    def reject_after_real_heartbeat(request: AgentRequest) -> bool:
+        if request.role is not AgentRole.CODER or not capacity:
+            return False
+        guard = current_execution_guard()
+        assert isinstance(guard, WorkerExecutionGuard) and guard.lease is not None
+        worker = guard.lease
+        original = worker.claim
+        renewed = worker.queue.renew(
+            original.work_item.id,
+            lease_id=original.lease.id,
+            owner_token=worker._token,
+            now=datetime.now(UTC),
+            expires_at=original.lease.expires_at + timedelta(seconds=20),
+        )
+        assert renewed.expires_at != original.lease.expires_at
+        assert worker.queue.original_claim(original.lease.id) == original
+        if legacy_claim_event:
+            # Test-only old record shape. Do not rewrite production events or
+            # reconstruct the initial expiry from TTL; its independent knowledge
+            # records retain the actual original full claim.
+            with (
+                closing(open_mysql_connection(mysql_dsn)) as connection,
+                connection.cursor() as cursor,
+            ):
+                cursor.execute(
+                    "UPDATE work_queue_events SET payload_json=%s "
+                    "WHERE lease_id=%s AND event_type='CLAIMED'",
+                    (
+                        json.dumps({"work_item": original.work_item.to_wire(), "detail": {}}),
+                        original.lease.id,
+                    ),
+                )
+                connection.commit()
+            assert worker.queue.original_claim(original.lease.id) != original
+        return True
+
     host = public_capacity_host(
         tmp_path=tmp_path,
         repository=repository,
@@ -214,7 +258,7 @@ def test_public_parent_knowledge_failure_then_capacity_recovers_same_task_to_don
         monkeypatch=monkeypatch,
         preparation_requests=preparation,
         invoked=invoked,
-        should_reject=lambda request: request.role is AgentRole.CODER and capacity,
+        should_reject=reject_after_real_heartbeat,
     )
     # Extend the existing offline provider at its ordinary typed seam. Single
     # repository requirements still use the public joint Product/Design/Plan gate.
@@ -340,6 +384,49 @@ def test_public_parent_knowledge_failure_then_capacity_recovers_same_task_to_don
         assert current.wait_disposition is not None
         assert current.wait_disposition.facts.classification == "CONTEXT_CAPACITY"
         assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
+        receipt_key = current.wait_disposition.facts.evidence_ids[0].removeprefix(
+            "context-capacity://"
+        )
+        original_capacity = KnowledgeRecordStore(
+            sidecar / "state/delivery-preflight", read_only=True
+        ).get("context-capacity-receipts", receipt_key, ContextCapacityReceipt)
+        current_claim = host.work_queue.original_claim(original_capacity.lease_id)
+        if not legacy_claim_event:
+            # Genuine new immutable SQL event cannot be replaced even by another
+            # internally sealed capacity hash which differs only by lease expiry.
+            conflicting = current_claim.model_copy(
+                update={
+                    "lease": current_claim.lease.model_copy(
+                        update={"expires_at": current_claim.lease.expires_at + timedelta(seconds=1)}
+                    )
+                }
+            )
+            conflicting_marker = original_capacity.model_copy(
+                update={"claim_sha256": digest(conflicting.to_wire())}
+            )
+            conflicting_marker = conflicting_marker.model_copy(
+                update={
+                    "receipt_sha256": digest(
+                        conflicting_marker.model_dump(mode="json", exclude={"receipt_sha256"})
+                    )
+                }
+            )
+            with pytest.raises(ValueError, match="禁止用知识快照覆盖"):
+                read_capacity_claim_snapshot(
+                    state=sidecar / "state",
+                    task=original,
+                    marker=conflicting_marker,
+                    historical=current_claim,
+                    scope=EngineeringScope(
+                        team_id="team_test",
+                        project_id="project_test",
+                        repository_id=current.repository_id,
+                        repository_root=str(repository),
+                    ),
+                    requirement_id=checkpoint.delivery_id,
+                    queue=host.work_queue,
+                    require_step=lambda _item, _step: None,
+                )
         (repository / "platform.txt").write_text("new source prerequisite\n")
         _git("add", "platform.txt", cwd=repository)
         _git("commit", "-m", "new platform baseline", cwd=repository)

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, Protocol, Self, cast, runtime_checkable
 
-from pydantic import TypeAdapter, ValidationError, model_validator
+from pydantic import JsonValue, TypeAdapter, ValidationError, model_validator
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.artifacts import ArtifactStore
@@ -43,6 +43,10 @@ from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.orchestration.state_machine import apply_event
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.store.mysql_repository import _decode_task, _encode, open_mysql_connection
+from ai_software_engineer.work_queue.claim_snapshot import (
+    OriginalClaimRecord,
+    require_claim_snapshot,
+)
 from ai_software_engineer.work_queue.models import (
     CheckpointSequence,
     QueueArtifactReceipt,
@@ -511,12 +515,17 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
 
     def original_claim(self, lease_id: str) -> QueueClaim:
         """Read the original CLAIMED event, never reconstruct it from current work."""
+        return self.original_claim_record(lease_id).claim
+
+    def original_claim_record(self, lease_id: str) -> OriginalClaimRecord:
+        """Retain explicit legacy/new provenance after complete event/allocation checks."""
         with (
             closing(open_mysql_connection(self._dsn)) as connection,
             connection.cursor(DictCursor) as cursor,
         ):
             cursor.execute(
-                "SELECT assignment_json,lease_json,model_selection_json,worker_id "
+                "SELECT lease_id,work_item_id,task_id,agent_id,assignment_json,lease_json,"
+                "model_selection_json,worker_id,capacity_units,acquired_at,expires_at "
                 "FROM work_queue_claims WHERE lease_id=%s",
                 (lease_id,),
             )
@@ -524,25 +533,59 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             if row is None:
                 raise QueueNotFound(lease_id)
             cursor.execute(
-                "SELECT payload_json,occurred_at FROM work_queue_events "
+                "SELECT work_item_id,lease_id,from_status,to_status,payload_json,occurred_at "
+                "FROM work_queue_events "
                 "WHERE lease_id=%s AND event_type='CLAIMED' ORDER BY sequence",
                 (lease_id,),
             )
             events = cursor.fetchall()
             if len(events) != 1:
-                raise QueueCorruption("original claim has no unique immutable claim event")
+                raise QueueCorruption("原 claim 缺少唯一不可变领取事件")
             event = events[0]
-            payload = json.loads(str(event["payload_json"]))
-            return QueueClaim.model_validate(
-                {
-                    "work_item": payload["work_item"],
-                    "assignment": json.loads(str(row["assignment_json"])),
-                    "lease": json.loads(str(row["lease_json"])),
-                    "model_selection": json.loads(str(row["model_selection_json"])),
-                    "worker_id": row["worker_id"],
-                    "claimed_at": event["occurred_at"],
-                }
-            )
+            try:
+                payload = TypeAdapter(dict[str, JsonValue]).validate_json(
+                    str(event["payload_json"])
+                )
+                current = QueueClaim.model_validate(
+                    {
+                        "work_item": payload["work_item"],
+                        "assignment": json.loads(str(row["assignment_json"])),
+                        "lease": json.loads(str(row["lease_json"])),
+                        "model_selection": json.loads(str(row["model_selection_json"])),
+                        "worker_id": row["worker_id"],
+                        "claimed_at": event["occurred_at"],
+                    }
+                )
+                if (
+                    current.lease.id != lease_id
+                    or (row["lease_id"], event["lease_id"]) != (lease_id, lease_id)
+                    or (row["work_item_id"], event["work_item_id"])
+                    != (current.work_item.id, current.work_item.id)
+                    or row["task_id"] != current.work_item.task_id
+                    or row["agent_id"] != current.lease.agent_id
+                    or row["capacity_units"] != current.lease.capacity_units
+                    or self._parse_time(str(row["acquired_at"])) != current.lease.acquired_at
+                    or self._parse_time(str(row["expires_at"])) != current.lease.expires_at
+                    or current.claimed_at != current.lease.acquired_at
+                    or current.claimed_at != current.work_item.updated_at
+                    or event["from_status"]
+                    not in {WorkItemStatus.READY.value, WorkItemStatus.RETRY_SCHEDULED.value}
+                    or event["to_status"] != WorkItemStatus.LEASED.value
+                ):
+                    raise ValueError("原 claim 分配索引与不可变领取事件不一致")
+                detail = payload.get("detail", {})
+                if not isinstance(detail, dict):
+                    raise ValueError("原 claim 领取事件详情无效")
+                if "queue_claim" not in detail:
+                    # Legacy has no immutable lease expiry. Do not guess the
+                    # original raw bytes from TTL or the current heartbeat.
+                    return OriginalClaimRecord(current, has_immutable_snapshot=False)
+                snapshot = QueueClaim.model_validate(detail["queue_claim"])
+                return OriginalClaimRecord(
+                    require_claim_snapshot(snapshot, current), has_immutable_snapshot=True
+                )
+            except (ValidationError, ValueError, KeyError, TypeError) as error:
+                raise QueueCorruption("原 claim 记录或不可变完整快照不一致") from error
 
     def claims_for_work_item(self, work_item_id: str) -> tuple[QueueClaim, ...]:
         """Return exact immutable claim identities, never infer from role/attempt."""

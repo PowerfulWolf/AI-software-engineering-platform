@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +40,7 @@ from ai_software_engineer.manager.verifier_preparation import (
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.team_workspace import _read_regular, _reject_symlinks
+from ai_software_engineer.work_queue.claim_snapshot import require_claim_snapshot
 from ai_software_engineer.work_queue.execution_store import QueuedRoleStep
 from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationOutcome,
@@ -270,9 +272,14 @@ class CapacityInputReader:
         route_root: Path | None,
         baselines: FileExecutionBaselineStore | None,
         permissions: AgentPermissions | None = None,
+        legacy_claim_snapshot: Callable[
+            [Task, ContextCapacityReceipt, QueueClaim, QueuedRoleStep], QueueClaim
+        ]
+        | None = None,
     ) -> None:
         self.state, self.queue, self.artifacts = state, queue, artifacts
         self.route_root, self.baselines, self.permissions = route_root, baselines, permissions
+        self.legacy_claim_snapshot = legacy_claim_snapshot
 
     def require_identity(
         self, task: Task, marker: ContextCapacityReceipt, claim: QueueClaim, step: QueuedRoleStep
@@ -287,6 +294,15 @@ class CapacityInputReader:
         )
         for value in receipts:
             value.validate_integrity()
+        if (
+            marker.claim_sha256 != digest(claim.to_wire())
+            and self.legacy_claim_snapshot is not None
+        ):
+            claim = require_claim_snapshot(
+                self.legacy_claim_snapshot(task, marker, claim, step),
+                claim,
+                expected_sha256=marker.claim_sha256,
+            )
         request = marker.request
         if (
             marker.origin != "final_input"
@@ -295,6 +311,7 @@ class CapacityInputReader:
                 marker.task_id,
                 marker.task_intent_sha256,
                 marker.claim_sha256,
+                marker.lease_id,
                 marker.assignment_id,
                 marker.work_item_id,
                 marker.role,
@@ -308,6 +325,7 @@ class CapacityInputReader:
                 task.id,
                 task_intent_sha256(task),
                 digest(claim.to_wire()),
+                claim.lease.id,
                 claim.assignment.id,
                 claim.work_item.id,
                 claim.work_item.role,

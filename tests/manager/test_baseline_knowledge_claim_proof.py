@@ -38,6 +38,7 @@ from ai_software_engineer.knowledge.invocation import (
     KnowledgeInvocationIntent,
     KnowledgeInvocationJournal,
     KnowledgeInvocationOutcome,
+    KnowledgeInvocationResult,
     invocation_lane_sha256,
 )
 from ai_software_engineer.knowledge.models import (
@@ -63,6 +64,7 @@ from ai_software_engineer.orchestration.context import FileRunContextBuilder
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.store import MySqlTaskRepository
+from ai_software_engineer.work_queue.claim_snapshot import OriginalClaimRecord
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
@@ -90,7 +92,7 @@ class Facts:
     outcome: KnowledgeInvocationOutcome
 
 
-def knowledge_failure(tmp_path: Path) -> Facts:
+def knowledge_failure(tmp_path: Path, *, returned: bool = False) -> Facts:
     repository = tmp_path / "repository"
     repository.mkdir()
     task = make_task().model_copy(
@@ -118,6 +120,9 @@ def knowledge_failure(tmp_path: Path) -> Facts:
             if identity != claim.lease.id:
                 raise ValueError("foreign historical claim")
             return claim
+
+        def original_claim_record(self, identity: str) -> OriginalClaimRecord:
+            return OriginalClaimRecord(self.original_claim(identity), has_immutable_snapshot=False)
 
         def step_for_claim(self, actual: QueueClaim) -> QueuedRoleStep:
             assert claim_identity_sha256(actual) == claim_identity_sha256(claim)
@@ -215,7 +220,7 @@ def knowledge_failure(tmp_path: Path) -> Facts:
     receipt = StructuredHttpRoundTripReceipt.create(
         admission=admission,
         outcome="returned",
-        http_status=503,
+        http_status=200 if returned else 503,
         response_body_sha256="a" * 64,
         completed_at=NOW + timedelta(seconds=3),
     )
@@ -225,8 +230,13 @@ def knowledge_failure(tmp_path: Path) -> Facts:
     )
     outcome = KnowledgeInvocationOutcome.create(
         intent=intent,
-        state="FAILED",
-        failure=KnowledgeInvocationFailure(
+        state="RETURNED" if returned else "FAILED",
+        result=KnowledgeInvocationResult(payload={"checked": True}, duration_ms=0)
+        if returned
+        else None,
+        failure=None
+        if returned
+        else KnowledgeInvocationFailure(
             code=AgentErrorCode.PROVIDER_UNAVAILABLE,
             safe_message="知识提供方暂不可用",
             transient=True,

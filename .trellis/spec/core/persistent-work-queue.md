@@ -443,3 +443,53 @@ identity, or ambiguous accepted output escapes as an unclassified Backend except
 Required regressions: `tests/orchestration/test_context_registry.py`, public
 `qa_unstarted` in `test_production_continuation_v2.py`, and
 `test_worker_mysql.py::test_ambiguous_accepted_history_waits_and_releases_the_real_claim`.
+
+## Immutable original claim across lease renewal (2026-10-12)
+
+```python
+OriginalClaimRecord(claim: QueueClaim, has_immutable_snapshot: bool)
+MySqlRoleQueue.original_claim_record(lease_id: str) -> OriginalClaimRecord
+MySqlRoleQueue.original_claim(lease_id: str) -> QueueClaim
+require_claim_snapshot(snapshot: QueueClaim, historical: QueueClaim,
+                       *, expected_sha256: str | None = None) -> QueueClaim
+```
+
+`claim()` seals the complete initial `QueueClaim` as `CLAIMED.payload.detail.queue_claim`
+in the same transaction as the allocation and claimed WorkItem. It returns that same object.
+Heartbeat renews only the active SQL lease expiry. The immutable event retains initial lease
+expiry; `original_claim()` returns the initial full claim, so its raw canonical SHA stays exact
+through multiple real renewals, RUNNING, wait and release. This is an additive event-detail
+contract, with no table migration or change to the QueueClaim wire/Schema.
+
+The reader validates the exact requested lease key, event and claim row lease/work-item indexes,
+Task and Agent, capacity, worker, assignment, model selection, acquisition and expiry indexes,
+unique CLAIMED event, READY/RETRY_SCHEDULED -> LEASED, and event clock == lease acquisition ==
+claimed WorkItem updated clock. A sealed snapshot must match the complete reconstructed original
+allocation/event object after changing **only** its lease expiry to the current SQL expiry.
+No WorkItem status/time, assignment, model, worker, claim time, repository scope or lease ownership
+normalization is accepted. `expected_sha256`, when supplied, must match complete original raw
+bytes before the permitted expiry comparison. The expiry comparison does not grant a lease,
+stop proof, retry refund, execution permission or verdict.
+
+Legacy event absence is explicit provenance in `OriginalClaimRecord`; missing API support is
+not absence evidence. An absent `queue_claim` keeps the historical reader's current SQL expiry
+without inventing its original value. Present null, malformed, wrong-clock/ownership or
+inconsistent snapshots raise a fixed Chinese QueueCorruption and never fall back to legacy.
+No reader writes SQL or replaces events. Structured capacity recovery may only reconcile a
+legacy raw SHA from separately validated exact immutable knowledge facts, as specified in
+`execution-baseline.md`; existing original-claim consumers do not acquire a general fallback.
+
+| Input | Required outcome |
+| --- | --- |
+| New complete event + multiple real owner-fenced renewals | Initial full bytes/raw SHA remain identical |
+| New immutable claim + contradictory capacity raw SHA | Refuse; knowledge cannot replace immutable original authority |
+| Exact legacy event without snapshot | Explicit legacy metadata; no guessed initial expiry |
+| Present null/invalid snapshot or event/SQL index/clock mismatch | Refuse without a legacy fallback |
+| Any discrepancy other than renewable expiry | Refuse, even if stable identity hash is equal |
+
+Incremental regression: `tests/work_queue/test_original_claim_snapshot.py` uses real isolated
+MySQL start, repeated renew, wait, reopening readers and corrupted event cases; public joint
+baseline tests include genuine renewal in new and legacy event shapes. Verifier capacity resume,
+knowledge preparation retry, independent serial delivery and heartbeat-loss tests protect
+existing consumers. Once new snapshot facts are written, retain this compatible reader and
+prefer a forward fix; rollback must not discard recorded original authority.

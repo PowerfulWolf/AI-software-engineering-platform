@@ -715,3 +715,68 @@ Host, invoking a provider, publishing a quiescence record or initializing SQL sc
 存量数据处置：只修定位，原 K1 知识 parent 与旧恢复批准都保留；没有改库、停止记录回填或
 counter重算。发布后在原需求重提精确方案，独立确认并批准 PAUSE，再从原需求明确继续。
 无可信原记录仍拒绝。回滚保留所有已有 immutable 记录与审批，新记录已发布后需要兼容 reader。
+
+### Exact legacy raw claim recovery after heartbeat renewal
+
+```python
+read_capacity_claim_snapshot(*, state, task, marker: ContextCapacityReceipt,
+    historical: QueueClaim, scope: EngineeringScope, requirement_id: str,
+    queue: KnowledgeProofQueue, require_step) -> QueueClaim
+CapacityInputReader(..., legacy_claim_snapshot: typed_callback | None = None)
+```
+
+Old capacity receipts hash the original full `guard.lease.claim`, while legacy SQL claim readers
+used the live lease expiry updated by heartbeat. Stable ownership equality cannot prove those
+missing raw bytes. The baseline collector supplies a trusted typed resolver only when the
+receipt raw SHA differs. The resolver first reads a fully validated `OriginalClaimRecord`:
+only explicit absence of an immutable original snapshot permits this legacy path. A new
+snapshot's contradictory raw SHA refuses immediately; knowledge cannot replace the immutable
+original claim, even when only expiry differs. Missing custom queue methods are not interpreted
+as legacy provenance.
+
+The shared completed-knowledge reader validates only the exact trusted approved parent and
+legacy Task lanes. It retains all prior content-addressed key, complete intent/outcome, orphan
+and independently reread observation/route checks, exact real SQL claim and historical source,
+full original Context/Task/claim and frozen knowledge snapshot, and genuine native stop checks.
+For the selected claim, all completed phases must have one exact binding and byte-identical
+full claim snapshots; completion must precede the capacity observation. The full snapshot's
+raw SHA must equal the original capacity receipt SHA, and the complete snapshot must equal
+SQL history with only the renewable expiry adjusted. A normalized identity hash alone is
+insufficient. The capacity reader independently checks its final Context, original complete
+permissions, Task/source/step and all main-call no-start contradictions; its lease ID is now
+also an explicit exact identity field.
+
+A successfully RETURNED knowledge result supplies original immutable snapshot evidence but
+never a FAILED knowledge-only quiescence proof. `read_failed_knowledge_claims` retains its
+selected FAILED gate. Knowledge preparation's base Context and final capacity Context can
+legitimately have different IDs after knowledge sections are appended: verify each complete
+Context independently against the same real claim, original Task and source, never equate IDs
+or mutate either Context. No model call, fabricated stop, counter refund, verdict or recovery
+approval is introduced by these readers.
+
+| Legacy/raw input | Required outcome |
+| --- | --- |
+| Exact independently sealed RETURNED/FAILED knowledge snapshot + actual SQL renewal | Original raw bytes usable for capacity identity; no extra execution authority |
+| Two completed phases with identical original snapshots | Deduplicate exact object |
+| Two phases with distinct original expiry or binding | Refuse ambiguous raw history |
+| Missing snapshot/outcome/observation; foreign lane/claim; modified ownership/time/source/Context | Refuse, preserve original work |
+| New event has an immutable snapshot but receipt raw SHA differs | Refuse replacement; no legacy fallback |
+| Old verifier receipt has no independently sealed full snapshot | Existing exact raw validation refuses; do not synthesize expiry |
+
+Raw-consumer audit: `work_queue/preparation_resume.py` and `execution_store.py` verifier capacity
+checks remain exact and gain stable initial bytes for new events through `original_claim`.
+They gain no legacy normalization-only exception. Retrospective `recovery/context_capacity.py`
+retains its explicit legacy origin; preparation progress is an audit hash of the actual initial
+claim. `recovery/workspace_snapshot.py` intentionally hashes a full consistent **terminal** SQL
+claim row/event, including record digest; it requires no active claim and released/expired
+state, where renew is impossible. That terminal observation is distinct from an original claim
+hash and its whole-row evidence semantics remain unchanged.
+
+存量数据处置：不改 Task、Operation、旧 CLAIMED event、capacity receipt、Context、知识记录或审批；
+不回填停止、不退款、不重建需求。原 K1 的 attempt 3 有两个真实 RETURNED 知识 phase，完整原 claim
+raw SHA 与原 capacity receipt 精确一致；与当前 SQL 只续租 expiry 不同。兼容版本加载后可在原需求
+重新准备精确基线方案；仍须通过真实任务锁/SQL屏障、完整现场检查、准确 PAUSE 批准和明确继续。
+生产只读重放通过不等于真实 proposal fence 或执行批准已经通过。无独立原快照的旧 verifier
+恢复仍拒绝，需独立可信完整事实或显式工程路径，不能用 stable hash 代替缺失原记录。
+回滚：新事实发布前撤销代码即可保留旧数据；新增完整 CLAIMED snapshot 后须保留兼容 reader，
+优先向前修复，保留所有 immutable 审批、worktree/分支/草稿和重试历史。
