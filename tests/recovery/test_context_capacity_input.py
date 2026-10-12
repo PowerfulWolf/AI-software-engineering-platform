@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from ai_software_engineer.domain.execution_baseline import RetainedExecutionPatch
 from ai_software_engineer.recovery.context import recovery_context_sources
-from ai_software_engineer.recovery.models import RecoveryPlan
+from ai_software_engineer.recovery.models import RecoveryPlan, RecoverySource
 from tests.recovery.test_authorization import make_plan
 
 
@@ -86,6 +86,33 @@ def test_capacity_wire_keeps_ordinary_run_required_and_exact_no_start_input(tmp_
     assert list(validator.iter_errors(wire))
     with pytest.raises(ValidationError):
         RecoveryPlan.model_validate(wire)
+
+
+@pytest.mark.parametrize(
+    "null_fields",
+    (
+        ("execution_baseline_sha256",),
+        ("execution_base_revision",),
+        ("execution_baseline_sha256", "execution_base_revision"),
+    ),
+)
+def test_capacity_source_schema_and_python_require_nonnull_exact_baseline(
+    tmp_path: Path, null_fields: tuple[str, ...]
+) -> None:
+    from jsonschema import Draft202012Validator
+
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/delivery-recovery.schema.json").read_text()
+    )
+    source_validator = Draft202012Validator({**schema, "$ref": "#/$defs/RecoverySource"})
+    plan_validator = Draft202012Validator(schema)
+    wire = capacity_plan(tmp_path / "project").to_wire()
+    for field in null_fields:
+        wire["source"][field] = None
+    with pytest.raises(ValidationError):
+        RecoverySource.model_validate(wire["source"])
+    assert list(source_validator.iter_errors(wire["source"]))
+    assert list(plan_validator.iter_errors(wire))
 
 
 @pytest.mark.parametrize("fault", ("missing_receipt", "invented_run", "patch", "dirty", "mode"))
