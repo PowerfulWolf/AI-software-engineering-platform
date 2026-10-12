@@ -799,6 +799,7 @@ const labels = {
   PRODUCT_DISCOVERY: "产品梳理",
   WAITING_PRODUCT_REPLY: "等待补充需求",
   RETRY_BUDGET_EXHAUSTED: "执行预算已用尽",
+  CONTEXT_CAPACITY: "上下文容量不足",
   PLANNER_RETRY_REQUIRED: "计划执行待重试",
   WAITING_PRODUCT_APPROVAL: "等待产品批准",
   DESIGNING: "技术设计",

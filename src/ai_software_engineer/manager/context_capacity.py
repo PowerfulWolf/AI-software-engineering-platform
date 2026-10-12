@@ -2,7 +2,14 @@
 
 from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, Field, StrictInt, StringConstraints, model_validator
+from pydantic import (
+    AwareDatetime,
+    Field,
+    StrictInt,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from ai_software_engineer.agents.models import AgentRequest
 from ai_software_engineer.context.models import ContextId
@@ -48,6 +55,13 @@ class ContextCapacityReceipt(DomainModel):
     provider_started: Literal[False] = False
     observed_at: AwareDatetime
     receipt_sha256: Sha256
+
+    @field_validator("provider_started", mode="before")
+    @classmethod
+    def require_definitive_no_start(cls, value: object) -> object:
+        if value is not False:
+            raise ValueError("capacity receipt requires an explicit false no-start observation")
+        return value
 
     @model_validator(mode="after")
     def validate_identity(self) -> Self:

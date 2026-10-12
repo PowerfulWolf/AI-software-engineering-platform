@@ -62,6 +62,11 @@ def test_json_context_sections_are_losslessly_projected_without_changing_sealed_
         '{"infinity":Infinity}',
         '{"overflow":1e9999}',
         '{"precision":1.00000000000000001}',
+        '{"zero":0e9999999999999999999999}',
+        '{"tiny":1e-9999999999999999999999}',
+        '{"example":"\\ud800"}',
+        '{"example":"\\udfff"}',
+        '{"nested":' * 300 + '"complete original value"' + '}' * 300,
         "plain repository instructions",
         "17",
     ),
@@ -89,6 +94,7 @@ def test_ambiguous_or_non_json_context_keeps_its_original_text(
     )
     assert section["content"] == content
     assert section.get("content_format", "text") == "text"
+    assert payload.messages[1].content.encode("utf-8")
 
 
 def _reads(count: int = 14) -> list[WirePayload]:

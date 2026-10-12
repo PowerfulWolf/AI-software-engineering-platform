@@ -1,8 +1,10 @@
 """A final-input overflow is a claimed preparation fact, never an invocation."""
 
+import json
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from ai_software_engineer.agents.model_input import FinalModelInputCapacityExceeded
 from ai_software_engineer.context import ContextBudget, ContextBundle
@@ -72,8 +74,15 @@ def test_final_capacity_failure_seals_exact_claim_before_wait_without_a_model_st
     assert not records.list("invocation-outcomes", DeliveryInvocationOutcome)
     wire = receipt.to_wire()
     assert ContextCapacityReceipt.model_validate(wire) == receipt
-    with pytest.raises(ValueError):
-        ContextCapacityReceipt.model_validate({**wire, "provider_started": True})
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/context-capacity-receipt.schema.json").read_text()
+    )
+    validator = Draft202012Validator(schema)
+    validator.validate(wire)
+    for value in (True, 0, None, "false"):
+        with pytest.raises(ValueError):
+            ContextCapacityReceipt.model_validate({**wire, "provider_started": value})
+        assert tuple(validator.iter_errors({**wire, "provider_started": value}))
     changed = receipt.model_copy(update={"final_input_tokens": 12})
     with pytest.raises(ValueError):
         changed.validate_integrity()

@@ -461,12 +461,12 @@ def test_real_final_compilation_blocks_in_retry_engine_without_durable_start_or_
     try:
         result = runner.run_task(task.id)
         assert isinstance(result, BlockedResult)
-        assert result.classification.value == "BUDGET_EXHAUSTED"
+        assert result.classification.value == "CONTEXT_CAPACITY"
         assert result.task.status is TaskStatus.BLOCKED
         assert [request.role for request in scripted.requests] == [AgentRole.ORCHESTRATOR]
         assert native_runner.calls == 0 and not native._prepared_inputs
         assert records.list("invocation-starts", DeliveryInvocationStart) == ()
         assert records.list("invocation-outcomes", DeliveryInvocationOutcome) == ()
-        assert repository.list_events(task.id)[-1].reason.startswith("BUDGET_EXHAUSTED:")
+        assert repository.list_events(task.id)[-1].reason.startswith("CONTEXT_CAPACITY:")
     finally:
         repository.close()

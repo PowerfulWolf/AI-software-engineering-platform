@@ -7,7 +7,7 @@ exact deterministic derivative of the complete chunk text.
 
 import json
 import math
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from typing import Literal, cast
 
 from pydantic import TypeAdapter, ValidationError
@@ -58,9 +58,17 @@ def render_context_section(section: ContextSection) -> PromptSectionRendering | 
                 parse_float=_finite_float,
             ),
         )
-    except (ValueError, RecursionError):
+    except (ValueError, RecursionError, DecimalException):
         return None
     if not isinstance(value, (dict, list)):
+        return None
+    try:
+        # Valid sealed ASCII JSON may contain escaped lone surrogates or
+        # nesting beyond the typed reading representation's recursion limit.
+        # Neither is grounds to reject or shorten the original Context text.
+        TypeAdapter(JsonValue).validate_python(value)
+        json.dumps(value, ensure_ascii=False).encode("utf-8")
+    except (ValueError, RecursionError):
         return None
     if section.name == "knowledge.reads":
         if not isinstance(value, list):
@@ -97,8 +105,11 @@ def render_context_section(section: ContextSection) -> PromptSectionRendering | 
             )
         except (ValueError, ValidationError, KnowledgeError, TypeError, KeyError):
             return None
-    return PromptSectionRendering(
-        content=value,
-        content_format="json",
-        source_content_sha256=section.sha256,
-    )
+    try:
+        return PromptSectionRendering(
+            content=value,
+            content_format="json",
+            source_content_sha256=section.sha256,
+        )
+    except (ValueError, RecursionError):
+        return None
