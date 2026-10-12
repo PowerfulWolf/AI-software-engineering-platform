@@ -34,6 +34,9 @@ leave local journal decoder caches empty.
 - Author's six-file compatibility command in `task.json`: **59 passed in 12.82s**.
 - After adding the explicit regular-preflight counter, the focused count test: **1 passed
   in 0.67s**; it is already included among the 59 distinct author cases.
+- The final preflight spy imports its function from the defining module, avoiding a strict
+  mypy re-export violation. Focused test rerun: **1 passed in 0.98s**; final Ruff/format,
+  strict mypy and diff checks passed after this test-only import correction.
 - Ruff check and format check: **passed**, two files.
 - Strict mypy: **passed**, two files.
 - `git diff --check`: **passed**.

@@ -33,14 +33,13 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.multi_directory.models import JointCheckpoint
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.recovery import context_capacity as module
-from ai_software_engineer.recovery import native as native_module
 from ai_software_engineer.recovery.baseline_source import (
     LEGACY_CAPACITY_REASON,
     RecoveryBaselineEpoch,
 )
 from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope
 from ai_software_engineer.recovery.native import NativeApprovedStages, _parent
-from ai_software_engineer.team_workspace import TeamWorkspace
+from ai_software_engineer.team_workspace import TeamWorkspace, _read_regular
 from tests.domain.factories import NOW, make_plan_artifact, make_state_event, make_task
 from tests.e2e.test_delivery_checkpoint import _checkpoint, _full_fields
 from tests.manager.test_contracts import stage_chain
@@ -217,7 +216,6 @@ def test_capacity_observation_decodes_parent_prefix_once_but_reads_each_time(
     counts: Counter[Path] = Counter()
     preflights: Counter[Path] = Counter()
     read_bytes = Path.read_bytes
-    read_regular = native_module._read_regular
 
     def read(path: Path) -> bytes:
         if path in paths:
@@ -227,10 +225,10 @@ def test_capacity_observation_decodes_parent_prefix_once_but_reads_each_time(
     def preflight(path: Path, limit: int) -> bytes:
         if path in paths:
             preflights[path] += 1
-        return read_regular(path, limit)
+        return _read_regular(path, limit)
 
     monkeypatch.setattr(Path, "read_bytes", read)
-    monkeypatch.setattr(native_module, "_read_regular", preflight)
+    monkeypatch.setattr("ai_software_engineer.recovery.native._read_regular", preflight)
     with patch.object(
         JointCheckpoint, "model_validate_json", wraps=JointCheckpoint.model_validate_json
     ) as decode:
