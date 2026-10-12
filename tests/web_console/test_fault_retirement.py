@@ -407,3 +407,62 @@ def test_fault_retirement_schema_parity(name: str, model: type[module._Record]) 
     )
     assert schema.pop("$schema") == "https://json-schema.org/draft/2020-12/schema"
     assert schema == model.model_json_schema()
+
+
+def test_status_running_inspection_only_reports_viewing_without_rewriting_history(
+    tmp_path: Path,
+) -> None:
+    with _host(tmp_path) as (env, child):
+        plan = prepare_fault_retirement(env)
+        _execute(env, plan.record_sha256)
+        root = Path(env["ASE_SERVICE_STATE_DIR"])
+        store = ServiceLifecycleStore(root)
+        successor = ServiceInstance.new(pid=os.getpid(), at=datetime.now(UTC))
+        store.publish_instance(successor)
+        before = (root / "console-service-instance.json").read_bytes()
+        result = _cli(env, "status", str(successor.pid))
+        assert result.returncode == 0
+        assert "仅可查看记录" in result.stdout
+        assert "需求交付和所有写入操作均已暂停" in result.stdout
+        assert "可以接收新操作" not in result.stdout
+        assert (root / "console-service-instance.json").read_bytes() == before
+        assert child.poll() is not None
+        # Nonrunning lifecycle states retain their real status and diagnosis.
+        refused = successor.with_state(ServiceState.REFUSED, at=datetime.now(UTC))
+        store.publish_instance(refused)
+        result = _cli(env, "status", str(refused.pid))
+        assert result.returncode == 0
+        assert result.stdout.strip() == refused.safe_summary
+        assert "仅可查看" not in result.stdout
+
+
+def test_status_running_normal_keeps_normal_summary(tmp_path: Path) -> None:
+    with _host(tmp_path) as (env, child):
+        store = ServiceLifecycleStore(Path(env["ASE_SERVICE_STATE_DIR"]))
+        instance = ServiceInstance.new(pid=child.pid, at=datetime.now(UTC))
+        store.publish_instance(instance)
+        result = _cli(env, "status", str(child.pid))
+        assert result.returncode == 0
+        assert result.stdout.strip() == instance.safe_summary
+        assert "可以接收新操作" in result.stdout
+
+
+@pytest.mark.parametrize("mode", ["inspection", "invalid"])
+def test_status_explicit_mode_without_marker(tmp_path: Path, mode: str) -> None:
+    root = tmp_path / "state"
+    root.mkdir(mode=0o700)
+    store = ServiceLifecycleStore(root)
+    instance = ServiceInstance.new(pid=os.getpid(), at=datetime.now(UTC))
+    store.publish_instance(instance)
+    before = (root / "console-service-instance.json").read_bytes()
+    env = {"ASE_SERVICE_STATE_DIR": str(root), "ASE_CONSOLE_MODE": mode}
+    result = _cli(env, "status", str(instance.pid))
+    if mode == "inspection":
+        assert result.returncode == 0
+        assert "仅可查看记录" in result.stdout
+        assert "可以接收新操作" not in result.stdout
+        assert _cli(env, "launch-mode").stdout.strip() == mode
+    else:
+        assert result.returncode != 0
+        assert "可以接收新操作" not in result.stdout
+    assert (root / "console-service-instance.json").read_bytes() == before

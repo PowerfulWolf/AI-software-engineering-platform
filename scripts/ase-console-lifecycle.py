@@ -130,6 +130,13 @@ def wait(store: ServiceLifecycleStore, pid: int, request_id: str) -> None:
     raise ServiceLifecycleError("未收到本次安全收尾证明; 保留原服务, 不强制停止或启动替代服务。")
 
 
+def effective_mode() -> str:
+    configured = os.environ.get("ASE_CONSOLE_MODE", "normal")
+    if configured not in {"normal", "inspection"}:
+        raise ServiceLifecycleError("服务运行模式无效; 未启动服务。")
+    return "inspection" if inspection_required(os.environ) else configured
+
+
 def main() -> int:
     try:
         store = ServiceLifecycleStore.from_environment(os.environ)
@@ -177,10 +184,7 @@ def main() -> int:
             elif inspection_required(os.environ):
                 raise ServiceLifecycleError("检查模式的原实例记录缺失; 未启动替代服务。")
         elif command == "launch-mode":
-            configured = os.environ.get("ASE_CONSOLE_MODE", "normal")
-            if configured not in {"normal", "inspection"}:
-                raise ServiceLifecycleError("服务运行模式无效; 未启动服务。")
-            print("inspection" if inspection_required(os.environ) else configured)
+            print(effective_mode())
         elif command == "status":
             instance = store.read_instance()
             if instance is None or instance.pid != int(sys.argv[2]):
@@ -199,7 +203,10 @@ def main() -> int:
                     and result.recorded_at >= value.requested_at
                     else None
                 )
-                print(refusal.safe_summary if refusal is not None else instance.safe_summary)
+                if instance.state is ServiceState.RUNNING and effective_mode() == "inspection":
+                    print("服务正在运行, 当前仅可查看记录; 需求交付和所有写入操作均已暂停。")
+                else:
+                    print(refusal.safe_summary if refusal is not None else instance.safe_summary)
         elif command == "instance-id":
             instance = store.read_instance()
             print(instance.instance_id if instance is not None else "")
