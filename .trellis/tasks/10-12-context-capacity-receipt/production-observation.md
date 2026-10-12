@@ -64,3 +64,17 @@ native exit1 的独立只读核对：现存 exact ConsoleModelCall、typed invoc
 6条执行回执仅保留退出分类、stdout/stderr SHA及HTTP结果，没有可还原的可信脱敏主错误。
 部署 structured client 在代理模式分类后统一隐藏细节，临时目录已退出。因此不能确定是
 额度、认证、网络或Schema问题；旧记录不能补造诊断。本轮未重复模型或读取原始prompt/key。
+
+## 主 Coder 进行中的事实校正
+
+独立 typed 核对得到 attempt 2 的 `DeliveryInvocationStart`：03:17:01.994116Z，
+run `run_e197336456dc4dd683e2245194ad6fcc`，timeout=1800s，source仍为9cccb5b。
+本机服务的真实 Codex 子进程56937在03:17:07Z启动；截至03:39读取仍在，未读取argv或secret。
+相应恢复worktree中已出现learning collection模型、Schema、文档与增量测试的dirty文件。
+因此主Coder确实已经开发；model-calls仅列已结束路由，8条完成知识调用不能用来推断
+主模型未开始。此前parent CPU/Pydantic热点也不能归因成主调用空窗。
+
+attempt1没有主岗位start/outcome，只有知识模型失败。当前缺少plan455...的recovery
+invocation记录，代码初查为FirstCoderRunWorkspaceAdmission按attempt>1跳过；单列后续
+合同排查，不能用这项待查缺口否定当前全部进度或补造已发生的准入事实。当前Operation
+仍运行，主Coder outcome/完整implementation/QA/Review尚未封存，不宣称已交付。
