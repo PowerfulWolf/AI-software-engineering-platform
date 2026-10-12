@@ -23,6 +23,8 @@
 
 最终静态核验：测试与生成脚本 Ruff/格式通过，测试 Mypy 通过。没有全量测试或测试 MySQL 运行。
 
+2026-10-12 正式发布文件已由后端主作者统一重新生成。主作者随后在原开发树执行本测试文件，报告 **11 PASS，10.88 秒**；这次验证覆盖正式发布文件及真实重新生成输出的一致性，完成上述镜像核验后尚待完成的 canonical 检查。独立核验者已接收该执行结果，未将主作者运行描述成自己的重复执行。上述无 MySQL 结论仅指这份纯 Schema 核验。
+
 ```sh
 PYTHONPATH=src .venv/bin/python -m pytest tests/contracts/test_same_source_capacity_schema.py -q --tb=short
 MYPYPATH=src .venv/bin/mypy --follow-imports=silent tests/contracts/test_same_source_capacity_schema.py
