@@ -38,6 +38,13 @@
 
 ## Files
 
+- [Team summary/detail reads](team-summary-detail.md): typed current summaries, exact complete
+  resource reads, semantic record versions and unchanged read-only worker admission.
+- [Team summary/detail UI](team-summary-detail-ui.md): current-state summaries, selected complete
+  reading, owner-fenced asynchronous publication and exact ProductSpec approval reads.
+- [Capacity parent journal scope](capacity-parent-journal-scope.md): per-observation immutable
+  decode reuse with unchanged complete-byte/authority validation and exception-safe release.
+
 - [Context capacity recovery](context-input-capacity-recovery.md): claimed no-model-start
   receipts, exact continuation and immutable legacy terminal compatibility.
 - [Complete Context prompt rendering](context-prompt-rendering.md): verified reading

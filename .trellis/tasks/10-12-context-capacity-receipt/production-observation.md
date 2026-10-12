@@ -32,5 +32,35 @@ Task 文档 1513328/125项，timeline 68620/36项，execution_history 873359/518
 - 依用户已有代理审批授权提交 exact approved_plan_sha256，操作
   `operation_4e6715d6917b2d10050d5203c6f24996` 已 RUNNING。
 
-本记录写入时尚未观察到新模型调用，准备/审批/Operation 运行不等于实际交付完成。
+初次记录时尚未观察到新模型调用。后续观察如下；准备/审批/Operation 运行不等于实际交付完成。
 旧 terminal Task 与事件不改写，没有直接 SQL 修改、历史清理、业务补丁手工修冲突或自动 merge。
+
+## 真实恢复准备与模型进展（截至 03:22 UTC）
+
+保存的里程碑：AUTHORIZATION_RECORDED 02:37:43.117824Z；TASK_SEALED
+02:42:39.728281Z；DISPATCH_COMMITTED 03:03:57.383176Z；SEED_VERIFIED
+03:09:01.052539Z；EXECUTION_CLAIMED 03:09:06.000010Z。
+内部执行 Task 为 `task_recovery_45588301d1b35b02f44762650b6195e4`，不是新 Requirement。
+Task 封存到 dispatch 实测 21 分 17.65 秒，dispatch 到 seed 核验 5 分 03.67 秒；
+只读诊断发现完整历史在多层授权/fence 中重复解码。静态至少 48 轮 source 观察是
+代码遍历计数，不是磁盘 I/O 实测，后续性能任务须保留所有 fresh fences。
+
+公开 model-calls 已记录：两次 Coder `knowledge_intent` 用 native `gpt-6.1-sol`
+成功（111171 ms、78499 ms）。第一次 `knowledge_assessment` 的 native CLI exit 1、
+Responses sol HTTP 504、Responses astra HTTP 504 均失败；第二次 native exit 1、sol
+HTTP 504 后，Responses `codex/gpt-6-astra` 在 03:15:58.196486Z 开始、60194 ms
+后 HTTP 200 / SUCCEEDED。调用结束事实与实际开发/QA/Review 不混同；截至此次读取
+尚未看到主 Coder 实现或 QA/Review 调用，Operation 仍 RUNNING。不能把提供方 504
+或隐藏本地诊断直接定性成 ASE 平台缺陷，也不因备用模型成功宣称需求已交付。
+
+03:25:31.203772Z 公开完整 Team 读：Task 仍 IMPLEMENTING，attempt 1 CLOSED，attempt 2
+RUNNING，heartbeat 03:25:14.569670Z/lease 03:26:14.569670Z，execution_phase=ROLE_EXECUTION。
+该语义是平台进入主角色准入，不等于主模型已经开始；后续读取仍只有上述8条
+已完成知识调用路由记录。成功评估产物 `consultations-9a38df6bf12f1a054e2c65297e012daac44a725d000d44651d2b27891ad53724`
+为 GAP / MISSING / REPOSITORY：要求 Coder 只读检查冻结源码补齐实现依据，不是向用户
+追加产品问题，也未触发需求范围审批。公开页面显示 Coder RUNNING，须结合真实调用事实解读。
+
+native exit1 的独立只读核对：现存 exact ConsoleModelCall、typed invocation outcome 和
+6条执行回执仅保留退出分类、stdout/stderr SHA及HTTP结果，没有可还原的可信脱敏主错误。
+部署 structured client 在代理模式分类后统一隐藏细节，临时目录已退出。因此不能确定是
+额度、认证、网络或Schema问题；旧记录不能补造诊断。本轮未重复模型或读取原始prompt/key。
