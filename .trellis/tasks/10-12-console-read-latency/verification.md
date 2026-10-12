@@ -68,6 +68,24 @@ exact scope SHA remains
 Initial complete reading still costs seconds; no claim of instant history reading
 or removal of server's deliberate busy response is made.
 
+## Deployed readonly verification (2026-10-13)
+
+Main was fast-forwarded to `9b5f79e` and pushed after independent review. Ordinary
+controlled restart stopped the old service with verified saved work and started PID 229;
+normal operation mode remained active. No K1 inspection/resolution/continuation was submitted.
+
+- Real summary HTTP **200 / 0.458s**, exact K1 detail **200 / 11.105s**.
+- Complete body and exact scope hashes equal the bounded production measurements above;
+  all 19 documents, 19 timeline entries, **216** history entries and 19 runs remain.
+- Independent Chrome opened the original K1 Task, showed all **216** history rows, then
+  opened its complete Requirement and displayed the existing engineering inspection entry.
+  An earlier browser read encountered fixed busy 503 and retried to 200; no read-failure
+  publication or unhandled page error occurred. All attempted write requests were blocked;
+  **0** write requests were made. No native model run, approval or delivery resumed.
+- Current registered-host discovery still reports AVAILABLE, with a cached MySQL 8.0
+  immutable image. It does not rewrite the original K1 WAIT_ENGINEERING receipt or stand
+  in for the original Task's current typed prerequisite inspection/authorization.
+
 ## Existing data treatment / rollback
 
 No migration or direct SQL/journal/Task/Operation/approval/queue/worktree edits.
