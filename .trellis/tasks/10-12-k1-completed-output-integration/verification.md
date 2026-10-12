@@ -50,3 +50,15 @@ Root独占ai_software_engineer_test执行两source目的完整publicHost及两qu
 - 已通过公开入口为原 Requirement 提交 SOURCE prepare，操作 `operation_d814f022e9e3d59a6e1293592cf5132e` 的已观察状态为 `QUEUED`。尚未完成精确方案与 native-rule diff 审阅、人工 `PAUSE` 批准、独立 `RESUME` 或 K1 交付；没有创建重复需求。
 
 上述结果证明已修复版本部署和存量读取路径已生效，不代表方案已准备完成、Coder 已继续或需求已交付。后续仍须沿原 Requirement 的公开恢复流程完成审批和继续，并取得同一候选的 QA PASS、Review APPROVE 与 Handoff。
+
+## 2026-10-12 08:23（UTC+8）精确存量恢复与独立继续补记
+
+以下追加维护负责人随后从公开入口实际提交并核验的观察结果；上文 `QUEUED` 和待批准结论作为当时历史保留。本次只补文档，没有操作生产、数据库或模型。
+
+- 保留草稿 SOURCE proposal `operation_d814f022e9e3d59a6e1293592cf5132e` 已 `SUCCEEDED`，plan 为 `c43ce7fc543d80465488e33309a4d4d7085c1ca50c68899784e8d5c1d519efb1`，`conflicted=true`。准备此方案没有修改原现场的 `30` 个 paths；冲突没有在旧批准下自动解开。
+- 已显式通过公开入口新提交 `coder_reapply` proposal `operation_84691b3769fbbd98da6b43e0993f4c7a`，结果 `SUCCEEDED`。plan `812a2c0295912bfcbab7babbbd32f4c48c682de47dbaaf0f136314f7b40a0ca4` 为 `conflicted=false`，target/source 精确为 `7ef2425427a122aeb4a9282d9fd32da063c8ee25`。该方案的 complete capture、dirty capture 和 before capture 与原 preserve 方案严格相同；完整旧草稿作为 Coder 下一次适配的输入保留，没有借由新模式接受旧报告或改写旧失败。
+- 已经公开 GET 读取并审阅全部 `15` 个完整 native-rule diff，其中索引 `05–09` 和 `10–14` 分别经过独立 review。批准所绑定的 change 为 `1ebfb41fc9e614df8936a7aba0943cc8bc24c577c8531469b3c1bb04a1bdf925`，epoch 为 `18e07a0a48a066d66b46590df90c9888e88f26858f70c89a61abbcd9d3e5a7ea`；此处审阅不是 QA/Review verdict。
+- 精确人工 `PAUSE` operation `operation_8f6d430c87a763ae52d11380ca31dee4` 已 `SUCCEEDED`，binding 为 `5cf552ecfda1df1bb122e664ab0c156e457d0d1eb936d5734ba652d96ca1538a`。保留的完整旧补丁为 `604438` bytes，SHA-256 为 `c085ce5563e49e446c861eb4771cc3634af2f8ad0ebb27181175d9cbf80211f5`，原 branch 保留。批准后观察到以 `work_5cf552e` 开头的 next work 为 attempt `2`、`WAITING_HUMAN`，尚无 start 或模型执行，旧失败记录保留；fresh Team 显示 `PAUSED`。
+- 随后单独提交的 `RESUME` operation `operation_c204d15e77ad4a14d5d22be16c3c082a` 已观察为 `RUNNING`，仍处于准备阶段。该操作状态不证明 Coder claim、原生进程或模型已开始，也不证明需求交付。
+
+原 Task 的 immutable base `1769977` 保持不变，新的 execution source 为 `7ef2425427a122aeb4a9282d9fd32da063c8ee25`。本次沿原 Requirement 和原 branch 继续，没有创建重复需求、退款、接受旧 INVALID_OUTPUT 或复活旧 terminal Task。下一步需继续核验真实 Run/Context/claim 与 Coder 产出，再完成同一候选的独立 QA、Review 和 Handoff；K1 尚未交付。
