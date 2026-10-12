@@ -1,0 +1,24 @@
+{
+  "name": "faulted-service-maintenance",
+  "title": "精确故障Host退休与持久只读检查继任",
+  "status": "completed",
+  "priority": "P0",
+  "branch": "task/faulted-service-maintenance",
+  "created_at": "2026-10-12",
+  "rollback_commit": "88128c3",
+  "allowed_paths": [
+    "src/ai_software_engineer/web_console/fault_retirement.py",
+    "src/ai_software_engineer/owned_sessions.py",
+    "scripts/ase-console-lifecycle.py",
+    "scripts/ase-console-service.sh",
+    "scripts/ase-console-maintenance.py",
+    "scripts/generate-fault-retirement-schemas.py",
+    "schemas/console-fault-retirement-*.schema.json",
+    "schemas/console-inspection.schema.json",
+    "tests/web_console/test_fault_retirement.py",
+    ".trellis/spec/core/faulted-service-maintenance.md",
+    ".trellis/spec/core/index.md",
+    "docs/operations/controlled-service-restart.md",
+    ".trellis/tasks/10-12-faulted-service-maintenance/**"
+  ]
+}

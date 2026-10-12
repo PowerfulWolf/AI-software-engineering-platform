@@ -12,6 +12,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 try:
+    from ai_software_engineer.web_console.fault_retirement import (
+        inspection_required,
+        require_inspection_retirement,
+    )
     from ai_software_engineer.web_console.service_lifecycle import (
         ServiceLifecycleError,
         ServiceLifecycleStore,
@@ -149,45 +153,34 @@ def main() -> int:
             print(request(store, int(sys.argv[2]), sys.argv[3], float(sys.argv[4])))
         elif command == "wait":
             wait(store, int(sys.argv[2]), sys.argv[3])
-        elif command == "dead":
+        elif command in {"dead", "initial"}:
             instance = store.read_instance()
-            result = store.read_result()
-            value = store.read_request()
-            if (
-                instance is None
-                or instance.pid != int(sys.argv[2])
-                or instance.state != ServiceState.READY
-                or result is None
-                or value is None
-                or not value.matches(instance)
-                or not result.matches(value)
-                or result.state != ServiceState.READY
-                or result.recorded_at < value.requested_at
-                or instance.updated_at < value.requested_at
-            ):
-                raise ServiceLifecycleError(
-                    "旧服务未留下安全收尾证明; 请先核对原执行, 不能直接替换。"
-                )
-        elif command == "initial":
-            instance = store.read_instance()
+            if command == "dead" and (instance is None or instance.pid != int(sys.argv[2])):
+                raise ServiceLifecycleError("旧服务身份不匹配; 未启动替代服务。")
             if instance is not None:
                 if alive(instance.pid):
-                    raise ServiceLifecycleError("旧服务仍在运行, 但缺少 PID 记录; 未启动替代服务。")
+                    raise ServiceLifecycleError("旧服务仍在运行; 未启动替代服务。")
                 result = store.read_result()
                 value = store.read_request()
-                if (
-                    instance.state != ServiceState.READY
-                    or result is None
-                    or value is None
-                    or not value.matches(instance)
-                    or not result.matches(value)
-                    or result.state != ServiceState.READY
-                    or result.recorded_at < value.requested_at
-                    or instance.updated_at < value.requested_at
-                ):
-                    raise ServiceLifecycleError(
-                        "旧服务未留下安全收尾证明; 请先核对原执行, 不能直接替换。"
-                    )
+                normal_ready = (
+                    instance.state == ServiceState.READY
+                    and result is not None
+                    and value is not None
+                    and value.matches(instance)
+                    and result.matches(value)
+                    and result.state == ServiceState.READY
+                    and result.recorded_at >= value.requested_at
+                    and instance.updated_at >= value.requested_at
+                )
+                if not normal_ready:
+                    require_inspection_retirement(os.environ, instance, value, result)
+            elif inspection_required(os.environ):
+                raise ServiceLifecycleError("检查模式的原实例记录缺失; 未启动替代服务。")
+        elif command == "launch-mode":
+            configured = os.environ.get("ASE_CONSOLE_MODE", "normal")
+            if configured not in {"normal", "inspection"}:
+                raise ServiceLifecycleError("服务运行模式无效; 未启动服务。")
+            print("inspection" if inspection_required(os.environ) else configured)
         elif command == "status":
             instance = store.read_instance()
             if instance is None or instance.pid != int(sys.argv[2]):
@@ -212,7 +205,9 @@ def main() -> int:
             print(instance.instance_id if instance is not None else "")
         elif command == "started":
             pid, previous_id = int(sys.argv[2]), sys.argv[3]
-            deadline = time.monotonic() + 5
+            deadline = time.monotonic() + (
+                120 if len(sys.argv) > 4 and sys.argv[4] == "inspection" else 5
+            )
             while alive(pid) and time.monotonic() < deadline:
                 instance = store.read_instance()
                 if (

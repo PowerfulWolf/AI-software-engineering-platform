@@ -77,6 +77,8 @@
 - [`workspace-inventory.md`](workspace-inventory.md): complete ignored-file observation,
   exact bounded maintenance fingerprints and audited cache preservation/replay.
 
+- [`faulted-service-maintenance.md`](faulted-service-maintenance.md): exact faulted Host retirement, full immutable archive, retry and persistent inspection-only successor.
+
 - [`controlled-service-restart.md`](controlled-service-restart.md): complete Host admission drain,
   real durable completion, process-stop proof, signal handling and exact private restart handshake.
 

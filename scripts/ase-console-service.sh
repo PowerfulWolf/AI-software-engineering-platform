@@ -183,6 +183,7 @@ PY
 
 launch_child() {
   previous_instance=$(lifecycle instance-id) || return 1
+  launch_mode=$(lifecycle launch-mode) || return 1
   # Keep values loaded from runtime.env inside the child-launch subshell. The
   # long-lived supervisor must not retain a secret that a later save removes.
   (
@@ -190,6 +191,7 @@ launch_child() {
     # may suppress `set -e` for the whole function body. Propagate a malformed
     # or unsafe runtime.env explicitly instead of continuing with stale input.
     load_runtime_environment || exit 1
+    export ASE_CONSOLE_MODE="$launch_mode"
     export ASE_CONFIG="$CONFIG_FILE"
     export ASE_SERVICE_STATE_DIR="$SERVICE_STATE_DIR"
     : >>"$LOG_FILE"
@@ -426,6 +428,12 @@ stop_child_for_apply() {
 
 apply_configuration() {
   apply_request_id=$1
+  apply_mode=$(lifecycle launch-mode) || return 1
+  if [ "$apply_mode" = inspection ]; then
+    echo "检查模式只允许读取；配置应用与需求交付保持暂停。" >&2
+    write_apply_state "$apply_request_id" FAILED
+    return 1
+  fi
   [ -f "$APPLY_REQUEST_FILE" ] && [ ! -L "$APPLY_REQUEST_FILE" ] || return 0
   [ "$(sed -n '1p' "$APPLY_REQUEST_FILE")" = "$apply_request_id" ] || return 1
   [ "$(read_apply_state_status "$apply_request_id" 2>/dev/null)" = PENDING ] || return 0
@@ -433,7 +441,7 @@ apply_configuration() {
   if stop_child_for_apply; then
     if launch_child; then sleep 1; fi
     if [ "${started_pid:-}" ] && is_our_process "$started_pid" && \
-      lifecycle started "$started_pid" "$previous_instance"; then
+      lifecycle started "$started_pid" "$previous_instance" "$launch_mode"; then
       write_apply_state "$apply_request_id" SUCCEEDED
     else
       write_apply_state "$apply_request_id" FAILED
@@ -533,7 +541,7 @@ start_service() {
     tail -n 30 "$LOG_FILE" >&2 || true
     exit 1
   fi
-  lifecycle started "$started_pid" "$previous_instance" || return 1
+  lifecycle started "$started_pid" "$previous_instance" "$launch_mode" || return 1
   if ! start_supervisor; then
     stop_child_for_apply || true
     echo "error: ase-console supervisor could not be started safely" >&2

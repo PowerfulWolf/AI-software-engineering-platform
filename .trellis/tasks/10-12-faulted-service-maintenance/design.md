@@ -1,0 +1,16 @@
+# 实际收敛设计：只读继任
+
+旧进程崩溃不能提供可信内存idle快照。退休不再宣称原工作完整收尾，而是保留历史UNKNOWN，
+用真实精确OS身份/冻结/实际终止及完整原文件/日志归档，只恢复没有任何writer的inspection前端。
+
+受信本地prepare从固定原实例/SHUTDOWN/PID与kernelboot/birth/executable/argv采集Plan。
+execute exactdigest+confirm在replacementflock内先TERM已验证固定supervisor、再SIGKILL旧Host。
+原log同FS移动保持inode；真实absence、lsof阳性调查无writer、全SHA后sealreceipt+永久marker。
+每个阶段可同plan重入，不重发其他PIDsignal；未保存的signalACK保留UNKNOWN。
+
+只读marker优先normalenv并持久过重启，坏marker拒绝。lifecycle dead/initial只允许完整精确
+链+fresh旧PIDabsence，普通READY仍独立。Host/HTTP/dispatch/index隔离由并行inspection实现。
+角色/网络没有维护executor权限，不继续需求。scope不完整明确UNKNOWN。详细签名、60s启动
+归属窗口、Darwin系统shell能力、日志调查语义和rollback见core spec。
+
+原未消费service_maintenance.py原型及tests仅留独立tree，不纳入提交或production契约。
