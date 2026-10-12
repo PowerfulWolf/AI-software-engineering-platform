@@ -1,0 +1,300 @@
+[
+  {
+    "ref": "codex/inspection-console",
+    "head": "f9ac032c2e5f1c7611ed8e526d2026dd272858ef",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- f9ac032c2e5f1c7611ed8e526d2026dd272858ef fix(console): accept canonical omitted nullable reading identities"
+    ]
+  },
+  {
+    "ref": "codex/native-output-bounds-20261011",
+    "head": "fba82f3adba1fb1f11c015b809beae65d9c37de4",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- fba82f3adba1fb1f11c015b809beae65d9c37de4 fix(runtime): bound native process output while execution is running"
+    ]
+  },
+  {
+    "ref": "codex/negative-token-guidance-20261011",
+    "head": "00494263bffb20073faaa8563870ee3f02e1c6f3",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 00494263bffb20073faaa8563870ee3f02e1c6f3 fix(agents): guide negative credential tests with dynamic fixtures"
+    ]
+  },
+  {
+    "ref": "fix/cli-failure-classification",
+    "head": "3a1f6d4924ec09089d5a35f90bd74559cc7d8aa2",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 3a1f6d4924ec09089d5a35f90bd74559cc7d8aa2 fix(agents): isolate native CLI failure diagnostics"
+    ]
+  },
+  {
+    "ref": "fix/current-receipt-projection",
+    "head": "36972a9db61b9e281d9ae57b8b4d940e94c4b573",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 36972a9db61b9e281d9ae57b8b4d940e94c4b573 fix(console): bind current receipt to exact execution work"
+    ]
+  },
+  {
+    "ref": "fix/final-input-preflight",
+    "head": "f6e8c94efb4600ccc111f6f8441848134c490184",
+    "reason": "independent-change-line-audit",
+    "cherry": [
+      "+ f6e8c94efb4600ccc111f6f8441848134c490184 fix(runtime): prepare final provider input before invocation start"
+    ]
+  },
+  {
+    "ref": "fix/owned-session-stop",
+    "head": "60a619c5307642ced162e2dacfa8c0b5e03005f5",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 2273dc92c3facbb5474859deb90ddebd27d60e73 fix(execution): verify owned session stop before durable finalization",
+      "- 60a619c5307642ced162e2dacfa8c0b5e03005f5 fix(runtime): verify Darwin PID absence after short birth query"
+    ]
+  },
+  {
+    "ref": "fix/provider-source-plan-ui",
+    "head": "c97c077e5a6a7900e5e3c245d75b634d866e08c8",
+    "reason": "independent-change-line-audit",
+    "cherry": [
+      "+ c97c077e5a6a7900e5e3c245d75b634d866e08c8 fix(console): select current stopped provider recovery plan"
+    ]
+  },
+  {
+    "ref": "task/baseline-context-projection",
+    "head": "9a747944973511ddd34c5c5c7c574c86c190c7e0",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 9a747944973511ddd34c5c5c7c574c86c190c7e0 fix(context): bound preserved baseline reading input"
+    ]
+  },
+  {
+    "ref": "task/baseline-read-scope",
+    "head": "b7ddfa53b306069436f50209211e6f0a585d87d0",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- b7ddfa53b306069436f50209211e6f0a585d87d0 perf(recovery): scope full baseline consumption source checks"
+    ]
+  },
+  {
+    "ref": "task/baseline-transient-guard",
+    "head": "2bd78e59887078c02c9628afa5353423c09d622e",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 3d3130b56aea0570a12bcd14ab91795432dde47d fix(delivery): require explicit transient baseline retry fact",
+      "- 3cab12da9bbf13b1a1ae727aa1217ba3a3d4835a fix(agents): reject transient defaults for unknown native exits",
+      "- 2bd78e59887078c02c9628afa5353423c09d622e fix(delivery): route nontransient failures by frozen work budget"
+    ]
+  },
+  {
+    "ref": "task/capacity-failure-route",
+    "head": "e254074ff25b8e2d029110834d0b32eb28e85e1d",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 17263d27dffce396c86d18a8379f8c3ea98cb5a0 fix(delivery): preserve checkpoints on input capacity rejection",
+      "- 7624fe95900f73e7c2095cd79d8bcc7b386d12e2 fix(delivery): seal claimed input capacity stops before model admission",
+      "- e254074ff25b8e2d029110834d0b32eb28e85e1d fix(delivery): resume claimed coder capacity waits through exact baselines"
+    ]
+  },
+  {
+    "ref": "task/coder-slice-output-guidance",
+    "head": "050faba9033bbbe61135ea4113e2a065dde35175",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 050faba9033bbbe61135ea4113e2a065dde35175 fix(agents): align bounded Coder output guidance and rejection diagnostics"
+    ]
+  },
+  {
+    "ref": "task/console-idle-backoff",
+    "head": "eed6dce0b4910f8bc075e87e148c11508f367f82",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- eed6dce0b4910f8bc075e87e148c11508f367f82 fix(console): back off idle dispatch with immediate wake"
+    ]
+  },
+  {
+    "ref": "task/console-operation-summary-ui",
+    "head": "657f6ea28fd296b5e6037ad53f572b5e05c71217",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 657f6ea28fd296b5e6037ad53f572b5e05c71217 perf(console): poll operation summaries and bound full detail reads"
+    ]
+  },
+  {
+    "ref": "task/context-capacity-projection",
+    "head": "d4d51151af96d20e4e981f09eb6ee8519f93e5df",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 99fcb9f654644146fa69929a58653b20661d2ca8 fix(console): explain context capacity stops",
+      "- 5679cb8a90b2ba11b008b2348f9730d4f1b0791a docs(recovery): define context capacity recovery boundary",
+      "- d4d51151af96d20e4e981f09eb6ee8519f93e5df fix(console): recognize context capacity classification"
+    ]
+  },
+  {
+    "ref": "task/dynamic-credential-fixture",
+    "head": "1ef4fcfecaf2157dcacf7b6fdf945959c0c5c3a9",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 1ef4fcfecaf2157dcacf7b6fdf945959c0c5c3a9 fix(recovery): recognize proven dynamic credential test source"
+    ]
+  },
+  {
+    "ref": "task/faulted-service-maintenance",
+    "head": "fc6854664302346a583a787c09e7d25dc06fd136",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- fc6854664302346a583a787c09e7d25dc06fd136 fix(console): report inspection-only service status accurately"
+    ]
+  },
+  {
+    "ref": "task/k1-deployment-verification-closeout",
+    "head": "e0cd6d5f9b5a5db33b9cab2633cd4cdfa59c777d",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- beaa43a0d12319b3bf85321bf8159511afe9d8f4 docs(delivery): record controlled deployment and queued K1 source check",
+      "- e0cd6d5f9b5a5db33b9cab2633cd4cdfa59c777d docs(recovery): record exact K1 reapply approval and resume preparation"
+    ]
+  },
+  {
+    "ref": "task/native-coder-diagnostic-envelope",
+    "head": "8cfa9d27715b93a733b0251dc9ba0c6ace08eacb",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- a4384a4317356f19dc1eb5c87d045cc98e08d3e1 Deduplicate coder reapply patch context",
+      "- 7fe76e0970950595b97f68010fa3eb435d58ccfc Keep historical reapply contexts immutable",
+      "- 5896dc2ebb3ad3b88253ca84882217750a794989 Verify deduplicated reapply with recovery gate",
+      "- 8cfa9d27715b93a733b0251dc9ba0c6ace08eacb Render complete context within final provider budget"
+    ]
+  },
+  {
+    "ref": "task/operation-result-scope-compat",
+    "head": "edf5c77f852227e477c9adbb878140e991f89337",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 20d1ff75493e6bf32091579afdafe762dcd2c3ba fix(console): scope independent command results without blocking history",
+      "- edf5c77f852227e477c9adbb878140e991f89337 fix(console): preserve exact edited requirement navigation"
+    ]
+  },
+  {
+    "ref": "task/operation-summary-read",
+    "head": "621a035c1cc4a913dac611ed5193c28c5d4a1f7b",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- e7f0d19ac24d324a70262f2dc371d50bdd15314e perf(console): add bounded verified operation summary reads",
+      "- 621a035c1cc4a913dac611ed5193c28c5d4a1f7b docs(console): complete bounded operation read task contract"
+    ]
+  },
+  {
+    "ref": "task/owned-verification-diagnosis",
+    "head": "30d898e021cca0d0c46225e132a3d0131ef3598f",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 30d898e021cca0d0c46225e132a3d0131ef3598f fix(manager): preserve owned verification discovery uncertainty"
+    ]
+  },
+  {
+    "ref": "task/product-approval-linear-read",
+    "head": "51985fb0a70cf3135948d62e2bdc72bd91a52db2",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 51985fb0a70cf3135948d62e2bdc72bd91a52db2 perf(product): validate approval spec history once per lookup"
+    ]
+  },
+  {
+    "ref": "task/recovery-admission-facts",
+    "head": "f301e27c4a1ecf5b5f8b01e12bf6a8b0021fa94d",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- f301e27c4a1ecf5b5f8b01e12bf6a8b0021fa94d perf(recovery): derive Task from fresh authorization facts"
+    ]
+  },
+  {
+    "ref": "task/recovery-facts-window",
+    "head": "0f08eca808ae0c9b2625f306ceebfc1ccb866a03",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 22baea3374a03b89bdd19e411614c95938a16974 fix(recovery): preserve stronger trusted authorization gates",
+      "- 0f08eca808ae0c9b2625f306ceebfc1ccb866a03 perf(recovery): inspect complete terminal facts in one owned window"
+    ]
+  },
+  {
+    "ref": "task/recovery-progress-ui",
+    "head": "d319dee7549b5ed7eaec6a438ade09a8a25c8849",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- d319dee7549b5ed7eaec6a438ade09a8a25c8849 fix(console): preserve current recovery progress in summary views"
+    ]
+  },
+  {
+    "ref": "task/recovery-record-read-scope",
+    "head": "aeca8a92c854d10249f8ea05a373736a398b014f",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- aeca8a92c854d10249f8ea05a373736a398b014f perf(recovery): reuse verified immutable decoding within synchronous gates"
+    ]
+  },
+  {
+    "ref": "task/stopped-budget-planner-lineage",
+    "head": "1ddc7d42a7f30200c177c9ff6a583c439a6a79b2",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 1ddc7d42a7f30200c177c9ff6a583c439a6a79b2 fix(recovery): honor exact consumed rejected publications"
+    ]
+  },
+  {
+    "ref": "task/stopped-exhausted-settlement",
+    "head": "edaac21b0c06598e772c12209b5918db6f03f9cb",
+    "reason": "independent-change-line-audit",
+    "cherry": [
+      "+ edaac21b0c06598e772c12209b5918db6f03f9cb fix(delivery): settle stopped exhausted legacy waits atomically"
+    ]
+  },
+  {
+    "ref": "task/stopped-provider-retry",
+    "head": "90f3dbedab2a49401602022a1a91aeb62800e72b",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 90f3dbedab2a49401602022a1a91aeb62800e72b fix(delivery): preserve progress after stopped provider prerequisite failure"
+    ]
+  },
+  {
+    "ref": "task/terminal-context-capacity-recovery",
+    "head": "01b765ae80884c345456c3b21dd2ecca2bb46ab0",
+    "reason": "independent-change-line-audit",
+    "cherry": [
+      "- 5af7a305bf3c64f2998b4fed9c94d38a14357db7 fix(delivery): seal claimed input capacity stops before model admission",
+      "- 3c032c686ec0c45d81d1cc10353819aa719c15ae fix(recovery): preserve progress after terminal input capacity stop",
+      "- adc790cf01d2ffc1595067c4dba18fd18f51ae75 fix(recovery): require nonnull capacity source baseline in schema",
+      "+ 01b765ae80884c345456c3b21dd2ecca2bb46ab0 fix(recovery): verify exact legacy capacity source and clean removal"
+    ]
+  },
+  {
+    "ref": "task/unaccepted-coder-draft-resume",
+    "head": "896132dbaa73c013d1d5b86e616a063f1874c5fa",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 896132dbaa73c013d1d5b86e616a063f1874c5fa fix(manager): resume rejected completed coder drafts safely"
+    ]
+  },
+  {
+    "ref": "task/unaccepted-coder-draft-ui",
+    "head": "fe70ea81c512f59c6d053e38a1eb050af30325ca",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 0423ba0ad504c1d597e4ce401ba674afb33f6be1 fix(console): explain and gate preserved rejected Coder draft recovery",
+      "- fe70ea81c512f59c6d053e38a1eb050af30325ca fix(console): hide unsupported source approvals from sealed rejected proofs"
+    ]
+  },
+  {
+    "ref": "test/retired-rejected-publications",
+    "head": "99e94aaee3ac26c66dec8c051a4ceeec300d271e",
+    "reason": "patch-equivalent",
+    "cherry": [
+      "- 99e94aaee3ac26c66dec8c051a4ceeec300d271e test(delivery): cover repeated rejected progress recovery"
+    ]
+  }
+]
