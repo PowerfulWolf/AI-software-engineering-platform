@@ -780,3 +780,119 @@ raw SHA 与原 capacity receipt 精确一致；与当前 SQL 只续租 expiry �
 恢复仍拒绝，需独立可信完整事实或显式工程路径，不能用 stable hash 代替缺失原记录。
 回滚：新事实发布前撤销代码即可保留旧数据；新增完整 CLAIMED snapshot 后须保留兼容 reader，
 优先向前修复，保留所有 immutable 审批、worktree/分支/草稿和重试历史。
+
+## Same-source context capacity continuation (Console contract v8)
+
+```python
+BaselinePurpose.CONTEXT_CAPACITY_RESUME = "context_capacity_resume"
+BaselineProposeCommand(..., purpose=CONTEXT_CAPACITY_RESUME,
+    target_base_ref=None, input_mode=PRESERVE_DRAFT)
+ExecutionBaselineBinding.context_capacity_receipt_sha256: Sha256 | None = None
+require_context_capacity_binding(plan: ExecutionBaselinePlan,
+    binding: ExecutionBaselineBinding) -> None
+```
+
+After a real platform input/configuration repair, capacity waiting can continue without changing
+target-project code. It must use this distinct purpose. `SOURCE_REBIND` continues to require a
+different execution base and must reject a same-base proposal. Public callers omit the target
+or pass `None`; an explicit caller SHA, even the current SHA, refuses. The trusted collector
+derives the existing execution base. No public receipt digest, stopped Boolean or attempt override
+is accepted. The additive Console operation capability is version 8; an older server cannot
+advertise a usable capacity-resume action.
+
+The Plan requires the exact current `claimed_context_capacity` receipt and complete historical
+no-start verification described above: original raw claim, full Context/Task/permissions/source,
+actual queue reservation, all main invocation/provider/native/artifact contradictions and the
+historical baseline selected at original claim time. A capacity receipt never proves an unrelated
+execution stopped. Missing or contradictory records still refuse. A prior independent QA FAIL
+or Review REJECT remains a role verdict and cannot become a no-start result for the current Coder.
+
+For this purpose, `target_base_ref` equals the currently resolved execution base, prepared source
+equals the exact current capture source, and both dirty and complete committed-plus-dirty captures
+remain intact. The source can be a committed candidate descendant of the base; equality of source
+and base is not required. Native rules cannot change, and source/target native-rule digests remain
+equal. Only `preserve_draft` is valid. The Git mutation adapter is skipped: no rebase, patch replay,
+reset, index change or branch replacement occurs. Full legal captures and complete inventory are
+reread under the existing process/SQL fences before and after operation publication.
+
+Only an exact `BaselineOperatorAuthorization` with `continuation_mode=pause` is accepted.
+Automated admission and combined immediate RESUME refuse. The Binding preserves execution base,
+source, branch/worktree and before/after inventory, records the exact Plan receipt digest, and
+leaves both superseded implementation/progress IDs `None`. Accepted candidate and active progress
+therefore remain active under their existing publication order. Existing QA/Review findings,
+recommendations, commands, evidence and Context inputs continue to reach Coder; no role verdict
+or artifact is rewritten. Full plan/binding association is enforced when producing the Binding,
+reading its immutable store and consuming it in the queue. A rehashed foreign receipt, source or
+artifact inventory cannot graft authority onto an otherwise locally valid Binding.
+
+The continuation reservation must be `uninvoked`, `reservation_already_applied=true`, with
+`current_attempt == next_execution_attempt == task.attempts`. Queue consumption keeps the same
+WorkItem identity and frozen attempt, advances only its dispatch generation, and records an
+engineering pause. It does not update Task, add/refund work, reserve another attempt or alter
+retry budgets. Separate RESUME requires the latest exact Binding, original Task revision,
+source, paused disposition and complete unchanged inventory, then performs the existing fresh
+claim/Context/Run path. The complete baseline store and `BaselineInitialWorkspaceAdmission`
+remain the dirty-workspace gate. Old native receipts may be retired only by the exact Binding;
+their immutable records stay in history. The new real final input must be measured again before
+provider start. A successful recovery plan does not itself prove that the new input fits.
+
+The optional Binding field uses `exclude_if=None`; old absent/default/explicit-null inputs retain
+their canonical omitted wire form and previous SHA. A non-null digest requires explicit new
+purpose in static Schemas; other purposes cannot carry it. Canonical generator guards apply to
+Plan, Binding, proposal and embedded Console/queue definitions. Cross-record receipt, capture,
+authority and reservation relations remain trusted typed service/store/queue checks.
+
+| Input or action | Required outcome |
+| --- | --- |
+| Two real owned native stops, then claimed final-input capacity before model start | Same Task/WorkItem/attempt, exact PAUSE then separate RESUME; independent QA/Review |
+| Accepted progress, prior candidate and real QA FAIL, newer accepted fix progress, then capacity | Preserve candidate/progress and complete finding/evidence inputs; finish same Task |
+| Committed descendant source plus legal dirty progress | Exact source/base preserved independently; no source flattening |
+| Caller target, `coder_reapply`, native-rule change or same-base `source_rebind` | Refuse before usable proposal or unsafe mutation |
+| Automated approval, direct RESUME, stale facts/receipt/source/inventory or foreign artifact set | Refuse; retain original queue and files |
+| Binding lacks new purpose but has non-null capacity digest | Model and external Schema refuse |
+| Historical Binding absent/default/null capacity digest | Previous serialization/hash and source-update behavior |
+| New capacity wait after a previous resume | Require that new generation's actual receipt and fresh measurement; no old approval reuse |
+
+Consumer audit: `domain/execution_baseline.resolve_coder_execution_input` and
+`orchestration/runner._current_coder_input` preserve accepted progress/candidate because new-purpose
+bindings supersede neither. `orchestration/execution_baseline.BaselineRunContextBuilder` keeps
+the existing verified preserved-worktree projection. `context/execution_baseline` and
+`capacity_input_reader._CapacityBaselineVerifier` reread the complete store and exact historical
+epoch; their authority is not a purpose string. `recovery/baseline_source` reads the same validated
+store and reservation without widening its separate legacy terminal exception. Store and queue
+call the shared plan/binding guard. Console proposal/execute guidance, scoped operation summaries,
+Team engineering history and frontend purpose matching render retained code/progress and the
+separate continue step in Chinese. Binding-only operation summaries use a purpose only when the
+result belongs to the queried Requirement; full stored Operations are never rewritten.
+
+Historical finalized candidate outputs have an additional exact provenance gate. The platform
+CandidateCommitSkill changes an implementation-report's output `source_revision`/`commit_sha`
+to its candidate SHA; the immutable original Context and invocation request correctly retain
+the input SHA. Capacity investigation must not require those two distinct facts to be equal.
+Only `ImplementationReportArtifact` may resolve its input SHA through the unique full original
+invocation start, matching successful outcome and exact SQL accepted publication. The outcome's
+full artifact content digest must equal the final sealed artifact, with only its seal integrity
+fields excluded by the standard artifact digest. Validate producer Run/role/Agent, original
+claim/step/attempt/checkpoint, permissions, full Task/Context and historical baseline; check seal
+and claim/start time ordering. The SQL receipt must pin exact Task/WorkItem/lease/generation,
+Run/Context, output source and artifact digest. Missing, foreign, ambiguous or rehashed altered
+records refuse. Git ancestry, equal Task ID or a candidate-looking SHA alone grants no exception.
+All ordinary route/progress source equality checks remain, and a current capacity Run/Context/
+lease or same-claim output still refuses before this historical candidate helper can authorize
+anything. `test_capacity_candidate_provenance.py` covers resealed source/Context/Run/evidence,
+missing/duplicate start, missing/foreign outcome, foreign publication and same-claim negatives.
+
+Incremental verification lives in `test_same_base_capacity_baseline.py` (real isolated MySQL,
+owned subprocess stops and public Host delivery), `test_capacity_preserved_feedback_public.py`
+(accepted progress/real QA feedback through public delivery), `test_capacity_baseline_preserved_inputs.py`
+(typed service/store/Context graft and stale checks), `test_same_source_capacity_schema.py`,
+operation-summary/transport tests and engineering-history tests. Unit factory artifacts are not
+presented as production accepted facts. Provider outputs are fake in fixture delivery; the real
+production application remains independently supervised.
+
+存量数据处置：无需 SQL migration，不修改原 Task、WorkItem、capacity receipt、Context、claim、
+审批或重试账本，不重建需求。加载兼容版本并实际修复平台输入/配置后，在原需求准备“保留进度继续”
+方案，核对原代码、全部现场和调用前停止事实，精确批准并保持暂停，再单独点击“继续原需求”。
+新执行仍需独立领取、重新测量容量并经过 QA/Review。旧同基线 source_rebind 方案不静默转换；
+以新 purpose 重新准备方案。代码测试与生产审批分开，本实现不操作生产。回滚在新记录发布前可
+撤销代码；新 purpose Binding/审批已发布后必须保留兼容 reader，优先向前修复，保留全部历史。

@@ -25,6 +25,7 @@ from ai_software_engineer.domain.task import Task
 from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
     ExecutionBaselinePlan,
+    require_context_capacity_binding,
 )
 from ai_software_engineer.manager.completed_output_checkpoint import CompletedCoderOutputReason
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
@@ -64,6 +65,11 @@ class BaselineQueueConsumption(DomainModel):
     def exact_completed_operation(self) -> Self:
         self.plan.validate_integrity()
         self.binding.require_task(self.plan.facts.task)
+        require_context_capacity_binding(self.plan, self.binding)
+        if self.plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME and (
+            self.next_work_item_id != self.work_item_id
+        ):
+            raise ValueError("容量恢复必须沿用原已预留工作身份, 不能创建新attempt")
         if (
             self.task_id != self.binding.task_id
             or self.work_item_id != self.plan.facts.work_item_id

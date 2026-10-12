@@ -234,7 +234,13 @@ def guards(node: dict[str, object]) -> None:
                 "if": {
                     "required": ["purpose"],
                     "properties": {
-                        "purpose": {"enum": ["completed_output_rescue", "stopped_provider_retry"]}
+                        "purpose": {
+                            "enum": [
+                                "completed_output_rescue",
+                                "stopped_provider_retry",
+                                "context_capacity_resume",
+                            ]
+                        }
                     },
                 },
                 "then": {
@@ -869,6 +875,75 @@ def guards(node: dict[str, object]) -> None:
         existing = node.get("allOf", [])
         assert isinstance(existing, list)
         node["allOf"] = [*existing, *(guard for guard in extra if guard not in existing)]
+
+    # Runtime-only capacity recovery is an independent purpose. These local
+    # wire gates supplement the complete plan/binding/queue association in code.
+    if title in {"ExecutionBaselinePlan", "ExecutionBaselineBinding"}:
+        properties = {"input_mode": {"const": "preserve_draft"}}
+        required = []
+        if title == "ExecutionBaselinePlan":
+            properties.update(
+                {
+                    "conflicted": {"const": False},
+                    "facts": {
+                        "required": ["context_capacity_receipt_sha256", "continuation"],
+                        "properties": {
+                            "context_capacity_receipt_sha256": {"type": "string"},
+                            "legacy_containment": {"type": "null"},
+                            "completed_output": {"type": "null"},
+                            "stopped_provider_failure": {"type": "null"},
+                            "native_rule_change": {"type": "null"},
+                            "continuation": {
+                                "type": "object",
+                                "required": ["retry_cause", "reservation_already_applied"],
+                                "properties": {
+                                    "retry_cause": {"const": "uninvoked"},
+                                    "reservation_already_applied": {"const": True},
+                                },
+                            },
+                        },
+                    },
+                }
+            )
+        else:
+            required = ["context_capacity_receipt_sha256", "continuation_mode"]
+            properties.update(
+                {
+                    "context_capacity_receipt_sha256": {"type": "string"},
+                    "continuation_mode": {"const": "pause"},
+                    "authority_source": {"const": "engineering_operator_decision"},
+                    "legacy_containment_sha256": {"type": "null"},
+                    "completed_output_sha256": {"type": "null"},
+                    "stopped_provider_failure_sha256": {"type": "null"},
+                    "superseded_implementation_artifact_id": {"type": "null"},
+                    "superseded_progress_artifact_id": {"type": "null"},
+                }
+            )
+        gate = {
+            "if": {
+                "required": ["purpose"],
+                "properties": {"purpose": {"const": "context_capacity_resume"}},
+            },
+            "then": {"required": required, "properties": properties},
+        }
+        existing = node.get("allOf", [])
+        assert isinstance(existing, list)
+        if gate not in existing:
+            existing.append(gate)
+        if title == "ExecutionBaselineBinding":
+            digest_gate = {
+                "if": {
+                    "required": ["context_capacity_receipt_sha256"],
+                    "properties": {"context_capacity_receipt_sha256": {"type": "string"}},
+                },
+                "then": {
+                    "required": ["purpose"],
+                    "properties": {"purpose": {"const": "context_capacity_resume"}},
+                },
+            }
+            if digest_gate not in existing:
+                existing.append(digest_gate)
+        node["allOf"] = existing
 
 
 if __name__ == "__main__":

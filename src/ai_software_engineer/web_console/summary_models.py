@@ -237,7 +237,11 @@ class OperationSummary(DomainModel):
             else None,
             baseline_purpose=result.execution_baseline_plan.purpose.value
             if result and result.execution_baseline_plan
-            else None,
+            else (
+                result.execution_baseline_binding.purpose.value
+                if result and result.execution_baseline_binding
+                else None
+            ),
             has_baseline_binding=bool(result and result.execution_baseline_binding),
             next_step=_short(result.next_action) if result else None,
             summary=_short(result.diagnostic) if result else None,

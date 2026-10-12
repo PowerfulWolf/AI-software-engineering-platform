@@ -35,6 +35,7 @@ class BaselinePurpose(StrEnum):
     LEGACY_WORKSPACE_RESCUE = "legacy_workspace_rescue"
     COMPLETED_OUTPUT_RESCUE = "completed_output_rescue"
     STOPPED_PROVIDER_RETRY = "stopped_provider_retry"
+    CONTEXT_CAPACITY_RESUME = "context_capacity_resume"
 
 
 class BaselineContinuationMode(StrEnum):
@@ -77,6 +78,9 @@ class ExecutionBaselineBinding(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     stopped_provider_failure_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    context_capacity_receipt_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     scope: EngineeringScope
@@ -162,13 +166,31 @@ class ExecutionBaselineBinding(DomainModel):
                 or self.before_inventory_sha256 != self.after_inventory_sha256
             ):
                 raise ValueError("提供方前提失败恢复必须保留原基线和完整现场, 精确批准后保持暂停")
+        elif self.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
+            if (
+                self.context_capacity_receipt_sha256 is None
+                or self.execution_base_ref != self.prior_execution_base_ref
+                or self.execution_source_revision != self.prior_source_revision
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.continuation_mode is not BaselineContinuationMode.PAUSE
+                or self.authority_source != "engineering_operator_decision"
+                or self.legacy_containment_sha256 is not None
+                or self.completed_output_sha256 is not None
+                or self.stopped_provider_failure_sha256 is not None
+                or self.superseded_implementation_artifact_id is not None
+                or self.superseded_progress_artifact_id is not None
+                or self.before_inventory_sha256 != self.after_inventory_sha256
+            ):
+                raise ValueError("容量恢复必须精确批准后暂停, 保留原代码、完整进度和工作额度")
         elif (
             self.execution_base_ref == self.prior_execution_base_ref
             or self.legacy_containment_sha256 is not None
         ):
-            raise ValueError(
-                "source rebind must change its execution base without legacy containment"
-            )
+            raise ValueError("代码基线更新必须选择不同的执行基线, 不能混入旧执行隔离证据")
+        if self.purpose is not BaselinePurpose.CONTEXT_CAPACITY_RESUME and (
+            self.context_capacity_receipt_sha256 is not None
+        ):
+            raise ValueError("容量恢复摘要只能属于独立容量恢复绑定")
         if self.completed_output_sha256 is not None and (
             self.purpose
             not in {BaselinePurpose.COMPLETED_OUTPUT_RESCUE, BaselinePurpose.SOURCE_REBIND}

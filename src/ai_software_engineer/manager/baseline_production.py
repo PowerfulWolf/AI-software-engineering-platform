@@ -59,6 +59,7 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
     require_completed_output_confirmation,
+    require_context_capacity_binding,
     require_provider_confirmation_shape,
     require_provider_prerequisite_confirmation,
     require_rescue_confirmation,
@@ -142,12 +143,17 @@ class BaselineProposeCommand(DomainModel):
         if self.purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
+            BaselinePurpose.CONTEXT_CAPACITY_RESUME,
         }:
             if (
                 self.target_base_ref is not None
                 or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
             ):
-                raise ValueError("已结束执行恢复由平台核验并固定原基线, 不能指定目标或重放模式")
+                raise ValueError(
+                    "容量恢复由平台核验并固定当前基线, 不能指定目标或重放模式"
+                    if self.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                    else "已结束执行恢复由平台核验并固定原基线, 不能指定目标或重放模式"
+                )
         elif self.target_base_ref is None:
             raise ValueError("基线更新或旧执行救援需要精确目标版本")
         return self
@@ -191,7 +197,11 @@ class BaselineProposeCommand(DomainModel):
             self.expected_source_revision,
             plan.target_base_ref
             if self.purpose
-            in {BaselinePurpose.COMPLETED_OUTPUT_RESCUE, BaselinePurpose.STOPPED_PROVIDER_RETRY}
+            in {
+                BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+                BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+            }
             else self.target_base_ref,
             self.input_mode,
             self.purpose,
@@ -483,6 +493,7 @@ class ProductionBaselineFactCollector:
                 not in {
                     BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                     BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                    BaselinePurpose.CONTEXT_CAPACITY_RESUME,
                 }
                 and command.target_base_ref != target_base_ref
             )
@@ -606,6 +617,21 @@ class ProductionBaselineFactCollector:
         def validate_new_consumption() -> None:
             if not self._scope_held or self._idle_cursor is None:
                 raise ValueError("旧执行救援缺少原持锁执行和队列屏障")
+            if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
+                require_context_capacity_binding(plan, binding)
+                if self.collect(plan.target_base_ref) != plan.facts:
+                    raise ValueError("容量恢复的完整原调用或当前队列事实已变化, 原现场保留")
+                for capture in (plan.dirty_capture, plan.complete_capture):
+                    self.git.verify_mutations(
+                        capture.to_capture(),
+                        plan.facts.permissions,
+                        denied_paths=plan.facts.denied_paths,
+                    )
+                if (
+                    capture_mutation_inventory(Path(plan.dirty_capture.worktree_path))
+                    != plan.before_inventory
+                ):
+                    raise ValueError("容量恢复的完整保留进度已变化, 请重新准备方案")
             if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
                 containment = plan.facts.legacy_containment
                 if (
@@ -864,11 +890,19 @@ class ProductionBaselineFactCollector:
         if self.purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
+            BaselinePurpose.CONTEXT_CAPACITY_RESUME,
         }:
             if target_base_ref is not None and target_base_ref != source.execution_base_ref:
-                raise ValueError("已结束执行恢复不能更换当前代码基线")
+                raise ValueError(
+                    "容量恢复不能更换当前代码基线"
+                    if self.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                    else "已结束执行恢复不能更换当前代码基线"
+                )
             target_base_ref = source.execution_base_ref
-            if implementation is not None:
+            if (
+                implementation is not None
+                and self.purpose is not BaselinePurpose.CONTEXT_CAPACITY_RESUME
+            ):
                 raise ValueError("已有接纳候选不能改为未接纳执行恢复")
         elif target_base_ref is None:
             raise ValueError("执行基线调查缺少精确目标版本")

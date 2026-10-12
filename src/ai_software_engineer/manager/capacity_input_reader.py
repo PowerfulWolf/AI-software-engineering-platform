@@ -6,14 +6,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter
 
-from ai_software_engineer.agents import AgentRequest
+from ai_software_engineer.agents import AgentRequest, AgentRunStatus
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
-from ai_software_engineer.artifacts import ArtifactStore
-from ai_software_engineer.context import FileContextStore
+from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
+from ai_software_engineer.context import ContextBundle, FileContextStore
 from ai_software_engineer.context.execution_baseline import (
     ExecutionBaselineContext,
     PreservedWorktreeBaselineContext,
@@ -22,6 +22,7 @@ from ai_software_engineer.context.execution_baseline import (
     parse_execution_baseline_context,
 )
 from ai_software_engineer.domain.agent import AgentPermissions
+from ai_software_engineer.domain.artifact import ImplementationReportArtifact
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.delivery_resolution import VerifierPreparationEvidence
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus
@@ -41,7 +42,7 @@ from ai_software_engineer.manager.verifier_preparation import (
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.team_workspace import _read_regular, _reject_symlinks
 from ai_software_engineer.work_queue.claim_snapshot import require_claim_snapshot
-from ai_software_engineer.work_queue.execution_store import QueuedRoleStep
+from ai_software_engineer.work_queue.execution_store import AcceptedRoleArtifact, QueuedRoleStep
 from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationOutcome,
     DeliveryInvocationStart,
@@ -71,6 +72,11 @@ class CapacityInputQueue(Protocol):
     ) -> QueuedRoleStep: ...
 
     def original_claim(self, lease_id: str) -> QueueClaim: ...
+
+
+@runtime_checkable
+class CandidateCapacityQueue(CapacityInputQueue, Protocol):
+    def accepted(self, task_id: str) -> tuple[AcceptedRoleArtifact, ...]: ...
 
 
 class VerifierCapacityQueue(CapacityInputQueue, Protocol):
@@ -464,6 +470,7 @@ class CapacityInputReader:
         original ownership. This negative scan alone never proves a failed preparation.
         """
         starts: tuple[DeliveryInvocationStart, ...] = ()
+        outcomes: tuple[DeliveryInvocationOutcome, ...] = ()
         root = self.state / "invocations"
         if self._capacity_ledger_exists(root):
             records = KnowledgeRecordStore(root, read_only=True)
@@ -592,6 +599,8 @@ class CapacityInputReader:
                 source_revision=artifact.source_revision,
                 starts=starts,
                 allow_later_claims=allow_later_claims,
+                candidate=artifact if isinstance(artifact, ImplementationReportArtifact) else None,
+                outcomes=outcomes,
             )
 
     def _require_other_model_fact(
@@ -605,6 +614,8 @@ class CapacityInputReader:
         starts: tuple[DeliveryInvocationStart, ...],
         allow_later_claims: bool,
         attempt: int | None = None,
+        candidate: ImplementationReportArtifact | None = None,
+        outcomes: tuple[DeliveryInvocationOutcome, ...] = (),
     ) -> None:
         if run_id == marker.run_id or context_id == marker.context_manifest_id:
             raise ValueError("容量停止的原 Run 已有角色产出或提供方路由, 不能证明未调用")
@@ -613,6 +624,8 @@ class CapacityInputReader:
         context_root = self.state.parent / "contexts"
         _reject_symlinks(context_root / f"{context_id}.json")
         context = FileContextStore(context_root, read_only=True).get(context_id)
+        if candidate is not None:
+            source_revision = self._candidate_input_revision(candidate, context, starts, outcomes)
         if (context.task_id, context.role, context.source_revision) != (
             marker.task_id,
             role,
@@ -684,6 +697,118 @@ class CapacityInputReader:
             )
         ):
             raise ValueError("容量停止调查的产出或路由与原 claim 或完整调用不一致")
+
+    def _candidate_input_revision(
+        self,
+        candidate: ImplementationReportArtifact,
+        context: ContextBundle,
+        starts: tuple[DeliveryInvocationStart, ...],
+        outcomes: tuple[DeliveryInvocationOutcome, ...],
+    ) -> str:
+        """A finalized output SHA differs from its verified invocation input SHA."""
+        matching_starts = tuple(
+            start for start in starts if start.request.run_id == candidate.producer.run_id
+        )
+        if len(matching_starts) != 1:
+            raise ValueError("容量停止调查的候选缺少唯一完整原调用")
+        start = matching_starts[0]
+        start.validate_integrity()
+        matching_outcomes = tuple(outcome for outcome in outcomes if outcome.start == start)
+        if len(matching_outcomes) != 1:
+            raise ValueError("容量停止调查的候选缺少唯一完整调用结果")
+        outcome = matching_outcomes[0]
+        outcome.validate_integrity()
+        draft = outcome.result.artifact
+        if (
+            not isinstance(draft, ImplementationReportArtifact)
+            or outcome.result.status is not AgentRunStatus.SUCCEEDED
+            or draft.artifact_id != candidate.artifact_id
+            or artifact_digest(draft) != candidate.integrity.sha256
+            or artifact_digest(candidate) != candidate.integrity.sha256
+            or not candidate.integrity.validated
+            or candidate.integrity.validated_at is None
+            or candidate.integrity.validated_at < start.started_at
+            or candidate.source_revision != candidate.content.commit_sha
+        ):
+            raise ValueError("容量停止调查的候选与原完整调用结果或封存摘要不一致")
+        request = start.request
+        claim = self.queue.original_claim(start.lease_id)
+        step = self.queue.step_for_invocation(start.work_item_id, request.execution_baseline_sha256)
+        task_sections = tuple(section for section in context.sections if section.name == "task")
+        if len(task_sections) != 1 or task_sections[0].truncated:
+            raise ValueError("容量停止调查的候选缺少完整原 Task 快照")
+        task = Task.model_validate_json(task_sections[0].content)
+        if (
+            candidate.producer.role is not AgentRole.CODER
+            or candidate.producer.agent_id != claim.assignment.agent_id
+            or (candidate.task_id, candidate.context_manifest_id, candidate.producer.run_id)
+            != (request.task_id, request.context_manifest_id, request.run_id)
+            or (
+                claim.lease.id,
+                claim.work_item.id,
+                claim.work_item.task_id,
+                claim.work_item.role,
+                claim.work_item.attempt,
+                claim.work_item.checkpoint_sequence,
+            )
+            != (
+                start.lease_id,
+                start.work_item_id,
+                request.task_id,
+                request.role,
+                request.attempt,
+                start.checkpoint_sequence,
+            )
+            or step.boundary.source_revision != request.source_revision
+            or step.boundary.task_id != request.task_id
+            or step.boundary.role is not request.role
+            or step.boundary.attempt != request.attempt
+            or step.boundary.checkpoint_sequence != start.checkpoint_sequence
+            or task_sections[0].uri != "task://" + request.task_id
+            or task.id != request.task_id
+            or task.attempts != request.attempt
+            or task.status is not TaskStatus.IMPLEMENTING
+            or start.started_at < claim.claimed_at
+            or (self.permissions is not None and request.permissions != self.permissions)
+        ):
+            raise ValueError("容量停止调查的候选与真实原 claim、输入版本或权限不一致")
+        verifier = _CapacityBaselineVerifier(self.baselines, claim)
+        expected = verifier.expected(task)
+        if request.execution_baseline_sha256 != (
+            expected.binding_sha256 if expected is not None else None
+        ):
+            raise ValueError("容量停止调查的候选未绑定原 claim 的可信执行基线")
+        execution_baseline_from_context(context, request, task, verifier=verifier)
+        if not isinstance(self.queue, CandidateCapacityQueue):
+            raise ValueError("容量停止调查缺少候选 SQL 接纳凭据读取能力")
+        accepted = tuple(
+            value
+            for value in self.queue.accepted(candidate.task_id)
+            if value.receipt.artifact_id == candidate.artifact_id
+        )
+        if len(accepted) != 1 or (
+            accepted[0].task_id,
+            accepted[0].work_item_id,
+            accepted[0].lease_id,
+            accepted[0].dispatch_sequence,
+            accepted[0].checkpoint_sequence,
+            accepted[0].run_id,
+            accepted[0].context_manifest_id,
+            accepted[0].source_revision,
+            accepted[0].receipt.sha256,
+        ) != (
+            candidate.task_id,
+            start.work_item_id,
+            start.lease_id,
+            claim.work_item.dispatch_sequence,
+            claim.work_item.checkpoint_sequence,
+            candidate.producer.run_id,
+            candidate.context_manifest_id,
+            candidate.source_revision,
+            candidate.integrity.sha256,
+        ):
+            raise ValueError("容量停止调查的候选缺少精确 SQL 接纳凭据")
+        return request.source_revision
 
     def _conflicts_with_claim(
         self,

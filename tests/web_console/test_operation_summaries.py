@@ -298,6 +298,64 @@ def test_large_complete_plan_is_available_only_from_exact_get(
     assert store.get(operation_id).model_dump_json() == complete_wire
 
 
+@pytest.mark.parametrize("include_plan", [False, True])
+@pytest.mark.parametrize("independent_result", [False, True])
+def test_completed_binding_purpose_is_scoped_reading_metadata_without_rewriting_history(
+    tmp_path: Path, include_plan: bool, independent_result: bool
+) -> None:
+    from ai_software_engineer.web_console.models import ExecuteExecutionBaselineIntent
+    from tests.manager.test_execution_baseline import authorize, setup
+
+    fixture_root = tmp_path / "fixture"
+    fixture_root.mkdir()
+    fixture = setup(fixture_root)
+    plan = fixture.service.propose(fixture.target)
+    binding = fixture.service.execute(plan.plan_sha256, authority=authorize(plan))
+    store = FileConsoleOperationStore(tmp_path / "operations", team_id="team_test")
+    project_id = binding.scope.project_id
+    store.submit(
+        intent=ExecuteExecutionBaselineIntent(
+            project_id=project_id,
+            delivery_id="delivery_parent",
+            expected_checkpoint_sha256="a" * 64,
+            task_id=binding.task_id,
+            expected_plan_sha256=plan.plan_sha256,
+            reference="exact isolated source binding",
+        ),
+        idempotency_key="binding-summary",
+        requested_at=AT,
+    )
+    running = store.claim_next(at=AT + timedelta(seconds=1))
+    assert running is not None
+    completed = store.succeed(
+        running.operation_id,
+        expected=running.operation_sha256,
+        result=ConsoleCommandResult(
+            project_id=project_id,
+            delivery_id="delivery_independent" if independent_result else "delivery_parent",
+            checkpoint_sha256="b" * 64,
+            stage="EXECUTION_BASELINE_UPDATED",
+            next_action="查看当前已保存的基线",
+            execution_baseline_plan=plan if include_plan else None,
+            execution_baseline_binding=binding,
+        ),
+        at=AT + timedelta(seconds=2),
+    )
+    history = {path: path.read_bytes() for path in store.root.glob("operation_*/*.json")}
+    query = OperationSummaryQuery(project_id=project_id, delivery_id="delivery_parent")
+    item = store.summary_page(query).items[0]
+    assert item.baseline_purpose == (None if independent_result else binding.purpose.value)
+    assert item.has_baseline_binding is not independent_result
+    assert item.baseline_plan_sha256 == (
+        plan.plan_sha256 if include_plan and not independent_result else None
+    )
+    assert store.summary_page(query).items == (item,), "warm summary keeps the same scoped purpose"
+    assert store.get(completed.operation_id) == completed
+    assert {path: path.read_bytes() for path in history} == history
+    wire = item.to_wire()
+    assert "execution_baseline_binding" not in wire and "execution_baseline_plan" not in wire
+
+
 def test_cache_actual_512_entry_cap_and_full_overflow_pagination(tmp_path: Path) -> None:
     # Write valid terminal histories directly to the isolated fixture to avoid
     # O(n²) submit/claim admission scans while generating the boundary dataset.

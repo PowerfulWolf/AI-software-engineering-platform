@@ -1315,7 +1315,8 @@
         "source_rebind",
         "legacy_workspace_rescue",
         "completed_output_rescue",
-        "stopped_provider_retry"
+        "stopped_provider_retry",
+        "context_capacity_resume"
       ],
       "title": "BaselinePurpose",
       "type": "string"
@@ -2600,6 +2601,19 @@
           "default": null,
           "title": "Stopped Provider Failure Sha256"
         },
+        "context_capacity_receipt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Capacity Receipt Sha256"
+        },
         "scope": {
           "$ref": "#/$defs/EngineeringScope"
         },
@@ -2963,6 +2977,75 @@
               },
               "superseded_implementation_artifact_id": {
                 "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "context_capacity_resume"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "context_capacity_receipt_sha256",
+              "continuation_mode"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "string"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              },
+              "superseded_progress_artifact_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "context_capacity_receipt_sha256"
+            ],
+            "properties": {
+              "context_capacity_receipt_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "context_capacity_resume"
               }
             }
           }
@@ -6346,6 +6429,67 @@
               },
               "implementation_artifact_id": {
                 "type": "null"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "purpose"
+        ],
+        "properties": {
+          "purpose": {
+            "const": "context_capacity_resume"
+          }
+        }
+      },
+      "then": {
+        "required": [],
+        "properties": {
+          "input_mode": {
+            "const": "preserve_draft"
+          },
+          "conflicted": {
+            "const": false
+          },
+          "facts": {
+            "required": [
+              "context_capacity_receipt_sha256",
+              "continuation"
+            ],
+            "properties": {
+              "context_capacity_receipt_sha256": {
+                "type": "string"
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "completed_output": {
+                "type": "null"
+              },
+              "stopped_provider_failure": {
+                "type": "null"
+              },
+              "native_rule_change": {
+                "type": "null"
+              },
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause",
+                  "reservation_already_applied"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "uninvoked"
+                  },
+                  "reservation_already_applied": {
+                    "const": true
+                  }
+                }
               }
             }
           }

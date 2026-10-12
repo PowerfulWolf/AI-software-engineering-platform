@@ -437,10 +437,29 @@ class ExecutionBaselinePlan(DomainModel):
                 raise ValueError(
                     "提供方前提失败恢复必须使用原基线和完整合法草稿, 不能更换规范或执行模式"
                 )
+        elif self.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
+            reservation = self.facts.continuation
+            if (
+                self.facts.context_capacity_receipt_sha256 is None
+                or self.facts.legacy_containment is not None
+                or self.facts.completed_output is not None
+                or self.facts.stopped_provider_failure is not None
+                or self.facts.native_rule_change is not None
+                or self.facts.source_native_rules_sha256 != self.facts.target_native_rules_sha256
+                or self.target_base_ref != expected_base
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.prepared_source_revision != self.dirty_capture.source_revision
+                or self.prepared_dirty_patch != self.dirty_capture.patch
+                or self.conflicted
+                or reservation is None
+                or reservation.retry_cause != "uninvoked"
+                or not reservation.reservation_already_applied
+                or reservation.current_attempt != task.attempts
+                or reservation.next_execution_attempt != task.attempts
+            ):
+                raise ValueError("容量恢复需要精确未调用记录和原预留, 不能更换代码、规范或进度")
         elif self.target_base_ref == expected_base or self.facts.legacy_containment is not None:
-            raise ValueError(
-                "source rebind must select a different base without legacy containment"
-            )
+            raise ValueError("代码基线更新必须选择不同的执行基线, 不能混入旧执行隔离证据")
         if self.input_mode is BaselineInputMode.CODER_REAPPLY and (
             self.prepared_source_revision != self.target_base_ref
             or self.prepared_dirty_patch
@@ -460,6 +479,43 @@ class ExecutionBaselinePlan(DomainModel):
         return value.model_copy(
             update={"plan_sha256": digest(value.model_dump(mode="json", exclude={"plan_sha256"}))}
         )
+
+
+def require_context_capacity_binding(
+    plan: ExecutionBaselinePlan, binding: ExecutionBaselineBinding
+) -> None:
+    """Bind the runtime-only purpose to the exact trusted plan, never a caller digest."""
+    if plan.purpose is not BaselinePurpose.CONTEXT_CAPACITY_RESUME:
+        if binding.context_capacity_receipt_sha256 is not None:
+            raise ValueError("普通基线绑定不能携带独立容量恢复摘要")
+        return
+    plan.validate_integrity()
+    binding.validate_integrity()
+    expected_base = (
+        plan.previous_binding.execution_base_ref
+        if plan.previous_binding is not None
+        else plan.facts.task.base_ref
+    )
+    if (
+        binding.purpose is not plan.purpose
+        or binding.task_id != plan.facts.task.id
+        or binding.scope != plan.facts.scope
+        or binding.plan_sha256 != plan.plan_sha256
+        or binding.facts_sha256 != plan.facts.facts_sha256
+        or binding.context_capacity_receipt_sha256 != plan.facts.context_capacity_receipt_sha256
+        or binding.prior_execution_base_ref != expected_base
+        or binding.execution_base_ref != plan.target_base_ref
+        or binding.prior_source_revision != plan.dirty_capture.source_revision
+        or binding.execution_source_revision != plan.prepared_source_revision
+        or binding.worktree_path != plan.dirty_capture.worktree_path
+        or binding.source_artifact_ids != plan.facts.source_artifact_ids
+        or binding.resolved_interruption_receipt_sha256s
+        != plan.facts.resolved_interruption_receipt_sha256s
+        or binding.before_inventory_sha256 != plan.before_inventory.sha256
+        or binding.after_inventory_sha256 != plan.before_inventory.sha256
+        or binding.prior_task_revision != plan.facts.task_revision
+    ):
+        raise ValueError("容量恢复绑定与原完整方案、未调用记录或保留进度不一致")
 
 
 class BaselineOperatorAuthorization(DomainModel):
@@ -504,6 +560,10 @@ class BaselineOperatorAuthorization(DomainModel):
         return self
 
     def require_plan_confirmation(self, plan: ExecutionBaselinePlan) -> None:
+        if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME and (
+            self.continuation_mode is not BaselineContinuationMode.PAUSE
+        ):
+            raise ValueError("容量恢复需先精确批准并保持暂停, 再单独明确继续")
         require_completed_output_confirmation(plan, self.continuation_mode)
         require_provider_prerequisite_confirmation(
             plan, self.confirm_provider_prerequisites_repaired, self.continuation_mode

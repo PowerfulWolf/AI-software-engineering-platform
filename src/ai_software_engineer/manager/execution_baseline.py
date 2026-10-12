@@ -41,6 +41,7 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineOperationStart,
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
+    require_context_capacity_binding,
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.completed_output_checkpoint import (
@@ -105,9 +106,14 @@ class ExecutionBaselineService:
         if purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
+            BaselinePurpose.CONTEXT_CAPACITY_RESUME,
         }:
             if target_base_ref is not None or input_mode is not BaselineInputMode.PRESERVE_DRAFT:
-                raise ValueError("已结束执行恢复由平台核验原基线, 不能指定目标或重放模式")
+                raise ValueError(
+                    "容量恢复由平台核验当前基线, 不能指定目标或重放模式"
+                    if purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                    else "已结束执行恢复由平台核验原基线, 不能指定目标或重放模式"
+                )
         elif target_base_ref is None:
             raise ValueError("执行基线准备缺少精确目标版本")
         with source_inspection_scope(), self.store.execution_lock(), self.facts.execution_scope():
@@ -173,6 +179,10 @@ class ExecutionBaselineService:
                 if facts.stopped_provider_failure is None:
                     raise ValueError("原执行不符合已停止的提供方前提失败恢复条件, 原现场保留")
                 target_base_ref = expected_base
+            elif purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
+                if facts.context_capacity_receipt_sha256 is None:
+                    raise ValueError("当前没有精确的调用前容量停止记录, 原进度保留")
+                target_base_ref = expected_base
             assert target_base_ref is not None
             dirty = self.git.manager.capture_mutations(
                 worktree, facts.permissions, denied_paths=facts.denied_paths
@@ -205,6 +215,7 @@ class ExecutionBaselineService:
             if purpose in {
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                BaselinePurpose.CONTEXT_CAPACITY_RESUME,
             }:
                 preview = BaselineGitPreview(
                     worktree.head_revision,
@@ -322,6 +333,10 @@ class ExecutionBaselineService:
             authority.require_plan_confirmation(plan)
         elif plan.facts.native_rule_change is not None:
             raise ValueError("项目规范变化需要精确人工确认, 原源码更新能力不能自动批准")
+        if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
+            if not isinstance(authority, BaselineOperatorAuthorization):
+                raise ValueError("容量恢复需要精确人工工程确认, 不能自动审批")
+            authority.require_plan_confirmation(plan)
         if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("旧执行救援需要精确人工工程确认, 不能自动审批")
@@ -439,6 +454,7 @@ class ExecutionBaselineService:
                 BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                BaselinePurpose.CONTEXT_CAPACITY_RESUME,
             }:
                 self.git.manager.verify_mutations(
                     plan.dirty_capture.to_capture(),
@@ -471,7 +487,7 @@ class ExecutionBaselineService:
                         current.permissions,
                         current.denied_paths,
                     )
-                else:
+                elif plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
                     require_complete_legacy_inventory(
                         self.git.manager, plan.dirty_capture, inventory
                     )
@@ -548,8 +564,21 @@ class ExecutionBaselineService:
                 execution_base_ref=plan.target_base_ref,
                 execution_source_revision=reference.head_revision,
                 input_mode=plan.input_mode,
-                superseded_implementation_artifact_id=current.implementation_artifact_id,
-                superseded_progress_artifact_id=current.progress_artifact_id,
+                superseded_implementation_artifact_id=(
+                    None
+                    if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                    else current.implementation_artifact_id
+                ),
+                superseded_progress_artifact_id=(
+                    None
+                    if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                    else current.progress_artifact_id
+                ),
+                context_capacity_receipt_sha256=(
+                    current.context_capacity_receipt_sha256
+                    if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                    else None
+                ),
                 source_artifact_ids=current.source_artifact_ids,
                 resolved_interruption_receipt_sha256s=current.resolved_interruption_receipt_sha256s,
                 retained_patch=RetainedExecutionPatch(
@@ -566,6 +595,7 @@ class ExecutionBaselineService:
                 after_inventory_sha256=after_inventory,
                 completed_at=datetime.now(UTC),
             )
+            require_context_capacity_binding(plan, binding)
             completed = self.store.put_binding(binding)
             if self.publish_completion is not None:
                 self.publish_completion(plan, completed)

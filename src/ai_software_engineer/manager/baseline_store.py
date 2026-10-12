@@ -25,6 +25,7 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineOperationStart,
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
+    require_context_capacity_binding,
 )
 from ai_software_engineer.manager.baseline_native_rules import load_native_rule_epoch
 from ai_software_engineer.manager.completed_output_checkpoint import CompletedCoderOutputReason
@@ -221,6 +222,7 @@ class FileExecutionBaselineStore:
     def _require_rescue_binding(
         self, binding: ExecutionBaselineBinding, plan: ExecutionBaselinePlan
     ) -> None:
+        require_context_capacity_binding(plan, binding)
         if binding.purpose != plan.purpose:
             raise ValueError("工程绑定与批准方案的处置目的不同")
         proof = plan.facts.completed_output
@@ -326,6 +328,13 @@ class FileExecutionBaselineStore:
                     "新执行仍需独立领取和重新产出, QA 与 Review 不得跳过。\n"
                 )
                 if binding.stopped_provider_failure_sha256 is not None
+                else (
+                    "平台已核验调用前容量停止并准备保留进度的继续方案, 原代码版本和完整进度保持。"
+                    "原主岗位调用尚未启动, 本次继续沿用已预留的原执行额度; "
+                    "新执行仍须在调用前重新核验完整输入容量。"
+                    "已接纳进度和原QA/Review findings仍有效, 不得跳过独立验收。\n"
+                )
+                if binding.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
                 else (
                     "平台已按精确工程授权在同一需求分支更新代码执行基线。"
                     "原需求范围与验收保持有效。\n"
