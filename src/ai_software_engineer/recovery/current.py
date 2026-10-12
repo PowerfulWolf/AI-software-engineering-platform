@@ -23,6 +23,7 @@ from ai_software_engineer.manager.production_backend import (
 from ai_software_engineer.manager.production_rules import production_rules
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.read_record_scope import recovery_record_read_scope
+from ai_software_engineer.recovery.context_capacity import LegacyContextCapacitySourceReader
 from ai_software_engineer.recovery.models import (
     RecoveryPlan,
     RecoveryRejected,
@@ -112,6 +113,10 @@ class NativeRecoveryFactsVerifier:
     def _inspect(self, plan: RecoveryPlan) -> NativeRecoveryFacts:
         original = self._read_source(plan)
         target = self._target_preflight(plan, original)
+        if plan.context_capacity_input is not None:
+            if original.capacity_input != plan.context_capacity_input:
+                raise ValueError("capacity recovery lost its complete retained patch")
+            return self._target_facts(plan, target)
         workspace_snapshot = read_terminal_workspace_snapshot(
             self._config,
             self._environment,
@@ -163,11 +168,16 @@ class NativeRecoveryFactsVerifier:
     def _read_source(self, plan: RecoveryPlan) -> NativeRecoverySource:
         plan.require_execution_supported()
         source = plan.source
-        original = self._source.inspect(
-            source.scope,
-            failed_run_id=source.failed_run_id,
-            failed_context_id=source.failed_context_id,
-        )
+        if source.context_capacity_receipt_sha256 is not None:
+            original = LegacyContextCapacitySourceReader(self._config, self._environment).inspect(
+                source.scope, source.context_capacity_receipt_sha256
+            )
+        else:
+            original = self._source.inspect(
+                source.scope,
+                failed_run_id=source.failed_run_id,
+                failed_context_id=source.failed_context_id,
+            )
         if original.source != source or original.denied_paths != plan.denied_paths:
             raise ValueError("original source or policy changed")
         return original

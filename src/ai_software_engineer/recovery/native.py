@@ -38,6 +38,7 @@ from ai_software_engineer.domain.identity import ContextId, RunId
 from ai_software_engineer.domain.project_delivery import validate_stage_chain
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.git import GitWorktreeManager, WorktreeSpec
+from ai_software_engineer.manager.context_capacity import ContextCapacityReceipt
 from ai_software_engineer.manager.delivery import _delivery_id
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
@@ -71,6 +72,7 @@ from ai_software_engineer.recovery.baseline_source import (
     validate_pre_candidate_sources,
 )
 from ai_software_engineer.recovery.models import (
+    ContextCapacityRecoveryInput,
     RecoveryRejected,
     RecoveryScope,
     RecoverySource,
@@ -113,6 +115,8 @@ class NativeRecoverySource:
     task: Task
     worktree_revision: str
     accepted_progress: CoderProgressArtifact | None = None
+    capacity_receipt: ContextCapacityReceipt | None = None
+    capacity_input: ContextCapacityRecoveryInput | None = None
 
 
 def _is_recoverable_terminal_coder_route(
@@ -157,9 +161,11 @@ class NativeRecoverySourceReader:
     @source_inspection_scope()
     @recovery_record_read_scope()
     def inspect(
-        self, scope: RecoveryScope, *, failed_run_id: str, failed_context_id: str
+        self, scope: RecoveryScope, *, failed_run_id: str | None, failed_context_id: str
     ) -> NativeRecoverySource:
         try:
+            if failed_run_id is None:
+                raise RecoveryRejected("ordinary recovery requires its exact original Run")
             scope = RecoveryScope.model_validate(scope.to_wire())
             TypeAdapter(RunId).validate_python(failed_run_id)
             TypeAdapter(ContextId).validate_python(failed_context_id)

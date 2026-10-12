@@ -648,6 +648,8 @@ def _read_facts(
     scope: RecoveryWorkspaceScope,
 ) -> TerminalWorkspaceFacts:
     source = original.source
+    if source.failed_run_id is None:
+        raise RecoveryRejected("ordinary terminal workspace audit requires its original Run")
     continuation = FileContinuationStore(
         sidecar / "state/continuations" / source.task_id, task_id=source.task_id
     )
@@ -689,6 +691,8 @@ def _read_facts(
 
 
 def _read_routes(sidecar: Path, source: RecoverySource) -> tuple[ModelRouteAttempt, ...]:
+    if source.failed_run_id is None:
+        raise RecoveryRejected("ordinary terminal route audit requires its original Run")
     routes_root = model_route_root(sidecar)
     _reject_symlinks(routes_root)
     routes = FileModelRouteAttemptStore(routes_root, read_only=True).list_for_run(

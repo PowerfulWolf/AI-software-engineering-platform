@@ -40,6 +40,7 @@ from ai_software_engineer.knowledge.gaps import (
     KnowledgeGap,
     KnowledgeGapRaised,
 )
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery import DeliveryFailureSnapshot
 from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
 from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
@@ -71,6 +72,10 @@ from ai_software_engineer.recovery.context import (
     preserved_prerequisite_context,
     preserved_verification_context,
     recovery_context_sources,
+)
+from ai_software_engineer.recovery.context_capacity import (
+    LEGACY_CAPACITY_SUMMARY,
+    LegacyContextCapacitySourceReader,
 )
 from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
 from ai_software_engineer.recovery.models import (
@@ -304,8 +309,9 @@ class NativeRecoveryEntry:
         *,
         repository_root: str,
         delivery_id: str,
-        failed_run_id: str,
+        failed_run_id: str | None,
         failed_context_id: str,
+        capacity_receipt_sha256: str | None = None,
         input_mode: RecoveryInputMode | None = None,
         target_branch_name: BranchName | None = None,
         approved_scope_sha256: str | None = None,
@@ -322,11 +328,21 @@ class NativeRecoveryEntry:
             repository_root=prepared.repository_root,
             delivery_id=delivery_id,
         )
-        original = NativeRecoverySourceReader(self.config, self.environment).inspect(
-            scope,
-            failed_run_id=failed_run_id,
-            failed_context_id=failed_context_id,
-        )
+        if capacity_receipt_sha256 is not None:
+            original = LegacyContextCapacitySourceReader(self.config, self.environment).inspect(
+                scope, capacity_receipt_sha256
+            )
+            if failed_run_id is not None or original.source.failed_context_id != failed_context_id:
+                raise RecoveryRejected("恢复入口与已核验的未启动上下文不一致; 原执行历史仍保留")
+            if approved_scope_sha256 or scope_approval_reference or coder_scope_request:
+                raise RecoveryRejected("上下文容量恢复不能扩展原需求的开发范围")
+            input_mode = "coder_reapply"
+        else:
+            original = NativeRecoverySourceReader(self.config, self.environment).inspect(
+                scope,
+                failed_run_id=failed_run_id,
+                failed_context_id=failed_context_id,
+            )
         manager = self._manager(scope, {original.task.id: original.task.branch_name})
         source_spec = WorktreeSpec(
             task_id=original.task.id,
@@ -338,6 +354,10 @@ class NativeRecoveryEntry:
         try:
             old = manager.recover(source_spec)
         except WorktreeNotFound:
+            if original.capacity_input is not None:
+                raise RecoveryRejected(
+                    "保留的开发工作区缺失; 暂不能使用当前上下文容量恢复方案"
+                ) from None
             old = manager.restore_clean_coder(source_spec)
             restored_clean_source = True
         if restored_clean_source:
@@ -369,14 +389,19 @@ class NativeRecoveryEntry:
             base_revision=original.source.effective_base_revision,
         )
         captured = CapturedChanges.from_capture(capture)
-        workspace_snapshot = read_terminal_workspace_snapshot(
-            self.config,
-            self.environment,
-            original,
-            captured,
-            approved_permissions=source_permissions,
-            scope_supplement=supplement,
-        )
+        if original.capacity_input is not None:
+            if captured.patch or captured.files:
+                raise RecoveryRejected("保留的开发工作区已变化; 请重新检查恢复前提")
+            workspace_snapshot = None
+        else:
+            workspace_snapshot = read_terminal_workspace_snapshot(
+                self.config,
+                self.environment,
+                original,
+                captured,
+                approved_permissions=source_permissions,
+                scope_supplement=supplement,
+            )
         constraints = original.task.constraints
         allowed_paths = constraints.allowed_paths if constraints is not None else ()
         if supplement is not None:
@@ -409,6 +434,7 @@ class NativeRecoveryEntry:
             input_mode=input_mode,
             source=original.source,
             capture=captured,
+            context_capacity_input=original.capacity_input,
             workspace_snapshot=workspace_snapshot,
             target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(repository_root)),
             target_preparation_sha256=prepared.preparation_sha256,
@@ -443,6 +469,11 @@ class NativeRecoveryEntry:
             repository_root=checkpoint.repository_root,
             delivery_id=checkpoint.delivery_id,
         )
+        if checkpoint.failure_summary == LEGACY_CAPACITY_SUMMARY:
+            if request is not None:
+                raise RecoveryRejected("上下文容量恢复不能扩展原需求的开发范围")
+            LegacyContextCapacitySourceReader(self.config, self.environment).discover(scope)
+            return None
         original = NativeRecoverySourceReader(self.config, self.environment).discover_failed_coder(
             scope
         )
@@ -484,14 +515,27 @@ class NativeRecoveryEntry:
             repository_root=checkpoint.repository_root,
             delivery_id=checkpoint.delivery_id,
         )
-        source = NativeRecoverySourceReader(self.config, self.environment).discover_failed_coder(
-            scope
-        )
+        if checkpoint.failure_summary == LEGACY_CAPACITY_SUMMARY:
+            source = LegacyContextCapacitySourceReader(self.config, self.environment).discover(
+                scope
+            )
+            receipt = source.capacity_receipt
+            if receipt is None:
+                raise RecoveryRejected("未找到可核验的上下文容量处理记录")
+            root = _repository_sidecar(self.config, checkpoint.repository_id)
+            KnowledgeRecordStore(root / "state/delivery-preflight").put(
+                "context-capacity-receipts", receipt.receipt_sha256, receipt
+            )
+        else:
+            source = NativeRecoverySourceReader(
+                self.config, self.environment
+            ).discover_failed_coder(scope)
         return self.propose(
             repository_root=checkpoint.repository_root,
             delivery_id=checkpoint.delivery_id,
             failed_run_id=source.source.failed_run_id,
             failed_context_id=source.source.failed_context_id,
+            capacity_receipt_sha256=source.source.context_capacity_receipt_sha256,
             approved_scope_sha256=approved_scope_sha256,
             scope_approval_reference=scope_approval_reference,
             coder_scope_request=coder_scope_request,

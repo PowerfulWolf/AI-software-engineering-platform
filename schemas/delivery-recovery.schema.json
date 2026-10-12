@@ -666,6 +666,17 @@
             }
           ],
           "default": null
+        },
+        "context_capacity_input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextCapacityRecoveryInput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -700,6 +711,80 @@
             "properties": {
               "input_mode": {
                 "const": "coder_reapply"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "required": [
+                  "context_capacity_receipt_sha256"
+                ],
+                "properties": {
+                  "context_capacity_receipt_sha256": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "context_capacity_input"
+            ],
+            "properties": {
+              "context_capacity_input": {
+                "type": "object"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "context_capacity_input": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "context_capacity_input"
+            ],
+            "properties": {
+              "context_capacity_input": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "input_mode"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "coder_reapply"
+              },
+              "capture": {
+                "properties": {
+                  "patch": {
+                    "const": ""
+                  },
+                  "files": {
+                    "maxItems": 0
+                  }
+                }
+              },
+              "workspace_snapshot": {
+                "type": "null"
+              },
+              "scope_supplement": {
+                "type": "null"
+              },
+              "quarantined_paths": {
+                "type": "null"
               }
             }
           }
@@ -803,9 +888,17 @@
           "type": "string"
         },
         "failed_run_id": {
-          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
-          "title": "Failed Run Id",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failed Run Id"
         },
         "failed_context_id": {
           "pattern": "^ctx_[a-f0-9]{64}$",
@@ -868,6 +961,19 @@
           ],
           "default": null,
           "title": "Parent Checkpoint Sha256"
+        },
+        "context_capacity_receipt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Capacity Receipt Sha256"
         }
       },
       "required": [
@@ -882,7 +988,6 @@
         "approval_sha256",
         "technical_design_sha256",
         "execution_plan_sha256",
-        "failed_run_id",
         "failed_context_id",
         "base_revision"
       ],
@@ -916,6 +1021,39 @@
               }
             }
           ]
+        },
+        {
+          "if": {
+            "required": [
+              "context_capacity_receipt_sha256"
+            ],
+            "properties": {
+              "context_capacity_receipt_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "execution_baseline_sha256",
+              "execution_base_revision"
+            ],
+            "properties": {
+              "failed_run_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "failed_run_id"
+            ],
+            "properties": {
+              "failed_run_id": {
+                "type": "string"
+              }
+            }
+          }
         }
       ]
     },
@@ -1818,6 +1956,61 @@
         }
       },
       "title": "TransientRetryPolicy",
+      "type": "object"
+    },
+    "ContextCapacityRecoveryInput": {
+      "additionalProperties": false,
+      "description": "One complete retained baseline patch, separately from a clean worktree capture.",
+      "properties": {
+        "execution_baseline_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Execution Baseline Sha256",
+          "type": "string"
+        },
+        "retained_patch": {
+          "$ref": "#/$defs/RetainedExecutionPatch"
+        },
+        "patch": {
+          "maxLength": 1000000,
+          "title": "Patch",
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_baseline_sha256",
+        "retained_patch",
+        "patch"
+      ],
+      "title": "ContextCapacityRecoveryInput",
+      "type": "object"
+    },
+    "RetainedExecutionPatch": {
+      "additionalProperties": false,
+      "description": "Reference to complete old execution-base → candidate + dirty mutation bodies.\n\nTrusted collection must validate the body and URI before this reference is\npublished. A digest alone never permits discarding a dirty worktree.",
+      "properties": {
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "bytes": {
+          "maximum": 8000000,
+          "minimum": 0,
+          "title": "Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "uri",
+        "sha256",
+        "bytes"
+      ],
+      "title": "RetainedExecutionPatch",
       "type": "object"
     }
   },
