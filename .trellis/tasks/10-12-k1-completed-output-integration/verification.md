@@ -38,3 +38,15 @@ Root独占ai_software_engineer_test执行两source目的完整publicHost及两qu
 ## 风险与回滚
 
 不宣称无bug、已根除内存泄漏或线上性能达标。增量并非完整suite，仍需要用户自行跑全量验收。受控关闭后可回滚兼容代码；新rejected reason/binding消费后保留完整历史与compatible readers，优先forward fix，不退款、不删原Task或重新建需求。
+
+## 2026-10-12 08:10（UTC+8）实际部署与存量推进补记
+
+本段追加本次维护负责人已实际执行并核验的事实，保留上文当时“尚待生产执行”的历史记录；文档收尾没有再次操作生产、数据库或模型。
+
+- `ead05e7` 已在 idle 前提下通过受控停止取得 `READY`，旧实例实际退出后完成 main fast-forward、`uv` locked 依赖同步、推送和启动；该次启动 PID 为 `87430`。公共 Console 已返回 contract `7`，readiness 为 HTTP `200`。
+- 原需求范围的操作摘要已正常读取：`total_count=68`，本页 `5` 项，`active=[]`、`active_complete=true`。原 `330` 条历史操作完整保留，先前的摘要 `503` 已消失；没有重写历史结果、批准或原失败事实。
+- 随后的 `7ef2425` native Coder 诊断展示小修经独立审查 `0 blocking`，再次在 idle 前提下受控停止取得 `READY` 并确认旧实例退出，完成 fast-forward、locked 依赖同步、推送和启动；新实例 PID 为 `4722`。原 K1 的真实 GET Team 返回 HTTP `200`，前端数据已显示“开发报告未通过代码与工作区校验”；旧 `GIT_CONTRACT` 的具体子因仍未知，不能据此推断成切片错误。
+- registered clean main 已从 `1769977` fast-forward 到 `7ef2425`。这是注册代码基线更新，旧执行的 source revision、失败记录和完整草稿仍按原事实保留。
+- 已通过公开入口为原 Requirement 提交 SOURCE prepare，操作 `operation_d814f022e9e3d59a6e1293592cf5132e` 的已观察状态为 `QUEUED`。尚未完成精确方案与 native-rule diff 审阅、人工 `PAUSE` 批准、独立 `RESUME` 或 K1 交付；没有创建重复需求。
+
+上述结果证明已修复版本部署和存量读取路径已生效，不代表方案已准备完成、Coder 已继续或需求已交付。后续仍须沿原 Requirement 的公开恢复流程完成审批和继续，并取得同一候选的 QA PASS、Review APPROVE 与 Handoff。
