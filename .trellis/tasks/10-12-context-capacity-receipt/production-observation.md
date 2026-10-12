@@ -103,3 +103,53 @@ HTTP200成功。未触发产品范围问题或人工审批；后续实施与QA/R
 新独立Trellis任务10-12-preserved-continuation-input仅改变已核验同工作区v2续跑的阅读输入；完整capture/stop/ownership/当前现场校验及旧reapply全文均保留。原Requirement、所有旧Task/Operation/预算和审批保持不变，后续只能走公开exact PAUSE/RESUME。全局operation-summaries已确认active_complete=true、active=[]；部署仍需最终fresh空闲检查和受控stop。
 
 实际native `_compile_input`只读重放（包括当前manager tooling与输出Schema）：原输入精确复现285444，新阅读输入252481 <=256000。零provider调用、零生产事实写入，临时准备资源已正常关闭。纯prompt的251902不包含实际tooling，不能用于宣称最终输入大小。
+
+## 已审查修复的受控发布与生产读取验收（04:38 UTC 之后）
+
+再次通过全局 operation-summaries 确认 `active_complete=true, active=[]`、总数336；
+旧 PID43582 经有效 ASE_CONFIG 的受控 stop 保存操作/写入、确认执行器与索引结束后退出，
+没有强杀。维护 main fast-forward 到 `0c1053540beb214e0b4839a28906909c80957353`，
+`uv sync --locked` 成功，origin/main 与集成分支均推送成功。受控启动新 PID37024。
+K1 注册源码 checkout 原 clean，fetch/ff-only 同步到同一提交；这一步没有改变 Task 的
+原批准基线或原 Coder worktree。Console 声明 team_read_contract_version=v0.1、
+operation_contract_version=7、delivery_ready=true。
+
+生产首次若干 HTTP 摘要请求返回 `503 TEAM_READ_IN_PROGRESS`，约九分钟后恢复。
+服务仍响应 Console/Operation 读取；不能凭此称为内部装配异常或已确认的 gate 泄漏。
+独立纯读重放摘要4.463s、full14.912s均成功；macOS 拒绝 Python 进程栈采样，未提权或发信号。
+首次长时间占用的原因尚在单独核对，后续成功不能抹去这项观察。
+
+恢复后串行 HTTP 验收（单次观察，不是延迟保证）：
+
+| 读取 | 秒 | 响应 bytes | 完整内容 |
+| --- | ---: | ---: | --- |
+| 当前 Project summary | 3.373 | 78031 | 2 Requests / 25 Tasks 的当前事实 |
+| 选中 K1 Requirement detail | 7.626 | 221156 | 3 documents / 1 dialogue |
+| 选中 K1 Task detail | 14.459 | 1549614 | 19 documents / 13 timeline / 210 execution_history / 19 runs |
+| 兼容 Project full | 11.366 | 2957661 | 完整原 v0.2 响应 |
+
+所有2个 Request 和25个 Task 的当前字段与兼容 full 逐字段完全相等；选中资源的完整
+正文/历史也逐字段相等。详情 locator 全量映射 expected 字段且返回 scope 精确匹配。
+没有八条历史截断。未能使用已登录生产浏览器手动验收，不能将隔离 Chrome 增量测试或
+这些 HTTP 比较表述成已手动验证生产点击体验。服务 RSS 的单次下降/上升也不证明没有泄漏。
+
+## 原需求基线方案的历史知识 claim 缺口
+
+公开 PROPOSE_EXECUTION_BASELINE Operation
+`operation_0231e2ce23a7c6d9617bed6607a6204e` 被受理后 FAILED / COMMAND_REJECTED，
+04:41:46.978990Z 封存原因：`历史 claim 没有可验证的调用或执行前停止记录`。
+提案以原 Task revision2、原 attempt3 WorkItem、父 checkpoint ea13981...、source9cccb5b
+精确绑定 target0c10535、preserve_draft；未发布可批准计划，未移动原 Coder 分支。
+
+独立 typed store 读取确认原 attempt1 的知识 lane042bb062...、真实原 claim
+`lease_3bc0dd234365efd421c9b527` / `work_8c37cb243927c144045e0da348c1a9be3302048eb274c0180047490b3b6db1e0`：
+intent outcome065452a2...为RETURNED，assessment outcome9e7f319c...为FAILED/
+PROVIDER_UNAVAILABLE。两者完整 hash 校验，所有 embedded executions 均与独立
+knowledge-execution-records 回读相等：原生 route 有真实 stop，HTTP route 有本地 round-trip。
+HTTP 返回不证明远端停止。此轮没有 main DeliveryInvocationStart；只有 attempt2 有主岗位启动。
+
+当前 collector 只将无 main 的历史 claims 分为 capacity 或 WAIT_ENGINEERING preflight，
+遗漏知识准备已封存失败这一类。新 Trellis 任务10-12-baseline-knowledge-claim-proof修复
+完整知识事实与 no-main 否定扫描的结合；不能仅靠缺 start、PID 消失或空目录猜测未执行。
+原失败 Operation、Task、审批、预算与完整开发进度全部保留，没有 SQL 改写或补造旧 receipt。
+截至本段记录，K1仍为IMPLEMENTING/CONTEXT_CAPACITY等待，未进入QA/Review或交付完成。

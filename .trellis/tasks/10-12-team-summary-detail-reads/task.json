@@ -1,7 +1,7 @@
 {
   "id": "team-summary-detail-ui-20261012",
   "title": "需求与任务的当前摘要及完整正文阅读",
-  "status": "verified_pending_backend_integration",
+  "status": "completed",
   "owner": "codex",
   "goal": "当前状态独立更新，完整正文与返工历史稳定可读，精确审批必须读过当前完整规格。",
   "allowed_paths": [
@@ -25,7 +25,9 @@
     "Node增量6文件128项通过",
     "真实Chrome增量3文件13项通过",
     "独立前端review及源版本/POST边界负例通过",
-    "node --check与git diff --check通过"
+    "node --check与git diff --check通过",
+    "生产部署0c10535：summary和exact选中详情与legacy full当前字段/完整正文历史逐字段一致；Task完整210条历史",
+    "生产浏览器鉴权不可用，未宣称手动点击验收；首次长读取繁忙另行调查，详见production-observation.md"
   ],
   "rollback": "空闲受控部署时可回滚新客户端能力读取，旧v0.2full与全部历史保持。"
 }
