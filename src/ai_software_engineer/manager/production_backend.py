@@ -1787,6 +1787,7 @@ class ProductionProjectDeliveryBackend:
                 resumed_preparation=queue.preparation_resume_consumed,
                 prepare_input=adapter.prepare_input,
                 discard_prepared_input=adapter.discard_prepared_input,
+                context_reader=contexts.get,
             ),
             agent_definitions=definitions,
             repository_root=facts.workspace.repository_root,
