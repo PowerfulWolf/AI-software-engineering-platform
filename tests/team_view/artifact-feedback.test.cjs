@@ -103,7 +103,7 @@ test("summary-mode complete selected history retains verified QA and Review inpu
   for(const kind of ["qa-report","review-report"]) {
     const parent=artifact("art_feedback",kind,"task_current",{status:"FAIL",verdict:"REJECT"});
     const h=harness([parent],[parent.id]);
-    h.run(`page="requests"; consoleTeamReadContractVersion="v0.1"; snapshot.team_id="team_current";
+    h.run(`page="requests"; consoleTeamReadContractVersion="v0.1"; consoleReadingIdentity={teamId:"team_current",mode:"normal"}; snapshot.team_id="team_current";
       task.request_id="delivery_parent";task.work_kind="delivery";task.task_revision=2;task.task_intent_sha256="${"b".repeat(64)}";
       task.detail_source={team_id:snapshot.team_id,project_id:task.project_id,request_id:task.request_id,resource_kind:"task",resource_id:task.id,
         requirement_checkpoint_sha256:"${"c".repeat(64)}",resource_checkpoint_sha256:"${"d".repeat(64)}",resource_state_sha256:"${"e".repeat(64)}",work_kind:task.work_kind,

@@ -37,7 +37,7 @@ function harness() {
   const item=request(); item.detail_source=source(item);
   item.product_spec_source={spec_id:"product_spec_current",sha256:digest("d"),source_uri:"ProductSpec://product_spec_current"};
   context.item=item;
-  run('snapshot={schema_version:"v0.1",team_id:"team_current",selected_project_id:"project_current",projects:[],agents:[],tasks:[],requests:[item]}; selected={kind:"request",id:item.id}; page="requests"; consoleTeamReadContractVersion="v0.1"; render=()=>{};');
+  run('snapshot={schema_version:"v0.1",team_id:"team_current",selected_project_id:"project_current",projects:[],agents:[],tasks:[],requests:[item]}; selected={kind:"request",id:item.id}; page="requests"; consoleTeamReadContractVersion="v0.1"; consoleReadingIdentity={teamId:"team_current",mode:"normal"}; render=()=>{};');
   const detail = (resource = item, kind = "request") => ({schema_version:"v0.1",kind,
     as_of:"2026-10-12T00:01:00Z", scope:resource.detail_source,
     resource:{...resource, title:"旧详情标题", documents:[{name:"ProductSpec",source_uri:item.product_spec_source.source_uri,
@@ -244,17 +244,30 @@ test("409 body retry first refreshes current summary and joins the new exact bod
 });
 
 function coordinatedReads() {
-  const h=harness(),calls=[],state={holdSummary:null,holdDetail:null};
+  const h=harness(),calls=[],state={holdSummary:null,holdDetail:null,consoleFailure:null,methods:[],
+    manifest:{schema_version:"v0.2",team_id:"team_current",delivery_ready:true,
+      operation_contract_version:1,supported_actions:[],team_read_contract_version:"v0.1"}};
   const value={schema_version:"v0.1",as_of:"2026-10-12T00:00:00Z",team_id:"team_current",
     selected_project_id:"project_current",team_name:"Team",projects:[],agents:[],requests:[h.item],tasks:[]};
   const reply=(body,status=200)=>({ok:status<400,status,json:async()=>body});
   let summaryEntered,detailEntered;
   const summaryStarted=new Promise(resolve=>summaryEntered=resolve),detailStarted=new Promise(resolve=>detailEntered=resolve);
-  h.context.readFixture=async url=>{
-    calls.push(url);
-    if(url === "/api/v1/console") return reply({schema_version:"v0.2",team_id:"team_current",delivery_ready:true,
-      operation_contract_version:1,supported_actions:[],team_read_contract_version:"v0.1"});
+  h.context.readFixture=async (url,options={})=>{
+    calls.push(url);state.methods.push(options.method || "GET");
+    if(url === "/api/v1/console") {
+      if(state.consoleFailure === "network") throw Error("offline Console fixture");
+      if(state.consoleFailure === "json") return {ok:true,status:200,json:async()=>{throw Error("invalid JSON fixture");}};
+      return reply(state.manifest,state.consoleFailure || 200);
+    }
     if(url === "/api/v1/operations") return reply([]);
+    if(url.startsWith("/api/v1/operation-summaries?")) {
+      const query=new URL(url,"http://fixture").searchParams;
+      return reply({schema_version:"v0.1",team_id:state.manifest.team_id,
+        scope:{project_id:query.get("project_id"),delivery_id:query.get("delivery_id")},
+        inventory_sha256:digest("a"),items:[],active:[],active_complete:true,total_count:0,next_cursor:null});
+    }
+    if(url === "/api/v1/team" || url.startsWith("/api/v1/team?")) return reply({...value,schema_version:"v0.2",
+      requests:value.requests.map(item=>{const full={...item,documents:[],dialogue:[]};delete full.detail_source;return full;})});
     if(url.startsWith("/api/v1/team-summary")) {
       summaryEntered();
       if(state.holdSummary) await state.holdSummary;
@@ -422,4 +435,178 @@ test("busy retry stops at a genuine unavailable, changed or invalid body and nev
     assert.equal(h.timers.size,0);
     await h.run("readSelectedTeamDetail()");assert.equal(h.calls.length,2);
   }
+});
+
+// Exercise actual refresh -> metadata -> HTTP summary -> publication, not isolated decoder calls.
+test("Console interruptions keep same-Team summaries readable but revoke all delivery writes",async()=>{
+  for(const mode of ["normal","inspection"]) for(const failure of ["network",503,"json"]) {
+    const h=coordinatedReads();
+    Object.assign(h.state.manifest,{mode,delivery_ready:mode === "normal",supported_actions:["PRODUCT_APPROVAL"]});
+    await h.run("refresh()");await h.run("teamDetailRead.promise");
+    const previous=h.run("teamDetailRead.value");
+    assert.equal(h.run("teamReadIssue"),null);
+    assert.equal(h.run("canControlCurrentTeam()"),mode === "normal");
+    h.state.consoleFailure=failure;
+    await h.run("refresh()");
+    assert.equal(h.run("teamReadIssue"),null,`${mode}: ${failure} must not reject valid summary`);
+    assert.equal(h.run("consoleAvailable"),null);
+    assert.equal(h.run("consoleTeamId"),"team_current","verified Team identity is retained only as a read scope");
+    assert.equal(h.run("consoleDeliveryReady"),null);
+    assert.equal(h.run("consoleSupportedActions"),null);
+    assert.equal(h.run("canControlCurrentTeam()"),false);
+    assert.equal(h.run("teamDetailRead.value"),previous,"complete same-source body remains readable");
+    await h.run('submitOperation({action:"PRODUCT_APPROVAL",project_id:item.project_id,delivery_id:item.id,expected_checkpoint_sha256:item.checkpoint_sha256})');
+    assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team-summary")).length,2);
+    assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team?")).length,0);
+    assert.equal(h.state.methods.includes("POST"),false);
+    h.state.consoleFailure=null;
+    await h.run("refresh()");
+    assert.equal(h.run("teamReadIssue"),null);
+    assert.equal(h.run("consoleConnectionFailed"),false);
+    assert.equal(h.run("canControlCurrentTeam()"),mode === "normal");
+  }
+});
+
+test("transient Console loss retains the negotiated bounded Operation protocol with no full-history fallback",async()=>{
+  const h=coordinatedReads();h.state.manifest.operation_summary_contract_version="v0.1";
+  await h.run("refresh()");await h.run("teamDetailRead.promise");
+  h.state.consoleFailure=503;await h.run("refresh()");
+  assert.equal(h.run("teamReadIssue"),null);
+  assert.equal(h.run("operationsAvailable"),true);
+  assert.equal(h.run("consoleOperationSummaryContractVersion"),"v0.1");
+  assert.equal(h.calls.includes("/api/v1/operations"),false,"a metadata outage must not reload complete history");
+  assert.ok(h.calls.filter(url=>url.startsWith("/api/v1/operation-summaries?")).length >= 2);
+  assert.equal(h.run("canControlCurrentTeam()"),false);
+});
+
+test("initial Console failure cannot negotiate summary identity; confirmed 404 clears prior summary scope",async()=>{
+  for(const initial of [true,false]) {
+    const h=coordinatedReads();
+    if(initial) h.run('snapshot=null;selected=null;consoleReadingIdentity=null;consoleTeamReadContractVersion=null;consoleTeamId=null');
+    else {await h.run("refresh()");await h.run("teamDetailRead.promise");}
+    h.calls.length=0;h.state.consoleFailure=initial ? 503 : 404;
+    await h.run("refresh()");
+    assert.equal(h.run("consoleReadingIdentity"),null);
+    assert.equal(h.run("consoleTeamReadContractVersion"),null);
+    assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team-summary")).length,0);
+    assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team?") || url === "/api/v1/team").length,1,
+      "retain the legacy read-only dashboard contract without inventing a summary identity");
+    assert.equal(h.run("snapshot.schema_version"),"v0.2");
+    assert.equal(h.run("teamDetailRead"),null);
+    assert.equal(h.run("canControlCurrentTeam()"),false);
+    h.context.unsolicited={...h.value,schema_version:"v0.1"};
+    assert.throws(()=>h.run('verifiedTeamSummary(unsolicited,"project_current")'));
+  }
+});
+
+test("read outage still rejects foreign Team or altered checkpoint and a new verified Team clears old bodies",async()=>{
+  for(const invalid of ["team","checkpoint"]) {
+    const h=coordinatedReads();await h.run("refresh()");await h.run("teamDetailRead.promise");
+    const snapshot=structuredClone(h.value);
+    h.state.consoleFailure=503;
+    h.context.responseValue=structuredClone(h.value);
+    if(invalid === "team") h.context.responseValue.team_id="team_other";
+    else h.context.responseValue.requests[0].detail_source.resource_checkpoint_sha256=digest("f");
+    h.context.originalRead=h.context.readFixture;
+    h.run('fetch=async(url,options)=>url.startsWith("/api/v1/team-summary") ? {ok:true,status:200,json:async()=>responseValue} : originalRead(url,options)');
+    await h.run("refresh()");
+    assert.equal(h.run("teamReadIssue"),"unavailable",invalid);
+    assert.equal(h.run("snapshot.team_id"),snapshot.team_id);
+    assert.equal(h.run("snapshot.requests[0].checkpoint_sha256"),snapshot.requests[0].checkpoint_sha256);
+    assert.equal(h.run("canControlCurrentTeam()"),false);
+  }
+  const h=coordinatedReads();await h.run("refresh()");await h.run("teamDetailRead.promise");
+  h.state.consoleFailure=503;await h.run("refresh()");
+  h.state.consoleFailure=null;h.state.manifest.team_id="team_other";
+  await h.run("refresh()");
+  assert.equal(h.run("teamReadIssue"),"unavailable","old Team summary cannot follow a newly negotiated Team");
+  assert.equal(h.run("teamDetailRead"),null);
+  assert.equal(h.run("consoleReadingIdentity.teamId"),"team_other");
+  assert.equal(h.run("canControlCurrentTeam()"),false);
+  h.value.team_id="team_other";h.item.detail_source.team_id="team_other";
+  await h.run("refresh()");await h.run("teamDetailRead.promise");
+  assert.equal(h.run("teamReadIssue"),null);
+  assert.equal(h.run("snapshot.team_id"),"team_other");
+});
+
+test("successful protocol changes invalidate complete bodies; unsupported metadata cannot partially replace scope",async()=>{
+  const h=coordinatedReads();await h.run("refresh()");await h.run("teamDetailRead.promise");
+  const previous=h.run("consoleReadingIdentity");
+  h.state.manifest={...h.state.manifest,team_id:"team_foreign",mode:"invalid"};
+  await h.run("refresh()");
+  assert.equal(h.run("consoleReadingIdentity"),previous,"invalid metadata is never a partial Team replacement");
+  assert.equal(h.run("teamReadIssue"),null);
+  assert.equal(h.run("canControlCurrentTeam()"),false);
+  h.state.manifest={...h.state.manifest,team_id:"team_current",mode:"normal",team_read_contract_version:"v9"};
+  await h.run("refresh()");
+  assert.equal(h.run("consoleAvailable"),null);
+  assert.equal(h.run("consoleTeamReadContractVersion"),"v0.1");
+  assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team?")).length,0);
+  delete h.state.manifest.team_read_contract_version;
+  await h.run("refresh()");
+  assert.equal(h.run("consoleTeamReadContractVersion"),null);
+  assert.equal(h.run("teamDetailRead"),null);
+  assert.equal(h.run("snapshot.schema_version"),"v0.2");
+  h.state.manifest.team_read_contract_version="v0.1";
+  await h.run("refresh()");await h.run("teamDetailRead.promise");
+  assert.equal(h.run("teamReadIssue"),null);
+  assert.equal(h.run("snapshot.schema_version"),"v0.1");
+});
+
+test("a late Console success, failure or 404 cannot replace newer verified metadata",async()=>{
+  for(const status of [200,503,404]) for(const pause of ["headers","body"]) {
+    const h=harness();let release,entered;
+    const hold=new Promise(resolve=>release=resolve),started=new Promise(resolve=>entered=resolve);
+    const info={schema_version:"v0.2",team_id:"team_old",delivery_ready:true,team_read_contract_version:"v0.1"};
+    let calls=0;
+    h.context.fetch=async()=>{
+      calls++;
+      if(calls === 1) {
+        if(pause === "headers") {entered();await hold;}
+        return {ok:status===200,status,json:async()=>{if(pause === "body") {entered();await hold;} return info;}};
+      }
+      return {ok:true,status:200,json:async()=>({...info,team_id:"team_new",mode:"inspection",delivery_ready:false})};
+    };
+    const old=h.run("refreshConsoleInfo()");
+    if(pause === "body" && status !== 200) {await old;continue;}
+    await started;await h.run("refreshConsoleInfo()");release();await old;
+    assert.equal(h.run("consoleReadingIdentity.teamId"),"team_new");
+    assert.equal(h.run("consoleTeamId"),"team_new");
+    assert.equal(h.run("consoleAvailable"),true);
+    assert.equal(h.run("consoleMode"),"inspection");
+  }
+});
+
+test("Team publication cannot follow an old binding after independent metadata selects another Team",async()=>{
+  const h=coordinatedReads();await h.run("refresh()");await h.run("teamDetailRead.promise");
+  let release;h.state.holdSummary=new Promise(resolve=>release=resolve);
+  const reading=h.run("refresh()");
+  for(let i=0;i<30 && h.calls.filter(url=>url.startsWith("/api/v1/team-summary")).length<2;i++) await Promise.resolve();
+  h.state.manifest.team_id="team_other";await h.run("refreshConsoleInfo()");
+  release();await reading;
+  assert.equal(h.run("snapshot.team_id"),"team_current");
+  assert.equal(h.run("teamReadIssue"),"unavailable");
+  assert.equal(h.run("teamDetailRead"),null);
+  assert.equal(h.run("canControlCurrentTeam()"),false);
+});
+
+test("inspection banner distinguishes last confirmed mode from current connection and clears on 404",async()=>{
+  const h=coordinatedReads();Object.assign(h.state.manifest,{mode:"inspection",delivery_ready:false});
+  const nodes=new Map();
+  const node=()=>({hidden:false,textContent:"",setAttribute(){},before(child){nodes.set(child.id,child);}});
+  h.context.document={createElement:node,getElementById:id=>{
+    if(id === "service-maintenance") return nodes.get(id) || null;
+    if(!nodes.has(id)) nodes.set(id,node());return nodes.get(id);
+  }};
+  await h.run("refresh()");h.run("renderMaintenanceBanner()");
+  assert.match(nodes.get("service-maintenance").textContent,/平台处于维护仅查看模式/);
+  h.state.consoleFailure=503;await h.run("refresh()");h.run("renderMaintenanceBanner()");
+  assert.equal(h.run("consoleMode"),null);
+  assert.equal(nodes.get("service-maintenance").hidden,false);
+  assert.match(nodes.get("service-maintenance").textContent,/上次确认.*当前连接尚未确认/);
+  assert.match(h.run("deliveryControlUnavailableReason().reason"),/暂时无法连接/);
+  h.state.consoleFailure=null;await h.run("refresh()");h.run("renderMaintenanceBanner()");
+  assert.doesNotMatch(nodes.get("service-maintenance").textContent,/上次确认/);
+  h.state.consoleFailure=404;await h.run("refresh()");h.run("renderMaintenanceBanner()");
+  assert.equal(nodes.get("service-maintenance").hidden,true);
 });

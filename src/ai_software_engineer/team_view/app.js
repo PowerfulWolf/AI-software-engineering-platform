@@ -2,6 +2,10 @@
 let snapshot = null;
 let teamReadIssue = null;
 let consoleTeamReadContractVersion = null;
+// Successful metadata negotiates reading scope; a connection failure revokes
+// current control authority without turning the retained read scope into null.
+let consoleReadingIdentity = null;
+let consoleInfoReadGeneration = 0;
 let teamDetailRead = null;
 let teamDetailReadGeneration = 0;
 let teamDetailRenderRevision = 0;
@@ -95,7 +99,7 @@ function validTeamDetailSource(source, item, kind, teamId, projectId) {
 }
 function verifiedTeamSummary(value, target) {
   if (!value || value.schema_version !== "v0.1" || typeof value.team_id !== "string" ||
-      value.team_id !== consoleTeamId || target && value.selected_project_id !== target ||
+      value.team_id !== consoleReadingIdentity?.teamId || target && value.selected_project_id !== target ||
       !Array.isArray(value.projects) || !Array.isArray(value.agents) ||
       !Array.isArray(value.requests) || !Array.isArray(value.tasks)) throw new TeamReadFailure("unavailable");
   const requests = new Map();
@@ -123,7 +127,7 @@ function clearTeamDetailRead() {
   teamDetailRenderRevision++;
 }
 function selectedTeamDetailTarget() {
-  if (!teamSummaryMode() || !selected || !snapshot || projectSwitchPending()) return null;
+  if (!teamSummaryMode() || !selected || !snapshot || snapshot.team_id !== consoleReadingIdentity?.teamId || projectSwitchPending()) return null;
   const item = selected.kind === "task" ? taskById(selected.id) : requestById(selected.id);
   if (!item || !validTeamDetailSource(item.detail_source, item, selected.kind, snapshot.team_id, currentProjectId())) return null;
   return {source: item.detail_source, key: teamDetailSourceKey(item.detail_source),
@@ -11243,15 +11247,19 @@ function buildDetail(panel = document.getElementById("detail")) {
 }
 function renderMaintenanceBanner() {
   let banner = document.getElementById("service-maintenance");
-  if (!banner && consoleMode === "inspection") {
+  const lastConfirmedInspection = consoleAvailable === null && consoleReadingIdentity?.mode === "inspection";
+  const visible = consoleMode === "inspection" || lastConfirmedInspection;
+  if (!banner && visible) {
     banner = el("div", undefined, "admin-notice");
     banner.id = "service-maintenance";
     banner.setAttribute("role", "status");
     document.getElementById("connection").before(banner);
   }
   if (banner) {
-    banner.hidden = consoleMode !== "inspection";
-    banner.textContent = inspectionSummary;
+    banner.hidden = !visible;
+    banner.textContent = lastConfirmedInspection
+      ? "上次确认服务处于维护仅查看模式；当前连接尚未确认。仍可查看已核验的记录，交付操作保持暂停。"
+      : inspectionSummary;
   }
 }
 function render({ preserveComposer = false, incremental = false } = {}) {
@@ -11377,8 +11385,10 @@ for (const target of ["team", "requests", "knowledge", "settings", "status"])
     .getElementById("nav-" + target)
     .addEventListener("click", () => navigatePage(target));
 async function refreshConsoleInfo(signal) {
+  const generation = ++consoleInfoReadGeneration;
   try {
     const response = await fetch("/api/v1/console", { cache: "no-store", signal });
+    if (generation !== consoleInfoReadGeneration) return;
     if (response.status === 404) {
       consoleAvailable = false;
       consoleConnectionFailed = false;
@@ -11389,25 +11399,37 @@ async function refreshConsoleInfo(signal) {
       consoleSupportedActions = null;
       consoleOperationSummaryContractVersion = null;
       consoleTeamReadContractVersion = null;
+      consoleReadingIdentity = null;
+      clearOperationReadScope();
       clearTeamDetailRead();
       return;
     }
     if (!response.ok) throw new Error("console unavailable");
     const info = await response.json();
+    if (generation !== consoleInfoReadGeneration) return;
     if (
       info.schema_version !== "v0.2" ||
       typeof info.team_id !== "string" ||
       typeof info.delivery_ready !== "boolean"
     )
       throw new Error("invalid console response");
-    consoleAvailable = true;
-    consoleConnectionFailed = false;
-    if (consoleTeamId && consoleTeamId !== info.team_id) { clearOperationReadScope(); clearTeamDetailRead(); }
-    consoleTeamId = info.team_id;
     const mode = info.mode ?? "normal";
     if (!["normal", "inspection"].includes(mode) ||
         mode === "inspection" && info.delivery_ready !== false)
       throw new Error("invalid console mode");
+    const teamReadVersion = info.team_read_contract_version ?? null;
+    if (teamReadVersion !== null && teamReadVersion !== "v0.1")
+      throw new Error("unsupported Team read contract");
+    const teamChanged = consoleReadingIdentity?.teamId !== info.team_id;
+    const readVersionChanged = teamReadVersion !== consoleTeamReadContractVersion;
+    if (consoleReadingIdentity && teamChanged) clearOperationReadScope();
+    if (teamChanged || readVersionChanged) clearTeamDetailRead();
+    if (teamChanged || readVersionChanged || consoleReadingIdentity?.mode !== mode)
+      consoleReadingIdentity = {teamId:info.team_id, mode};
+    consoleTeamReadContractVersion = teamReadVersion;
+    consoleAvailable = true;
+    consoleConnectionFailed = false;
+    consoleTeamId = info.team_id;
     consoleMode = mode;
     consoleDeliveryReady = info.delivery_ready;
     const actions = info.supported_actions;
@@ -11418,18 +11440,16 @@ async function refreshConsoleInfo(signal) {
     consoleOperationContractVersion = validManifest ? info.operation_contract_version : null;
     consoleSupportedActions = validManifest ? [...actions] : null;
     consoleOperationSummaryContractVersion = info.operation_summary_contract_version === "v0.1" ? "v0.1" : null;
-    const teamReadVersion = info.team_read_contract_version === "v0.1" ? "v0.1" : null;
-    if (teamReadVersion !== consoleTeamReadContractVersion) clearTeamDetailRead();
-    consoleTeamReadContractVersion = teamReadVersion;
   } catch {
+    if (generation !== consoleInfoReadGeneration) return;
+    // Team identity and the negotiated read protocols remain read-only facts.
+    // Do not fall back to full histories when just the control connection fails.
     consoleAvailable = null;
     consoleConnectionFailed = true;
-    consoleTeamId = null;
     consoleDeliveryReady = null;
     consoleMode = null;
     consoleOperationContractVersion = null;
     consoleSupportedActions = null;
-    consoleOperationSummaryContractVersion = null;
   }
 }
 async function refreshOperations(signal, {consoleRead} = {}) {
@@ -11599,10 +11619,17 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       await consoleRead;
       controller.signal.throwIfAborted();
       const summaryRead = teamSummaryMode();
+      const readingIdentity = consoleReadingIdentity, readingVersion = consoleTeamReadContractVersion;
+      const currentRead = () => {
+        if (superseded()) return false;
+        if (readingIdentity !== consoleReadingIdentity || readingVersion !== consoleTeamReadContractVersion)
+          throw new TeamReadFailure("unavailable");
+        return true;
+      };
       const endpoint = summaryRead ? "/api/v1/team-summary" : "/api/v1/team";
       const url = target ? endpoint + "?project_id=" + encodeURIComponent(target) : endpoint;
       const observation = await readTeamJson(url, controller.signal, {
-        current: () => !superseded(),
+        current: currentRead,
         publish: value => {
           if (superseded()) return null;
           const next = summaryRead ? verifiedTeamSummary(value, target) : value;

@@ -135,3 +135,59 @@ and calls `.to_wire()`, then feeds their exact JSON into shipped JS via
 `tests/team_view/fixtures/nullable-wire.cjs`. It proves omitted keys before invoking JS and tests
 both null representations and actual identity mismatches. Handwritten all-null JavaScript fixtures
 alone are insufficient for this cross-language contract. No schema/store/data migration is needed.
+
+## Reading identity survives temporary Console metadata loss (2026-10-12)
+
+Scope: `team_view/app.js::refreshConsoleInfo`, `verifiedTeamSummary`,
+`selectedTeamDetailTarget`, `refreshSnapshot`, `renderMaintenanceBanner`. No HTTP or stored Schema
+changes. A verified `GET /api/v1/console` negotiates `consoleReadingIdentity={teamId,mode}` and
+`consoleTeamReadContractVersion`; `consoleTeamId` and
+`consoleOperationSummaryContractVersion` also retain the verified read scope. None is a delivery write grant.
+
+On network/5xx/invalid JSON/invalid core metadata, keep the last complete reading scope and both
+read protocols. Clear `consoleAvailable`, current `consoleMode`, `consoleDeliveryReady`, operation
+contract and supported actions; set `consoleConnectionFailed`. Current delivery write gates continue to
+require `consoleAvailable === true`, fresh Team/Operation facts and exact action support. In
+particular do not null the identity but keep the summary protocol, and do not fall back from
+Operation summaries to complete history merely because the Console connection failed.
+
+Metadata publication is atomic after validating schema, Team, delivery readiness, mode and Team
+read protocol. Only missing/null Team protocol denotes legacy full reads; an unsupported explicit
+version is unavailable rather than a silent downgrade. An explicit 404 clears the read identity,
+protocols and complete reading scopes. Successful Team or wire changes invalidate old complete
+bodies; a different Team also clears Operation scopes. An initial metadata failure retains legacy
+v0.2 dashboard reading compatibility, cannot accept an unsolicited v0.1 summary and cannot write.
+
+`consoleInfoReadGeneration` fences both header and body awaits, including failures: an older
+Console request may not overwrite a later observation. `refreshSnapshot` freezes negotiated
+identity/version before queuing its Team GET and rechecks them before GET and publication. A
+changed binding cannot publish an earlier Team response even when Project IDs are reused. Same
+Team/source successful reads preserve the complete selected body and reading position.
+
+A disconnected page last confirmed as inspection retains a banner explicitly saying “上次确认…
+当前连接尚未确认”; it must not call the prior mode the current service mode. Successful metadata
+restores the current banner/readiness; 404 clears it. Neither text nor successful GETs resume K1.
+
+| Input sequence | Required observation |
+| --- | --- |
+| normal/inspection metadata200 → network/503/invalid JSON → valid same-Team summary | readable summary/body, all delivery mutations disabled, no full-history fallback |
+| prior binding → response from another Team or altered checkpoint | reject; preserve prior reading without renewed control |
+| initial metadata failure / confirmed404 | legacy full read only, no invented summary Team or write authority |
+| valid new Team / explicit supported wire change | clear old complete scope; accept only new exact identity/protocol |
+| invalid mode or unsupported explicit read version | no partial identity publication, no implicit wire downgrade |
+| late metadata200/503/404 after newer observation | no overwrite of newer identity/readiness |
+| held summary → independent Team metadata switch | discard old publication; controls remain unavailable |
+| confirmed inspection → disconnect → reconnect | last-confirmed banner → current banner; no fake running/paused Task verdict |
+
+Good: Team and bounded Operations remain readable through a control-plane interruption while
+delivery mutations fail closed. Base: first-ever metadata failure can still show legacy read-only records.
+Bad: a cleared control Team makes every later valid summary fail, or disconnected polls reload the
+whole Operation history. Regression tests execute shipped `refresh()` with fake HTTP/timers for the
+complete metadata/summary/Operation chain, assert endpoint counts, POST absence, retained body,
+exact rejection, concurrent publication fences and banner wording. Canonical Python `to_wire()`
+regression remains required for source identity comparisons.
+
+Existing data: no SQL/journal/Task/Operation/approval/queue/budget mutation or migration. Deploy the
+client asset during controlled platform maintenance and reload the page; keep the existing
+inspection marker and demand pause. Rollback restores the prior asset and reloads it, preserving
+all durable facts. This defect does not prove the cause of every historical production read failure.

@@ -9,7 +9,7 @@ const context = vm.createContext({data, URLSearchParams, TextEncoder,
   document:{createElement:()=>({})}, console});
 vm.runInContext(script.slice(0, script.indexOf('for (const target of ["team"')), context);
 const run = code => vm.runInContext(code, context);
-run('consoleTeamId=data.summary.team_id');
+run('consoleTeamId=data.summary.team_id;consoleReadingIdentity={teamId:data.summary.team_id,mode:"normal"}');
 run('verifiedTeamSummary(data.summary,data.summary.selected_project_id)');
 for (let index=0; index<data.details.length; index++) {
   const detail = data.details[index], source=data.summary.tasks[index].detail_source;
