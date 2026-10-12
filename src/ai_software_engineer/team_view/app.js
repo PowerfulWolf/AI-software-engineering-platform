@@ -712,6 +712,9 @@ function consoleSupportsCompletedOutputRescue(rejected = false) {
 function consoleSupportsStoppedProviderRetry() {
   return consoleOperationContractVersion >= 6 && consoleSupportsPausedBaseline();
 }
+function consoleSupportsContextCapacityResume() {
+  return consoleOperationContractVersion >= 8 && consoleSupportsPausedBaseline();
+}
 const configurationApplyStorageKey = "ase-configuration-apply";
 const configurationApplyTimeoutMs = 30000;
 let configurationApplyPending = readConfigurationApplyPending();
@@ -2096,6 +2099,8 @@ async function copyEngineeringWaitReport(request, handling) {
 function engineeringWaitBox(request, task, step) {
   if (step.wait_disposition?.facts.classification === "EXECUTION_BASELINE_PAUSED")
     return engineeringBaselinePauseBox(request, task, step);
+  if (step.role === "coder" && step.wait_disposition?.facts.classification === "CONTEXT_CAPACITY")
+    return engineeringContextCapacityBox(request, task, step);
   const management = viewGroup(el("section", undefined, "engineering-wait-panel"),
     "engineering-wait:" + step.work_item_id);
   management.setAttribute("data-key", "engineering:" + step.work_item_id);
@@ -2296,6 +2301,127 @@ function engineeringBaselineFacts(request, task, step) {
     expected_task_intent_sha256: task.task_intent_sha256, expected_task_revision: task.task_revision,
     expected_work_item_id: step.work_item_id, expected_source_revision: facts.source_revision};
 }
+function engineeringContextCapacityFacts(request, task, step) {
+  const baseline = engineeringBaselineFacts(request, task, step);
+  const facts = step.wait_disposition?.facts;
+  const evidence = facts?.evidence_ids;
+  if (!baseline || facts.classification !== "CONTEXT_CAPACITY" || facts.role !== "coder" ||
+      !["WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(step.status) ||
+      step.wait_disposition.responsibility !== "engineering" ||
+      task.project_id !== request.project_id || task.request_id !== request.id ||
+      ["DONE", "CLOSED"].includes(request.stage) ||
+      !/^[a-f0-9]{64}$/.test(request.checkpoint_sha256 || "") ||
+      !/^[a-f0-9]{64}$/.test(step.wait_disposition_sha256 || "") ||
+      !Array.isArray(evidence) || evidence.length !== 1 ||
+      !/^context-capacity:\/\/[a-f0-9]{64}$/.test(evidence[0])) return null;
+  return {baseline, receipt_sha256: evidence[0].slice("context-capacity://".length),
+    disposition_sha256: step.wait_disposition_sha256};
+}
+function matchingContextCapacityPlan(plan, bound, operation) {
+  const facts = plan.facts;
+  const base = plan.previous_binding?.execution_base_ref || facts.task.base_ref;
+  return !Object.hasOwn(operation.intent, "target_base_ref") &&
+    plan.input_mode === "preserve_draft" && !plan.conflicted &&
+    plan.target_base_ref === base && plan.prepared_source_revision === bound.baseline.expected_source_revision &&
+    facts.context_capacity_receipt_sha256 === bound.receipt_sha256 &&
+    !facts.native_rule_change && !facts.legacy_containment && !facts.completed_output && !facts.stopped_provider_failure;
+}
+async function submitEngineeringContextCapacityOperation(intent, original) {
+  const request = requestById(intent.delivery_id);
+  const current = request && engineeringWaitSteps(request).find(({task, step}) => {
+    const facts = engineeringContextCapacityFacts(request, task, step);
+    return facts && sameEngineeringWaitIntent(facts.baseline, original.baseline) &&
+      facts.receipt_sha256 === original.receipt_sha256 && facts.disposition_sha256 === original.disposition_sha256;
+  });
+  if (!consoleSupportsContextCapacityResume()) {
+    operationNotice = {kind: "error", title: "当前服务不支持保留原代码版本的容量恢复",
+      message: "请在当前操作和角色执行结束、服务空闲时更新服务，再刷新原需求。原进度和历史保留。"};
+    renderDetail(); renderNotification(); return null;
+  }
+  const plan = current && engineeringBaselinePlan(request, current.task, current.step, "context_capacity_resume");
+  const propose = intent.action === "PROPOSE_EXECUTION_BASELINE";
+  const execute = intent.action === "EXECUTE_EXECUTION_BASELINE";
+  if (!current || intent.project_id !== original.baseline.project_id ||
+      request.project_id !== snapshot?.selected_project_id || !canControlCurrentTeam() ||
+      activeOperation(request.id, request.project_id) ||
+      ["approved_native_rule_change_sha256", "confirm_provider_prerequisites_repaired", "confirm_local_execution_stopped",
+        "confirm_legacy_containment", "target_base_ref"].some(key => Object.hasOwn(intent, key)) ||
+      propose && (!sameEngineeringWaitIntent(intent, original.baseline) ||
+        intent.purpose !== "context_capacity_resume" || intent.input_mode !== "preserve_draft") ||
+      execute && (!plan || plan.plan_sha256 !== intent.expected_plan_sha256 || intent.continuation_mode !== "pause" ||
+        intent.expected_checkpoint_sha256 !== request.checkpoint_sha256 || intent.task_id !== current.task.task_id) || !propose && !execute) {
+    operationNotice = {kind: "error", title: "容量恢复事实已变化",
+      message: "请查看当前需求并重新核对恢复方案。旧页面不能批准或继续新的执行现场。"};
+    renderDetail(); renderNotification(); return null;
+  }
+  return submitOperation(intent);
+}
+function engineeringContextCapacityBox(request, task, step) {
+  const bound = engineeringContextCapacityFacts(request, task, step);
+  const plan = bound && engineeringBaselinePlan(request, task, step, "context_capacity_resume");
+  const operation = bound && engineeringBaselineProposalOperation(bound.baseline, "context_capacity_resume");
+  const active = activeOperation(request.id, request.project_id);
+  const unavailable = deliveryControlUnavailableReason();
+  const panel = viewGroup(el("section", undefined, "engineering-wait-panel engineering-capacity-resume"),
+    "engineering-capacity:" + step.work_item_id);
+  panel.dataset.key = "engineering:" + step.work_item_id + ":capacity";
+  const phase = !bound ? "incomplete" : plan ? "ready" : "waiting";
+  panel.append(viewBlock(el("h3", !bound ? "容量等待记录不完整 · 交付暂停" :
+    plan ? "恢复方案已准备 · 等待确认" : "输入超过模型容量 · 交付暂停"), "capacity-title", phase),
+    viewBlock(engineeringGuidanceList(!bound ? [
+      "平台还不能核对当前容量等待与原开发现场。原需求和进度保留，完整记录恢复后再准备方案。",
+    ] : plan ? [
+      "平台已核验本次容量等待，完整合法开发进度已封存。原需求、分支、工作区和代码版本保持。",
+      "批准只保存本次精确恢复决定，交付保持暂停；之后再点击“继续原需求”，平台重新检查输入并接续开发。",
+      "本轮主开发调用尚未开始，后续仍需独立测试与评审。原容量记录和完整执行历史保留。",
+    ] : [
+      "本次模型输入超过容量，本轮主开发调用尚未开始。由 ASE 平台修复模型输入准备或执行配置后再检查。",
+      "原需求、分支、已有开发文件和执行历史保留。准备方案会重新核验完整现场，不要求填写代码版本。",
+      "平台修复后，点击“准备保留进度的恢复方案”；查看结果并批准保持暂停，之后再明确继续原需求。",
+    ]), "capacity-description", phase));
+  if (!bound) {
+    panel.append(viewBlock(el("p", "当前容量等待缺少完整记录。请刷新原需求；仍缺失时由平台修复记录读取，不能直接批准或继续。", "error"),
+      "capacity-incomplete", true));
+    return panel;
+  }
+  if (plan) {
+    const summary = viewBlock(el("div"), "capacity-summary", [plan, bound.receipt_sha256]);
+    summary.append(el("p", "原需求分支 · " + plan.facts.task.branch_name, "paths"));
+    const detail = engineeringDetails("恢复方案核对信息", step.work_item_id + ":capacity-plan");
+    detail.append(el("p", "代码版本保持 · " + plan.target_base_ref, "paths"),
+      el("p", "精确方案 · " + plan.plan_sha256, "paths"),
+      el("p", "容量记录 · " + bound.receipt_sha256, "paths"));
+    summary.append(detail);
+    panel.append(summary);
+  } else if (["FAILED", "INTERRUPTED"].includes(operation?.status)) {
+    panel.append(viewBlock(el("p", "恢复方案尚未准备完成 · " + humanizeBlockingText(operation.error_summary || "平台未能完成本次核验。") +
+      " 原需求和文件保留；处理本次原因后再重新准备。", "error"), "capacity-failure", operationRenderFact(operation)));
+  }
+  if (unavailable) panel.append(viewBlock(deliveryControlUnavailableNotice(unavailable), "capacity-control-unavailable", unavailable));
+  else if (!consoleSupportsContextCapacityResume()) panel.append(viewBlock(el("p",
+    "当前服务不支持保留原代码版本的容量恢复。请在当前操作和角色执行结束、服务空闲时更新服务，再刷新原需求；无需新建需求或填写代码版本。", "muted"),
+    "capacity-unsupported", [consoleOperationContractVersion, consoleSupportedActions]));
+  else if (active) panel.append(engineeringActiveOperationBox(request, active));
+  else if (canControlCurrentTeam()) {
+    const actions = viewBlock(el("div", undefined, "engineering-baseline-actions"), "capacity-actions",
+      [bound, plan, Boolean(operation), pollingControlFacts()]);
+    if (plan) {
+      const planSha256 = plan.plan_sha256;
+      actions.append(deliveryButton("批准保留进度，保持暂停", () => submitEngineeringContextCapacityOperation({
+        action: "EXECUTE_EXECUTION_BASELINE", project_id: request.project_id, delivery_id: request.id,
+        expected_checkpoint_sha256: bound.baseline.expected_checkpoint_sha256, task_id: task.task_id,
+        expected_plan_sha256: planSha256, continuation_mode: "pause",
+        reference: "批准保留完整开发进度，代码版本保持，交付保持暂停；之后另行明确继续原需求",
+      }, bound), "primary"));
+    }
+    actions.append(deliveryButton(operation ? "重新准备保留进度的恢复方案" : "准备保留进度的恢复方案", () =>
+      submitEngineeringContextCapacityOperation({...bound.baseline, action: "PROPOSE_EXECUTION_BASELINE",
+        purpose: "context_capacity_resume", input_mode: "preserve_draft"}, bound), plan ? "secondary" : "primary"));
+    panel.append(actions);
+  }
+  appendEngineeringBaseline(panel, request, task, step);
+  return panel;
+}
 function engineeringBaselinePlan(request, task, step, purpose = "source_rebind") {
   const bound = engineeringBaselineFacts(request, task, step);
   if (!bound) return null;
@@ -2307,11 +2433,15 @@ function engineeringBaselinePlan(request, task, step, purpose = "source_rebind")
       plan.facts?.task?.id !== bound.task_id || plan.facts.task_revision !== bound.expected_task_revision ||
       plan.facts.work_item_id !== bound.expected_work_item_id ||
       plan.dirty_capture?.source_revision !== bound.expected_source_revision ||
-      (!["completed_output_rescue", "stopped_provider_retry"].includes(purpose) && plan.target_base_ref !== operation.intent?.target_base_ref) ||
+      (!["completed_output_rescue", "stopped_provider_retry", "context_capacity_resume"].includes(purpose) && plan.target_base_ref !== operation.intent?.target_base_ref) ||
       plan.input_mode !== operation.intent?.input_mode ||
       !["preserve_draft", "coder_reapply"].includes(plan.input_mode)) return null;
   if (purpose === "completed_output_rescue" && !matchingCompletedOutputRescuePlan(plan, bound, operation)) return null;
   if (purpose === "stopped_provider_retry" && !matchingStoppedProviderRetryPlan(plan, bound, operation)) return null;
+  if (purpose === "context_capacity_resume") {
+    const capacity = engineeringContextCapacityFacts(request, task, step);
+    if (!capacity || !matchingContextCapacityPlan(plan, capacity, operation)) return null;
+  }
   if (purpose === "source_rebind" && plan.facts.stopped_provider_failure &&
       !matchingStoppedProviderRetryPlan(plan, bound, operation, false)) return null;
   if (purpose === "source_rebind" && plan.facts.completed_output &&
@@ -3081,7 +3211,25 @@ function coderOutputDiagnostic(detail) {
   };
   return reasons[rule?.[1]] || "开发报告不符合本轮步骤约定，平台未接纳报告";
 }
+function operationBaselinePurpose(operation) {
+  const result = operationResult(operation);
+  const purpose = operation.intent?.purpose || operation.baseline_purpose ||
+    result?.execution_baseline_plan?.purpose || result?.execution_baseline_binding?.purpose;
+  if (purpose) return purpose;
+  const planSha256 = operation.intent?.expected_plan_sha256;
+  if (!planSha256) return null;
+  const proposal = operations.find(item => operationAction(item) === "PROPOSE_EXECUTION_BASELINE" &&
+    item.status === "SUCCEEDED" && operationProject(item) === operationProject(operation) &&
+    item.intent?.delivery_id === operation.intent?.delivery_id && item.intent?.task_id === operation.intent?.task_id &&
+    operationResult(item)?.execution_baseline_plan?.plan_sha256 === planSha256);
+  return proposal && operationResult(proposal).execution_baseline_plan.purpose;
+}
 function operationPurpose(operation) {
+  if (["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"].includes(operationAction(operation)) &&
+      operationBaselinePurpose(operation) === "context_capacity_resume")
+    return operationAction(operation) === "EXECUTE_EXECUTION_BASELINE"
+      ? "保存精确恢复决定及完整开发进度，代码版本保持，交付保持暂停；之后需要另行继续原需求。"
+      : "检查容量等待与完整开发现场，准备保留原需求、分支、代码版本和进度的恢复方案；准备不启动开发。";
   if (operationAction(operation) === "EXECUTE_EXECUTION_BASELINE" && operation.intent?.continuation_mode === "pause")
     return "保存精确工程决定及完整开发进度，更新所批准的代码和规范输入，交付保持暂停；此操作不启动 Coder。";
   if ((operation.intent?.purpose || operation.baseline_purpose) === "legacy_workspace_rescue")
@@ -3099,6 +3247,10 @@ function operationPurpose(operation) {
   }[operationAction(operation)] || null;
 }
 function operationActionLabel(operation) {
+  if (["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"].includes(operationAction(operation)) &&
+      operationBaselinePurpose(operation) === "context_capacity_resume")
+    return operationAction(operation) === "EXECUTE_EXECUTION_BASELINE"
+      ? "批准保留进度，保持暂停" : "准备保留进度的恢复方案";
   if (operationAction(operation) === "EXECUTE_EXECUTION_BASELINE" && operation.intent?.continuation_mode === "pause")
     return operation.intent?.confirm_legacy_containment || operation.intent?.confirm_local_execution_stopped
       ? "批准保留进度，保持暂停" : "批准更新基线，保持暂停";
