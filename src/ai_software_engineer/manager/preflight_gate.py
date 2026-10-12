@@ -4,7 +4,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Literal
 
+from ai_software_engineer.agents.model_input import FinalModelInputCapacityExceeded
 from ai_software_engineer.agents.models import AgentRequest, AgentResult
+from ai_software_engineer.context.models import ContextBundle
+from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.native_verification import (
     NativeVerificationWaiting,
@@ -13,6 +16,7 @@ from ai_software_engineer.domain.native_verification import (
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.manager.context_capacity import ContextCapacityReceipt
 from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightCheckpoint,
     DeliveryPreflightReceipt,
@@ -47,6 +51,7 @@ class PreflightInvocationControl:
         resumed_preparation: Callable[[VerifierPreparationIntent, QueueClaim], bool] | None = None,
         prepare_input: Callable[[AgentRequest], None] | None = None,
         discard_prepared_input: Callable[[AgentRequest], None] | None = None,
+        context_reader: Callable[[str], ContextBundle] | None = None,
     ) -> None:
         self.delegate, self.guard, self.task_reader = delegate, guard, task_reader
         self.inspect, self.records, self.failure_control = inspect, records, failure_control
@@ -55,6 +60,7 @@ class PreflightInvocationControl:
         self.prepare_verifier, self.observe_verifier = prepare_verifier, observe_verifier
         self.resumed_preparation = resumed_preparation
         self.prepare_input, self.discard_prepared_input = prepare_input, discard_prepared_input
+        self.context_reader = context_reader
 
     def prepare(self, request: AgentRequest) -> AgentRequest:
         if self.delegate.has_started(request):
@@ -110,10 +116,90 @@ class PreflightInvocationControl:
                 self.prepare_input(request)
                 self.guard.check()
             return self.delegate.prepare(request)
+        except FinalModelInputCapacityExceeded as error:
+            if self.discard_prepared_input is not None:
+                self.discard_prepared_input(request)
+            self._capacity_wait(request, error)
+            raise
         except BaseException:
             if self.discard_prepared_input is not None:
                 self.discard_prepared_input(request)
             raise
+
+    def _capacity_wait(self, request: AgentRequest, error: FinalModelInputCapacityExceeded) -> None:
+        if self.context_reader is None:
+            # Existing custom compositions keep their original exception boundary.
+            return
+        self.guard.check()
+        task = self.task_reader()
+        assert self.guard.lease is not None
+        claim = self.guard.lease.claim
+        item = claim.work_item
+        context = self.context_reader(request.context_manifest_id)
+        if (
+            (item.task_id, item.role, item.attempt)
+            != (request.task_id, request.role, request.attempt)
+            or task.id != request.task_id
+            or (
+                context.context_id,
+                context.task_id,
+                context.role,
+                context.attempt,
+                context.source_revision,
+            )
+            != (
+                request.context_manifest_id,
+                request.task_id,
+                request.role,
+                request.attempt,
+                request.source_revision,
+            )
+            or context.budget.max_input_tokens != error.max_input_tokens
+        ):
+            raise QueueConflict("上下文容量检查与当前真实执行身份不一致; 未启动模型")
+        marker = ContextCapacityReceipt(
+            origin="final_input",
+            task_id=task.id,
+            task_sha256=digest(task.to_wire()),
+            task_intent_sha256=task_intent_sha256(task),
+            task_revision=item.checkpoint_sequence,
+            work_item_id=item.id,
+            lease_id=claim.lease.id,
+            assignment_id=claim.assignment.id,
+            claim_sha256=digest(claim.to_wire()),
+            dispatch_sequence=item.dispatch_sequence,
+            checkpoint_sequence=item.checkpoint_sequence,
+            role=request.role,
+            attempt=request.attempt,
+            source_revision=request.source_revision,
+            context_manifest_id=context.context_id,
+            context_sha256=digest(context.to_wire()),
+            max_input_tokens=context.budget.max_input_tokens,
+            context_input_tokens=context.budget.used_input_tokens,
+            final_input_tokens=error.estimated_input_tokens,
+            request=request,
+            execution_baseline_sha256=request.execution_baseline_sha256,
+            observed_at=datetime.now(UTC),
+            receipt_sha256="0" * 64,
+        )
+        marker = marker.model_copy(
+            update={
+                "receipt_sha256": digest(marker.model_dump(mode="json", exclude={"receipt_sha256"}))
+            }
+        )
+        marker.validate_integrity()
+        with self.guard.write_scope():
+            if self.delegate.has_started(request) or self.delegate.result(request) is not None:
+                raise QueueConflict("当前执行已有模型开始或结果记录; 不能记为未启动容量等待")
+            self.records.put("context-capacity-receipts", marker.receipt_sha256, marker)
+        self.failure_control.wait(
+            task,
+            classification="CONTEXT_CAPACITY",
+            reason="最终模型输入超过平台容量; 本次交付角色的模型调用未启动, "
+            "原任务、完整输入与开发进度已保留。平台调整输入装配后需精确核验再继续。",
+            source_revision=request.source_revision,
+            artifact_ids=("context-capacity://" + marker.receipt_sha256,),
+        )
 
     def _prepare_verifier(self, request: AgentRequest) -> None:
         assert self.prepare_verifier is not None and self.observe_verifier is not None
