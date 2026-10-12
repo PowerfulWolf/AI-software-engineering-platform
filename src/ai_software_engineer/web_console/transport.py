@@ -395,7 +395,9 @@ def create_console_app(
         if not isinstance(administration, LocalConsoleAdministration):
             return _error(404, "NOT_AVAILABLE", "项目规范审阅暂不可用。")
         try:
-            operation = console.get(TypeAdapter(OperationId).validate_python(operation_id))
+            operation = await run_in_threadpool(
+                console.get, TypeAdapter(OperationId).validate_python(operation_id)
+            )
             inspection = await run_in_threadpool(
                 _read_native_rule_change, administration, operation, path, command_team_id
             )

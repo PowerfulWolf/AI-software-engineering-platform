@@ -47,6 +47,33 @@ Console Team-read admission and diagnostic-object lifetime follow
 [`read-memory-lifecycle.md`](read-memory-lifecycle.md), including fixed
 `503 TEAM_READ_IN_PROGRESS`, worker-owned release and unchanged read-only facts.
 
+## Native-rule review read isolation (2026-10-12)
+
+`GET /api/v1/operations/{operation_id}/native-rules?path=...` validates `OperationId`
+then awaits the existing `run_in_threadpool(console.get, operation_id)` before the
+already-threaded `_read_native_rule_change(...)` inspection. Store reads can block
+on file locks; neither lookup nor complete frozen-rule inspection may run on the
+ASGI event loop. The endpoint remains read-only and does not construct a Host.
+
+| Input / overlap | Required behavior |
+| --- | --- |
+| Operation lookup is held on a store lock | Unrelated `/api/v1/console` completes before lookup releases |
+| Valid exact proposal and complete frozen rules | Existing full before/after/diff response |
+| Missing/conflicting/unreadable Operation | Existing fixed `409 NATIVE_RULE_REVIEW_UNAVAILABLE`, no private error text |
+| Invalid Operation ID / unavailable administration | Existing 409 / 404; no store lookup |
+
+Good: a worker waits for the real store read while the event loop serves capability
+reads. Bad: async handlers call synchronous stores directly, freezing unrelated requests.
+`test_native_rule_read_isolation.py` holds a fake lookup with Events, verifies the second
+HTTP response before release, and checks failure envelopes. `test_native_rule_review.py`
+retains complete exact-plan, changed-manifest, unsafe-path and unchanged-file coverage.
+No timing threshold, production database, model or background execution is needed.
+
+存量数据处置：no migration or rewriting Operation/Requirement/Task/approval bytes.
+An idle controlled restart loads this transport-only fix; K1 stays paused. Rollback
+restores only the prior transport behavior. This isolated blocking defect is not by
+itself evidence that it caused a particular user's Team-read failure.
+
 ## 1. Scope / Trigger
 
 修改 `web_console/`、浏览器交付操作、Team View 中的写入口、后台 Manager 执行、
