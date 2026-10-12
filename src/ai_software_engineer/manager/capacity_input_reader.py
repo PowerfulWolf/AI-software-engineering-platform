@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -43,6 +45,22 @@ from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationStart,
 )
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
+
+
+@dataclass(frozen=True)
+class UninvokedClaimBoundary:
+    """Trusted collector input, never a persisted stop or no-start receipt."""
+
+    task_id: str
+    work_item_id: str
+    lease_id: str
+    role: AgentRole
+    attempt: int
+    checkpoint_sequence: int
+    dispatch_sequence: int
+    observed_at: datetime
+    run_id: str
+    context_manifest_id: str
 
 
 class CapacityInputQueue(Protocol):
@@ -403,6 +421,30 @@ class CapacityInputReader:
     ) -> None:
         request = marker.request
         assert request is not None
+        self.require_claim_not_started(
+            UninvokedClaimBoundary(
+                task_id=marker.task_id,
+                work_item_id=marker.work_item_id,
+                lease_id=marker.lease_id,
+                role=marker.role,
+                attempt=marker.attempt,
+                checkpoint_sequence=marker.checkpoint_sequence,
+                dispatch_sequence=marker.dispatch_sequence,
+                observed_at=marker.observed_at,
+                run_id=request.run_id,
+                context_manifest_id=marker.context_manifest_id,
+            ),
+            allow_later_claims=allow_later_claims,
+        )
+
+    def require_claim_not_started(
+        self, marker: UninvokedClaimBoundary, *, allow_later_claims: bool = False
+    ) -> None:
+        """Reject all main/native/route/artifact facts conflicting with the original claim.
+
+        The caller must independently establish complete preparation facts and exact
+        original ownership. This negative scan alone never proves a failed preparation.
+        """
         starts: tuple[DeliveryInvocationStart, ...] = ()
         root = self.state / "invocations"
         if self._capacity_ledger_exists(root):
@@ -465,7 +507,7 @@ class CapacityInputReader:
         if self._capacity_ledger_exists(native_root):
             native = FileContinuationStore(native_root, task_id=marker.task_id)
             for prefix in ("capture-start", "capture-stop", "receipt", "admission"):
-                path = native_root / f"{prefix}-{request.run_id}.json"
+                path = native_root / f"{prefix}-{marker.run_id}.json"
                 if path.exists() or path.is_symlink():
                     raise ValueError("容量停止的原 Run 已有原生执行记录, 不能证明未调用")
             for path in native_root.iterdir():
@@ -505,7 +547,7 @@ class CapacityInputReader:
                 )
                 for receipt in native.receipts_for_task(marker.task_id)
             ) or any(
-                request.run_id == admission.interrupted_run_id
+                marker.run_id == admission.interrupted_run_id
                 or self._conflicts_with_claim(
                     marker,
                     admission.new_request,
@@ -536,7 +578,7 @@ class CapacityInputReader:
 
     def _require_other_model_fact(
         self,
-        marker: ContextCapacityReceipt,
+        marker: UninvokedClaimBoundary,
         *,
         run_id: str,
         context_id: str,
@@ -546,8 +588,7 @@ class CapacityInputReader:
         allow_later_claims: bool,
         attempt: int | None = None,
     ) -> None:
-        assert marker.request is not None
-        if run_id == marker.request.run_id or context_id == marker.context_manifest_id:
+        if run_id == marker.run_id or context_id == marker.context_manifest_id:
             raise ValueError("容量停止的原 Run 已有角色产出或提供方路由, 不能证明未调用")
         if role is not marker.role:
             return
@@ -582,7 +623,7 @@ class CapacityInputReader:
             raise ValueError("容量停止调查的产出或路由缺少唯一完整调用记录")
         output_start = output_starts[0]
         actual_claim = self.queue.original_claim(lease_id)
-        if any(
+        if actual_claim.lease.id != lease_id or any(
             sealed.get(field) != expected
             for field, expected in {
                 "task_id": actual_claim.work_item.task_id,
@@ -628,15 +669,14 @@ class CapacityInputReader:
 
     def _conflicts_with_claim(
         self,
-        marker: ContextCapacityReceipt,
+        marker: UninvokedClaimBoundary,
         request: AgentRequest,
         work_item_id: str,
         lease_id: str,
         *,
         allow_later_claims: bool,
     ) -> bool:
-        assert marker.request is not None
-        if request.run_id == marker.request.run_id or lease_id == marker.lease_id:
+        if request.run_id == marker.run_id or lease_id == marker.lease_id:
             return True
         if work_item_id != marker.work_item_id:
             return False
@@ -646,7 +686,8 @@ class CapacityInputReader:
         # invocation. Only real queue provenance can distinguish it from an alias.
         claim = self.queue.original_claim(lease_id)
         return not (
-            claim.work_item.id == work_item_id
+            claim.lease.id == lease_id
+            and claim.work_item.id == work_item_id
             and claim.work_item.task_id == marker.task_id == request.task_id
             and claim.work_item.role is marker.role is request.role
             and claim.work_item.attempt == marker.attempt == request.attempt

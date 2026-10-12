@@ -1,0 +1,17 @@
+{
+  "id": "baseline-knowledge-claim-proof",
+  "title": "历史知识准备失败的精确 claim 核验",
+  "status": "completed",
+  "base_commit": "0c1053540beb214e0b4839a28906909c80957353",
+  "allowlist": [
+    "src/ai_software_engineer/manager/knowledge_invocation_proof.py",
+    "src/ai_software_engineer/manager/baseline_production.py",
+    "src/ai_software_engineer/manager/capacity_input_reader.py",
+    "tests/manager/test_baseline_knowledge_claim_proof.py",
+    ".trellis/spec/core/execution-baseline.md",
+    ".trellis/tasks/10-12-baseline-knowledge-claim-proof/"
+  ],
+  "verification": "Only targeted lint/typecheck and knowledge/baseline/capacity regressions; public MySQL test window coordinated with root.",
+  "rollback": "Revert code before a new proposal; preserve all immutable records and published baseline facts. No SQL update, stop backfill, retry refund, or Task replacement.",
+  "phase": "incremental_verified_and_independently_reviewed"
+}

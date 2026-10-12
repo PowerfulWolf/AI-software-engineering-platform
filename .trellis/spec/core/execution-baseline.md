@@ -604,3 +604,52 @@ source/branch, full prepared patch and clean index. Preserve the original failur
 Task/event history, normal work counters and complete ignored inventory. No new Task, purpose,
 process-stopped Boolean, accepted artifact or role verdict is introduced. The completed-output
 spec owns the detailed guards, public validation matrix, existing-data handling and rollback.
+## Historical knowledge-only preparation failures
+
+`ProductionBaselineFactCollector._invocations` partitions each immutable historical claim by
+its actual main invocation, claimed Context capacity receipt, failed knowledge preparation,
+or preflight checkpoint. Absence of a main start is never sufficient proof. The internal
+`read_failed_knowledge_claims` reader locates only the exact Team/Project/Repository/Task/role
+lane for the native Requirement and documented legacy Task scope. A returned-only knowledge
+lane cannot acquire failure authority; it remains subject to the ordinary invocation/preflight
+checks.
+
+When at least one selected claim has a FAILED knowledge outcome, all records in the applicable
+lanes must retain their exact content-addressed keys, complete intent/outcome associations and
+independently reread structured observations. Every lane intent must have a genuine original
+claim, historical step, original source, full Context/Task/claim section, and exact frozen
+knowledge snapshot. A record cannot become legitimate merely because its lease differs from
+the currently selected WorkItem. Missing/foreign ownership, orphan records, extra unfinished
+routes, resealed incorrect snapshot keys and altered source/Context identities reject.
+
+Each native knowledge completion must retain its actual local process-stop proof and pass the
+existing stopped-session verifier. An HTTP round-trip receipt proves only that the local
+synchronous transport returned; it does not assert that a remote model stopped. Knowledge
+preparation remains read-only and its FAILED outcome is never a code verdict.
+
+The shared `CapacityInputReader.require_claim_not_started(UninvokedClaimBoundary)` then performs
+the existing complete main start/outcome, model route, native capture/receipt/admission and raw
+artifact contradiction scan for the exact original claim. This internal boundary is derived
+from validated historical facts, never published as a fabricated capacity or stop receipt.
+Capacity recovery still enters through `require_not_started(ContextCapacityReceipt)` and retains
+its full independent capacity identity/Context/claim validation. Later main invocations require
+their own genuine claim/source provenance; a different Run or Context alone cannot hide an alias.
+
+`BaselineInvocationProof.knowledge_only_claims` is an internal quiescence summary of original
+claim, intent, outcome and observation digests. Its empty default is omitted so previously
+published quiescence wire bytes/hashes remain unchanged. The new `claimed_knowledge_failure`
+proof kind cannot carry a main start, main outcome or interruption receipt. Public Commands,
+plans, bindings, approvals, attempt reservations and static JSON Schemas remain unchanged.
+
+Validation: `tests/manager/test_baseline_knowledge_claim_proof.py` covers complete independently
+sealed HTTP observations, a real offline native process and owned stop, missing outcome/record,
+wrong key, orphan outcome/observation, foreign claim, source/snapshot drift and the public
+knowledge-failure → claimed capacity stop → exact source-rebind PAUSE/RESUME → independent
+Coder/QA/Review delivery path. Existing invocation and capacity public tests protect historical
+overlays and complete no-start refusals.
+
+存量数据处置：不修改 Task、Operation、claim、审批、重试账本或旧知识记录，不回填 stop，不退款。
+当前 K1 已有可信的知识-only失败事实可以在发布后被重新读取；在原需求重新准备精确代码基线
+方案，核对并批准暂停，再明确继续即可。若原记录缺失或矛盾则继续保留现场并拒绝，不重建需求。
+本次实现与测试不操作生产。回滚在新方案前撤销代码提交；已经持久化的追加摘要和工程审计历史
+必须保留，回滚本身不授权重新调用模型或重放已消费审批。

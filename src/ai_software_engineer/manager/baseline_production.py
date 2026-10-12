@@ -78,6 +78,10 @@ from ai_software_engineer.manager.delivery_preflight import (
 )
 from ai_software_engineer.manager.dispatch import DeliveryAllocation
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
+from ai_software_engineer.manager.knowledge_invocation_proof import (
+    KnowledgeOnlyClaimProof,
+    read_failed_knowledge_claims,
+)
 from ai_software_engineer.manager.legacy_containment import (
     LegacyExecutionContainment,
     LocalBootObservation,
@@ -281,6 +285,9 @@ class BaselineInvocationProof(DomainModel):
     context_capacity_receipt_sha256s: tuple[Sha256, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
+    knowledge_only_claims: tuple[KnowledgeOnlyClaimProof, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
     legacy_containment: LegacyExecutionContainment | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -293,11 +300,19 @@ class BaselineInvocationProof(DomainModel):
         "unclaimed",
         "claimed_preflight",
         "claimed_context_capacity",
+        "claimed_knowledge_failure",
         "legacy_execution_contained",
     ]
 
     @model_validator(mode="after")
     def validate_legacy(self) -> Self:
+        if self.proof_kind == "claimed_knowledge_failure" and (
+            not self.knowledge_only_claims
+            or self.start_sha256 is not None
+            or self.outcome_sha256 is not None
+            or self.interruption_receipt_sha256 is not None
+        ):
+            raise ValueError("知识准备失败证明不能冒充主岗位启动、结果或停止收据")
         if self.proof_kind == "claimed_context_capacity" and (
             not self.context_capacity_receipt_sha256s
             or self.start_sha256 is not None
@@ -1139,10 +1154,20 @@ class ProductionBaselineFactCollector:
             )
             capacity_markers = self._capacity_markers(task, item, preflight_claims)
             capacity_leases = {marker.lease_id for marker in capacity_markers}
-            markers = self._preflight_markers(
+            knowledge_markers = self._knowledge_markers(
                 task,
                 item,
                 tuple(claim for claim in preflight_claims if claim.lease.id not in capacity_leases),
+            )
+            knowledge_leases = {marker.lease_id for marker in knowledge_markers}
+            markers = self._preflight_markers(
+                task,
+                item,
+                tuple(
+                    claim
+                    for claim in preflight_claims
+                    if claim.lease.id not in capacity_leases | knowledge_leases
+                ),
             )
             step = (
                 self.queue.step_for_invocation(item.id, start.request.execution_baseline_sha256)
@@ -1177,7 +1202,7 @@ class ProductionBaselineFactCollector:
                 ):
                     raise ValueError("原调用未绑定精确队列角色、attempt 和源版本")
                 claim = self.queue.original_claim(start.lease_id)
-                if (
+                if claim.lease.id != start.lease_id or (
                     claim.work_item.id,
                     claim.work_item.task_id,
                     claim.work_item.role,
@@ -1222,6 +1247,7 @@ class ProductionBaselineFactCollector:
                         context_capacity_receipt_sha256s=tuple(
                             marker.receipt_sha256 for marker in capacity_markers
                         ),
+                        knowledge_only_claims=knowledge_markers,
                         proof_kind=proof_kind,
                         legacy_containment=containment
                         if proof_kind == "legacy_execution_contained"
@@ -1256,10 +1282,13 @@ class ProductionBaselineFactCollector:
                     context_capacity_receipt_sha256s=tuple(
                         marker.receipt_sha256 for marker in capacity_markers
                     ),
+                    knowledge_only_claims=knowledge_markers,
                     proof_kind="claimed_context_capacity"
                     if capacity_markers
                     else "claimed_preflight"
                     if markers
+                    else "claimed_knowledge_failure"
+                    if knowledge_markers
                     else "unclaimed",
                 )
             )
@@ -1702,6 +1731,26 @@ class ProductionBaselineFactCollector:
         if len(matches) > 1:
             raise ValueError("同一旧执行存在重复救援记录, 禁止重复预留")
         return matches[0] if matches else None
+
+    def _knowledge_markers(
+        self, task: Task, item: QueuedWorkItem, claims: tuple[QueueClaim, ...]
+    ) -> tuple[KnowledgeOnlyClaimProof, ...]:
+        root = self.state.parent / "knowledge" / "runs" / "invocations"
+        if not claims or not CapacityInputReader._capacity_ledger_exists(root):
+            return ()
+        if not self._scope_held:
+            raise ValueError("知识准备调查缺少真实任务锁和队列屏障")
+        return read_failed_knowledge_claims(
+            state=self.state,
+            task=task,
+            item=item,
+            claims=claims,
+            scope=self.scope,
+            requirement_id=self.requirement_id,
+            queue=self.queue,
+            require_step=self._require_step,
+            no_start_reader=self._capacity_input_reader(),
+        )
 
     def _preflight_markers(
         self, task: Task, item: QueuedWorkItem, claims: tuple[QueueClaim, ...]
