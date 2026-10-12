@@ -19,6 +19,18 @@ class ModelInputPreparation(Protocol):
     def discard_prepared_input(self, request: AgentRequest) -> None: ...
 
 
+class FinalModelInputCapacityExceeded(ContextBudgetExceeded):
+    """The actual serialized provider input failed before invocation admission."""
+
+    def __init__(self, *, estimated_input_tokens: int, max_input_tokens: int) -> None:
+        self.estimated_input_tokens = estimated_input_tokens
+        self.max_input_tokens = max_input_tokens
+        super().__init__(
+            "final provider input exceeds the configured Context budget "
+            f"({estimated_input_tokens} > {max_input_tokens})"
+        )
+
+
 class BoundModelInputBudget:
     """Apply the original typed Context budget to the final serialized model input."""
 
@@ -42,7 +54,7 @@ class BoundModelInputBudget:
             raise WorkspacePolicyError("final provider input Context integrity differs")
         tokens = estimate_input_tokens(content)
         if tokens > context.budget.max_input_tokens:
-            raise ContextBudgetExceeded(
-                "final provider input exceeds the configured Context budget "
-                f"({tokens} > {context.budget.max_input_tokens})"
+            raise FinalModelInputCapacityExceeded(
+                estimated_input_tokens=tokens,
+                max_input_tokens=context.budget.max_input_tokens,
             )
