@@ -1,0 +1,24 @@
+{
+  "id": "immutable-claim-capacity",
+  "title": "保留真实首次 claim 快照，修复 heartbeat 后容量证据误拒绝",
+  "status": "completed",
+  "base_commit": "0434f00",
+  "allowlist": [
+    "src/ai_software_engineer/work_queue/claim_snapshot.py",
+    "src/ai_software_engineer/work_queue/mysql.py",
+    "src/ai_software_engineer/work_queue/execution_store.py",
+    "src/ai_software_engineer/manager/knowledge_invocation_proof.py",
+    "src/ai_software_engineer/manager/capacity_input_reader.py",
+    "src/ai_software_engineer/manager/baseline_production.py",
+    "tests/work_queue/test_original_claim_snapshot.py",
+    "tests/manager/test_baseline_knowledge_claim_proof.py",
+    "tests/manager/test_capacity_legacy_claim_snapshot.py",
+    "tests/manager/test_baseline_knowledge_parent_scope.py",
+    ".trellis/spec/core/persistent-work-queue.md",
+    ".trellis/spec/core/execution-baseline.md",
+    ".trellis/tasks/10-12-immutable-claim-capacity/"
+  ],
+  "verification": "增量合同/negative tests、真实MySQL续租、公共joint capacity PAUSE/RESUME及独立typed生产只读重放，不调用生产模型。",
+  "rollback": "撤销代码；保留新旧immutable claim、原始raw hash、Task、worktree、审批和retry history。无改库、回填stop、退款或重建需求。",
+  "phase": "incremental_verified_and_independently_reviewed"
+}

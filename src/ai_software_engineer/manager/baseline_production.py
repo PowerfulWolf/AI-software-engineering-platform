@@ -80,6 +80,7 @@ from ai_software_engineer.manager.dispatch import DeliveryAllocation
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.manager.knowledge_invocation_proof import (
     KnowledgeOnlyClaimProof,
+    read_capacity_claim_snapshot,
     read_failed_knowledge_claims,
 )
 from ai_software_engineer.manager.legacy_containment import (
@@ -1887,6 +1888,22 @@ class ProductionBaselineFactCollector:
             route_root=self.route_root,
             baselines=self.inputs.store,
             permissions=self.permissions,
+            legacy_claim_snapshot=self._legacy_capacity_claim_snapshot,
+        )
+
+    def _legacy_capacity_claim_snapshot(
+        self, task: Task, marker: ContextCapacityReceipt, claim: QueueClaim, step: QueuedRoleStep
+    ) -> QueueClaim:
+        self._require_step(claim.work_item, step)
+        return read_capacity_claim_snapshot(
+            state=self.state,
+            task=task,
+            marker=marker,
+            historical=claim,
+            scope=self.scope,
+            requirement_id=getattr(self, "knowledge_requirement_id", self.requirement_id),
+            queue=self.queue,
+            require_step=self._require_step,
         )
 
     def _require_capacity_identity(

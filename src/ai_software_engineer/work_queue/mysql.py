@@ -386,15 +386,7 @@ class MySqlPersistentWorkQueue:
                 )
             except pymysql.IntegrityError as error:
                 raise QueueConflict("Lease or Assignment identity is already claimed") from error
-            self._append_event(
-                cursor,
-                claimed_item,
-                from_status=current.status,
-                event_type="CLAIMED",
-                lease_id=lease.id,
-                occurred_at=now,
-            )
-            return QueueClaim(
+            claim = QueueClaim(
                 work_item=claimed_item,
                 assignment=assignment,
                 lease=lease,
@@ -402,6 +394,16 @@ class MySqlPersistentWorkQueue:
                 worker_id=typed_worker_id,
                 claimed_at=now,
             )
+            self._append_event(
+                cursor,
+                claimed_item,
+                from_status=current.status,
+                event_type="CLAIMED",
+                lease_id=lease.id,
+                occurred_at=now,
+                detail={"queue_claim": claim.to_wire()},
+            )
+            return claim
 
     def start(
         self,
