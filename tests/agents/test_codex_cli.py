@@ -28,7 +28,10 @@ from ai_software_engineer.agents.codex_cli import (
     SubprocessCodexCommandRunner,
     _completion_reserve_seconds,
 )
-from ai_software_engineer.agents.workspace_admission import FirstCoderRunWorkspaceAdmission
+from ai_software_engineer.agents.workspace_admission import (
+    FirstCoderRunWorkspaceAdmission,
+    WorkspaceAdmissionRejected,
+)
 from ai_software_engineer.domain import (
     AgentRole,
     ChangedFile,
@@ -169,17 +172,6 @@ class _SequentialCoderRunner:
         return CodexInvocationResult(returncode=0)
 
 
-class _OneShotAdmission:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def authorize(self, request: AgentRequest, workspace_root: Path) -> None:
-        del request, workspace_root
-        self.calls += 1
-        if self.calls > 1:
-            raise AssertionError("initial recovery admission was reused")
-
-
 class _RejectOnceAdmission:
     def __init__(self) -> None:
         self.calls = 0
@@ -188,7 +180,7 @@ class _RejectOnceAdmission:
         del request, workspace_root
         self.calls += 1
         if self.calls == 1:
-            raise RuntimeError("stale recovery seed")
+            raise WorkspaceAdmissionRejected("stale recovery seed")
 
 
 class _FailureRunner:
@@ -542,7 +534,9 @@ def test_recovery_seed_admission_is_consumed_before_review_remediation(
         }
     )
     runner = _SequentialCoderRunner((first_request, second_request))
-    admission = _OneShotAdmission()
+    from tests.agents.seed_admission_support import RecordedSeedAdmission
+
+    admission = RecordedSeedAdmission(tmp_path / "admission")
     adapter = CodexCliAgentAdapter(
         workspace_root=root,
         model="gpt-5.5",
@@ -556,6 +550,7 @@ def test_recovery_seed_admission_is_consumed_before_review_remediation(
     first = adapter.run(first_request)
     assert first.status is AgentRunStatus.SUCCEEDED
     assert first.artifact is not None
+    admission.completed(first)
     candidate = first.artifact.source_revision
     second_request = second_request.model_copy(update={"source_revision": candidate})
     runner.requests = (first_request, second_request)
@@ -588,6 +583,7 @@ def test_rejected_recovery_seed_admission_is_not_consumed(tmp_path: Path) -> Non
     second = adapter.run(second_request)
 
     assert first.status is AgentRunStatus.FAILED
+    assert first.error is not None and first.error.code is AgentErrorCode.WORK_INTERRUPTED
     assert second.status is AgentRunStatus.SUCCEEDED
     assert admission.calls == 2
     assert runner.calls == 1

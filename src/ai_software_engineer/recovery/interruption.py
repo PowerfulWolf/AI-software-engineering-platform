@@ -11,8 +11,10 @@ from pydantic import JsonValue
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents import AgentRequest, FileModelRouteAttemptStore
+from ai_software_engineer.agents.continuation import ContinuationExecutionUncertain
 from ai_software_engineer.agents.execution import current_execution_guard
 from ai_software_engineer.agents.fallback import model_route_root
+from ai_software_engineer.agents.workspace_admission import InitialWorkspaceAdmission
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import (
@@ -30,6 +32,11 @@ from ai_software_engineer.git import (
     GitWorktreeManager,
     WorkspacePolicyError,
     WorktreeRef,
+)
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.recovery.admission import (
+    ClaimedRecoveryInvocationHistory,
+    reject_invalid_admission,
 )
 from ai_software_engineer.recovery.context import validate_reapply_context
 from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
@@ -398,6 +405,7 @@ class RecoveryInterruptionService:
                 raise RecoveryRejected("interruption seed belongs to another target workspace")
             self.inspect(expected=plan)
 
+    @reject_invalid_admission
     def authorize(self, request: AgentRequest, workspace_root: Path) -> None:
         """InitialWorkspaceAdmission implementation, called under the new real Worker."""
         plan = self.store.get_interruption_plan(self.original.plan_sha256)
@@ -445,3 +453,31 @@ class RecoveryInterruptionService:
         record = record.model_copy(update={"record_sha256": record.recompute_sha256()})
         with guard.write_scope():
             self.store.put_interruption_invocation(self.original.plan_sha256, record)
+
+    @reject_invalid_admission
+    def for_request(self, request: AgentRequest) -> InitialWorkspaceAdmission | None:
+        """Keep later accepted checkpoints separate from the one-use replacement admission."""
+        try:
+            replacement = self.store.get_interruption_invocation(self.original.plan_sha256)
+        except RecoveryRecordMissing:
+            return self  # Original claimed replacement authorization remains mandatory.
+        plan = self.store.get_interruption_plan(self.original.plan_sha256)
+        history = ClaimedRecoveryInvocationHistory(
+            dispatch=self.entry._dispatch_for(self.store, self.original),
+            permissions=self.original.effective_target_permissions,
+            invocations=KnowledgeRecordStore(self.sidecar / "state/invocations", read_only=True),
+            artifacts=FileArtifactStore(self.sidecar / "artifacts", read_only=True),
+        )
+        outcomes = history.prior_main_outcomes(request)
+        matched = tuple(
+            outcome
+            for outcome in outcomes
+            if outcome.start.work_item_id == plan.work_item_id
+            and outcome.start.request == replacement.request
+            and outcome.start.lease_id == replacement.lease_id
+        )
+        if len(matched) != 1 or not history.has_accepted_input(request, matched):
+            raise ContinuationExecutionUncertain(
+                "替代执行的完整结果或已接纳进度尚未确认; 保留旧记录, 禁止重复使用恢复审批"
+            )
+        return None

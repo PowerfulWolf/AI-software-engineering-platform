@@ -56,6 +56,8 @@ from ai_software_engineer.agents.ports import (
 )
 from ai_software_engineer.agents.workspace_admission import (
     InitialWorkspaceAdmission,
+    WorkspaceAdmissionRejected,
+    authorize_workspace_admission,
     workspace_admission_for_request,
 )
 from ai_software_engineer.domain import AgentDefinition, AgentRole
@@ -297,6 +299,13 @@ class ResponsesAgentAdapter:
             result = self._execute(request, started, initial_head, initial_inventory, window)
         except ContinuationExecutionUncertain:
             raise
+        except WorkspaceAdmissionRejected:
+            result = _failed(
+                request,
+                AgentErrorCode.WORK_INTERRUPTED,
+                "恢复工作区准入校验未通过。未调用模型。现场已保留。请查看平台恢复检查结果。",
+                duration_ms=_elapsed_ms(started),
+            )
         except InterruptionAdmissionRejected:
             result = _failed(
                 request,
@@ -999,7 +1008,7 @@ def _validate_request_binding(
     if (admission := workspace_admission_for_request(initial_admission, request)) is not None:
         if request.role is not AgentRole.CODER:
             raise ResponsesAgentConfigurationError("workspace seed admission is Coder-only")
-        admission.authorize(request, root)
+        authorize_workspace_admission(admission, request, root)
         return
     observed = candidate_commit.changed_paths()
     if request.continuation_checkpoint_id is None:

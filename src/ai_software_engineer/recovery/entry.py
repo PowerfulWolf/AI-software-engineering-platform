@@ -1044,6 +1044,8 @@ class NativeRecoveryEntry:
             dispatch=dispatch,
             permissions=definitions[AgentRole.CODER].permissions,
             contexts=contexts,
+            invocations=KnowledgeRecordStore(sidecar / "state/invocations"),
+            artifacts=FileArtifactStore(sidecar / "artifacts", read_only=True),
         )
         if interruption is None:
             seed_record = seed.seed(binding.worktree)

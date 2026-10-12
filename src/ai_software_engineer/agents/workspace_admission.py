@@ -3,9 +3,14 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
+from ai_software_engineer.agents.continuation import InterruptionAdmissionRejected
 from ai_software_engineer.agents.models import AgentRequest
+
+
+class WorkspaceAdmissionRejected(InterruptionAdmissionRejected):
+    """A trusted workspace precondition failed before the provider was invoked."""
 
 
 class InitialWorkspaceAdmission(Protocol):
@@ -14,13 +19,20 @@ class InitialWorkspaceAdmission(Protocol):
     def authorize(self, request: AgentRequest, workspace_root: Path) -> None: ...
 
 
+@runtime_checkable
+class RequestWorkspaceAdmission(Protocol):
+    """Select from trusted durable execution facts, never an attempt counter."""
+
+    def for_request(self, request: AgentRequest) -> InitialWorkspaceAdmission | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class FirstCoderRunWorkspaceAdmission:
     """Explicit seed policy across fresh provider adapters, never a live authority cache.
 
-    Later Coder runs use their normal accepted progress/candidate checks. Ports
-    without this wrapper (including same-Task baselines) still run on every call.
-    The delegate retains exact Task/context/claim and at-most-once verification.
+    The delegate selects seed versus normal checkpoint checks from durable facts.
+    Unscoped delegates remain authoritative on every call: an attempt number does
+    not prove that knowledge preparation reached the main role invocation.
     """
 
     delegate: InitialWorkspaceAdmission
@@ -45,8 +57,24 @@ class ConditionalWorkspaceAdmission:
 def workspace_admission_for_request(
     admission: InitialWorkspaceAdmission | None, request: AgentRequest
 ) -> InitialWorkspaceAdmission | None:
-    if isinstance(admission, ConditionalWorkspaceAdmission):
-        return workspace_admission_for_request(admission.select(request), request)
-    if isinstance(admission, FirstCoderRunWorkspaceAdmission) and request.attempt > 1:
-        return None
-    return admission
+    try:
+        if isinstance(admission, ConditionalWorkspaceAdmission):
+            return workspace_admission_for_request(admission.select(request), request)
+        if isinstance(admission, FirstCoderRunWorkspaceAdmission):
+            delegate = admission.delegate
+            if isinstance(delegate, RequestWorkspaceAdmission):
+                return workspace_admission_for_request(delegate.for_request(request), request)
+            return delegate
+        return admission
+    except ValueError as error:
+        raise WorkspaceAdmissionRejected("恢复工作区的准入条件校验未通过") from error
+
+
+def authorize_workspace_admission(
+    admission: InitialWorkspaceAdmission, request: AgentRequest, workspace_root: Path
+) -> None:
+    """Validation failures are preconditions; ownership and waiting signals propagate."""
+    try:
+        admission.authorize(request, workspace_root)
+    except ValueError as error:
+        raise WorkspaceAdmissionRejected("恢复工作区的准入条件校验未通过") from error

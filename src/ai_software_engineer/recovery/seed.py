@@ -3,19 +3,28 @@
 from pathlib import Path
 
 from ai_software_engineer.agents import AgentRequest
+from ai_software_engineer.agents.continuation import ContinuationExecutionUncertain
+from ai_software_engineer.agents.workspace_admission import InitialWorkspaceAdmission
+from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import AgentPermissions, AgentRole
 from ai_software_engineer.git import GitWorktreeManager, WorktreeRef
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
+from ai_software_engineer.recovery.admission import (
+    ClaimedRecoveryInvocationHistory,
+    reject_invalid_admission,
+)
 from ai_software_engineer.recovery.context import validate_reapply_context
 from ai_software_engineer.recovery.models import CapturedChanges, RecoveryRejected
 from ai_software_engineer.recovery.records import RecoveryInvocationRecord, RecoverySeedRecord
 from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.redaction import source_inspection_scope
+from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
 
-class RecoverySeedService:
+class RecoverySeedService(ClaimedRecoveryInvocationHistory):
     def __init__(
         self,
         *,
@@ -25,9 +34,43 @@ class RecoverySeedService:
         dispatch: RecoveryDispatchRecord,
         permissions: AgentPermissions,
         contexts: FileContextStore,
+        invocations: KnowledgeRecordStore,
+        artifacts: ArtifactStore,
+        guard: WorkerExecutionGuard | None = None,
     ) -> None:
         self.store, self.sealing, self.manager = store, sealing, manager
         self.dispatch, self.permissions, self.contexts = dispatch, permissions, contexts
+        super().__init__(
+            dispatch=dispatch,
+            permissions=permissions,
+            invocations=invocations,
+            artifacts=artifacts,
+            guard=guard,
+        )
+
+    @reject_invalid_admission
+    def for_request(self, request: AgentRequest) -> InitialWorkspaceAdmission | None:
+        outcomes = self.prior_main_outcomes(request)
+        try:
+            invocation = self.store.get_invocation(self.dispatch.recovery_plan_sha256)
+        except RecoveryRecordMissing:
+            if not outcomes:
+                return self
+            if self.has_accepted_input(request, outcomes):
+                return None
+            raise ContinuationExecutionUncertain(
+                "已有主执行但缺少恢复种子准入记录; "
+                "请使用已核验的中断续跑或已接纳产物, 不得补造旧准入"
+            ) from None
+        if not any(
+            outcome.start.request.run_id == invocation.run_id
+            and outcome.start.request.context_manifest_id == invocation.context_manifest_id
+            for outcome in outcomes
+        ):
+            raise ContinuationExecutionUncertain(
+                "恢复种子已准入, 原执行的完整结果尚未确认; 禁止重新调用"
+            )
+        return None
 
     @source_inspection_scope()
     def seed(self, target: WorktreeRef) -> RecoverySeedRecord:
@@ -79,14 +122,16 @@ class RecoverySeedService:
         )
 
     @source_inspection_scope()
+    @reject_invalid_admission
     def authorize(self, request: AgentRequest, workspace_root: Path) -> None:
         """Called immediately before the provider, under the recovery execution lock."""
+        if self.for_request(request) is not self:
+            raise RecoveryRejected("recovery seed was already consumed by a completed main run")
         plan = self.store.get_plan(self.dispatch.recovery_plan_sha256)
         receipt = self.store.get_seed(plan.plan_sha256)
         if (
             request.role is not AgentRole.CODER
             or request.task_id != self.dispatch.task_id
-            or request.attempt != 1
             or request.source_revision != self.dispatch.task.base_ref
             or request.permissions != self.permissions
             or str(workspace_root) != receipt.capture.worktree_path
@@ -97,7 +142,7 @@ class RecoverySeedService:
             context.task_id != request.task_id
             or context.role is not request.role
             or context.source_revision != request.source_revision
-            or context.attempt != 1
+            or context.attempt != request.attempt
         ):
             raise RecoveryRejected("Coder context differs from authorized seed")
         validate_reapply_context(plan, context)
@@ -116,6 +161,9 @@ class RecoverySeedService:
             context_manifest_id=request.context_manifest_id,
             record_sha256="0" * 64,
         )
-        self.store.put_invocation(
-            invocation.model_copy(update={"record_sha256": invocation.recompute_sha256()})
-        )
+        with self.worker().write_scope():
+            if self.for_request(request) is not self:
+                raise RecoveryRejected("recovery seed admission changed before publication")
+            self.store.put_invocation(
+                invocation.model_copy(update={"record_sha256": invocation.recompute_sha256()})
+            )

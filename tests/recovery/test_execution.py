@@ -222,7 +222,7 @@ class OfflineAdapter:
                     self.seed.dispatch.task, AgentRole.CODER, attempt=1
                 )
                 wrong_context = self.seed.contexts.put(without_patch)
-                with pytest.raises(RecoveryRejected, match="complete approved recovery patch"):
+                with pytest.raises(RecoveryRejected, match="exact current start"):
                     self.seed.authorize(
                         request.model_copy(
                             update={"context_manifest_id": wrong_context.context_id}
@@ -366,6 +366,7 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         / original.task.id,
         task_id=original.task.id,
     )
+    assert original.source.failed_run_id is not None
     original_start = continuation.capture_start(original.source.failed_run_id)
     original_run = original_start.request
     original_stop = continuation.capture_stop(original_run.run_id)

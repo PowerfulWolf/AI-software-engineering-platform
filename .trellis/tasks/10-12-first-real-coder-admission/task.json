@@ -1,0 +1,68 @@
+{
+  "id": "first-real-coder-admission-20261012",
+  "title": "知识准备失败后首次真实 Coder 的恢复种子准入",
+  "status": "completed",
+  "owner": "codex",
+  "baseline": "e3dd96f",
+  "problem": "FirstCoderRunWorkspaceAdmission 按 request.attempt>1 跳过准入；知识准备失败也会推进执行身份，因此首次实际 Coder 可能仍未消费恢复种子准入。",
+  "scope": [
+    "知识准备与主Coder执行分开：真实claim与完整durable main facts选择seed或normal input gate",
+    "原seed与旧replacement在fresh adapter/progress/QA返工中保持一次性，不补造旧receipt",
+    "两provider准入拒绝统一typed WORK_INTERRUPTED并透传ownership/unknown/wait控制信号",
+    "只做fake provider、真实临时Git及隔离MySQL增量验证；不操作生产事实"
+  ],
+  "acceptance": [
+    "知识-only失败后首个main Coder即使attempt>1仍核验原批准、sealed Task和seed",
+    "stale/deleted authority或seed漂移在provider前拒绝",
+    "先前已真实准入并完成的Coder使用正常progress/candidate检查，不重放seed",
+    "已有start无结果不能视为未执行或补造recovery invocation",
+    "仅增量测试，不停当前合法Coder，不改SQL、旧审批或执行记录"
+  ],
+  "allowed_paths": [
+    "src/ai_software_engineer/agents/workspace_admission.py",
+    "src/ai_software_engineer/agents/codex_cli.py",
+    "src/ai_software_engineer/agents/responses.py",
+    "src/ai_software_engineer/recovery/admission.py",
+    "src/ai_software_engineer/recovery/seed.py",
+    "src/ai_software_engineer/recovery/entry.py",
+    "src/ai_software_engineer/recovery/interruption.py",
+    "tests/agents/test_first_real_coder_admission.py",
+    "tests/agents/seed_admission_support.py",
+    "tests/agents/test_codex_cli.py",
+    "tests/agents/test_initial_admission_scope.py",
+    "tests/recovery/seed_admission_support.py",
+    "tests/recovery/test_first_real_seed_admission.py",
+    "tests/recovery/test_preparation_inspection_scope.py",
+    "tests/recovery/test_execution.py",
+    ".trellis/spec/core/first-real-coder-admission.md",
+    ".trellis/tasks/10-12-first-real-coder-admission/"
+  ],
+  "verification": [
+    "ruff check/format --check on all owned Python files",
+    "mypy --strict on all 15 owned Python files",
+    "pytest tests/agents/test_first_real_coder_admission.py: zero provider calls and typed errors/control signals",
+    "pytest tests/recovery/test_first_real_seed_admission.py tests/recovery/test_preparation_inspection_scope.py",
+    "pytest tests/agents/test_initial_admission_scope.py tests/agents/test_codex_cli.py tests/agents/test_codex_failed_continuation.py",
+    "Selected isolated MySQL tests/recovery/test_execution.py cases; legacy fixture failures require independent baseline comparison",
+    "Independent source/spec and incremental regression review before commit"
+  ],
+  "rollback": "Revert the scoped code commit before new execution; unchanged wire schema requires no data migration. Preserve any real new admission receipt and all old missing/unknown facts.",
+  "review": {
+    "agent": "/root/summary_result_scope_compat",
+    "result": "PASS",
+    "includes": [
+      "source/spec and error/ownership propagation",
+      "15 owned files Ruff/strict mypy",
+      "first-main provider and seed/replacement regressions",
+      "historical claim lease-identity delta"
+    ]
+  },
+  "results": {
+    "adapter_incremental": "105 PASS, 30.05 s",
+    "seed_and_preparation": "26 PASS, 10.83 s",
+    "native_reapply_mysql": "2 PASS, 390.64 s",
+    "foreign_lease_negative": "RED before guard, GREEN after guard; independent 1 PASS",
+    "legacy_fixture_baseline": "3 known FAIL on efb2fc1 and current; exact evidence in contract.md; no production audit weakened",
+    "production_mutation": "none"
+  }
+}

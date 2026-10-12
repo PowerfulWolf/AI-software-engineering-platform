@@ -12,11 +12,14 @@ import pytest
 
 from ai_software_engineer import redaction
 from ai_software_engineer.agents import AgentRequest
+from ai_software_engineer.agents.continuation import ContinuationExecutionUncertain
+from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import FileContextBuilder, FileContextStore
 from ai_software_engineer.domain import AgentPermissions, AgentRole, TaskStatus
 from ai_software_engineer.domain.project_delivery import derive_delivery_task
 from ai_software_engineer.git import GitWorktreeManager, WorktreeChangeCapture, WorktreeRef
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline import ProjectSpecBaseline
 from ai_software_engineer.manager.dispatch import DispatchWorkforceSnapshot, RecoveryDispatchRecord
 from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
@@ -38,6 +41,7 @@ from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
 from ai_software_engineer.repository_profile import RepositoryProfile
 from tests.manager.test_contracts import stage_chain
 from tests.manager.test_dispatch import _agents, _policy
+from tests.recovery.seed_admission_support import bind_seed_runtime
 from tests.recovery.test_authorization import Human, approval, make_plan
 
 SOURCE = "VALUE = 2\n" + "".join(
@@ -500,6 +504,9 @@ class SeedManager:
 
 def seed_fixture(
     f: PreparationFixture,
+    *,
+    main_started: bool = True,
+    dispatch_sequence: int = 0,
 ) -> tuple[RecoverySeedService, WorktreeRef, AgentRequest]:
     dispatch, _ = allocate(f)
     target = WorktreeRef(
@@ -537,7 +544,10 @@ def seed_fixture(
         dispatch=dispatch,
         permissions=f.plan.permissions,
         contexts=contexts,
+        invocations=KnowledgeRecordStore(f.body.parent / "state/invocations"),
+        artifacts=FileArtifactStore(f.body.parent / "artifacts"),
     )
+    bind_seed_runtime(service, request, start=main_started, dispatch_sequence=dispatch_sequence)
     f.reads.clear()
     return service, target, request
 
@@ -579,7 +589,7 @@ def test_authorize_releases_scope_before_provider_and_replay_is_still_rejected(
     provider()
     assert scans.generic == 18, "the provider cannot inherit admission's scan facts"
     assert isinstance(f.store.get_invocation(f.plan.plan_sha256), RecoveryInvocationRecord)
-    with pytest.raises(RecoveryRejected, match="already admitted"):
+    with pytest.raises(ContinuationExecutionUncertain, match="恢复种子已准入"):
         seed.authorize(request, target.path)
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
 

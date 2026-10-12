@@ -54,6 +54,8 @@ from ai_software_engineer.agents.workspace_admission import (
     InitialWorkspaceAdmission as InitialWorkspaceAdmission,
 )
 from ai_software_engineer.agents.workspace_admission import (
+    WorkspaceAdmissionRejected,
+    authorize_workspace_admission,
     workspace_admission_for_request,
 )
 from ai_software_engineer.config.codex_proxy import (
@@ -599,6 +601,14 @@ class CodexCliAgentAdapter:
             )
         except CodexExecutionUnconfirmed as error:
             raise ContinuationExecutionUncertain("无法证明原生执行已停止") from error
+        except WorkspaceAdmissionRejected:
+            result = _failure(
+                request,
+                AgentErrorCode.WORK_INTERRUPTED,
+                "恢复工作区准入校验未通过。未调用模型。现场已保留。请查看平台恢复检查结果。",
+                transient=False,
+                duration_ms=_elapsed_ms(started),
+            )
         except (
             MutationInventoryRejected,
             InterruptionAdmissionRejected,
@@ -689,10 +699,7 @@ class CodexCliAgentAdapter:
         elif (
             admission := workspace_admission_for_request(self._initial_admission, request)
         ) is not None:
-            try:
-                admission.authorize(request, self._workspace_root)
-            except Exception as error:
-                raise CodexCliError("recovery seed admission rejected") from error
+            authorize_workspace_admission(admission, request, self._workspace_root)
         else:
             initial_changed = self._candidate_commit.changed_paths()
             if request.continuation_checkpoint_id is None:

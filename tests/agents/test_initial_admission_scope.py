@@ -14,6 +14,7 @@ from ai_software_engineer.agents import (
     ResponsesAgentAdapter,
 )
 from ai_software_engineer.agents.workspace_admission import FirstCoderRunWorkspaceAdmission
+from tests.agents.seed_admission_support import RecordedSeedAdmission as Admission
 from tests.agents.test_codex_cli import (
     _DirtySuccessRunner,
     _FailureRunner,
@@ -25,21 +26,10 @@ from tests.agents.test_openai_compatible import StaticPromptBuilder, _coder_requ
 from tests.agents.test_responses import _request as responses_request
 
 
-class Admission:
-    def __init__(self) -> None:
-        self.attempts: list[int] = []
-
-    def authorize(self, request: AgentRequest, workspace_root: Path) -> None:
-        assert workspace_root.is_dir()
-        self.attempts.append(request.attempt)
-        if request.attempt != 1:
-            raise ValueError("the recovery seed is only authorized for its initial Run")
-
-
 def progress(tmp_path: Path) -> tuple[Path, AgentRequest, Admission]:
     root, base = _repository(tmp_path)
     first = _coder_request().model_copy(update={"source_revision": base})
-    admission = Admission()
+    admission = Admission(tmp_path / "admission")
     result = CodexCliAgentAdapter(
         workspace_root=root,
         model="fixture",
@@ -51,6 +41,7 @@ def progress(tmp_path: Path) -> tuple[Path, AgentRequest, Admission]:
     ).run(first)
     assert result.status is AgentRunStatus.SUCCEEDED
     assert result.artifact is not None and result.artifact.kind.value == "coder-progress"
+    admission.completed(result)
     request = AgentRequest.model_validate(
         {
             **first.to_wire(),
@@ -230,7 +221,7 @@ def test_fresh_adapter_after_verifier_feedback_uses_clean_candidate(
 ) -> None:
     root, base = _repository(tmp_path)
     first = _coder_request().model_copy(update={"source_revision": base})
-    admission = Admission()
+    admission = Admission(tmp_path / "admission")
     result = CodexCliAgentAdapter(
         workspace_root=root,
         model="fixture",
@@ -241,6 +232,7 @@ def test_fresh_adapter_after_verifier_feedback_uses_clean_candidate(
         initial_workspace_admission=FirstCoderRunWorkspaceAdmission(admission),
     ).run(first)
     assert result.artifact is not None and result.status is AgentRunStatus.SUCCEEDED
+    admission.completed(result)
     request = first.model_copy(
         update={
             "run_id": "run_verifier_feedback",
