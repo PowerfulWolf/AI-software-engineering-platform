@@ -7,6 +7,7 @@ an executor stopped, grant write paths, or replace original native instructions.
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -21,6 +22,13 @@ from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, Rou
 from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.artifacts.ordering import latest_accepted_artifact
+from ai_software_engineer.context import FileContextStore
+from ai_software_engineer.context.execution_baseline import (
+    ExecutionBaselineContext,
+    PreservedWorktreeBaselineContext,
+    execution_baseline_from_context,
+    parse_execution_baseline_context,
+)
 from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.artifact import (
     CoderProgressArtifact,
@@ -64,11 +72,13 @@ from ai_software_engineer.manager.baseline_models import (
     require_rescue_confirmation,
 )
 from ai_software_engineer.manager.baseline_native_rules import build_native_rule_change
+from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.completed_output_checkpoint import (
     CompletedCoderOutputReason,
     CompletedCoderOutputUnavailableProof,
     require_completed_output_workspace,
 )
+from ai_software_engineer.manager.context_capacity import ContextCapacityReceipt
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightCheckpoint,
@@ -105,6 +115,7 @@ from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.repository_profile import NativeRuleSource, native_rule_kinds
 from ai_software_engineer.spec_compiler import SpecRule
 from ai_software_engineer.store import TaskRepository
+from ai_software_engineer.team_workspace import _reject_symlinks
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
 from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationOutcome,
@@ -230,6 +241,11 @@ class BaselineExecuteCommand(DomainModel):
     def require_plan(self, plan: ExecutionBaselinePlan) -> None:
         plan.validate_integrity()
         require_completed_output_confirmation(plan, self.continuation_mode)
+        if (
+            plan.facts.context_capacity_receipt_sha256 is not None
+            and self.continuation_mode is not BaselineContinuationMode.PAUSE
+        ):
+            raise ValueError("上下文容量恢复需先精确批准保留进度并暂停, 再明确继续原需求")
         if (plan.facts.task.id, plan.plan_sha256) != (self.task_id, self.expected_plan_sha256):
             raise ValueError("工程决定未绑定当前需求和精确执行基线计划")
         change = plan.facts.native_rule_change
@@ -271,6 +287,9 @@ class BaselineInvocationProof(DomainModel):
     preflight_checkpoint_sha256s: tuple[Sha256, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
+    context_capacity_receipt_sha256s: tuple[Sha256, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
     legacy_containment: LegacyExecutionContainment | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -282,11 +301,19 @@ class BaselineInvocationProof(DomainModel):
         "owned_process_stopped",
         "unclaimed",
         "claimed_preflight",
+        "claimed_context_capacity",
         "legacy_execution_contained",
     ]
 
     @model_validator(mode="after")
     def validate_legacy(self) -> Self:
+        if self.proof_kind == "claimed_context_capacity" and (
+            not self.context_capacity_receipt_sha256s
+            or self.start_sha256 is not None
+            or self.outcome_sha256 is not None
+            or self.interruption_receipt_sha256 is not None
+        ):
+            raise ValueError("上下文容量停止证明不能冒充模型启动、结果或停止收据")
         if self.proof_kind == "legacy_execution_contained":
             containment = self.legacy_containment
             if (
@@ -315,6 +342,26 @@ class BaselineQuiescenceProof(DomainModel):
     task_process_lock: Literal["held"] = "held"
     queue_authority_and_task_row: Literal["held_no_active_claim"] = "held_no_active_claim"
     invocations: tuple[BaselineInvocationProof, ...]
+
+
+class _CapacityBaselineVerifier:
+    """Verify the full historical epoch preceding one actual no-start claim."""
+
+    def __init__(self, store: FileExecutionBaselineStore | None, claim: QueueClaim) -> None:
+        self.store, self.claim = store, claim
+
+    def expected(self, task: Task) -> ExecutionBaselineBinding | None:
+        history = self.store.bindings_for_task(task.id) if self.store is not None else ()
+        for binding in history:
+            binding.require_task(task)
+        eligible = tuple(
+            binding for binding in history if binding.completed_at <= self.claim.claimed_at
+        )
+        return eligible[-1] if eligible else None
+
+    def require_current(self, binding: ExecutionBaselineBinding, task: Task) -> None:
+        if self.expected(task) != binding:
+            raise ValueError("容量停止输入未绑定原 claim 前的最新完整执行基线")
 
 
 def native_rules_at_revision(
@@ -904,6 +951,7 @@ class ProductionBaselineFactCollector:
             completed_output=completed_output,
             stopped_provider_failure=stopped_provider_failure,
         )
+        current_capacity = self._current_capacity_receipt(task, item, invocation_proofs)
         proof = BaselineQuiescenceProof(
             task_id=task.id,
             task_revision=revision,
@@ -942,6 +990,7 @@ class ProductionBaselineFactCollector:
             legacy_containment=legacy,
             completed_output=completed_output,
             stopped_provider_failure=stopped_provider_failure,
+            context_capacity_receipt_sha256=current_capacity,
             permissions=self.permissions,
             denied_paths=task.constraints.denied_paths if task.constraints else (),
             facts_sha256="0" * 64,
@@ -1116,7 +1165,13 @@ class ProductionBaselineFactCollector:
             preflight_claims = tuple(
                 claim for claim in claims if start is None or claim.lease.id != start.lease_id
             )
-            markers = self._preflight_markers(task, item, preflight_claims)
+            capacity_markers = self._capacity_markers(task, item, preflight_claims)
+            capacity_leases = {marker.lease_id for marker in capacity_markers}
+            markers = self._preflight_markers(
+                task,
+                item,
+                tuple(claim for claim in preflight_claims if claim.lease.id not in capacity_leases),
+            )
             step = (
                 self.queue.step_for_invocation(item.id, start.request.execution_baseline_sha256)
                 if start is not None
@@ -1192,6 +1247,9 @@ class ProductionBaselineFactCollector:
                         preflight_checkpoint_sha256s=tuple(
                             marker.checkpoint_sha256 for marker in markers
                         ),
+                        context_capacity_receipt_sha256s=tuple(
+                            marker.receipt_sha256 for marker in capacity_markers
+                        ),
                         proof_kind=proof_kind,
                         legacy_containment=containment
                         if proof_kind == "legacy_execution_contained"
@@ -1223,7 +1281,14 @@ class ProductionBaselineFactCollector:
                     preflight_checkpoint_sha256s=tuple(
                         marker.checkpoint_sha256 for marker in markers
                     ),
-                    proof_kind="claimed_preflight" if markers else "unclaimed",
+                    context_capacity_receipt_sha256s=tuple(
+                        marker.receipt_sha256 for marker in capacity_markers
+                    ),
+                    proof_kind="claimed_context_capacity"
+                    if capacity_markers
+                    else "claimed_preflight"
+                    if markers
+                    else "unclaimed",
                 )
             )
         return tuple(result)
@@ -1728,3 +1793,240 @@ class ProductionBaselineFactCollector:
         if set(matches) != set(claims_by_lease):
             raise ValueError("历史 claim 没有可验证的调用或执行前停止记录")
         return tuple(matches[identity] for identity in sorted(matches))
+
+    def _current_capacity_receipt(
+        self, task: Task, item: QueuedWorkItem, proofs: tuple[BaselineInvocationProof, ...]
+    ) -> str | None:
+        disposition = item.wait_disposition
+        if disposition is None or disposition.facts.classification != "CONTEXT_CAPACITY":
+            return None
+        proof = next(value for value in proofs if value.work_item_id == item.id)
+        records = KnowledgeRecordStore(self.state / "delivery-preflight", read_only=True)
+        markers = tuple(
+            records.get("context-capacity-receipts", identity, ContextCapacityReceipt)
+            for identity in proof.context_capacity_receipt_sha256s
+        )
+        current = tuple(
+            marker for marker in markers if marker.dispatch_sequence == item.dispatch_sequence
+        )
+        if len(current) != 1:
+            raise ValueError("当前容量等待缺少唯一精确未调用记录, 原进度和历史保留")
+        marker = current[0]
+        if (
+            marker.task_sha256 != digest(task.to_wire())
+            or marker.task_revision != self.repository.current_revision(task.id)
+            or disposition.facts.source_revision != marker.source_revision
+            or disposition.facts.evidence_ids != ("context-capacity://" + marker.receipt_sha256,)
+            or proof.proof_kind != "claimed_context_capacity"
+        ):
+            raise ValueError("当前容量等待与原 Task、输入或未调用证明不一致")
+        return marker.receipt_sha256
+
+    def _capacity_markers(
+        self, task: Task, item: QueuedWorkItem, claims: tuple[QueueClaim, ...]
+    ) -> tuple[ContextCapacityReceipt, ...]:
+        """Cover actual historical claims using independently sealed no-start facts."""
+        root = self.state / "delivery-preflight"
+        if not claims or not self._capacity_ledger_exists(root):
+            return ()
+        claims_by_lease = {claim.lease.id: claim for claim in claims}
+        if len(claims_by_lease) != len(claims):
+            raise ValueError("容量停止调查含重复历史 claim")
+        records = KnowledgeRecordStore(root, read_only=True)
+        markers = tuple(
+            marker
+            for marker in records.list("context-capacity-receipts", ContextCapacityReceipt)
+            if marker.work_item_id == item.id and marker.lease_id in claims_by_lease
+        )
+        if not markers:
+            return ()
+        if not self._scope_held:
+            raise ValueError("容量停止调查缺少真实任务锁和队列屏障")
+        matched: dict[str, ContextCapacityReceipt] = {}
+        for marker in markers:
+            marker.validate_integrity()
+            claim = claims_by_lease[marker.lease_id]
+            step = self.queue.step_for_claim(claim)
+            self._require_step(item, step)
+            self._require_capacity_identity(task, marker, claim, step)
+            self._require_capacity_context(task, marker, claim)
+            self._require_capacity_not_started(marker)
+            if marker.lease_id in matched:
+                raise ValueError("同一历史 claim 存在多个容量停止记录, 不能推断调用边界")
+            matched[marker.lease_id] = marker
+        return tuple(sorted(matched.values(), key=lambda marker: marker.dispatch_sequence))
+
+    def _require_capacity_identity(
+        self, task: Task, marker: ContextCapacityReceipt, claim: QueueClaim, step: QueuedRoleStep
+    ) -> None:
+        request = marker.request
+        if (
+            marker.origin != "final_input"
+            or request is None
+            or (
+                marker.task_id,
+                marker.task_intent_sha256,
+                marker.claim_sha256,
+                marker.assignment_id,
+                marker.work_item_id,
+                marker.role,
+                marker.attempt,
+                marker.dispatch_sequence,
+                marker.checkpoint_sequence,
+                marker.task_revision,
+                marker.source_revision,
+            )
+            != (
+                task.id,
+                task_intent_sha256(task),
+                digest(claim.to_wire()),
+                claim.assignment.id,
+                claim.work_item.id,
+                claim.work_item.role,
+                claim.work_item.attempt,
+                claim.work_item.dispatch_sequence,
+                claim.work_item.checkpoint_sequence,
+                claim.work_item.checkpoint_sequence,
+                step.boundary.source_revision,
+            )
+            or marker.observed_at < claim.claimed_at
+            or (request.role is AgentRole.CODER and request.permissions != self.permissions)
+            or self.queue.step_for_invocation(
+                claim.work_item.id, request.execution_baseline_sha256
+            ).boundary
+            != step.boundary
+        ):
+            raise ValueError("容量停止记录与真实 claim、原权限或工程输入不一致")
+
+    def _require_capacity_context(
+        self, task: Task, marker: ContextCapacityReceipt, claim: QueueClaim
+    ) -> None:
+        context_root = self.state.parent / "contexts"
+        _reject_symlinks(context_root / f"{marker.context_manifest_id}.json")
+        context = FileContextStore(context_root, read_only=True).get(
+            marker.context_manifest_id
+        )
+        request = marker.request
+        assert request is not None
+        if digest(context.to_wire()) != marker.context_sha256 or (
+            context.task_id,
+            context.role,
+            context.attempt,
+            context.source_revision,
+            context.budget.max_input_tokens,
+            context.budget.used_input_tokens,
+        ) != (
+            marker.task_id,
+            marker.role,
+            marker.attempt,
+            marker.source_revision,
+            marker.max_input_tokens,
+            marker.context_input_tokens,
+        ):
+            raise ValueError("容量停止上下文身份或完整摘要不一致")
+        original_tasks = tuple(section for section in context.sections if section.name == "task")
+        if len(original_tasks) != 1 or original_tasks[0].truncated:
+            raise ValueError("容量停止缺少完整原 Task 快照")
+        original = Task.model_validate(json.loads(original_tasks[0].content))
+        if (
+            digest(original.to_wire()) != marker.task_sha256
+            or not task_matches_dispatch(original, task)
+            or original.attempts != marker.attempt
+            or original.status
+            is not {
+                AgentRole.CODER: TaskStatus.IMPLEMENTING,
+                AgentRole.QA: TaskStatus.QA,
+                AgentRole.REVIEWER: TaskStatus.REVIEW,
+            }[marker.role]
+        ):
+            raise ValueError("容量停止的原 Task 快照与冻结意图或执行身份不一致")
+        claim_sections = tuple(
+            section for section in context.sections if section.name == "source:execution.claim"
+        )
+        if len(claim_sections) != 1 or claim_sections[0].truncated:
+            raise ValueError("容量停止上下文缺少完整真实 claim")
+        sealed_claim = json.loads(claim_sections[0].content)
+        if claim_sections[0].uri != "claim://" + claim.lease.id or any(
+            sealed_claim.get(field) != value
+            for field, value in {
+                "task_id": claim.work_item.task_id,
+                "work_item_id": claim.work_item.id,
+                "lease_id": claim.lease.id,
+                "assignment_id": claim.assignment.id,
+                "dispatch_sequence": claim.work_item.dispatch_sequence,
+                "role": claim.work_item.role.value,
+                "attempt": claim.work_item.attempt,
+                "checkpoint_sequence": claim.work_item.checkpoint_sequence,
+            }.items()
+        ):
+            raise ValueError("容量停止上下文的原 claim 与真实队列身份不一致")
+        verifier = _CapacityBaselineVerifier(self.inputs.store, claim)
+        expected = verifier.expected(original)
+        if request.execution_baseline_sha256 != (
+            expected.binding_sha256 if expected is not None else None
+        ):
+            raise ValueError("容量停止请求未绑定原 claim 前的最新执行基线")
+        binding = execution_baseline_from_context(context, request, original, verifier=verifier)
+        if binding is not None:
+            store = self.inputs.store
+            if store is None:
+                raise ValueError("容量停止缺少完整可信执行基线存储")
+            complete = ExecutionBaselineContext.from_required_context(
+                binding, store.required_context(binding)
+            )
+            section = next(
+                section for section in context.sections if section.name == "execution.baseline"
+            )
+            value = parse_execution_baseline_context(section.content)
+            if value != complete and value != PreservedWorktreeBaselineContext.from_complete(
+                complete
+            ):
+                raise ValueError("容量停止的保留补丁上下文与完整授权记录不一致")
+
+    def _require_capacity_not_started(self, marker: ContextCapacityReceipt) -> None:
+        request = marker.request
+        assert request is not None
+        root = self.state / "invocations"
+        if self._capacity_ledger_exists(root):
+            records = KnowledgeRecordStore(root, read_only=True)
+            if any(
+                start.request.run_id == request.run_id
+                for start in records.list("invocation-starts", DeliveryInvocationStart)
+            ) or any(
+                outcome.start.request.run_id == request.run_id
+                for outcome in records.list("invocation-outcomes", DeliveryInvocationOutcome)
+            ):
+                raise ValueError("容量停止的原 Run 已有模型开始或结果, 不能证明未调用")
+        if self.route_root is None:
+            raise ValueError("容量停止调查缺少真实模型路由位置")
+        if self._capacity_ledger_exists(self.route_root) and FileModelRouteAttemptStore(
+            self.route_root, read_only=True
+        ).list_for_run(request.run_id):
+            raise ValueError("容量停止的原 Run 已有提供方路由, 不能证明未调用")
+        native_root = self.state / "continuations" / marker.task_id
+        if self._capacity_ledger_exists(native_root):
+            native = FileContinuationStore(native_root, task_id=marker.task_id)
+            for prefix in ("capture-start", "capture-stop", "receipt", "admission"):
+                path = native_root / f"{prefix}-{request.run_id}.json"
+                if path.exists() or path.is_symlink():
+                    raise ValueError("容量停止的原 Run 已有原生执行记录, 不能证明未调用")
+            if any(
+                receipt.request.run_id == request.run_id
+                for receipt in native.receipts_for_task(marker.task_id)
+            ) or any(
+                request.run_id in (admission.new_request.run_id, admission.interrupted_run_id)
+                for admission in native.admissions_for_task(marker.task_id)
+            ):
+                raise ValueError("容量停止的原 Run 已有原生恢复记录, 不能证明未调用")
+        if any(
+            artifact.producer.run_id == request.run_id
+            for artifact in self.artifacts.list_for_task(marker.task_id)
+        ):
+            raise ValueError("容量停止的原 Run 已有角色产出, 不能证明未调用")
+
+    @staticmethod
+    def _capacity_ledger_exists(root: Path) -> bool:
+        _reject_symlinks(root)
+        if root.exists() and not root.is_dir():
+            raise ValueError("容量停止调查的执行记录目录不可读取, 不能证明未调用")
+        return root.is_dir()
