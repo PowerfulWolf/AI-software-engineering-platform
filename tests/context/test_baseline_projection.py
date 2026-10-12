@@ -2,13 +2,14 @@
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from ai_software_engineer.agents.models import AgentRequest
-from ai_software_engineer.context import ContextBudget, ContextSource, InMemoryContextStore
+from ai_software_engineer.context import ContextBudget, InMemoryContextStore
 from ai_software_engineer.context.execution_baseline import (
     ExecutionBaselineContext,
     PreservedWorktreeBaselineContext,
@@ -25,9 +26,12 @@ from ai_software_engineer.domain.execution_baseline import (
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.orchestration.context import FileRunContextBuilder
 from ai_software_engineer.orchestration.execution_baseline import BaselineRunContextBuilder
+from ai_software_engineer.recovery.context import recovery_context_sources, validate_reapply_context
+from ai_software_engineer.recovery.models import CapturedChanges, RecoveryPlan
 from tests.agents.test_openai_compatible import _request
 from tests.manager.test_execution_baseline import Setup, authorize, setup
 from tests.orchestration.test_runner import _definitions
+from tests.recovery.test_authorization import make_plan
 
 
 @pytest.mark.parametrize("role", [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER])
@@ -279,14 +283,17 @@ def test_coder_reapply_deduplicates_complete_patch_when_recovery_source_is_prese
     complete = resolver.required_context(resolver.current(task, implementation=None, progress=None))
     assert complete is not None and len(complete) > 500_000
     patch = complete.split("完整旧补丁:\n", 1)[1]
-    recovery = ContextSource(
-        source_id="recovery.patch",
-        uri="recovery://fixture/patch/capture",
-        content=patch,
-        roles=(AgentRole.CODER,),
-        required=True,
-        priority=11,
+    original = make_plan(tmp_path / "original-recovery")
+    recovery_plan = RecoveryPlan.create(
+        **{
+            **original.to_wire(),
+            "input_mode": "coder_reapply",
+            "capture": CapturedChanges.from_capture(
+                replace(original.capture.to_capture(), patch=patch.encode())
+            ),
+        }
     )
+    recovery = recovery_context_sources(recovery_plan)[1]
     contexts = InMemoryContextStore()
     context = BaselineRunContextBuilder(
         FileRunContextBuilder(
@@ -326,6 +333,7 @@ def test_coder_reapply_deduplicates_complete_patch_when_recovery_source_is_prese
         execution_baseline_from_context(context, request, task, verifier=resolver)
         == binding
     )
+    validate_reapply_context(recovery_plan, context)
 
     missing = context.model_copy(
         update={
