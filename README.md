@@ -434,6 +434,8 @@ v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kube
 Operation、模型/工具执行、索引和记录保存完成；收到精确实例、请求、PID 对应的 `READY` 且原服务退出后
 才启动替代服务。超时、保存失败或没有可靠握手记录时会拒绝重启，保留原服务与现场。
 首次从旧版本升级的方法与异常处理见 [受控重启说明](docs/operations/controlled-service-restart.md)。
+故障替换后的“维护仅查看”可通过页面顶部的维护完成指引受控退出，见
+[完成维护并恢复普通模式](docs/user/service-maintenance.md)；恢复服务不会自动继续暂停需求。
 
 浏览器提交的操作先以 append-only 事实保存为 `QUEUED`，后台执行时变为 `RUNNING`，最后变为
 `SUCCEEDED`、`FAILED` 或 `INTERRUPTED`。Host 重启不会静默重放不确定的模型调用；用户在同一页面

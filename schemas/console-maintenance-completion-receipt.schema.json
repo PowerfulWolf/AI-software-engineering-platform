@@ -1,0 +1,83 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "title": "Recorded At",
+      "type": "string"
+    },
+    "record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Record Sha256",
+      "type": "string"
+    },
+    "kind": {
+      "const": "maintenance_completion_receipt",
+      "default": "maintenance_completion_receipt",
+      "title": "Kind",
+      "type": "string"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "marker_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Marker Sha256",
+      "type": "string"
+    },
+    "principal_uid": {
+      "minimum": 0,
+      "title": "Principal Uid",
+      "type": "integer"
+    },
+    "supersedes_receipt_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Supersedes Receipt Sha256"
+    },
+    "successor_mode": {
+      "const": "normal",
+      "default": "normal",
+      "title": "Successor Mode",
+      "type": "string"
+    },
+    "historical_execution_outcome": {
+      "const": "UNKNOWN",
+      "default": "UNKNOWN",
+      "title": "Historical Execution Outcome",
+      "type": "string"
+    },
+    "requirement_action": {
+      "const": "NONE",
+      "default": "NONE",
+      "title": "Requirement Action",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recorded_at",
+    "record_sha256",
+    "plan_sha256",
+    "marker_sha256",
+    "principal_uid"
+  ],
+  "title": "MaintenanceCompletionReceipt",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

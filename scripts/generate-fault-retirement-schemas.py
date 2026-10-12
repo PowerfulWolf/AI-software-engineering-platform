@@ -11,6 +11,11 @@ from ai_software_engineer.web_console.fault_retirement import (
     SignalSent,
     TerminationIntent,
 )
+from ai_software_engineer.web_console.maintenance_completion import (
+    MaintenanceCompletionPlan,
+    MaintenanceCompletionReceipt,
+    MaintenanceNormalAdmission,
+)
 
 root = Path(__file__).resolve().parents[1] / "schemas"
 for name, model in (
@@ -19,6 +24,9 @@ for name, model in (
     ("console-fault-retirement-intent", TerminationIntent),
     ("console-fault-retirement-signal", SignalSent),
     ("console-inspection", InspectionMarker),
+    ("console-maintenance-completion-plan", MaintenanceCompletionPlan),
+    ("console-maintenance-completion-receipt", MaintenanceCompletionReceipt),
+    ("console-maintenance-admission", MaintenanceNormalAdmission),
 ):
     schema = model.model_json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"

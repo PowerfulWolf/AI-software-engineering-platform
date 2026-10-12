@@ -1111,3 +1111,14 @@ fresh complete journal byte/path verification. Four `console-operation-{summary,
 JSON Schemas define the wire. All original full Operation GET and exact approval/mutation/claim
 contracts remain authoritative; summary identities and shortened text cannot grant execution or
 approval. See `.trellis/spec/core/operation-summaries.md` for bounds and negative cases.
+
+## Local maintenance completion
+
+`web_console.maintenance_completion` supplies prepare/complete/first-normal-admission independently
+of Requirement recovery. The current inspection successor needs exact SHUTDOWN/READY and actual PID
+absence; full fault archive remains validated and retained. `maintenance_queue` uses existing
+readonly Operation discovery and a complete consistent READ ONLY SQL snapshot, never Host/queue
+initialization or reconciliation. Runnable work/operations and every ACTIVE claim block release.
+Exact local confirmation appends immutable receipt lineage; first normal startup rechecks before
+any TeamHost constructor. HTTP inspection remains strictly readonly. See
+`.trellis/spec/core/maintenance-completion.md` for fields, file paths, errors and contract tests.

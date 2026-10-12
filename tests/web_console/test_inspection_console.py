@@ -191,3 +191,37 @@ def test_damaged_marker_cannot_fall_back_to_normal(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(host, "_inspection_required", damaged)
     with pytest.raises(ValueError, match="维护记录损坏"):
         host.production_console_app({"ASE_CONSOLE_MODE": "normal"})
+
+
+def test_maintenance_completion_guide_is_readonly_and_contains_exact_quoted_commands(
+    tmp_path: Path,
+) -> None:
+    import shlex
+
+    from ai_software_engineer.web_console.maintenance_guide import completion_guide
+
+    config = tmp_path / "config with space.json"
+    state = tmp_path / "service state"
+    guide = completion_guide(config, state)
+    tokens = shlex.split(guide.prepare_command)
+    assert tokens[0] == f"ASE_CONFIG={config}"
+    assert tokens[1] == f"ASE_SERVICE_STATE_DIR={state}"
+    assert tokens[-1] == "prepare-maintenance-completion"
+    assert shlex.split(guide.complete_command)[-3:] == [
+        "complete-maintenance",
+        "PLAN_SHA256",
+        "--confirm-restore-normal",
+    ]
+    console = InspectionConsole(
+        FileConsoleOperationStore(tmp_path / "absent", team_id="team_test", read_only=True),
+        FilePreparationProgressStore(tmp_path / "progress", read_only=True),
+    )
+    app = create_console_app(
+        console, _Reader(), team_id="team_test", inspection=True, maintenance_completion_guide=guide
+    )
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        info = client.get("/api/v1/console").json()
+        assert info["maintenance_completion_guide"] == guide.to_wire()
+        assert client.post("/api/v1/maintenance/complete").status_code == 503
+        assert info["supported_actions"] == [] and not info["delivery_ready"]
+    assert list(tmp_path.iterdir()) == []

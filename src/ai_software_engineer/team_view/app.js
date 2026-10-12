@@ -729,6 +729,7 @@ let consoleConnectionFailed = false;
 let consoleTeamId = null;
 let consoleDeliveryReady = null;
 let consoleMode = null;
+let maintenanceCompletionGuide = null;
 const inspectionSummary = "平台处于维护仅查看模式：可以查看已保存的需求和执行记录；交付与修改操作已暂停。";
 let consoleOperationContractVersion = null;
 let consoleSupportedActions = null;
@@ -11257,9 +11258,32 @@ function renderMaintenanceBanner() {
   }
   if (banner) {
     banner.hidden = !visible;
-    banner.textContent = lastConfirmedInspection
+    const summary = lastConfirmedInspection
       ? "上次确认服务处于维护仅查看模式；当前连接尚未确认。仍可查看已核验的记录，交付操作保持暂停。"
       : inspectionSummary;
+    const guide = consoleMode === "inspection" ? maintenanceCompletionGuide : null;
+    // Keep the guide, text selection and expanded state stable across polling.
+    const signature = JSON.stringify([summary, guide, visible]);
+    if (banner.dataset?.maintenanceSignature === signature) return;
+    const wasOpen = banner.querySelector?.("details")?.open;
+    banner.textContent = summary;
+    if (banner.dataset) banner.dataset.maintenanceSignature = signature;
+    if (visible && guide) {
+      const details = el("details", undefined, "maintenance-completion");
+      details.open = Boolean(wasOpen);
+      details.append(el("summary", "完成维护并恢复普通模式"));
+      details.append(el("p", "在运行 ASE 的本机终端完成。第一步会安全停止页面服务，页面会暂时离线；生成并检查方案后，再明确确认恢复普通模式。"));
+      details.append(el("p", "1. 安全收尾并检查完整故障归档、待执行队列："));
+      const prepare = el("pre");
+      prepare.append(el("code", guide.prepare_command));
+      details.append(prepare);
+      details.append(el("p", "2. 核对输出中的队列计数及方案。将以下 PLAN_SHA256 替换为第一步输出的 record_sha256，再执行："));
+      const complete = el("pre");
+      complete.append(el("code", guide.complete_command));
+      details.append(complete);
+      details.append(el("p", "检查失败时维护限制仍保留，按终端中的中文原因处理。完成后刷新本页面；恢复普通模式不会批准或继续已暂停的需求。若显式设置了 ASE_CONSOLE_MODE=inspection，请先取消该设置。"));
+      banner.append(details);
+    }
   }
 }
 function render({ preserveComposer = false, incremental = false } = {}) {
@@ -11395,6 +11419,7 @@ async function refreshConsoleInfo(signal) {
       consoleTeamId = null;
       consoleDeliveryReady = null;
       consoleMode = null;
+      maintenanceCompletionGuide = null;
       consoleOperationContractVersion = null;
       consoleSupportedActions = null;
       consoleOperationSummaryContractVersion = null;
@@ -11431,6 +11456,11 @@ async function refreshConsoleInfo(signal) {
     consoleConnectionFailed = false;
     consoleTeamId = info.team_id;
     consoleMode = mode;
+    const guide = info.maintenance_completion_guide;
+    maintenanceCompletionGuide = mode === "inspection" && guide?.schema_version === "v1" &&
+      [guide.prepare_command, guide.complete_command].every(value =>
+        typeof value === "string" && value.length > 0 && value.length <= 16384)
+      ? {prepare_command: guide.prepare_command, complete_command: guide.complete_command} : null;
     consoleDeliveryReady = info.delivery_ready;
     const actions = info.supported_actions;
     const validManifest = Number.isInteger(info.operation_contract_version) &&

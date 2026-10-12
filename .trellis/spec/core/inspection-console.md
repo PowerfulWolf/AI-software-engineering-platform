@@ -7,7 +7,9 @@ and `fault_retirement.inspection_required(environment) -> bool` before any write
 `FileConsoleOperationStore(..., read_only: bool = False)` forbids all writes in read-only mode.
 
 ## Contracts
-A valid durable console-inspection marker forces inspection even if environment says normal.
+A valid durable console-inspection marker forces inspection even if environment says normal until
+separate confirmed maintenance completion. The original marker/archive stay intact; the first normal
+Host requires a fresh maintenance admission before writer composition. See [maintenance-completion](maintenance-completion.md).
 Malformed mode or marker refuses startup. Inspection constructs only existing Team discovery,
 ProductionTeamReader and read-only Operation/preparation stores. No TeamHost, ProjectConsole,
 Manager adapter, knowledge/index/reconciliation/dispatch worker or database initialization.
@@ -48,3 +50,13 @@ omitted HOME never silently skips inspection of the default lifecycle directory.
 Wire fields on `GET /api/v1/console` are additive to schema_version=v0.2: mode is normal|inspection,
 maintenance_summary is the fixed Chinese message or null, delivery_ready is false during inspection,
 supported_actions is empty. No domain artifact Schema or persisted record changes.
+
+## Completion guide wire and UI
+GET /api/v1/console may include maintenance_completion_guide during inspection:
+`{schema_version: "v1", prepare_command: string, complete_command: string}`. The trusted Host
+constructs quoted local shell instructions from its config/state/script paths; no credentials,
+queue facts or authority is returned. The frontend renders textContent and a native details entry
+“完成维护并恢复普通模式”. Polling preserves the same expanded guide/selection; a lost connection
+withdraws current instructions. Opening the guide sends no HTTP write. Local two-step script entry
+is deliberately separate from readonly HTTP and Requirement approval. Tests cover real browser
+selection/DOM retention and inspection POST rejection with the guide present.

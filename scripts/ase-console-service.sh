@@ -24,7 +24,7 @@ LIFECYCLE_PYTHON="$PROJECT_ROOT/.venv/bin/python"
 SHUTDOWN_TIMEOUT=${ASE_SHUTDOWN_TIMEOUT_SECONDS:-300}
 
 usage() {
-  echo "Usage: $0 {start|stop|restart|resume|status|logs}"
+  echo "Usage: $0 {start|stop|restart|resume|status|logs|prepare-maintenance-completion|complete-maintenance PLAN_SHA256 --confirm-restore-normal}"
 }
 
 lifecycle() {
@@ -194,6 +194,9 @@ launch_child() {
     export ASE_CONSOLE_MODE="$launch_mode"
     export ASE_CONFIG="$CONFIG_FILE"
     export ASE_SERVICE_STATE_DIR="$SERVICE_STATE_DIR"
+    if [ -e "$SERVICE_STATE_DIR/console-inspection.json" ] || [ -L "$SERVICE_STATE_DIR/console-inspection.json" ]; then
+      lifecycle admit-start || exit 1
+    fi
     : >>"$LOG_FILE"
     child_pid=$(launch_detached "$SERVICE_EXECUTABLE") || exit 1
     # Local Workers cannot renew their leases while macOS is idle-asleep.
@@ -611,7 +614,36 @@ status_service() {
   return 1
 }
 
+maintenance_command() {
+  (
+    load_runtime_environment || exit 1
+    export ASE_CONFIG="$CONFIG_FILE"
+    export ASE_SERVICE_STATE_DIR="$SERVICE_STATE_DIR"
+    "$LIFECYCLE_PYTHON" "$SCRIPT_DIR/ase-console-maintenance.py" "$@"
+  )
+}
+
 case "${1:-}" in
+  prepare-maintenance-completion)
+    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    if [ ! -e "$SERVICE_STATE_DIR/console-inspection.json" ]; then
+      echo "当前服务没有待完成的故障维护记录；未停止服务。" >&2
+      exit 1
+    fi
+    # stop and prepare independently acquire the replacement lock; prepare
+    # refuses if another start has changed the stopped-instance facts.
+    "$SERVICE_SCRIPT" stop || exit 1
+    if ! maintenance_command prepare-completion; then
+      echo "维护检查未通过；尝试恢复仅查看服务，需求保持暂停。" >&2
+      ASE_CONSOLE_MODE=inspection "$SERVICE_SCRIPT" start || true
+      exit 1
+    fi
+    ;;
+  complete-maintenance)
+    [ "$#" -eq 3 ] && [ "$3" = --confirm-restore-normal ] || { usage >&2; exit 2; }
+    maintenance_command complete --plan "$2" --confirm-restore-normal || exit 1
+    "$SERVICE_SCRIPT" start
+    ;;
   start|stop|restart|resume) with_replacement_lock "$1" ;;
   locked)
     lifecycle verify-lock || exit 1

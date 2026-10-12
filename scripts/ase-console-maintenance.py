@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local exact fault retirement: the successor is always inspection, never delivery."""
+"""Local controlled fault retirement and explicit maintenance completion."""
 
 from __future__ import annotations
 
@@ -7,26 +7,40 @@ import argparse
 import os
 import sys
 
+from ai_software_engineer.config.production import ProductionConfig
+from ai_software_engineer.config.runtime_environment import (
+    LocalRuntimeEnvironmentStore,
+    runtime_environment_path,
+)
 from ai_software_engineer.web_console.fault_retirement import (
     execute_fault_retirement,
     prepare_fault_retirement,
 )
+from ai_software_engineer.web_console.maintenance_completion import (
+    complete_maintenance,
+    prepare_maintenance_completion,
+)
+from ai_software_engineer.web_console.service_lifecycle import ServiceLifecycleError
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="将精确故障服务归档并替换为只读检查服务; 不会继续需求。"
+        description="核验故障服务归档与维护完成方案; 恢复普通服务不会继续需求。"
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("prepare")
     execute = commands.add_parser("execute")
     execute.add_argument("--plan", required=True)
     execute.add_argument("--confirm-fault-retirement", action="store_true")
+    commands.add_parser("prepare-completion")
+    complete = commands.add_parser("complete")
+    complete.add_argument("--plan", required=True)
+    complete.add_argument("--confirm-restore-normal", action="store_true")
     args = parser.parse_args()
     try:
         if args.command == "prepare":
             print(prepare_fault_retirement(os.environ).model_dump_json())
-        else:
+        elif args.command == "execute":
             print(
                 execute_fault_retirement(
                     os.environ,
@@ -34,8 +48,32 @@ def main() -> int:
                     confirm_fault_retirement=args.confirm_fault_retirement,
                 ).model_dump_json()
             )
-    except (OSError, ValueError, RuntimeError):
-        print("故障服务维护无法核验, 原记录与现场保留; 未启动服务。", file=sys.stderr)
+        else:
+            environment = dict(os.environ)
+            source = ProductionConfig.path_from_environment(environment)
+            config = ProductionConfig.from_file(source)
+            stored = LocalRuntimeEnvironmentStore(runtime_environment_path(source)).load()
+            # Only the configured database credential is needed for read-only checking.
+            name = config.database.dsn_env
+            if name in stored:
+                environment[name] = stored[name]
+            if args.command == "prepare-completion":
+                print(prepare_maintenance_completion(environment).model_dump_json())
+            else:
+                print(
+                    complete_maintenance(
+                        environment,
+                        plan_sha256=args.plan,
+                        confirm_restore_normal=args.confirm_restore_normal,
+                    ).model_dump_json()
+                )
+    except (OSError, ValueError, RuntimeError) as error:
+        print(
+            str(error)
+            if isinstance(error, ServiceLifecycleError)
+            else "服务维护无法核验, 原记录与现场保留; 未启动服务。",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

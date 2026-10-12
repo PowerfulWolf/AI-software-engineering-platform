@@ -1,0 +1,399 @@
+{
+  "$defs": {
+    "MaintenanceQueueInventory": {
+      "additionalProperties": false,
+      "properties": {
+        "inventory_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Inventory Sha256",
+          "type": "string"
+        },
+        "team_manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Team Manifest Sha256",
+          "type": "string"
+        },
+        "queue_scope": {
+          "const": "SELECTED_DATABASE_ALL_ROWS",
+          "default": "SELECTED_DATABASE_ALL_ROWS",
+          "title": "Queue Scope",
+          "type": "string"
+        },
+        "operation_count": {
+          "minimum": 0,
+          "title": "Operation Count",
+          "type": "integer"
+        },
+        "work_item_count": {
+          "minimum": 0,
+          "title": "Work Item Count",
+          "type": "integer"
+        },
+        "claim_count": {
+          "minimum": 0,
+          "title": "Claim Count",
+          "type": "integer"
+        },
+        "waiting_work_item_count": {
+          "minimum": 0,
+          "title": "Waiting Work Item Count",
+          "type": "integer"
+        },
+        "blocked_operation_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Blocked Operation Ids",
+          "type": "array"
+        },
+        "blocked_work_item_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Blocked Work Item Ids",
+          "type": "array"
+        },
+        "active_lease_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Active Lease Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "inventory_sha256",
+        "team_manifest_sha256",
+        "operation_count",
+        "work_item_count",
+        "claim_count",
+        "waiting_work_item_count"
+      ],
+      "title": "MaintenanceQueueInventory",
+      "type": "object"
+    },
+    "ServiceInstance": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "instance_id": {
+          "pattern": "^console_instance_[a-f0-9]{32}$",
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "pid": {
+          "exclusiveMinimum": 1,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ServiceState",
+          "default": "RUNNING"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "safe_summary": {
+          "title": "Safe Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id",
+        "pid",
+        "started_at",
+        "updated_at",
+        "safe_summary"
+      ],
+      "title": "ServiceInstance",
+      "type": "object"
+    },
+    "ServiceShutdownAction": {
+      "enum": [
+        "SHUTDOWN",
+        "RESUME"
+      ],
+      "title": "ServiceShutdownAction",
+      "type": "string"
+    },
+    "ServiceShutdownRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^console_shutdown_[a-f0-9]{32}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "instance_id": {
+          "pattern": "^console_instance_[a-f0-9]{32}$",
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "pid": {
+          "exclusiveMinimum": 1,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "action": {
+          "$ref": "#/$defs/ServiceShutdownAction",
+          "default": "SHUTDOWN"
+        },
+        "state": {
+          "const": "REQUESTED",
+          "default": "REQUESTED",
+          "title": "State",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 300.0,
+          "maximum": 3600,
+          "minimum": 0.01,
+          "title": "Timeout Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "request_id",
+        "instance_id",
+        "pid",
+        "requested_at"
+      ],
+      "title": "ServiceShutdownRequest",
+      "type": "object"
+    },
+    "ServiceShutdownResult": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^console_shutdown_[a-f0-9]{32}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "instance_id": {
+          "pattern": "^console_instance_[a-f0-9]{32}$",
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "pid": {
+          "exclusiveMinimum": 1,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ServiceState"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "safe_summary": {
+          "title": "Safe Summary",
+          "type": "string"
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShutdownRefusal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "request_id",
+        "instance_id",
+        "pid",
+        "state",
+        "recorded_at",
+        "safe_summary"
+      ],
+      "title": "ServiceShutdownResult",
+      "type": "object"
+    },
+    "ServiceState": {
+      "enum": [
+        "STARTING",
+        "RUNNING",
+        "DRAINING",
+        "READY",
+        "REFUSED"
+      ],
+      "title": "ServiceState",
+      "type": "string"
+    },
+    "ShutdownRefusal": {
+      "additionalProperties": false,
+      "description": "Safe, bounded explanation for a refused drain; never contains raw errors.",
+      "properties": {
+        "component": {
+          "enum": [
+            "WRITE_GATE",
+            "CONSOLE",
+            "KNOWLEDGE_INDEX",
+            "OWNED_PROCESSES",
+            "LIFECYCLE"
+          ],
+          "title": "Component",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "TIMEOUT",
+            "UNCONFIRMED",
+            "COMPONENT_ERROR"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "active_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Count"
+        }
+      },
+      "required": [
+        "component",
+        "reason"
+      ],
+      "title": "ShutdownRefusal",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "title": "Recorded At",
+      "type": "string"
+    },
+    "record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Record Sha256",
+      "type": "string"
+    },
+    "kind": {
+      "const": "maintenance_completion_plan",
+      "default": "maintenance_completion_plan",
+      "title": "Kind",
+      "type": "string"
+    },
+    "marker_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Marker Sha256",
+      "type": "string"
+    },
+    "retirement_plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Retirement Plan Sha256",
+      "type": "string"
+    },
+    "retirement_receipt_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Retirement Receipt Sha256",
+      "type": "string"
+    },
+    "config_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Config Sha256",
+      "type": "string"
+    },
+    "principal_uid": {
+      "minimum": 0,
+      "title": "Principal Uid",
+      "type": "integer"
+    },
+    "instance": {
+      "$ref": "#/$defs/ServiceInstance"
+    },
+    "request": {
+      "$ref": "#/$defs/ServiceShutdownRequest"
+    },
+    "result": {
+      "$ref": "#/$defs/ServiceShutdownResult"
+    },
+    "inventory": {
+      "$ref": "#/$defs/MaintenanceQueueInventory"
+    },
+    "historical_execution_outcome": {
+      "const": "UNKNOWN",
+      "default": "UNKNOWN",
+      "title": "Historical Execution Outcome",
+      "type": "string"
+    },
+    "requirement_action": {
+      "const": "NONE",
+      "default": "NONE",
+      "title": "Requirement Action",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recorded_at",
+    "record_sha256",
+    "marker_sha256",
+    "retirement_plan_sha256",
+    "retirement_receipt_sha256",
+    "config_sha256",
+    "principal_uid",
+    "instance",
+    "request",
+    "result",
+    "inventory"
+  ],
+  "title": "MaintenanceCompletionPlan",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

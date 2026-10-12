@@ -161,6 +161,9 @@ def production_console_app(
     delivery_runtime_ready = True
     owned_processes = HostOwnedProcessRegistry()
     if mode == "inspection":
+        from .maintenance_guide import completion_guide
+        from .service_lifecycle import ServiceLifecycleStore
+
         teams = discover_team_workspaces(config.platform_root)
         if len(teams) != 1 or teams[0].manifest.team_id != config.team_id:
             raise ValueError("仅查看控制台无法核验现有 Team 工作空间。")
@@ -181,7 +184,17 @@ def production_console_app(
             delivery_ready=False,
             owned_processes=owned_processes,
             inspection=True,
+            maintenance_completion_guide=completion_guide(
+                config_path,
+                ServiceLifecycleStore.from_environment(
+                    {"HOME": str(Path.home()), **variables}
+                ).root,
+            ),
         )
+    from .maintenance_completion import admit_completed_maintenance
+
+    # Outside setup fallback: invalid maintenance authority must never compose writers.
+    admit_completed_maintenance({"HOME": str(Path.home()), **variables})
     try:
         # Avoid TeamHost's writer boundary when first-run delivery prerequisites are absent.
         config.require_mysql_dsn(variables)

@@ -37,6 +37,7 @@ from ai_software_engineer.owned_sessions import (
 from ai_software_engineer.project_workspace import ProjectManifest
 from ai_software_engineer.team_workspace import TeamManifest
 
+from .maintenance_names import COMPLETION_RECEIPT_NAME, NORMAL_ADMISSION_NAME
 from .service_lifecycle import (
     ServiceInstance,
     ServiceInstanceId,
@@ -965,12 +966,20 @@ def inspection_required(environment: Mapping[str, str]) -> bool:
     try:
         (root / MARKER_NAME).lstat()
     except FileNotFoundError:
+        for name in (COMPLETION_RECEIPT_NAME, NORMAL_ADMISSION_NAME):
+            try:
+                (root / name).lstat()
+            except FileNotFoundError:
+                continue
+            raise FaultRetirementError(_ERROR) from None
         return False
     try:
         _verified_marker(root)
+        from .maintenance_completion import verified_completion
+
+        return verified_completion(root) is None
     except (OSError, ValueError, ServiceLifecycleError) as error:
         raise FaultRetirementError(_ERROR) from error
-    return True
 
 
 def require_inspection_retirement(
@@ -981,6 +990,8 @@ def require_inspection_retirement(
 ) -> None:
     """Fresh exact old-Host absence plus archive admits only inspection startup."""
     root = ServiceLifecycleStore.from_environment(environment).root
+    if not inspection_required(environment):
+        raise FaultRetirementError(_ERROR)
     try:
         plan, _ = _verified_marker(root)
         if (instance, request, result) != (plan.instance, plan.request, plan.result):

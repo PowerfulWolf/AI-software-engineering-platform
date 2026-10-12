@@ -163,7 +163,9 @@ def main() -> int:
         elif command in {"dead", "initial"}:
             instance = store.read_instance()
             if command == "dead" and (instance is None or instance.pid != int(sys.argv[2])):
-                raise ServiceLifecycleError("旧服务身份不匹配; 未启动替代服务。")
+                raise ServiceLifecycleError(
+                    "旧服务身份不匹配, 未留下安全收尾证明; 未启动替代服务。"
+                )
             if instance is not None:
                 if alive(instance.pid):
                     raise ServiceLifecycleError("旧服务仍在运行; 未启动替代服务。")
@@ -180,9 +182,18 @@ def main() -> int:
                     and instance.updated_at >= value.requested_at
                 )
                 if not normal_ready:
+                    if not inspection_required(os.environ):
+                        raise ServiceLifecycleError("旧服务未留下安全收尾证明; 未启动替代服务。")
                     require_inspection_retirement(os.environ, instance, value, result)
             elif inspection_required(os.environ):
                 raise ServiceLifecycleError("检查模式的原实例记录缺失; 未启动替代服务。")
+        elif command == "admit-start":
+            if effective_mode() == "normal":
+                from ai_software_engineer.web_console.maintenance_completion import (
+                    admit_completed_maintenance,
+                )
+
+                admit_completed_maintenance(os.environ)
         elif command == "launch-mode":
             print(effective_mode())
         elif command == "status":
@@ -213,7 +224,10 @@ def main() -> int:
         elif command == "started":
             pid, previous_id = int(sys.argv[2]), sys.argv[3]
             deadline = time.monotonic() + (
-                120 if len(sys.argv) > 4 and sys.argv[4] == "inspection" else 5
+                120
+                if (len(sys.argv) > 4 and sys.argv[4] == "inspection")
+                or (store.root / "console-inspection.json").exists()
+                else 5
             )
             while alive(pid) and time.monotonic() < deadline:
                 instance = store.read_instance()

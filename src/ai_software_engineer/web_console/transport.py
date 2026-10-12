@@ -71,6 +71,7 @@ from .lifecycle import (
     ConfigurationApplyView,
     ConfigurationLifecycle,
 )
+from .maintenance_guide import MaintenanceCompletionGuide
 from .models import ConsoleAction, ConsoleIntent, ConsoleOperation, IdempotencyKey, OperationId
 from .preparation_store import PreparationProgressError
 from .service_lifecycle import (
@@ -302,6 +303,7 @@ def create_console_app(
     delivery_ready: bool = True,
     owned_processes: OwnedProcessShutdownPort | None = None,
     inspection: bool = False,
+    maintenance_completion_guide: MaintenanceCompletionGuide | None = None,
 ) -> FastAPI:
     if isinstance(port, bool) or not 1 <= port <= 65535:
         raise ValueError("invalid console server port")
@@ -549,6 +551,11 @@ def create_console_app(
                 "delivery_ready": delivery_ready and not inspection,
                 "mode": "inspection" if inspection else "normal",
                 "maintenance_summary": MAINTENANCE_SUMMARY if inspection else None,
+                **(
+                    {"maintenance_completion_guide": maintenance_completion_guide.to_wire()}
+                    if inspection and maintenance_completion_guide is not None
+                    else {}
+                ),
                 "operation_contract_version": _OPERATION_CONTRACT_VERSION,
                 "supported_actions": supported_actions,
                 **(

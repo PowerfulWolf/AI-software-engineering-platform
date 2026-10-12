@@ -3850,3 +3850,12 @@ code {
     padding: 12px;
   }
 }
+
+/* Local maintenance is separate from Requirement controls. */
+.maintenance-completion { margin-top: 8px; max-width: 100%; }
+.maintenance-completion summary { cursor: pointer; font-weight: 600; }
+.maintenance-completion p { margin: 10px 0 6px; line-height: 1.6; }
+.maintenance-completion pre { padding: 10px; background: #fff; border: 1px solid #cbd5e1;
+  border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+
+#service-maintenance { background: #fffbeb; color: #78350f; border-color: #fcd34d; }

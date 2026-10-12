@@ -3,7 +3,7 @@
 ## Scope and signatures
 
 This is an independent local engineering action, never ordinary READY, delivery approval, old Run
-completion, all-tool stop proof or datastore consistency. The successor is permanently **inspection**:
+completion, all-tool stop proof or datastore consistency. The fault-retirement successor is **inspection** until separately confirmed maintenance completion:
 no TeamHost, dispatch/index workers or HTTP mutations. Unknown historical execution and scope remain
 UNKNOWN. The earlier unconnected `service_maintenance.py` prototype is not part of this implementation.
 
@@ -17,8 +17,9 @@ this executor after explicit engineering authorization. It is not an Agent/HTTP/
 `inspection_required(environment: Mapping[str,str]) -> bool` verifies the fixed private
 `console-inspection.json` and complete immutable archive chain. Missing marker returns False; malformed,
 foreign, link, changed chain/log or unsafe permissions raises fixed `FaultRetirementError` before any
-writer is created. `ASE_CONSOLE_MODE=inspection` also permits explicit readonly startup. A marker always
-forces inspection even if the environment says normal; no marker deletion/exit-inspection API is provided.
+writer is created. `ASE_CONSOLE_MODE=inspection` also permits explicit readonly startup. A marker forces inspection even if the environment says normal until the separate
+[maintenance-completion](maintenance-completion.md) plan/receipt/admission gate succeeds.
+The marker and entire archive are retained. There is no marker deletion or HTTP exit-inspection API.
 
 `require_inspection_retirement(env, instance, request, result)` is the only dead/initial fallback:
 exact original REFUSED objects/files, complete archive/receipt/marker and fresh original boot/PID absence
@@ -102,5 +103,5 @@ service retirement is a new engineering action separate from normal controlled s
 
 Rollback must retain compatible marker/receipt readers and the inspection-only gate. Never remove the
 marker, delete archives, clear the old failure latch, manufacture READY or start an old normal-only
-binary against this state. Exiting inspection and safely continuing a retained demand needs a separate
-reviewed engineering recovery; this change does not grant it.
+binary against this state. Exiting inspection uses the separate reviewed maintenance-completion gate. Safely continuing a retained
+demand still requires its own recovery authorization; neither service action grants it.
