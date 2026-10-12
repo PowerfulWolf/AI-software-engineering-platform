@@ -893,12 +893,28 @@ def _summarize(
                 facts=(
                     *(
                         (
-                            "平台已核验本轮开发执行确已停止，并检查保留工作区的完整文件清单。",  # noqa: RUF001
+                            "本轮因上下文超过平台输入容量而停止，开发模型尚未调用；"  # noqa: RUF001
+                            "旧工作是否已完成仍按原历史记录判断。",
+                            "完整旧补丁已核验并保留 "
+                            f"{recovery_plan.context_capacity_input.retained_patch.bytes} 字节，"  # noqa: RUF001
+                            "将作为 Coder 的必读输入；由 Coder 在目标基线上适配。",  # noqa: RUF001
+                            f"目标代码基线 {recovery_plan.target_base_revision}",
                         )
-                        if snapshot is not None
+                        if recovery_plan.context_capacity_input is not None
                         else ()
                     ),
-                    f"保留改动 {len(recovery_plan.capture.files)} 个文件",
+                    *(
+                        (
+                            "平台已核验本轮开发执行确已停止，并检查保留工作区的完整文件清单。",  # noqa: RUF001
+                        )
+                        if snapshot is not None and recovery_plan.context_capacity_input is None
+                        else ()
+                    ),
+                    *(
+                        (f"保留改动 {len(recovery_plan.capture.files)} 个文件",)
+                        if recovery_plan.context_capacity_input is None
+                        else ()
+                    ),
                     *(
                         (
                             "本轮误建的 Python 环境只保留在历史工作区，"  # noqa: RUF001

@@ -919,6 +919,57 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
         assert result.checkpoint_sha256 == parent.checkpoint_sha256
 
 
+def test_capacity_recovery_approval_explains_complete_old_patch_and_no_model_start(
+    tmp_path: Path,
+) -> None:
+    from tests.recovery.test_context_capacity_input import capacity_plan
+
+    adapter, host, entry = _adapter(tmp_path)
+    plan = capacity_plan(tmp_path / "project")
+    store = FileRecoveryStore.initialize(tmp_path / "recovery", scope=plan.source.scope)
+    store.put_plan(plan)
+    plan_path = tmp_path / "recovery" / f"plan-{plan.plan_sha256}.json"
+    child = ProjectDeliveryCheckpoint.create(
+        delivery_id="delivery_child",
+        sequence=1,
+        previous_checkpoint_sha256=None,
+        repository_id=plan.source.scope.repository_id,
+        repository_root=plan.source.scope.repository_root,
+        stage=DeliveryStage.BLOCKED,
+        stage_attempts=DeliveryStageAttempts(),
+        next_action=DeliveryNextAction.REQUEST_HUMAN,
+        failure_code=DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED,
+        failure_summary="Required context exceeds the configured input budget",
+        checkpointed_at=datetime(2026, 9, 15, tzinfo=UTC),
+    )
+    host.recovery_plan = plan
+    host.resume_result = DeliveryResumeResult(
+        outcome=DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
+        checkpoint=child,
+        next_action="Review the capacity recovery plan.",
+        recovery_plan_file=str(plan_path),
+        recovery_plan_sha256=plan.plan_sha256,
+    )
+    result = adapter.execute(
+        ContinueDeliveryIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+        )
+    )
+    assert result.approval is not None
+    facts = result.approval.facts
+    assert result.approval.plan_sha256 == plan.plan_sha256
+    assert result.approval.kind == "coder_recovery"
+    assert any("开发模型尚未调用" in fact for fact in facts)
+    assert plan.context_capacity_input is not None
+    assert any(str(plan.context_capacity_input.retained_patch.bytes) + " 字节" in f for f in facts)
+    assert f"目标代码基线 {plan.target_base_revision}" in facts
+    assert not any("保留改动 0 个文件" in fact or "本轮开发执行确已停止" in fact for fact in facts)
+    assert any("不会新建同名需求" in fact for fact in facts)
+    assert any("独立 QA 和 Reviewer" in fact for fact in facts)
+
+
 @pytest.mark.parametrize("joint", [False, True])
 @pytest.mark.parametrize("qa_source", ["none", "native", "standalone"])
 @pytest.mark.parametrize("swift", [False, True])
