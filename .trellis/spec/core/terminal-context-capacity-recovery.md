@@ -23,6 +23,9 @@ RecoveryPlan.context_capacity_input: ContextCapacityRecoveryInput | None
 
 - ordinary Source 必须有真实 `failed_run_id`；仅 capacity receipt 源省略 Run 字段。普通非空字段
   wire/hash 保持不变，不能借此放宽 native route reader 或旧 terminal workspace stop 验证。
+- capacity Source 的 `execution_baseline_sha256` 和 `execution_base_revision` 必须同时存在且非 null；
+  Python 与 `delivery-recovery.schema.json` 的 Source/Plan 条件约束一致，不能仅用 `required` 声明
+  nullable 属性。同步脚本只替换上一版容量条件，不删改普通源和历史 Schema guard。
 - 新 reader 使用现有 native dispatch、完整原审批链、完整 Project/Requirement 归属及基线 epoch
   校验；当前 Task、StateEvent 和 checkpoint 必须保持 original terminal identity。
 - 原原因匹配完整 `BUDGET_EXHAUSTED: Required context exceeds the configured input budget; no automatic retry.`；

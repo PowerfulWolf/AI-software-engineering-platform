@@ -38,7 +38,11 @@ def synchronize(schema: Schema, generated: Schema) -> Schema:
         },
         "then": {
             "required": ["execution_baseline_sha256", "execution_base_revision"],
-            "properties": {"failed_run_id": {"type": "null"}},
+            "properties": {
+                "failed_run_id": {"type": "null"},
+                "execution_baseline_sha256": {"type": "string"},
+                "execution_base_revision": {"type": "string"},
+            },
         },
         "else": {
             "required": ["failed_run_id"],
@@ -46,6 +50,10 @@ def synchronize(schema: Schema, generated: Schema) -> Schema:
         },
     }
     rules = _array(source.setdefault("allOf", []))
+    legacy_source_rule = deepcopy(source_rule)
+    _object(legacy_source_rule["then"])["properties"] = {"failed_run_id": {"type": "null"}}
+    if legacy_source_rule in rules:
+        rules.remove(legacy_source_rule)
     if source_rule not in rules:
         rules.append(source_rule)
     plan = _object(definitions["RecoveryPlan"])

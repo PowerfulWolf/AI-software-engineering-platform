@@ -1041,6 +1041,12 @@
             "properties": {
               "failed_run_id": {
                 "type": "null"
+              },
+              "execution_baseline_sha256": {
+                "type": "string"
+              },
+              "execution_base_revision": {
+                "type": "string"
               }
             }
           },
