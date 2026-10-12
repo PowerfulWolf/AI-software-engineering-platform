@@ -23,8 +23,10 @@ NATIVE_RULE_EPOCH_NAMESPACE = "baseline-native-rules"
 
 def load_native_rule_epoch(records: KnowledgeRecordStore, sha256: str) -> NativeRuleEpoch:
     """20 MB secure store budget exceeds the epoch's 16 MiB serialized byte limit."""
-    epoch = records.get(NATIVE_RULE_EPOCH_NAMESPACE, sha256, NativeRuleEpoch)
-    epoch.validate_integrity()
+    epoch = records.read_recovery_record(
+        NATIVE_RULE_EPOCH_NAMESPACE, sha256, NativeRuleEpoch, kind="native-rule-epoch"
+    )
+    assert epoch is not None
     if epoch.epoch_sha256 != sha256:
         raise ValueError("完整原生规范版本与绑定的摘要不一致")
     return epoch

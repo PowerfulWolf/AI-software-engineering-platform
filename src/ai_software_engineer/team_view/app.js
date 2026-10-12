@@ -56,6 +56,18 @@ async function readTeamJson(url, signal, {detail = false, current = () => true, 
     return current() ? publish(value) : null;
   }, signal);
 }
+async function readCurrentTeamJson(url, signal, options) {
+  for (let attempt = 0; ; attempt++) {
+    if (!options.current()) return null;
+    try {return await readTeamJson(url, signal, options);}
+    catch (error) {
+      if (!options.current()) return null;
+      if (!(error instanceof TeamReadFailure) || error.kind !== "busy" ||
+          attempt >= teamDetailBusyDelays.length) throw error;
+      await waitForTeamDetailRetry(teamDetailBusyDelays[attempt], signal);
+    }
+  }
+}
 function waitForTeamDetailRetry(delay, signal) {
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
@@ -11658,7 +11670,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       };
       const endpoint = summaryRead ? "/api/v1/team-summary" : "/api/v1/team";
       const url = target ? endpoint + "?project_id=" + encodeURIComponent(target) : endpoint;
-      const observation = await readTeamJson(url, controller.signal, {
+      const observation = await readCurrentTeamJson(url, controller.signal, {
         current: currentRead,
         publish: value => {
           if (superseded()) return null;

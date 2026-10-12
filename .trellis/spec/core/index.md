@@ -44,6 +44,8 @@
 
 - [Team summary/detail reads](team-summary-detail.md): typed current summaries, exact complete
   resource reads, semantic record versions and unchanged read-only worker admission.
+- [Sealed-body redaction scope](sealed-body-redaction-scope.md): bounded pure clean-body
+  facts with unchanged complete scanning and source/patch priority.
 - [Team summary/detail UI](team-summary-detail-ui.md): current-state summaries, selected complete
   reading, owner-fenced asynchronous publication and exact ProductSpec approval reads.
 - [Capacity parent journal scope](capacity-parent-journal-scope.md): per-observation immutable

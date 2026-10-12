@@ -289,6 +289,73 @@ function coordinatedReads() {
   return {...h,calls,state,value,summaryStarted,detailStarted};
 }
 
+test("summary refresh retries fixed external busy without publishing a read failure",async()=>{
+  const h=coordinatedReads(),original=h.context.readFixture;let summaries=0;
+  h.context.readFixture=async(url,options)=>{
+    if(url.startsWith("/api/v1/team-summary") && summaries++ === 0) {
+      h.calls.push(url);
+      return {ok:false,status:503,json:async()=>({error:{code:"TEAM_READ_IN_PROGRESS"}})};
+    }
+    return original(url,options);
+  };
+  h.run("fetch=readFixture");
+  const refreshing=h.run("refresh()");
+  for(let turn=0;turn<50 && ![...h.timers.values()].some(timer=>timer.delay === 1000);turn++) await Promise.resolve();
+  const retry=[...h.timers.values()].find(timer=>timer.delay === 1000);
+  assert.ok(retry,"fixed busy should be retried inside the current refresh deadline");
+  assert.equal(h.run("teamReadIssue"),null);
+  retry.fn();await refreshing;
+  await h.run("teamDetailRead?.promise");
+  assert.equal(summaries,2);
+  assert.equal(h.run("teamReadIssue"),null);
+  assert.equal(h.run("teamDetailRead.status"),"ready");
+});
+
+test("summary busy retries stay bounded and never hide actual integrity failure",async()=>{
+  for(const failure of ["busy","unavailable"]) {
+    const h=coordinatedReads(),original=h.context.readFixture;let attempts=0;
+    h.context.readFixture=async(url,options)=>{
+      if(url.startsWith("/api/v1/team-summary")) {
+        h.calls.push(url);attempts++;
+        return {ok:false,status:503,json:async()=>({error:{code:failure === "busy" ? "TEAM_READ_IN_PROGRESS" : "TEAM_UNAVAILABLE"}})};
+      }
+      return original(url,options);
+    };
+    h.run("fetch=readFixture");
+    const reading=h.run("refresh()");
+    if(failure === "busy") for(const delay of [1000,2000,4000]) {
+      for(let turn=0;turn<60 && ![...h.timers.values()].some(timer=>timer.delay === delay);turn++) await Promise.resolve();
+      const timer=[...h.timers.values()].find(timer=>timer.delay === delay);assert.ok(timer);timer.fn();
+    }
+    await reading;
+    assert.equal(attempts,failure === "busy" ? 4 : 1);
+    assert.equal(h.run("teamReadIssue"),failure);
+    assert.equal(h.run("canControlCurrentTeam()"),false);
+  }
+});
+
+test("Project navigation during summary busy delay sends no stale retry GET",async()=>{
+  const h=coordinatedReads(),original=h.context.readFixture;let attempts=0;
+  h.run("mayCloseComposer=()=>true");
+  h.context.readFixture=async(url,options)=>{
+    if(url.startsWith("/api/v1/team-summary") && attempts++ === 0) {
+      h.calls.push(url);return {ok:false,status:503,json:async()=>({error:{code:"TEAM_READ_IN_PROGRESS"}})};
+    }
+    return original(url,options);
+  };
+  h.run("fetch=readFixture");
+  const reading=h.run("refresh()");
+  for(let turn=0;turn<60 && ![...h.timers.values()].some(timer=>timer.delay === 1000);turn++) await Promise.resolve();
+  const retry=[...h.timers.values()].find(timer=>timer.delay === 1000);assert.ok(retry);
+  const navigation=h.run('refresh("project_next")');retry.fn();
+  await Promise.all([reading,navigation]);
+  const projects=h.calls.filter(url=>url.startsWith("/api/v1/team-summary"))
+    .map(url=>new URL(url,"http://fixture").searchParams.get("project_id"));
+  assert.deepEqual(projects,["project_current","project_next"]);
+  assert.equal(h.run("currentProjectId()"),"project_next");
+  assert.equal(h.run("teamReadWaiters.size"),0);
+});
+
 test("real refresh holds summary while selected body waits and automatically reads after publication",async()=>{
   const h=coordinatedReads();let release;
   h.state.holdSummary=new Promise(resolve=>release=resolve);

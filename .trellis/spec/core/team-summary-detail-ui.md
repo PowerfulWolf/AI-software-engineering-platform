@@ -16,6 +16,7 @@ requireProductApprovalRead(intent, expectedBinding)
 withTeamRead(read, signal)                 // one page-owned GET/body/publication
 waitForTeamRead(signal)                    // cancelable local wait, no snapshot
 readTeamJson(url, signal, {detail, current, publish})
+readCurrentTeamJson(url, signal, {current, publish}) // same finite busy policy for summary/full
 waitForTeamDetailRetry(delay, signal)        // one bounded owner/deadline retry
 ```
 
@@ -56,6 +57,12 @@ waitForTeamDetailRetry(delay, signal)        // one bounded owner/deadline retry
   最多额外三次，分别等待1、2、4秒；40秒总体 deadline 仍有效。等待期间说明正在稍后
   重读，耗尽保留明确手动入口；不重复读取已成功的相同 source。`TEAM_UNAVAILABLE`、409、
   非法 JSON/正文/身份不匹配均不自动重试，不能以调度掩盖原错误。任何等待不恢复批准资格。
+
+- 当前摘要/full 刷新同样仅对固定 `TEAM_READ_IN_PROGRESS` 做 1/2/4 秒最多三次额外重试，
+  保留原 40 秒总 deadline；每次延迟及实际 GET 前核验最新 Project/Team/contract owner。
+  各次 HTTP 完成即释放客户端读取 owner，辅助读取继续。重试耗尽才发布 busy；
+  `TEAM_UNAVAILABLE` 立即沿原核验失败路径处理，无 fallback。刷新期间原控制门禁继续生效。
+  `productApprovalReadReady` 仅表示正文已读，不代替 `canControlCurrentTeam` 的当前执行权限。
 
 - 同selection/source自动刷新不重复GET。Team/Project/page/实体/selection revision或关闭
   改变owner，abort旧HTTP、递增generation；每次await后重验owner和source key。冻结

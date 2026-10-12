@@ -14,7 +14,7 @@ from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.execution_baseline import FullGitRevision
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
-from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.redaction import redact_body_text
 from ai_software_engineer.repository_profile import NativeRuleSource
 
 MAX_NATIVE_RULE_EPOCH_BYTES = 16 * 1024 * 1024
@@ -92,7 +92,7 @@ class NativeRuleEpochBody(DomainModel):
         if (
             len(data) != self.content_bytes
             or hashlib.sha256(data).hexdigest() != self.content_sha256
-            or redact_text(self.content).text != self.content
+            or redact_body_text(self.content).text != self.content
             or self.source.byte_length > MAX_NATIVE_RULE_SOURCE_BYTES
         ):
             raise ValueError("原生规范正文必须完整、脱敏并匹配内容摘要")

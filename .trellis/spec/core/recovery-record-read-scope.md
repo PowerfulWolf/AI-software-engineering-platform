@@ -13,7 +13,7 @@ current_recovery_record_reads() -> RecoveryRecordReads | None
 finish_recovery_record_reads() -> None
 decode_verified_record(
     *, path: Path,
-    kind: Literal["baseline-plan", "baseline-start", "context"],
+    kind: Literal["baseline-plan", "baseline-start", "context", "native-rule-epoch"],
     model: type[T], record_key: str, payload: bytes, allow_reuse: bool = True,
 ) -> T
 KnowledgeRecordStore.read_recovery_record(
@@ -24,14 +24,15 @@ KnowledgeRecordStore.read_recovery_record(
 
 `payload` must be the current complete bytes read through the original store's trusted
 file port. There is no caller-provided decoder or validator and no Agent-exposed cache API.
-Exact allowed models are `ExecutionBaselinePlan`, `BaselineOperationStart`, and
-`ContextBundle`. Subclasses, authority records and current Task/READY/facts models cannot
+Exact allowed models are `ExecutionBaselinePlan`, `BaselineOperationStart`, `ContextBundle`
+and immutable historical `NativeRuleEpoch` (`native-rule-epoch`). Subclasses, authority
+records and current Task/READY/facts models cannot
 register themselves by claiming another kind.
 
 Native Requirement history additionally uses the fixed internal compact-edge port from
 [recovery-history-observation.md](recovery-history-observation.md). Its `_VerifiedJointEdge`
 receipts share this owner and budget. Public `RecordKind`/`decode_verified_record` stay
-restricted to the three models above; callers cannot submit arbitrary Journal models or
+restricted to the four models above; callers cannot submit arbitrary Journal models or
 validators through those ports. The observer derives receipts after the original complete
 JointCheckpoint codec and successor checks.
 
@@ -51,6 +52,14 @@ decoding for Plan/Start or UTF-8/schema decoding for Context. Registration addit
 executes the complete Plan/Start `validate_integrity()` or content-addressed Context manifest
 validation and verifies the exact Plan SHA, Start's embedded Plan SHA, or Context ID.
 Malformed envelope bytes cannot be registered by returning an unrelated valid model.
+
+`manager.baseline_native_rules.load_native_rule_epoch` uses the fixed `native-rule-epoch`
+port. Full bytes/envelope/schema/integrity and exact `epoch_sha256` key are checked on a
+miss; a hit requires the original complete bytes hash. Approved change references,
+`require_epoch`, Task/scope, authority and binding predecessor checks stay independent.
+This adds no budget pool. `tests/recovery/test_native_rule_read_scope.py` checks full-read
+2/decode 1, next-scope cold reading, private-copy isolation, changed resealed body/key,
+symlink/missing original rejection and zero-budget complete fallback.
 
 Each result is a deep copy of a private validated model. Nested Task metadata in a historical
 Plan and other mutable containers cannot poison later consumers. On bytes changing, discard

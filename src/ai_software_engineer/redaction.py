@@ -99,7 +99,9 @@ _MAX_INSPECTION_ENTRIES = 512
 _MAX_INSPECTION_BYTES = 16 * 1024 * 1024
 
 type _SourceInspectionKey = tuple[Literal["source", "patch"], str | None, str]
-type _GenericInspectionKey = tuple[Literal["generic"], tuple[tuple[str, re.Pattern[str]], ...], str]
+type _GenericInspectionKey = tuple[
+    Literal["generic", "generic-body"], tuple[tuple[str, re.Pattern[str]], ...], str
+]
 type _InspectionKey = _SourceInspectionKey | _GenericInspectionKey
 
 
@@ -140,7 +142,12 @@ class _SourceInspectionCache:
             if generic:
                 return
             # Preserve source/patch capacity by evicting only opportunistic generic facts.
-            generic_keys = tuple(stored for stored in self.facts if stored[0] == "generic")
+            generic_keys = tuple(
+                stored
+                for stored in self.facts
+                if stored[0] == "generic"
+                or (key[0] != "generic-body" and stored[0] == "generic-body")
+            )
             generic_bytes = sum(self.sizes[stored] for stored in generic_keys)
             if (
                 len(self.facts) - len(generic_keys) >= _MAX_INSPECTION_ENTRIES
@@ -193,12 +200,25 @@ def source_inspection_scope() -> Iterator[None]:
 
 def redact_text(content: str) -> RedactedText:
     """Replace supported secret shapes without retaining original values."""
+    return _redact_text(content, body=False)
+
+
+def redact_body_text(content: str) -> RedactedText:
+    """Same complete redaction, with clean sealed bodies preceding small generic facts.
+
+    Only a no-match pure fact can be retained. The original shared bounds, exact
+    full text/rules and higher source/patch priority remain; no authority is reused.
+    """
+    return _redact_text(content, body=True)
+
+
+def _redact_text(content: str, *, body: bool) -> RedactedText:
     cache = _SOURCE_INSPECTION_CACHE.get()
     if cache is not None and cache.source_scan_depth:
         # Internal scans keep their original cost and leave capacity for their parent fact.
         cache = None
     patterns = _SECRET_PATTERNS
-    key: _GenericInspectionKey = ("generic", patterns, content)
+    key: _GenericInspectionKey = ("generic-body" if body else "generic", patterns, content)
     if cache is not None and cache.facts.get(key) == ():
         return RedactedText(text=content, occurrences=())
     redacted = content

@@ -293,6 +293,15 @@ class _EvaluationEventCache:
         return self._by_root[root]
 
 
+type _TaskReadKey = tuple[Path, str | None, str, str, str, str | None, bool]
+
+
+@dataclass(slots=True)
+class _TaskBodyReference:
+    task_id: str | None = None
+    state_artifact_ids: tuple[str, ...] = ()
+
+
 @dataclass(slots=True)
 class _TaskReadSnapshot:
     """Reuse exact native Task projections inside one read-only SQL transaction.
@@ -309,9 +318,8 @@ class _TaskReadSnapshot:
     _evaluations: _EvaluationEventCache = field(default_factory=_EvaluationEventCache)
     _baselines: BaselineBindingSnapshot = field(default_factory=BaselineBindingSnapshot)
     _engineering: EngineeringHistorySnapshot = field(default_factory=EngineeringHistorySnapshot)
-    _views: dict[tuple[Path, str | None, str, str, str, str | None, bool], TaskView] = field(
-        default_factory=dict
-    )
+    _views: dict[_TaskReadKey, TaskView] = field(default_factory=dict)
+    _body_references: dict[_TaskReadKey, _TaskBodyReference] = field(default_factory=dict)
 
     def read(
         self,
@@ -321,7 +329,7 @@ class _TaskReadSnapshot:
         dispatch_override: DeliveryAllocation | None = None,
         include_details: bool = True,
     ) -> TaskView:
-        identity = (
+        identity: _TaskReadKey = (
             native.sidecar,
             native.team_id,
             native.checkpoint.checkpoint_sha256,
@@ -331,18 +339,33 @@ class _TaskReadSnapshot:
             include_details,
         )
         if identity not in self._views:
-            self._views[identity] = _read_task_details(
-                native,
-                self._cursor,
-                base,
-                dispatch_override=dispatch_override,
-                route_attempts=self._route_attempts,
-                branch_cache=self._branches,
-                evaluation_events=self._evaluations,
-                baseline_bindings=self._baselines,
-                engineering_history_snapshot=self._engineering,
-                include_details=include_details,
-            )
+            compact_key: _TaskReadKey = (*identity[:-1], False)
+            reference = self._body_references.get(compact_key)
+            if include_details and reference is not None and reference.task_id is not None:
+                self._views[identity] = _hydrate_task_body(
+                    native,
+                    self._cursor,
+                    base,
+                    self._views[compact_key],
+                    reference,
+                    self._route_attempts,
+                )
+            else:
+                reference = _TaskBodyReference()
+                self._views[identity] = _read_task_details(
+                    native,
+                    self._cursor,
+                    base,
+                    dispatch_override=dispatch_override,
+                    route_attempts=self._route_attempts,
+                    branch_cache=self._branches,
+                    evaluation_events=self._evaluations,
+                    baseline_bindings=self._baselines,
+                    engineering_history_snapshot=self._engineering,
+                    include_details=include_details,
+                    body_reference=reference,
+                )
+                self._body_references[identity] = reference
         return self._views[identity]
 
 
@@ -388,9 +411,10 @@ class ProductionTeamReader:
                 assert isinstance(result, (RequestDetail, TaskDetail))
                 # Reopen all current source and SQL facts after the complete selected
                 # body was read. A body never pins permission across observations.
-                current = self._read_snapshot(query.project_id, summary_only=True)
-                assert isinstance(current, TeamSummary)
-                self._require_detail_source(current, query)
+                current = self._read_snapshot(query.project_id, source_query=query)
+                assert isinstance(current, TeamDetailSource)
+                if current != query.source():
+                    raise TeamDetailStale("所选详情的版本或归属已更新, 请刷新后重新打开。")
                 return result
         except (TeamDetailNotFound, TeamDetailStale):
             raise
@@ -413,15 +437,19 @@ class ProductionTeamReader:
         *,
         summary_only: bool = False,
         detail_query: TeamDetailQuery | None = None,
-    ) -> TeamSnapshot | TeamSummary | TeamDetail:
-        full_snapshot = not summary_only and detail_query is None
+        source_query: TeamDetailQuery | None = None,
+    ) -> TeamSnapshot | TeamSummary | TeamDetail | TeamDetailSource:
+        full_snapshot = not summary_only and detail_query is None and source_query is None
+        if detail_query is not None and source_query is not None:
+            raise ValueError("a Team read has only one selected mode")
         teams = discover_team_workspaces(self.config.platform_root)
         if len(teams) != 1:
             raise ValueError("team workspace has not been prepared")
         team = teams[0]
         if team.manifest.team_id != self.config.team_id:
             raise ValueError("configured Team identity does not match the prepared Team")
-        if detail_query is not None and detail_query.team_id != team.manifest.team_id:
+        selected_query = detail_query or source_query
+        if selected_query is not None and selected_query.team_id != team.manifest.team_id:
             raise TeamDetailNotFound("所选需求或任务不属于当前团队。")
         projects = team.project_registry().discover()
         selected_id = project_id or self.config.default_project_id
@@ -431,7 +459,7 @@ class ProductionTeamReader:
             (item for item in projects if item.manifest.project_id == selected_id), None
         )
         if selected_id is not None and selected is None:
-            if summary_only or detail_query is not None:
+            if summary_only or selected_query is not None:
                 raise TeamDetailNotFound("所选项目不存在, 或已删除。")
             raise ValueError("Project workspace has not been prepared")
         workforce_workspace = TeamWorkforceWorkspace.from_team(team)
@@ -683,6 +711,16 @@ class ProductionTeamReader:
         tasks: list[TaskView] = []
         native_views: list[tuple[_Native, TaskView]] = []
         native_by_task: dict[str, tuple[_Native, str, ScopeView]] = {}
+        selected_native_task = (
+            selected_query is not None
+            and selected_query.kind == "task"
+            and selected_query.expected_work_kind != "candidate_verification"
+        )
+        selected_verification = (
+            selected_query is not None
+            and selected_query.kind == "task"
+            and selected_query.expected_work_kind == "candidate_verification"
+        )
         branch_cache = _CandidateBranchCache()
         if natives:
             assert selected is not None
@@ -745,6 +783,12 @@ class ProductionTeamReader:
                     cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
                     task_reads = _TaskReadSnapshot(cursor, route_attempts, branch_cache)
                     for native, base in native_views:
+                        if selected_verification or (
+                            selected_native_task
+                            and selected_query is not None
+                            and selected_query.id != base.id
+                        ):
+                            continue
                         include_task = full_snapshot or (
                             detail_query is not None
                             and detail_query.kind == "task"
@@ -816,29 +860,39 @@ class ProductionTeamReader:
                         tasks.append(view)
                         resource_checkpoints[view.id] = native.checkpoint.checkpoint_sha256
                         projected_native_views.append((native, view))
-                    tasks.extend(
-                        _read_verifications(
-                            cursor,
-                            native_by_task,
-                            team_id=team.manifest.team_id,
-                            project_id=selected.manifest.project_id,
-                            retired_task_sources=retired_task_sources,
-                            route_attempts=route_attempts,
-                            branch_cache=branch_cache,
-                            task_reads=task_reads,
-                            include_details=full_snapshot,
-                            detail_query=detail_query,
-                            requirement_checkpoints={
-                                request.id: request.checkpoint_sha256 for request in requests
-                            },
-                            resource_states=resource_states if not full_snapshot else None,
+                    if not selected_native_task:
+                        tasks.extend(
+                            _read_verifications(
+                                cursor,
+                                native_by_task,
+                                team_id=team.manifest.team_id,
+                                project_id=selected.manifest.project_id,
+                                retired_task_sources=retired_task_sources,
+                                route_attempts=route_attempts,
+                                branch_cache=branch_cache,
+                                task_reads=task_reads,
+                                include_details=full_snapshot,
+                                detail_query=detail_query,
+                                requirement_checkpoints={
+                                    request.id: request.checkpoint_sha256 for request in requests
+                                },
+                                resource_states=resource_states if not full_snapshot else None,
+                                selected_id=selected_query.id
+                                if selected_verification and selected_query is not None
+                                else None,
+                            )
                         )
-                    )
             finally:
                 connection.rollback()
                 connection.close()
         else:
             for native, base in native_views:
+                if selected_verification or (
+                    selected_native_task
+                    and selected_query is not None
+                    and selected_query.id != base.id
+                ):
+                    continue
                 tasks.append(base)
                 resource_checkpoints[base.id] = native.checkpoint.checkpoint_sha256
                 if not full_snapshot:
@@ -897,47 +951,50 @@ class ProductionTeamReader:
         if any(a.agent_id not in known_agents for t in tasks for a in t.assignments):
             raise ValueError("assignment references an unknown Team member")
         agents = _agent_views(profiles, requests, tasks, historical_work_ids=historical_work_ids)
-        header = _TeamReadHeader(
-            as_of=datetime.now(UTC),
-            team_id=team.manifest.team_id,
-            team_name=_safe(team.manifest.name),
-            selected_project_id=selected.manifest.project_id if selected is not None else None,
-            projects=tuple(
-                ProjectView(
-                    id=item.manifest.project_id,
-                    name=_safe(item.manifest.name),
-                    repository_count=len(item.repository_registry().discover()),
-                    requirement_count=len(
-                        set(
-                            path.name
-                            for path in (
-                                joint_directories
+
+        def header() -> _TeamReadHeader:
+            return _TeamReadHeader(
+                as_of=datetime.now(UTC),
+                team_id=team.manifest.team_id,
+                team_name=_safe(team.manifest.name),
+                selected_project_id=selected.manifest.project_id if selected is not None else None,
+                projects=tuple(
+                    ProjectView(
+                        id=item.manifest.project_id,
+                        name=_safe(item.manifest.name),
+                        repository_count=len(item.repository_registry().discover()),
+                        requirement_count=len(
+                            set(
+                                path.name
+                                for path in (
+                                    joint_directories
+                                    if selected is not None
+                                    and item.manifest.project_id == selected.manifest.project_id
+                                    else _directories(item.requirements_root, "delivery_multi_*")
+                                )
+                            )
+                            - (
+                                retired
                                 if selected is not None
                                 and item.manifest.project_id == selected.manifest.project_id
-                                else _directories(item.requirements_root, "delivery_multi_*")
+                                else _retired_requirement_ids(
+                                    item,
+                                    _JointHistorySnapshot(
+                                        JointJournal(item.requirements_root, read_only=True)
+                                    ),
+                                )
                             )
-                        )
-                        - (
-                            retired
-                            if selected is not None
-                            and item.manifest.project_id == selected.manifest.project_id
-                            else _retired_requirement_ids(
-                                item,
-                                _JointHistorySnapshot(
-                                    JointJournal(item.requirements_root, read_only=True)
-                                ),
-                            )
-                        )
-                    ),
-                )
-                for item in projects
-            ),
-            agents=agents,
-        )
+                        ),
+                    )
+                    for item in projects
+                ),
+                agents=agents,
+            )
+
         ordered_requests = tuple(sorted(requests, key=lambda r: r.id))
         ordered_tasks = tuple(sorted(tasks, key=lambda t: (t.last_activity, t.id), reverse=True))
         if full_snapshot:
-            return TeamSnapshot(**header, requests=ordered_requests, tasks=ordered_tasks)
+            return TeamSnapshot(**header(), requests=ordered_requests, tasks=ordered_tasks)
         owners = {request.id: request for request in ordered_requests}
         sources: dict[tuple[str, str], TeamDetailSource] = {}
         for request in ordered_requests:
@@ -963,6 +1020,11 @@ class ProductionTeamReader:
                 checkpoint_sha256,
                 resource_states[task.id],
             )
+        if source_query is not None:
+            source = sources.get((source_query.kind, source_query.id))
+            if source is None:
+                raise TeamDetailNotFound("所选需求或任务不存在, 或已删除。")
+            return source
         if detail_query is not None:
             source = sources.get((detail_query.kind, detail_query.id))
             if source is None:
@@ -971,15 +1033,15 @@ class ProductionTeamReader:
                 raise TeamDetailStale("所选详情的版本或归属已更新, 请刷新后重新打开。")
             if detail_query.kind == "request":
                 return RequestDetail(
-                    as_of=header["as_of"], scope=source, resource=owners[detail_query.id]
+                    as_of=datetime.now(UTC), scope=source, resource=owners[detail_query.id]
                 )
             return TaskDetail(
-                as_of=header["as_of"],
+                as_of=datetime.now(UTC),
                 scope=source,
                 resource=next(task for task in ordered_tasks if task.id == detail_query.id),
             )
         return TeamSummary(
-            **header,
+            **header(),
             requests=tuple(
                 RequestSummary(
                     **{
@@ -2209,6 +2271,7 @@ def _read_verifications(
     detail_query: TeamDetailQuery | None = None,
     requirement_checkpoints: Mapping[str, str] | None = None,
     resource_states: dict[str, str] | None = None,
+    selected_id: str | None = None,
 ) -> tuple[TaskView, ...]:
     """Project verification reservations as first-class read-side work items."""
     cursor.execute(
@@ -2251,6 +2314,8 @@ def _read_verifications(
         if reservation.repository_id != native.checkpoint.repository_id:
             raise ValueError("verification reservation project mismatch")
         verification_id = f"verification_{reservation.plan_sha256[:32]}"
+        if selected_id is not None and selected_id != verification_id:
+            continue
         if (
             detail_query is not None
             and detail_query.kind == "task"
@@ -2525,6 +2590,45 @@ def _verification_view(
     )
 
 
+def _hydrate_task_body(
+    native: _Native,
+    cursor: DictCursor,
+    base: TaskView,
+    compact: TaskView,
+    reference: _TaskBodyReference,
+    route_attempts: _ModelRouteAttemptCache,
+) -> TaskView:
+    """Hydrate one exact projection inside its original read-only SQL snapshot.
+
+    Current engineering facts were validated before selecting the body. Reopen
+    original accepted artifacts, receipts and claims through the unchanged port;
+    the outer detail read independently fences the current source afterward.
+    """
+    if reference.task_id is None or compact.task_id != reference.task_id:
+        raise ValueError("selected Task body lost its validated SQL identity")
+    history = _read_accepted_artifact_history(
+        cursor,
+        task_id=reference.task_id,
+        sidecar=native.sidecar,
+        state_artifact_ids=reference.state_artifact_ids,
+    )
+    return compact.model_copy(
+        update={
+            "documents": base.documents
+            + tuple(
+                DocumentView(
+                    name=artifact.kind.value,
+                    source_uri=f"artifact://{artifact.artifact_id}",
+                    sha256=artifact.integrity.sha256,
+                    content=_safe(artifact.model_dump_json(indent=2)),
+                )
+                for artifact in history.artifacts
+            ),
+            "runs": _read_runs(native, reference.task_id, route_attempts=route_attempts),
+        }
+    )
+
+
 def _read_task_details(
     native: _Native,
     cursor: DictCursor,
@@ -2537,6 +2641,7 @@ def _read_task_details(
     baseline_bindings: BaselineBindingSnapshot | None = None,
     engineering_history_snapshot: EngineeringHistorySnapshot | None = None,
     include_details: bool = True,
+    body_reference: _TaskBodyReference | None = None,
 ) -> TaskView:
     cp = native.checkpoint
     if cp.dispatch_commit_id is None and dispatch_override is None:
@@ -2601,6 +2706,11 @@ def _read_task_details(
         sidecar=native.sidecar,
         state_artifact_ids=tuple(identity for event in events for identity in event.artifact_ids),
     )
+    if body_reference is not None:
+        body_reference.task_id = task.id
+        body_reference.state_artifact_ids = tuple(
+            identity for event in events for identity in event.artifact_ids
+        )
     artifacts = artifact_history.artifacts
     if evaluation_events is None:
         evaluation_events = _EvaluationEventCache()

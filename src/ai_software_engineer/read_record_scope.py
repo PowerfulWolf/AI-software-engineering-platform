@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from ai_software_engineer.domain.model import DomainModel
 
-RecordKind = Literal["baseline-plan", "baseline-start", "context"]
+RecordKind = Literal["baseline-plan", "baseline-start", "context", "native-rule-epoch"]
 type _RecordKey = tuple[str, str, type[DomainModel], str]
 
 if TYPE_CHECKING:
@@ -227,6 +227,7 @@ def _decode_record[T: DomainModel](
 
 def _require_record_key(kind: RecordKind, value: DomainModel, record_key: str) -> None:
     from ai_software_engineer.context.models import ContextBundle
+    from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
     from ai_software_engineer.manager.baseline_models import (
         BaselineOperationStart,
         ExecutionBaselinePlan,
@@ -239,6 +240,8 @@ def _require_record_key(kind: RecordKind, value: DomainModel, record_key: str) -
         if kind == "baseline-plan" and isinstance(value, ExecutionBaselinePlan)
         else value.plan.plan_sha256
         if kind == "baseline-start" and isinstance(value, BaselineOperationStart)
+        else value.epoch_sha256
+        if kind == "native-rule-epoch" and isinstance(value, NativeRuleEpoch)
         else None
     )
     if actual != record_key:
@@ -250,6 +253,7 @@ def _validate_record(kind: RecordKind, value: DomainModel, record_key: str) -> N
     from ai_software_engineer.context.models import ContextBundle
     from ai_software_engineer.context.ports import ContextCorruption
     from ai_software_engineer.context.store import _validate_context_identity
+    from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
     from ai_software_engineer.manager.baseline_models import (
         BaselineOperationStart,
         ExecutionBaselinePlan,
@@ -260,7 +264,7 @@ def _validate_record(kind: RecordKind, value: DomainModel, record_key: str) -> N
     _require_record_key(kind, value, record_key)
     if isinstance(value, ContextBundle):
         _validate_context_identity(value, ContextCorruption)
-    elif isinstance(value, ExecutionBaselinePlan | BaselineOperationStart):
+    elif isinstance(value, ExecutionBaselinePlan | BaselineOperationStart | NativeRuleEpoch):
         value.validate_integrity()
     else:
         raise ValueError("recovery immutable record has an unsupported type")
@@ -269,6 +273,7 @@ def _validate_record(kind: RecordKind, value: DomainModel, record_key: str) -> N
 def _allowed_record_model(kind: RecordKind, model: type[DomainModel]) -> bool:
     # Lazy imports avoid adapter/model construction cycles; exact trusted types only.
     from ai_software_engineer.context.models import ContextBundle
+    from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
     from ai_software_engineer.manager.baseline_models import (
         BaselineOperationStart,
         ExecutionBaselinePlan,
@@ -280,5 +285,6 @@ def _allowed_record_model(kind: RecordKind, model: type[DomainModel]) -> bool:
             "context": ContextBundle,
             "baseline-plan": ExecutionBaselinePlan,
             "baseline-start": BaselineOperationStart,
+            "native-rule-epoch": NativeRuleEpoch,
         }[kind]
     )

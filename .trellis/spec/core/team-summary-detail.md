@@ -54,6 +54,16 @@ sidecar 的 Project/repository binding、原 request/preparation、Product check
 
 ## Read lifecycle and performance boundary
 
+详情返回完整选中资源，不装配未返回的 ProjectView 统计。Task 详情与其 source fence 仅装配
+选中 native Task（含全部历史）或选中 candidate verification（含真实 source Task 核验）。
+原 joint/native ownership history 与 reservation SQL envelope 仍完整核验；其他卡片的工程、
+队列和正文装配留给普通摘要/full。结束时使用相同 selected Team/Project
+文件与独立 SQL snapshot 重新计算 exact `TeamDetailSource`；完整读取该来源所需全部事实并比较
+完整 query，不为 fence 构造无关 Project 的统计。普通 full/summary 仍提供完整 Project 列表。
+同一 `_TaskReadSnapshot` 的 compact→body 仅重新读取 accepted artifact 原文件和完整 receipt/
+claim 校验并装配 documents/runs；已核验的工程状态来自同一 exact projection，不能跨 transaction
+或 HTTP 复用。本文后面的“全新当前摘要 fence”指同一当前来源计算，不能解释成可缓存授权。
+
 摘要从装配开始跳过未选中 pretty documents/dialogue、run 展示与历史 Task 完整 hydration，
 禁止先 full snapshot 再 strip。摘要仍完整核验当前 Task 所需 accepted artifact、evaluation、
 engineering disposition、continuation 和 exact receipt，不能删掉决定安全恢复与终态的事实读取。

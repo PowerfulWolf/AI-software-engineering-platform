@@ -631,9 +631,15 @@ def test_detail_rechecks_source_after_complete_body_read(
         *,
         summary_only: bool = False,
         detail_query: TeamDetailQuery | None = None,
+        source_query: TeamDetailQuery | None = None,
     ) -> TeamSummary | TeamDetail | object:
         nonlocal calls
-        result = original(project_id, summary_only=summary_only, detail_query=detail_query)
+        result = original(
+            project_id,
+            summary_only=summary_only,
+            detail_query=detail_query,
+            source_query=source_query,
+        )
         calls += 1
         if calls == 1:
             _add_product(journal, parent)
