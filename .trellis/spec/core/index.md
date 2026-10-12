@@ -38,6 +38,11 @@
 
 ## Files
 
+- [Context capacity recovery](context-input-capacity-recovery.md): claimed no-model-start
+  receipts, exact continuation and immutable legacy terminal compatibility.
+- [Complete Context prompt rendering](context-prompt-rendering.md): verified reading
+  projections, full original text fallback and actual final input capacity checks.
+
 - [`terminal-context-capacity-recovery.md`](terminal-context-capacity-recovery.md): exact legacy
   no-start Context observations, complete retained patch and same-Requirement human approval.
 

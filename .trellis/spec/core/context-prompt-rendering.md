@@ -18,6 +18,11 @@ and state that it creates no execution or verdict authority.
 Duplicate object keys at any depth, non-finite numeric constants, floating point
 overflow/precision loss, invalid JSON and primitive prose remain the original
 complete text. No permissive parse may silently discard information.
+Escaped lone surrogate keys/values, Decimal exponent errors and nesting beyond
+the typed JsonValue recursion limit also retain the complete original UTF-8
+text. Optional reading optimization must never make an otherwise readable
+sealed Context fail. Verify both typed values and UTF-8 serialization before
+using structured content; ValidationError is not a verdict or corrupt record.
 
 `knowledge.reads` additionally permits `content_format=knowledge-read-v1` and
 `omitted_derived_fields=["chunk.terms"]`. Before applying it, the renderer parses
@@ -51,6 +56,7 @@ prove that a call fits.
 | --- | --- |
 | Complete object/array JSON with Unicode, escaped patch, booleans and null | Same structured values and explicit JSON format; sealed Context bytes unchanged |
 | Duplicate key/nested duplicate/non-finite/precision loss | Preserve original complete text |
+| Escaped lone surrogate, extreme Decimal exponent or excessive typed nesting | Preserve complete original text through the actual ContextPromptBuilder |
 | Valid typed READ with exact derived terms | Preserve every field and chunk body except the declared redundant lexical index |
 | Changed terms/body, invalid evidence digest or unknown field | Preserve original complete text; do not strip potentially meaningful input |
 | Original complete native prompt+schema exceeds 256,000; rendered one fits | Zero provider during prepare; same required patch/READ text, actual schema included |
