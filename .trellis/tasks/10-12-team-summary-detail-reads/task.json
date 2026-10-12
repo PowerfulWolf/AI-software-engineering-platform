@@ -1,0 +1,31 @@
+{
+  "id": "team-summary-detail-ui-20261012",
+  "title": "需求与任务的当前摘要及完整正文阅读",
+  "status": "verified_pending_backend_integration",
+  "owner": "codex",
+  "goal": "当前状态独立更新，完整正文与返工历史稳定可读，精确审批必须读过当前完整规格。",
+  "allowed_paths": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/team-summary-reading.test.cjs",
+    "tests/team_view/browser/team-summary-reading.test.cjs",
+    "tests/team_view/artifact-feedback.test.cjs",
+    ".trellis/spec/core/team-summary-detail-ui.md",
+    ".trellis/tasks/10-12-team-summary-detail-reads/",
+    "docs/user/team-console.md"
+  ],
+  "acceptance": [
+    "仅当前selection保存完整正文，相同source tick不重取",
+    "resource_state版本变化读取所有新增QA/Review反馈，旧版本及晚响应拒绝",
+    "正文读取失败不冒充没有产物，当前状态始终来自摘要",
+    "完整ProductSpec ID或version、原digest、实际URI与当前locator相符才可批准",
+    "关闭或跨Team/Project/page的旧callback零POST，保留选区/滚动/展开/草稿",
+    "无8条历史截断，无数据库或既有审批迁移"
+  ],
+  "verification": [
+    "Node增量6文件128项通过",
+    "真实Chrome增量3文件13项通过",
+    "独立前端review及源版本/POST边界负例通过",
+    "node --check与git diff --check通过"
+  ],
+  "rollback": "空闲受控部署时可回滚新客户端能力读取，旧v0.2full与全部历史保持。"
+}

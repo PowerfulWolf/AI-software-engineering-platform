@@ -98,3 +98,22 @@ test("missing hash binding or foreign Task lineage remains neutral", () => {
     assert.match(text(h.render()), /当前历史不足以确认/);
   }
 });
+
+test("summary-mode complete selected history retains verified QA and Review input lineage",()=>{
+  for(const kind of ["qa-report","review-report"]) {
+    const parent=artifact("art_feedback",kind,"task_current",{status:"FAIL",verdict:"REJECT"});
+    const h=harness([parent],[parent.id]);
+    h.run(`page="requests"; consoleTeamReadContractVersion="v0.1"; snapshot.team_id="team_current";
+      task.request_id="delivery_parent";task.work_kind="delivery";task.task_revision=2;task.task_intent_sha256="${"b".repeat(64)}";
+      task.detail_source={team_id:snapshot.team_id,project_id:task.project_id,request_id:task.request_id,resource_kind:"task",resource_id:task.id,
+        requirement_checkpoint_sha256:"${"c".repeat(64)}",resource_checkpoint_sha256:"${"d".repeat(64)}",resource_state_sha256:"${"e".repeat(64)}",work_kind:task.work_kind,
+        task_id:task.task_id,task_revision:2,task_intent_sha256:task.task_intent_sha256,source_task_id:null,verification_plan_sha256:null};
+      const complete={...task,documents:[],runs:[]};delete task.execution_history;delete task.timeline;
+      const target=selectedTeamDetailTarget();teamDetailRead={owner:target.owner,key:target.key,loadedKey:target.key,status:"ready",
+        value:verifiedTeamDetail({schema_version:"v0.1",kind:"task",scope:task.detail_source,as_of:"2026-10-12T00:00:00Z",resource:complete},task.detail_source)};`);
+    assert.match(text(h.render()),receipt,kind);
+    assert.equal(h.run("snapshot.tasks[0].execution_history"),undefined);
+    h.run('task.detail_source.task_revision++;task.task_revision++');
+    assert.doesNotMatch(text(h.render()),receipt,"an outdated body is only retained history, not current input confirmation");
+  }
+});

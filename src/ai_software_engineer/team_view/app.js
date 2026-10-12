@@ -1,6 +1,219 @@
 "use strict";
 let snapshot = null;
 let teamReadIssue = null;
+let consoleTeamReadContractVersion = null;
+let teamDetailRead = null;
+let teamDetailReadGeneration = 0;
+let teamDetailRenderRevision = 0;
+const teamSummaryMode = () => consoleTeamReadContractVersion === "v0.1";
+const teamDetailSourceFields = ["team_id", "project_id", "request_id", "resource_kind", "resource_id",
+  "requirement_checkpoint_sha256", "resource_checkpoint_sha256", "resource_state_sha256", "work_kind", "task_id",
+  "task_revision", "task_intent_sha256", "source_task_id", "verification_plan_sha256"];
+const teamBodyFields = kind => kind === "request" ? ["documents", "dialogue"]
+  : ["documents", "timeline", "execution_history", "runs"];
+const teamDetailSourceKey = source => source && JSON.stringify(teamDetailSourceFields.map(field => source[field] ?? null));
+function validTeamDetailSource(source, item, kind, teamId, projectId) {
+  const sha = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  if (!source || source.team_id !== teamId || source.project_id !== projectId ||
+      source.resource_kind !== kind || source.resource_id !== item.id || item.project_id !== projectId ||
+      !sha(source.requirement_checkpoint_sha256) || !sha(source.resource_checkpoint_sha256) ||
+      !sha(source.resource_state_sha256)) return false;
+  if (kind === "request") return source.request_id === item.id &&
+    source.requirement_checkpoint_sha256 === item.checkpoint_sha256 &&
+    source.resource_checkpoint_sha256 === item.checkpoint_sha256 &&
+    ["work_kind", "task_id", "task_revision", "task_intent_sha256", "source_task_id", "verification_plan_sha256"]
+      .every(field => source[field] == null);
+  if (source.request_id !== item.request_id || source.work_kind !== item.work_kind ||
+      source.task_id !== (item.task_id ?? null) || source.task_revision !== (item.task_revision ?? null) ||
+      source.task_intent_sha256 !== (item.task_intent_sha256 ?? null)) return false;
+  if (source.work_kind === "candidate_verification") return Boolean(source.task_id && source.source_task_id &&
+    source.task_id !== source.source_task_id && source.source_task_id === item.source_task_id &&
+    source.verification_plan_sha256 === item.plan_sha256 && sha(source.verification_plan_sha256) &&
+    source.resource_id === "verification_" + source.verification_plan_sha256.slice(0, 32) &&
+    source.task_revision == null && source.task_intent_sha256 == null);
+  const identity = [source.task_id, source.task_revision, source.task_intent_sha256];
+  return ["delivery", "remediation"].includes(source.work_kind) &&
+    source.source_task_id == null && source.verification_plan_sha256 == null &&
+    (identity.every(value => value == null) || typeof source.task_id === "string" &&
+      Number.isInteger(source.task_revision) && source.task_revision >= 0 && sha(source.task_intent_sha256));
+}
+function verifiedTeamSummary(value, target) {
+  if (!value || value.schema_version !== "v0.1" || typeof value.team_id !== "string" ||
+      value.team_id !== consoleTeamId || target && value.selected_project_id !== target ||
+      !Array.isArray(value.projects) || !Array.isArray(value.agents) ||
+      !Array.isArray(value.requests) || !Array.isArray(value.tasks)) throw new TeamReadFailure("unavailable");
+  const requests = new Map();
+  for (const item of value.requests) {
+    if (requests.has(item.id) || teamBodyFields("request").some(field => Object.hasOwn(item, field)) ||
+        !validTeamDetailSource(item.detail_source, item, "request", value.team_id, value.selected_project_id))
+      throw new TeamReadFailure("unavailable");
+    requests.set(item.id, item);
+  }
+  const tasks = new Set();
+  for (const item of value.tasks) {
+    const owner = requests.get(item.request_id);
+    if (tasks.has(item.id) || !owner || teamBodyFields("task").some(field => Object.hasOwn(item, field)) ||
+        !validTeamDetailSource(item.detail_source, item, "task", value.team_id, value.selected_project_id) ||
+        item.detail_source.requirement_checkpoint_sha256 !== owner.checkpoint_sha256)
+      throw new TeamReadFailure("unavailable");
+    tasks.add(item.id);
+  }
+  return value;
+}
+function clearTeamDetailRead() {
+  teamDetailReadGeneration++;
+  teamDetailRead?.controller?.abort();
+  teamDetailRead = null;
+  teamDetailRenderRevision++;
+}
+function selectedTeamDetailTarget() {
+  if (!teamSummaryMode() || !selected || !snapshot || projectSwitchPending()) return null;
+  const item = selected.kind === "task" ? taskById(selected.id) : requestById(selected.id);
+  if (!item || !validTeamDetailSource(item.detail_source, item, selected.kind, snapshot.team_id, currentProjectId())) return null;
+  return {source: item.detail_source, key: teamDetailSourceKey(item.detail_source),
+    owner: JSON.stringify([page, snapshot.team_id, currentProjectId(), selected.kind, selected.id, selectionIntentRevision])};
+}
+function teamDetailQuery(source) {
+  const query = new URLSearchParams({team_id:source.team_id, project_id:source.project_id,
+    request_id:source.request_id, kind:source.resource_kind, id:source.resource_id,
+    expected_requirement_checkpoint_sha256:source.requirement_checkpoint_sha256,
+    expected_resource_checkpoint_sha256:source.resource_checkpoint_sha256,
+    expected_resource_state_sha256:source.resource_state_sha256});
+  for (const field of ["work_kind", "task_id", "task_revision", "task_intent_sha256", "source_task_id", "verification_plan_sha256"])
+    if (source[field] != null) query.set("expected_" + field, String(source[field]));
+  return "/api/v1/team-details?" + query;
+}
+function verifiedTeamDetail(value, source) {
+  const item = value?.resource, kind = source.resource_kind;
+  if (!value || value.schema_version !== "v0.1" || value.kind !== kind ||
+      teamDetailSourceKey(value.scope) !== teamDetailSourceKey(source) ||
+      !Number.isFinite(Date.parse(value.as_of)) || !item || item.id !== source.resource_id ||
+      item.project_id !== source.project_id ||
+      kind === "request" && item.checkpoint_sha256 !== source.resource_checkpoint_sha256 ||
+      kind === "task" && (item.request_id !== source.request_id || item.work_kind !== source.work_kind ||
+        (item.task_id ?? null) !== source.task_id || (item.task_revision ?? null) !== source.task_revision ||
+        (item.task_intent_sha256 ?? null) !== source.task_intent_sha256 ||
+        source.work_kind === "candidate_verification" && (item.source_task_id !== source.source_task_id ||
+          item.plan_sha256 !== source.verification_plan_sha256)) ||
+      teamBodyFields(kind).some(field => !Array.isArray(item[field]))) throw new Error("invalid detail");
+  return value;
+}
+async function readSelectedTeamDetail({force = false} = {}) {
+  const target = selectedTeamDetailTarget();
+  if (!target) { if (teamDetailRead) clearTeamDetailRead(); return; }
+  if (!force && teamDetailRead?.owner === target.owner && teamDetailRead.key === target.key) return teamDetailRead.promise;
+  const previous = teamDetailRead;
+  const retain = previous?.source.team_id === target.source.team_id &&
+    previous.source.project_id === target.source.project_id && previous.source.resource_kind === target.source.resource_kind &&
+    previous.source.resource_id === target.source.resource_id && previous.owner === target.owner;
+  clearTeamDetailRead();
+  const generation = teamDetailReadGeneration, controller = new AbortController();
+  // Copy the small locator so an in-place current-fact mutation cannot alter a frozen read.
+  const source = {...target.source};
+  const state = {owner:target.owner, key:target.key, source, controller, status:"loading", issue:null,
+    value:retain ? previous.value : null, loadedKey:retain ? previous.loadedKey : null};
+  teamDetailRead = state;
+  const current = () => teamDetailRead === state && generation === teamDetailReadGeneration &&
+    selectedTeamDetailTarget()?.owner === target.owner && selectedTeamDetailTarget()?.key === target.key;
+  const timeout = setTimeout(() => controller.abort(), 40000);
+  state.promise = (async () => {
+    try {
+      const response = await fetch(teamDetailQuery(source), {cache:"no-store", signal:controller.signal});
+      if (!current()) return;
+      if (!response.ok) { state.issue = response.status === 409 ? "changed" : "unavailable"; throw new Error("detail unavailable"); }
+      const value = await response.json();
+      if (!current()) return;
+      state.value = verifiedTeamDetail(value, source);
+      state.loadedKey = target.key;
+      state.status = "ready";
+    } catch {
+      if (!current()) return;
+      state.issue = controller.signal.aborted ? "timeout" : state.issue || "unavailable";
+      state.status = "error";
+    } finally {
+      clearTimeout(timeout);
+      state.promise = null;
+      state.controller = null;
+      if (current()) {
+        teamDetailRenderRevision++;
+        render({preserveComposer:true, incremental:true});
+      } else {
+        state.value = null;
+        if (teamDetailRead === state) clearTeamDetailRead();
+      }
+    }
+  })();
+  return state.promise;
+}
+function detailReadingItem(item) {
+  if (!teamSummaryMode()) return item;
+  const source = teamDetailRead?.value?.scope;
+  if (!source || source.team_id !== snapshot?.team_id || source.project_id !== currentProjectId() ||
+      source.resource_id !== item.id || source.resource_kind !== selected?.kind) return item;
+  return {...item, ...Object.fromEntries(teamBodyFields(source.resource_kind)
+    .map(field => [field, teamDetailRead.value.resource[field]]))};
+}
+function productApprovalReadReady(request) {
+  if (!teamSummaryMode()) return true;
+  const target = selectedTeamDetailTarget(), state = teamDetailRead, spec = request.product_spec_source;
+  if (selected?.kind !== "request" || selected.id !== request.id || request.stage !== "WAITING_PRODUCT_APPROVAL" ||
+      !target || state?.status !== "ready" || state.loadedKey !== target.key || state.owner !== target.owner ||
+      request.checkpoint_sha256 !== requestById(request.id)?.checkpoint_sha256 || !spec ||
+      !/^[a-f0-9]{64}$/.test(spec.sha256 || "") ||
+      spec.source_uri !== (spec.spec_id != null ? "ProductSpec://" + spec.spec_id : "request://" + request.id + "/ProductSpec")) return false;
+  return state.value.resource.documents.some(doc => {
+    if (doc.source_uri !== spec.source_uri || doc.sha256 !== spec.sha256 || !doc.content) return false;
+    try {
+      const body = JSON.parse(doc.content);
+      return spec.spec_id != null ? spec.version == null && body.id === spec.spec_id
+        : Number.isInteger(spec.version) && spec.version >= 1 && body.version === spec.version &&
+          body.product != null && typeof body.product === "object" && !Array.isArray(body.product);
+    } catch { return false; }
+  });
+}
+function productApprovalReadBinding(request) {
+  return teamSummaryMode() ? JSON.stringify([teamDetailSourceKey(request?.detail_source), request?.product_spec_source]) : null;
+}
+function requireProductApprovalRead(intent, expectedBinding) {
+  if (intent.action !== "PRODUCT_APPROVAL" || !teamSummaryMode()) return;
+  const request = requestById(intent.delivery_id);
+  if (!request || request.project_id !== intent.project_id || request.checkpoint_sha256 !== intent.expected_checkpoint_sha256 ||
+      !productApprovalReadReady(request) || productApprovalReadBinding(request) !== expectedBinding)
+    throw new Error("请先读取并审阅当前完整 ProductSpec；旧版本或尚未读取的正文不能用于批准。");
+}
+function teamDetailReadNotice() {
+  const state = teamDetailRead, target = selectedTeamDetailTarget();
+  const box = viewBlock(el("div", undefined, "detail-body-read-status admin-notice"), "detail-body-read-status",
+    [state?.status, state?.issue, state?.loadedKey, target?.key, state?.value?.as_of]);
+  box.setAttribute("role", "status");
+  const ready = state?.status === "ready" && state.loadedKey === target?.key;
+  if (ready) {
+    box.append(el("p", "完整正文与历史已读取 · " + time(state.value.as_of), "muted"));
+    return box;
+  }
+  const saved = state?.value ? "下方保留上次读取的正文，仅供阅读；当前状态和操作以上方最新记录为准。" : "正文尚未读取，不能据此判断没有产物或历史。";
+  const reason = state?.status === "error" ? state.issue === "changed"
+    ? "记录已有更新，请刷新当前状态后重新读取正文。"
+    : state.issue === "timeout" ? "完整正文读取超时，可以稍后重新读取。" : "完整正文暂时无法读取，可以稍后重新读取。"
+    : "正在读取所选记录的完整正文与历史…";
+  box.append(el("p", reason), el("p", saved, "muted"));
+  if (state?.status === "error") box.append(button(state.issue === "changed" ? "刷新当前状态并重新读取" : "重新读取完整正文",
+    retrySelectedTeamDetail, "secondary"));
+  return box;
+}
+async function retrySelectedTeamDetail() {
+  const target = selectedTeamDetailTarget(), state = teamDetailRead;
+  if (!target || !state || state.status === "loading") return state?.promise;
+  if (state.issue === "changed") {
+    await refresh();
+    const current = selectedTeamDetailTarget();
+    if (current?.owner !== target.owner || teamReadIssue) return;
+    // A successful summary may already have started the changed-version body.
+    // Join it rather than canceling and duplicating the exact new read.
+    if (current.key !== target.key) return readSelectedTeamDetail();
+  }
+  return readSelectedTeamDetail({force:true});
+}
 class TeamReadFailure extends Error {
   constructor(kind) { super("Team read failed"); this.kind = kind; }
 }
@@ -586,7 +799,7 @@ function renderView(container, key, facts, build, incremental) {
 function pollingControlFacts() {
   return [consoleAvailable, consoleTeamId, consoleDeliveryReady, consoleOperationContractVersion,
     consoleSupportedActions, consoleOperationSummaryContractVersion, operationsAvailable, operationDetailReadyScope, teamReadIssue,
-    snapshot?.team_id, currentProjectId(), projectSwitchPending()];
+    snapshot?.team_id, currentProjectId(), projectSwitchPending(), consoleTeamReadContractVersion];
 }
 function pollingContentFacts() {
   const common = [page, pollingControlFacts(), administrationNotice, !snapshot && teamReadIssue, operationHistoryRevision];
@@ -613,7 +826,8 @@ function pollingDetailFacts() {
   return [page, selected, item, parent, tasks, snapshot?.agents, pollingControlFacts(), operationHistoryRevision,
     operationRenderFacts(item ? operations.filter(operation => operationTarget(operation) === item.id ||
       (parent && operationTarget(operation) === parent.id && operationProject(operation) === parent.project_id)) : []),
-    page === "requests" && Boolean(snapshot?.requests.length), nativeRuleReviewsRevision, recoveryPreparationDisplayFacts()];
+    page === "requests" && Boolean(snapshot?.requests.length), nativeRuleReviewsRevision, recoveryPreparationDisplayFacts(),
+    teamDetailRenderRevision];
 }
 function recoveryPreparationDisplayFacts() {
   const facts = recoveryPreparationObservation;
@@ -5254,6 +5468,8 @@ async function submitOperation(intent) {
   const ownerProjectId = intent.project_id || null;
   const ownerTeamId = snapshot?.team_id;
   const owner = operationWriteOwnerSignature();
+  const productReadBinding = intent.action === "PRODUCT_APPROVAL"
+    ? productApprovalReadBinding(snapshot?.requests.find(item => item.id === intent.delivery_id)) : null;
   try {
     if (!canControlCurrentTeam())
       throw new Error("交付控制状态暂不可用，请刷新后重试。");
@@ -5267,10 +5483,12 @@ async function submitOperation(intent) {
     if ((intent.continuation_mode === "pause" || intent.action === "RESUME_EXECUTION_BASELINE") &&
         !consoleSupportsPausedBaseline())
       throw new Error("本次保留进度暂停或继续请求未被受理，不是原需求新增的阻塞。" + consoleOperationVersionMismatchMessage);
+    requireProductApprovalRead(intent, productReadBinding);
     await recheckOperationWriteFacts(intent);
     if (owner !== operationWriteOwnerSignature() || !canControlCurrentTeam() ||
         !consoleSupportsOperation(intent.action) || activeOperation(intent.delivery_id, intent.project_id))
       throw new Error("当前操作或控制资格已变化，请重新核对后再提交。");
+    requireProductApprovalRead(intent, productReadBinding);
     const response = await fetch("/api/v1/operations", {
       method: "POST",
       cache: "no-store",
@@ -5835,6 +6053,15 @@ function requestOperation(panel, request, discussionSection) {
   }
   if (request.stage === "WAITING_PRODUCT_APPROVAL" && !running) {
     const approval = el("div", undefined, "approval-box");
+    const readBinding = productApprovalReadBinding(request);
+    const approve = deliveryButton("批准 ProductSpec 并开始交付", () => {
+      const current = requestById(request.id);
+      if (teamSummaryMode() && (!current || !productApprovalReadReady(current) ||
+          readBinding !== productApprovalReadBinding(current))) return null;
+      return submitOperation({action:"PRODUCT_APPROVAL", project_id:request.project_id,
+        delivery_id:request.id, expected_checkpoint_sha256:request.checkpoint_sha256});
+    }, "primary");
+    setDeliveryControlDisabled(approve, !productApprovalReadReady(request));
     approval.append(
       el("h3", "产品文档已准备好"),
       el(
@@ -5842,17 +6069,8 @@ function requestOperation(panel, request, discussionSection) {
         "请先阅读下方 ProductSpec。确认内容准确后批准；如果仍需调整，可在下方继续和 Product Agent 讨论。",
         "muted",
       ),
-      deliveryButton(
-        "批准 ProductSpec 并开始交付",
-        () =>
-          submitOperation({
-            action: "PRODUCT_APPROVAL",
-            project_id: request.project_id,
-            delivery_id: request.id,
-            expected_checkpoint_sha256: request.checkpoint_sha256,
-          }),
-        "primary",
-      ),
+      ...(productApprovalReadReady(request) ? [] : [el("p", "当前完整 ProductSpec 尚未读取并核对，读取完成后才可批准。", "muted")]),
+      approve,
     );
     appendDiscussionContent(approval);
   }
@@ -9453,6 +9671,7 @@ function renderStatus(content) {
 }
 function showDetail(kind, id) {
   selectionIntentRevision++;
+  clearTeamDetailRead();
   pausedTaskDetailKey = null;
   selected = { kind, id };
   if (operationSummaryMode()) {
@@ -9976,7 +10195,11 @@ function appendExecutionArtifactDetails(target, entry) {
     // Only the selected Task's verified lineage can establish parent types.
     const tasks = (snapshot?.tasks || []).filter(task => selected?.kind === "task" &&
       task.id === selected.id && task.project_id === currentProjectId());
-    const task = tasks.length === 1 ? tasks[0] : null;
+    const sourceTask = tasks.length === 1 ? tasks[0] : null;
+    const reading = selectedTeamDetailTarget();
+    const currentBody = !teamSummaryMode() || teamDetailRead?.status === "ready" &&
+      teamDetailRead.owner === reading?.owner && teamDetailRead.loadedKey === reading?.key;
+    const task = sourceTask && currentBody ? detailReadingItem(sourceTask) : null;
     const history = task?.execution_history?.length ? task.execution_history : task?.timeline || [];
     const taskIds = new Set([task?.task_id, ...(task?.history_task_ids || [])].filter(Boolean));
     const verified = item => item?.kind === "artifact" && taskIds.has(item.task_id) &&
@@ -10355,6 +10578,9 @@ function syncDetailReadFreshness(panel) {
   }, true);
 }
 function renderDetail({ incremental = false } = {}) {
+  // This starts at most one read per exact selection/version. The read response
+  // only updates a separate body owner, never the current snapshot or controls.
+  void readSelectedTeamDetail();
   syncRecoveryPreparationTarget();
   // Retain every repository plan visible in this requirement; prune once for the
   // complete detail, never while rendering an individual repository's controls.
@@ -10403,12 +10629,13 @@ function buildDetail(panel = document.getElementById("detail")) {
     }
     return;
   }
-  const item =
+  const currentItem =
     selected.kind === "task" ? taskById(selected.id) : requestById(selected.id);
-  if (!item) {
+  if (!currentItem) {
     panel.append(el("p", "当前快照中找不到这条记录。"));
     return;
   }
+  const item = detailReadingItem(currentItem);
   const historicalTask = selected.kind === "task" && isHistoricalRequestTask(item);
   const top = el("div", undefined, "row");
   const topActions = el("div", undefined, "detail-heading-actions");
@@ -10507,6 +10734,7 @@ function buildDetail(panel = document.getElementById("detail")) {
       () => {
         selectionIntentRevision++;
         selected = null;
+        clearTeamDetailRead();
         render();
       },
       "detail-close-control",
@@ -10528,8 +10756,9 @@ function buildDetail(panel = document.getElementById("detail")) {
     const titleRow = viewGroup(el("div", undefined, "request-title-row"), "request-title-row");
     titleRow.append(viewBlock(el("p", item.title, "request-detail-title"), "request-heading-title", item.title),
       viewBlock(requestNodeBadge(item), "request-heading-status", [deliveryPhase(item), requestNodeExecution(item)]));
-    masthead.append(viewBlock(top, "request-heading-actions", [item, pollingControlFacts(), operationRenderFacts()]), titleRow,
+    masthead.append(viewBlock(top, "request-heading-actions", [currentItem, pollingControlFacts(), operationRenderFacts()]), titleRow,
       detailReadFreshnessSlot());
+    if (teamSummaryMode()) masthead.append(teamDetailReadNotice());
     panel.append(masthead, requestChapterNavigation(item));
     const current = requestChapter("current");
     const processingControlIssue = requestNodeExecution(item).platformProcessing
@@ -10604,8 +10833,9 @@ function buildDetail(panel = document.getElementById("detail")) {
     const outputs = requestChapter("outputs");
     deliveryResult(outputs, item);
     const artifacts = viewGroup(el("section", undefined, "detail-section stage-artifacts"), "stage-artifacts");
-    artifacts.append(el("h3", `阶段产物 · ${item.documents.length} 份`));
-    documentList(artifacts, item.documents);
+    artifacts.append(el("h3", Array.isArray(item.documents) ? `阶段产物 · ${item.documents.length} 份` : "阶段产物"));
+    if (Array.isArray(item.documents)) documentList(artifacts, item.documents);
+    else artifacts.append(el("p", "完整产物正文尚未读取，请查看上方读取提示。", "muted"));
     outputs.append(artifacts);
     panel.append(outputs);
     const history = requestChapter("history");
@@ -10617,7 +10847,8 @@ function buildDetail(panel = document.getElementById("detail")) {
     }
     requestOperationHistory(history, item);
     requestHistoricalDeliveryRecords(history, item);
-    if (history.children.length === 1) history.append(el("p", "暂无已保存的历史记录。", "muted"));
+    if (teamSummaryMode() && !Array.isArray(item.dialogue)) history.append(el("p", "需求讨论正文尚未读取；交付操作记录独立展示。", "muted"));
+    else if (history.children.length === 1) history.append(el("p", "暂无已保存的历史记录。", "muted"));
     panel.append(history);
     const reference = requestChapter("reference");
     const engineering = viewGroup(el("div", undefined, "detail-section request-reference-section"), "request-engineering");
@@ -10645,6 +10876,7 @@ function buildDetail(panel = document.getElementById("detail")) {
   const header = viewGroup(el("header", undefined, "task-detail-header"), "task-detail-header");
   viewBlock(top, "task-heading", [item.id, historicalTask]);
   header.append(top, taskReadingToolbar(), detailReadFreshnessSlot());
+  if (teamSummaryMode()) header.append(teamDetailReadNotice());
   dialog.append(header);
   const masthead = viewGroup(el("div", undefined, "task-detail-masthead"), "task-detail-masthead");
   const taskTitleRow = viewGroup(el("div", undefined, "task-title-row"), "task-title-row");
@@ -10719,35 +10951,36 @@ function buildDetail(panel = document.getElementById("detail")) {
         `${snapshot.agents.find((x) => x.id === a.agent_id)?.name || a.agent_id} · ${label(a.role)} · ${a.planned_provider} / ${a.planned_model}${a.current_stage ? historicalTask ? " · 当次岗位" : " · 当前阶段" : ""}`,
       ),
     );
-  const history = item.execution_history?.length ? item.execution_history : item.timeline;
+  const history = item.execution_history?.length ? item.execution_history : item.timeline || [];
+  const bodyLoaded = Array.isArray(item.documents);
   const currentTaskId = historicalTask ? null : item.task_id || item.id;
   const feedback = taskFeedbackSection(history, currentTaskId);
   if (feedback) current.append(feedback);
   dialog.append(current);
   const outputs = taskChapter("outputs");
-  outputs.append(viewBlock(el("p", `共 ${item.documents.length} 份已保存产物。`, "muted"), "task-document-count", item.documents.length));
+  outputs.append(viewBlock(el("p", bodyLoaded ? `共 ${item.documents.length} 份已保存产物。` : "完整产物正文尚未读取，请查看上方读取提示。", "muted"), "task-document-count", bodyLoaded ? item.documents.length : null));
   const reports = viewGroup(el("div", undefined, "task-artifact-list"), "task-documents");
-  documentList(reports, item.documents);
+  if (bodyLoaded) documentList(reports, item.documents);
   outputs.append(reports);
   dialog.append(outputs);
   const executionRecords = taskChapter("history");
-  const records = taskReadingFold(`执行记录（完整历史） · ${history.length} 条`, "task-history", true);
-  records.append(viewBlock(el("p", `共 ${history.length} 条记录。历史轮次完整保留，不代表当前状态。`, "muted"), "task-history-count", history.length));
+  const records = taskReadingFold(bodyLoaded ? `执行记录（完整历史） · ${history.length} 条` : "执行记录（尚未读取完整历史）", "task-history", true);
+  records.append(viewBlock(el("p", bodyLoaded ? `共 ${history.length} 条记录。历史轮次完整保留，不代表当前状态。` : "完整执行历史尚未读取，请查看上方读取提示。", "muted"), "task-history-count", bodyLoaded ? history.length : null));
   engineeringTarget.append(el("p", (historicalTask ? "当次 Task · " : "当前 Task · ") + (item.task_id || item.id), "paths"));
   if (item.history_task_ids?.length > 1)
     engineeringTarget.append(el("p", "关联 Task · " + item.history_task_ids.join(" → "), "paths"));
   const list = viewGroup(el("ol", undefined, "execution-history"), "task-history-list");
   for (const entry of history) appendExecutionEntry(list, entry, currentTaskId);
-  if (!history.length) list.append(el("li", "暂无已保存的执行记录。", "muted"));
+  if (bodyLoaded && !history.length) list.append(el("li", "暂无已保存的执行记录。", "muted"));
   records.append(list);
   executionRecords.append(records);
-  const calls = taskReadingFold(`已完成的模型调用 · ${item.runs.length} 次`, "task-model-calls");
+  const calls = taskReadingFold(bodyLoaded ? `已完成的模型调用 · ${item.runs.length} 次` : "已完成的模型调用（尚未读取）", "task-model-calls");
   const callList = viewGroup(el("div", undefined, "task-model-call-list"), "task-model-call-list");
-  if (!item.runs.length)
+  if (bodyLoaded && !item.runs.length)
     callList.append(
       el("p", historicalTask ? "暂无已保存的完成调用记录；此处只展示当次记录。" : "暂无已提交调用记录；进行中的调用完成后才会出现。", "muted"),
     );
-  for (const run of item.runs) {
+  for (const run of item.runs || []) {
     const card = viewBlock(el("article", undefined, "task-model-call-card"),
       `task-run:${run.run_id}:${run.source_uri}`, run);
     card.append(
@@ -10855,6 +11088,7 @@ async function navigatePage(target) {
   if (!mayCloseComposer()) return;
   if (uiCommands.has(document.querySelector?.(".settings-form"))) return;
   selectionIntentRevision++;
+  clearTeamDetailRead();
   administrationNotice = null;
   page = target;
   selected = null;
@@ -10903,6 +11137,8 @@ async function refreshConsoleInfo(signal) {
       consoleOperationContractVersion = null;
       consoleSupportedActions = null;
       consoleOperationSummaryContractVersion = null;
+      consoleTeamReadContractVersion = null;
+      clearTeamDetailRead();
       return;
     }
     if (!response.ok) throw new Error("console unavailable");
@@ -10915,7 +11151,7 @@ async function refreshConsoleInfo(signal) {
       throw new Error("invalid console response");
     consoleAvailable = true;
     consoleConnectionFailed = false;
-    if (consoleTeamId && consoleTeamId !== info.team_id) clearOperationReadScope();
+    if (consoleTeamId && consoleTeamId !== info.team_id) { clearOperationReadScope(); clearTeamDetailRead(); }
     consoleTeamId = info.team_id;
     consoleDeliveryReady = info.delivery_ready;
     const actions = info.supported_actions;
@@ -10926,6 +11162,9 @@ async function refreshConsoleInfo(signal) {
     consoleOperationContractVersion = validManifest ? info.operation_contract_version : null;
     consoleSupportedActions = validManifest ? [...actions] : null;
     consoleOperationSummaryContractVersion = info.operation_summary_contract_version === "v0.1" ? "v0.1" : null;
+    const teamReadVersion = info.team_read_contract_version === "v0.1" ? "v0.1" : null;
+    if (teamReadVersion !== consoleTeamReadContractVersion) clearTeamDetailRead();
+    consoleTeamReadContractVersion = teamReadVersion;
   } catch {
     consoleAvailable = null;
     consoleConnectionFailed = true;
@@ -10936,8 +11175,9 @@ async function refreshConsoleInfo(signal) {
     consoleOperationSummaryContractVersion = null;
   }
 }
-async function refreshOperations(signal) {
-  await refreshConsoleInfo(signal);
+async function refreshOperations(signal, {consoleRead} = {}) {
+  if (consoleRead) await consoleRead;
+  else await refreshConsoleInfo(signal);
   try {
     if (operationSummaryMode()) {
       const projectId = activeRefreshProject || currentProjectId();
@@ -10975,6 +11215,7 @@ async function refresh(projectId, includeRuntimeStatus = false) {
   if (projectId && projectId !== currentProjectId() && !mayCloseComposer()) return;
   if (projectId) {
     selectionIntentRevision++;
+    clearTeamDetailRead();
     requestedProjectId = projectId;
     refreshQueued = projectId !== activeRefreshProject || requestedRuntimeStatus;
   }
@@ -11094,10 +11335,14 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
   let systemReadFinished = false;
   let teamPublished = false;
   try {
-    const url = target
-      ? "/api/v1/team?project_id=" + encodeURIComponent(target)
-      : "/api/v1/team";
+    // Negotiate once, shared with Operations, before selecting the Team wire.
+    const consoleRead = refreshConsoleInfo(controller.signal);
     const teamRead = (async () => {
+      await consoleRead;
+      controller.signal.throwIfAborted();
+      const summaryRead = teamSummaryMode();
+      const endpoint = summaryRead ? "/api/v1/team-summary" : "/api/v1/team";
+      const url = target ? endpoint + "?project_id=" + encodeURIComponent(target) : endpoint;
       const response = await fetch(url, {
         cache: "no-store",
         signal: controller.signal,
@@ -11107,10 +11352,11 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
         try { code = (await response.json())?.error?.code; } catch { /* Fixed messages only. */ }
         throw new TeamReadFailure(code === "TEAM_READ_IN_PROGRESS" ? "busy" : "unavailable");
       }
-      const next = await response.json();
+      const value = await response.json();
       if (superseded()) return;
+      const next = summaryRead ? verifiedTeamSummary(value, target) : value;
       if (
-        next.schema_version !== "v0.2" ||
+        next.schema_version !== (summaryRead ? "v0.1" : "v0.2") ||
         (target && next.selected_project_id !== target) ||
         !Array.isArray(next.tasks) ||
         !Array.isArray(next.agents) ||
@@ -11123,6 +11369,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
           JSON.stringify({ ...next, as_of: null });
       const projectChanged = currentProjectId() !== next.selected_project_id;
       const selectedBeforeRefresh = selected;
+      if (snapshot && (snapshot.team_id !== next.team_id || projectChanged)) clearTeamDetailRead();
       snapshot = next;
       teamReadIssue = null;
       recordTeamReadOutcome(null);
@@ -11163,7 +11410,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
     });
     const systemRead = (async () => {
       try {
-        await refreshOperations(controller.signal);
+        await refreshOperations(controller.signal, {consoleRead});
         syncDeliveryControls();
         if (priorOperationsAvailable !== operationsAvailable) renderOperationStatus();
         await refreshSystemViews();
