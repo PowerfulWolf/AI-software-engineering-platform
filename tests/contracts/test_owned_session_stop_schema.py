@@ -91,7 +91,7 @@ def test_absent_new_field_preserves_original_wire_and_nested_digests() -> None:
     )
 
 
-def test_all_ten_embeddings_and_fresh_repair_regeneration_keep_exact_stop_graph(
+def test_all_known_embeddings_and_fresh_repair_regeneration_keep_exact_stop_graph(
     tmp_path: Path,
 ) -> None:
     expected = NativeProcessStop.model_json_schema()
@@ -101,7 +101,19 @@ def test_all_ten_embeddings_and_fresh_repair_regeneration_keep_exact_stop_graph(
         for p in ROOT.joinpath("schemas").glob("*.schema.json")
         if "NativeProcessStop" in json.loads(p.read_text()).get("$defs", {})
     ]
-    assert len(paths) == 10
+    assert {path.name for path in paths} == {
+        "completed-coder-output-unavailable.schema.json",
+        "console-operation.schema.json",
+        "execution-baseline-plan.schema.json",
+        "execution-baseline-queue-consumption.schema.json",
+        "execution-capture.schema.json",
+        "execution-continuation.schema.json",
+        "knowledge-execution-record.schema.json",
+        "knowledge-invocation-outcome.schema.json",
+        "rejected-coder-output-checkpoint.schema.json",
+        "stopped-provider-failure.schema.json",
+        "structured-execution-observation.schema.json",
+    }
     for path in paths:
         defs = json.loads(path.read_text())["$defs"]
         assert defs["NativeProcessStop"] == expected, path.name
@@ -156,3 +168,49 @@ def test_typed_stop_rejects_unbound_or_corrupt_scope(mutation: str) -> None:
     wire["session_proof"] = proof
     with pytest.raises(ValidationError):
         NativeProcessStop.model_validate(wire)
+
+
+@pytest.mark.parametrize("inventory", ["known", "missing", "extra", "replacement"])
+def test_stop_schema_sync_checks_exact_inventory_before_any_write(
+    tmp_path: Path, inventory: str
+) -> None:
+    scripts, schemas = tmp_path / "scripts", tmp_path / "schemas"
+    scripts.mkdir()
+    schemas.mkdir()
+    shutil.copyfile(
+        ROOT / "scripts/sync-owned-session-schemas.py", scripts / "sync-owned-session-schemas.py"
+    )
+    for original in ROOT.joinpath("schemas").glob("*.schema.json"):
+        schema = json.loads(original.read_text())
+        if "NativeProcessStop" in schema.get("$defs", {}):
+            # A successful sync must replace stale stop graphs; a refused inventory
+            # must leave even these deliberately stale bytes entirely untouched.
+            schema["$defs"]["NativeProcessStop"] = {"type": "null"}
+            (schemas / original.name).write_text(json.dumps(schema))
+    if inventory in {"missing", "replacement"}:
+        (schemas / "execution-baseline-queue-consumption.schema.json").unlink()
+    if inventory in {"extra", "replacement"}:
+        (schemas / "unreviewed-stop-embedding.schema.json").write_text(
+            '{"$defs":{"NativeProcessStop":{"type":"null"}}}'
+        )
+    before = {p.name: p.read_bytes() for p in schemas.iterdir()}
+    result = subprocess.run(
+        (sys.executable, str(scripts / "sync-owned-session-schemas.py")),
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        timeout=20,
+    )
+    if inventory != "known":
+        assert result.returncode != 0
+        assert {p.name: p.read_bytes() for p in schemas.iterdir()} == before
+        return
+    assert result.returncode == 0, result.stderr
+    canonical = NativeProcessStop.model_json_schema()
+    closure = canonical.pop("$defs")
+    assert {p.name for p in schemas.iterdir()} == before.keys()
+    for path in schemas.iterdir():
+        synchronized = json.loads(path.read_text())
+        assert synchronized["$defs"]["NativeProcessStop"] == canonical
+        for name, definition in closure.items():
+            assert synchronized["$defs"][name] == definition

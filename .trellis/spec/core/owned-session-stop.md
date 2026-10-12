@@ -73,6 +73,56 @@ Leader/SID reuse is conservatively rejected. OS observation-to-signal is not ato
 
 ## Wire and digest contract
 
+### Trusted query spawn gate
+
+Only the fixed trusted survey/verification callers use
+`owned_spawn.spawn_owned_query(argv: tuple[str, ...], *, environment: Mapping[str, str],
+cwd: Path | None, stdin: int, stdout: int | BinaryIO, stderr: int | BinaryIO) -> OwnedQuerySpawn`.
+The result holds the actual `Popen[bytes]` and its original `OwnedProcessObservation`.
+This helper is absent from Agent tools and does not change native/Role command permissions.
+
+A versioned isolated Python `-I -S -B` bootstrap blocks on one private ACK pipe before executing
+the original token argv. Only that bootstrap's actual PID/birth/SID is captured and independently
+observed using the existing owned seam. The parent releases the ACK only after successful capture.
+The private frame is ACK byte `b'1'`, 4-byte big-endian length, and at most 2 MiB of ASCII JSON
+containing the exact original string environment dictionary. Python may add locale/macOS variables
+to its own environment; the bootstrap must exec with the reconstructed original dictionary instead
+of `os.environ`. The environment is never placed on argv or logged. Partial/invalid/oversized frames
+exit125 without target exec; target exec denial exits127 without native exception text.
+ACK publication is nonblocking with a fixed one-second internal deadline; it cannot replace or
+extend an unbounded wait in the caller. The target retains the caller's original execution timeout.
+Bootstrap closes the control FD before `execvpe`, preserving PID, birth, SID and the exact caller
+environment/stdio/cwd. The caller reuses this observation, not a post-exec capture. Neither side
+retains an ACK descriptor. ACK EOF, failed capture or denied OS identity never executes the target.
+
+This addresses an actual Darwin `/bin/ps` incompatibility: the OS binary is setuid root and its
+alive effective-root process denies the ordinary parent's BSD birth query. The actual query can
+exit0 yet leave initial capture uncertainty. Diagnostic samples used non-reaping `waitid(WNOWAIT)`
+and kernel `ps` state/effective UID to distinguish it from an exited zombie; do not classify EPERM
+as absence. Gate capture occurs while the trusted bootstrap still has the ordinary account identity.
+The original stop, EOF and publication gates remain mandatory. A target that becomes unreadable
+while still alive/timeout remains uncertain; no missing proof is reconstructed.
+
+| Spawn/result | Required behavior |
+|---|---|
+| Trusted setuid ps or extremely short target | capture actual blocked leader before release; original stop proof after real exit/reap |
+| Capture or independent observation denied | zero target work; cleanup actual bootstrap leader; retain registry unknown |
+| ACK absent/EOF/invalid version | no original exec; bounded caller failure, no secret/argv traceback |
+| Target escapes while retaining output pipe | caller timeout/drain rejects; no false stop/registry READY |
+| Known birth leaves original SID | existing owned controller rejects; gate does not widen proof scope |
+| Repeated successful or failed launches | no parent or target control-FD leak |
+| Target argv/env/stdin/stdout/stderr/cwd | exact caller values; fixed wrapper adds no target permissions |
+
+Good: real setuid ps completes under a captured bootstrap birth and unchanged empty-session proof.
+Base: an ordinary quick query uses the same gate and retains its original bounded output/result.
+Bad: accept EPERM as stopped, release ACK after failed capture, invoke shell, or reuse the gate to
+change Native Codex/Role permissions. Required tests live in `tests/execution/test_owned_query_spawn.py`
+plus the existing survey, verification discovery and owned process/session regressions.
+
+No historical Operation/Run/stop/lifecycle record is altered. An old capture-failed registry entry
+cannot be repaired by this new launcher; keep its UNKNOWN and use the independent Host maintenance
+boundary. Rollback requires actual controlled stop first, then revert new callers/helper together.
+
 `NativeProcessStop.session_proof: OwnedSessionStopProof | None` is additive. Absent/null proof is
 omitted by ordinary `model_dump` and wire serialization, preserving the original stop and enclosing
 record digests. Existing records keep their original leader/group scope and are never upgraded.
@@ -88,8 +138,13 @@ occupancy, every observed original birth (including a living birth now in anothe
 SID absence twice. This read never signals. Legacy proof reads retain the old group check.
 
 `scripts/sync-owned-session-schemas.py` synchronizes only `NativeProcessStop` and its new definition
-closure in exactly ten embedded Schemas, preserving enclosing handwritten guards. Fresh repair
-generation obtains the same canonical stop guards; repeated generation must be byte stable.
+closure in the eleven explicitly named embedded Schemas, including
+`execution-baseline-queue-consumption.schema.json` added by same-source capacity recovery.
+Both the synchronizer and independent golden contract test require the exact file-name set;
+missing, additional or same-count replaced embeddings fail before any schema write. This repairs
+the stale ten-file generator inventory left after `d4d6f32`; it changes no published schema bytes.
+Enclosing handwritten guards remain unchanged. Fresh repair generation obtains the same canonical
+stop guards; repeated generation must be byte stable.
 
 ## Durable responsibility and Host registry
 

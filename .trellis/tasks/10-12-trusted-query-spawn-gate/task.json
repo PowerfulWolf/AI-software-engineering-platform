@@ -1,0 +1,39 @@
+{
+  "name": "trusted-query-spawn-gate",
+  "title": "在可信探测命令执行前捕获真实进程归属",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "88128c3cf31804ed6f6e3eeff52e03382f250c09",
+  "allowed_paths": [
+    "src/ai_software_engineer/owned_spawn.py",
+    "src/ai_software_engineer/manager/verification_process.py",
+    "src/ai_software_engineer/manager/legacy_local_execution.py",
+    "tests/execution/test_owned_query_spawn.py",
+    ".trellis/spec/core/owned-session-stop.md",
+    ".trellis/tasks/10-12-trusted-query-spawn-gate/**",
+    "tests/contracts/test_owned_session_stop_schema.py",
+    "scripts/sync-owned-session-schemas.py"
+  ],
+  "constraints": [
+    "Independent worktree; do not overwrite other authors' changes or merge main",
+    "No production HTTP, Host, SQL, approvals, signals, restart or model calls",
+    "Do not modify owned-session/registry stop semantics or native/Role command permissions",
+    "Only trusted local survey and verification query spawn callers adopt this helper",
+    "Capture failure never executes target or turns EPERM/ESRCH into successful stop",
+    "Incremental tests only; no new agent delegation"
+  ],
+  "rollback": "Controlled service stop first, revert helper/callers; retain all UNKNOWN and original lifecycle/Run/Operation history.",
+  "scope_extension": "Root explicitly authorized the pre-existing stop-schema inventory repair after reproducing the same 11-versus-10 failure on clean main 88128c3; retain all per-graph assertions. Root additionally authorized the same exact-inventory repair in the generator/spec, with missing/extra fixture zero-write refusal tests.",
+  "validation_record": "validation.md",
+  "review": {
+    "status": "PASS",
+    "source": "Independent reviewer final result relayed by root",
+    "blocking_findings": 0,
+    "incremental_tests": "35 passed in 5.89s",
+    "diff_check": "PASS"
+  },
+  "delivery": {
+    "commit_authorization": "Root explicitly authorized exact allowlist commit on independent branch",
+    "integration": "Root-owned; no merge, push, or deployment by this worker"
+  }
+}

@@ -7,7 +7,8 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
-from ai_software_engineer.owned_processes import finish_owned_process, observe_owned_process
+from ai_software_engineer.owned_processes import finish_owned_process
+from ai_software_engineer.owned_spawn import spawn_owned_query
 
 
 def bounded_verification_command(
@@ -19,16 +20,15 @@ def bounded_verification_command(
     timeout: int = 20,
     limit: int = 128_000,
 ) -> bytes:
-    process = subprocess.Popen(
+    spawned = spawn_owned_query(
         argv,
         cwd=cwd,
-        env=dict(environment),
+        environment=environment,
         stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        start_new_session=True,
     )
-    observation = observe_owned_process(process, kind="tool")
+    process, observation = spawned.process, spawned.observation
     output_drained = False
     assert process.stdout is not None and process.stderr is not None
     deadline = time.monotonic() + timeout

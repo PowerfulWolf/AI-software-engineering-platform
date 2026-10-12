@@ -22,11 +22,8 @@ from pydantic import AwareDatetime, model_validator
 
 from ai_software_engineer.domain.artifact import Sha256
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
-from ai_software_engineer.owned_processes import (
-    OwnedProcessesUncertain,
-    finish_owned_process,
-    observe_owned_process,
-)
+from ai_software_engineer.owned_processes import OwnedProcessesUncertain, finish_owned_process
+from ai_software_engineer.owned_spawn import spawn_owned_query
 from ai_software_engineer.recovery.models import digest
 
 if TYPE_CHECKING:
@@ -186,17 +183,15 @@ class TrustedLegacyLocalExecutionObserver:
         # Query bytes are bounded and short lived. Neither output nor native
         # error text is attached to a persisted record or public exception.
         with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-            process = subprocess.Popen(
+            spawned = spawn_owned_query(
                 argv,
                 stdin=subprocess.DEVNULL,
                 stdout=output,
                 stderr=errors,
-                cwd="/",
-                env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"},
-                shell=False,
-                start_new_session=True,
+                cwd=Path("/"),
+                environment={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"},
             )
-            owned = observe_owned_process(process, kind="tool")
+            process, owned = spawned.process, spawned.observation
             query_pids = _QUERY_PIDS.get()
             if query_pids is not None:
                 query_pids.add(process.pid)
