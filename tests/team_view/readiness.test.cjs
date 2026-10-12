@@ -391,6 +391,10 @@ for (const oldFails of [false, true]) test(`only the latest queued Project is re
     return response({ ...team, selected_project_id: target });
   };
   const poll = ui.tick();
+  // This case exercises an actually entered old Team reader, not a Console
+  // capability request whose Team GET can still be skipped before navigation.
+  await settled();
+  assert.deepEqual(reads, ["project_fixture"]);
   choose("Project B");
   const chosen = choose("Project C");
   const ticks = [ui.tick(), ui.tick(), ui.tick()];

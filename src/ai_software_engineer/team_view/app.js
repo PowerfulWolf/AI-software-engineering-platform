@@ -5,6 +5,62 @@ let consoleTeamReadContractVersion = null;
 let teamDetailRead = null;
 let teamDetailReadGeneration = 0;
 let teamDetailRenderRevision = 0;
+let teamReadFlight = null;
+const teamReadWaiters = new Set();
+const teamDetailBusyDelays = [1000, 2000, 4000];
+function waitForTeamRead(signal) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const dispose = () => {
+      teamReadWaiters.delete(resume);
+      signal?.removeEventListener("abort", abort);
+    };
+    const resume = () => {dispose(); resolve();};
+    const abort = () => {dispose(); reject(signal.reason);};
+    teamReadWaiters.add(resume);
+    signal?.addEventListener("abort", abort, {once:true});
+  });
+}
+async function withTeamRead(read, signal) {
+  // This is only browser scheduling. An aborted HTTP request does not prove
+  // that the server's synchronous reader stopped; its admission remains intact.
+  while (teamReadFlight) await waitForTeamRead(signal);
+  signal?.throwIfAborted();
+  const flight = {};
+  teamReadFlight = flight;
+  try {return await read();}
+  finally {
+    if (teamReadFlight === flight) {
+      teamReadFlight = null;
+      for (const resume of [...teamReadWaiters]) resume();
+    }
+  }
+}
+async function readTeamJson(url, signal, {detail = false, current = () => true, publish = value => value} = {}) {
+  return withTeamRead(async () => {
+    signal?.throwIfAborted();
+    if (!current()) return null;
+    const response = await fetch(url, {cache:"no-store", signal});
+    if (!response.ok) {
+      let code = null;
+      try {code = (await response.json())?.error?.code;} catch { /* Fixed codes only. */ }
+      throw new TeamReadFailure(code === "TEAM_READ_IN_PROGRESS" ? "busy"
+        : detail && response.status === 409 ? "changed" : "unavailable");
+    }
+    const value = await response.json();
+    signal?.throwIfAborted();
+    return current() ? publish(value) : null;
+  }, signal);
+}
+function waitForTeamDetailRetry(delay, signal) {
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const dispose = () => {clearTimeout(timer); signal.removeEventListener("abort", abort);};
+    const abort = () => {dispose(); reject(signal.reason);};
+    const timer = setTimeout(() => {dispose(); resolve();}, delay);
+    signal.addEventListener("abort", abort, {once:true});
+  });
+}
 const teamSummaryMode = () => consoleTeamReadContractVersion === "v0.1";
 const teamDetailSourceFields = ["team_id", "project_id", "request_id", "resource_kind", "resource_id",
   "requirement_checkpoint_sha256", "resource_checkpoint_sha256", "resource_state_sha256", "work_kind", "task_id",
@@ -118,17 +174,33 @@ async function readSelectedTeamDetail({force = false} = {}) {
   const timeout = setTimeout(() => controller.abort(), 40000);
   state.promise = (async () => {
     try {
-      const response = await fetch(teamDetailQuery(source), {cache:"no-store", signal:controller.signal});
+      for (let attempt = 0; ; attempt++) {
+        try {
+          // Recheck the selected owner after waiting for the page's other Team
+          // read, before issuing any request for a no-longer-selected source.
+          const value = await readTeamJson(teamDetailQuery(source), controller.signal, {detail:true, current});
+          if (!current()) return;
+          state.value = verifiedTeamDetail(value, source);
+          state.loadedKey = target.key;
+          state.issue = null;
+          state.status = "ready";
+          break;
+        } catch (error) {
+          if (!current()) return;
+          if (!(error instanceof TeamReadFailure) || error.kind !== "busy" ||
+              attempt >= teamDetailBusyDelays.length) throw error;
+          state.issue = "busy";
+          state.status = "waiting";
+          teamDetailRenderRevision++;
+          render({preserveComposer:true, incremental:true});
+          await waitForTeamDetailRetry(teamDetailBusyDelays[attempt], controller.signal);
+          if (!current()) return;
+        }
+      }
+    } catch (error) {
       if (!current()) return;
-      if (!response.ok) { state.issue = response.status === 409 ? "changed" : "unavailable"; throw new Error("detail unavailable"); }
-      const value = await response.json();
-      if (!current()) return;
-      state.value = verifiedTeamDetail(value, source);
-      state.loadedKey = target.key;
-      state.status = "ready";
-    } catch {
-      if (!current()) return;
-      state.issue = controller.signal.aborted ? "timeout" : state.issue || "unavailable";
+      state.issue = controller.signal.aborted ? "timeout"
+        : error instanceof TeamReadFailure ? error.kind : "unavailable";
       state.status = "error";
     } finally {
       clearTimeout(timeout);
@@ -194,8 +266,11 @@ function teamDetailReadNotice() {
   const saved = state?.value ? "下方保留上次读取的正文，仅供阅读；当前状态和操作以上方最新记录为准。" : "正文尚未读取，不能据此判断没有产物或历史。";
   const reason = state?.status === "error" ? state.issue === "changed"
     ? "记录已有更新，请刷新当前状态后重新读取正文。"
-    : state.issue === "timeout" ? "完整正文读取超时，可以稍后重新读取。" : "完整正文暂时无法读取，可以稍后重新读取。"
-    : "正在读取所选记录的完整正文与历史…";
+    : state.issue === "timeout" ? "完整正文读取超时，可以稍后重新读取。"
+      : state.issue === "busy" ? "团队读取仍然繁忙，已完成本次自动重试；可以稍后重新读取完整正文。"
+        : "完整正文暂时无法读取，可以稍后重新读取。"
+    : state?.issue === "busy" ? "团队信息正在读取，完整正文会稍后自动重试…"
+      : "正在读取所选记录的完整正文与历史…";
   box.append(el("p", reason), el("p", saved, "muted"));
   if (state?.status === "error") box.append(button(state.issue === "changed" ? "刷新当前状态并重新读取" : "重新读取完整正文",
     retrySelectedTeamDetail, "secondary"));
@@ -203,7 +278,7 @@ function teamDetailReadNotice() {
 }
 async function retrySelectedTeamDetail() {
   const target = selectedTeamDetailTarget(), state = teamDetailRead;
-  if (!target || !state || state.status === "loading") return state?.promise;
+  if (!target || !state || ["loading", "waiting"].includes(state.status)) return state?.promise;
   if (state.issue === "changed") {
     await refresh();
     const current = selectedTeamDetailTarget();
@@ -11495,44 +11570,35 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       const summaryRead = teamSummaryMode();
       const endpoint = summaryRead ? "/api/v1/team-summary" : "/api/v1/team";
       const url = target ? endpoint + "?project_id=" + encodeURIComponent(target) : endpoint;
-      const response = await fetch(url, {
-        cache: "no-store",
-        signal: controller.signal,
+      const observation = await readTeamJson(url, controller.signal, {
+        current: () => !superseded(),
+        publish: value => {
+          if (superseded()) return null;
+          const next = summaryRead ? verifiedTeamSummary(value, target) : value;
+          if (
+            next.schema_version !== (summaryRead ? "v0.1" : "v0.2") ||
+            (target && next.selected_project_id !== target) ||
+            !Array.isArray(next.tasks) || !Array.isArray(next.agents) || !Array.isArray(next.requests)
+          ) throw new Error("invalid snapshot");
+          const changed = !snapshot || JSON.stringify({...snapshot, as_of:null}) !== JSON.stringify({...next, as_of:null});
+          const projectChanged = currentProjectId() !== next.selected_project_id;
+          const selectedBeforeRefresh = selected;
+          if (snapshot && (snapshot.team_id !== next.team_id || projectChanged)) clearTeamDetailRead();
+          snapshot = next;
+          teamReadIssue = null;
+          recordTeamReadOutcome(null);
+          teamPublished = true;
+          if (requestedProjectId === target) requestedProjectId = null;
+          if (selectedBeforeRefresh?.kind === "request" && !requestById(selectedBeforeRefresh.id)) {
+            if (!selectEditedReplacement(selectedBeforeRefresh)) selected = null;
+          }
+          // Publish the current source before waking a queued body reader. It
+          // must not issue an old locator between HTTP completion and publication.
+          return {changed, projectChanged};
+        },
       });
-      if (!response.ok) {
-        let code = null;
-        try { code = (await response.json())?.error?.code; } catch { /* Fixed messages only. */ }
-        throw new TeamReadFailure(code === "TEAM_READ_IN_PROGRESS" ? "busy" : "unavailable");
-      }
-      const value = await response.json();
-      if (superseded()) return;
-      const next = summaryRead ? verifiedTeamSummary(value, target) : value;
-      if (
-        next.schema_version !== (summaryRead ? "v0.1" : "v0.2") ||
-        (target && next.selected_project_id !== target) ||
-        !Array.isArray(next.tasks) ||
-        !Array.isArray(next.agents) ||
-        !Array.isArray(next.requests)
-      )
-        throw new Error("invalid snapshot");
-      const changed =
-        !snapshot ||
-        JSON.stringify({ ...snapshot, as_of: null }) !==
-          JSON.stringify({ ...next, as_of: null });
-      const projectChanged = currentProjectId() !== next.selected_project_id;
-      const selectedBeforeRefresh = selected;
-      if (snapshot && (snapshot.team_id !== next.team_id || projectChanged)) clearTeamDetailRead();
-      snapshot = next;
-      teamReadIssue = null;
-      recordTeamReadOutcome(null);
-      teamPublished = true;
-      if (requestedProjectId === target) requestedProjectId = null;
-      if (
-        selectedBeforeRefresh?.kind === "request" &&
-        !requestById(selectedBeforeRefresh.id)
-      ) {
-        if (!selectEditedReplacement(selectedBeforeRefresh)) selected = null;
-      }
+      if (!observation) return;
+      const {changed, projectChanged} = observation;
       if (page === "knowledge") {
         if (projectChanged) {
           // Publish identity and its loading view together; a later navigation may

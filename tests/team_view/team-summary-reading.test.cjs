@@ -242,3 +242,184 @@ test("409 body retry first refreshes current summary and joins the new exact bod
     if(boundary == null) assert.equal(h.run("teamDetailRead.status"),"ready");
   }
 });
+
+function coordinatedReads() {
+  const h=harness(),calls=[],state={holdSummary:null,holdDetail:null};
+  const value={schema_version:"v0.1",as_of:"2026-10-12T00:00:00Z",team_id:"team_current",
+    selected_project_id:"project_current",team_name:"Team",projects:[],agents:[],requests:[h.item],tasks:[]};
+  const reply=(body,status=200)=>({ok:status<400,status,json:async()=>body});
+  let summaryEntered,detailEntered;
+  const summaryStarted=new Promise(resolve=>summaryEntered=resolve),detailStarted=new Promise(resolve=>detailEntered=resolve);
+  h.context.readFixture=async url=>{
+    calls.push(url);
+    if(url === "/api/v1/console") return reply({schema_version:"v0.2",team_id:"team_current",delivery_ready:true,
+      operation_contract_version:1,supported_actions:[],team_read_contract_version:"v0.1"});
+    if(url === "/api/v1/operations") return reply([]);
+    if(url.startsWith("/api/v1/team-summary")) {
+      summaryEntered();
+      if(state.holdSummary) await state.holdSummary;
+      const project=new URL(url,"http://fixture").searchParams.get("project_id");
+      return reply(project === value.selected_project_id ? value
+        : {...value,selected_project_id:project,requests:[],tasks:[]});
+    }
+    if(url.startsWith("/api/v1/team-details")) {
+      detailEntered();
+      const body=h.detail();
+      if(state.holdDetail) await state.holdDetail;
+      return reply(body);
+    }
+    throw Error("Unexpected offline route "+url);
+  };
+  h.run(`document.getElementById=()=>({disabled:false,className:"",textContent:""});
+    showRefreshProgress=()=>{};syncDeliveryControls=()=>{};renderOperationStatus=()=>{};renderNotification=()=>{};
+    fetch=readFixture;render=()=>{void readSelectedTeamDetail();};`);
+  return {...h,calls,state,value,summaryStarted,detailStarted};
+}
+
+test("real refresh holds summary while selected body waits and automatically reads after publication",async()=>{
+  const h=coordinatedReads();let release;
+  h.state.holdSummary=new Promise(resolve=>release=resolve);
+  const refresh=h.run("refresh()");await h.summaryStarted;
+  const detail=h.run("readSelectedTeamDetail()");
+  assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team-details")).length,0,
+    "the page must not send its own selected body into its active summary worker");
+  assert.ok(h.calls.includes("/api/v1/operations"),"auxiliary records remain independent");
+  release();await Promise.all([refresh,detail]);
+  assert.equal(h.run("teamReadIssue"),null);
+  assert.equal(h.run("teamDetailRead.status"),"ready");
+  assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team-details")).length,1);
+});
+
+test("real refresh waits for selected detail without blocking auxiliary records or replacing its owner",async()=>{
+  const h=coordinatedReads();let release;
+  h.state.holdDetail=new Promise(resolve=>release=resolve);
+  const detail=h.run("readSelectedTeamDetail()");await h.detailStarted;
+  const refresh=h.run("refresh()");
+  for(let turn=0;turn<20;turn++) await Promise.resolve();
+  assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team-summary")).length,0);
+  assert.ok(h.calls.includes("/api/v1/operations"));
+  release();await Promise.all([detail,refresh]);
+  assert.equal(h.run("teamDetailRead.status"),"ready");
+  assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team-summary")).length,1);
+  assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team-details")).length,1);
+});
+
+test("a summary queued behind held detail skips its superseded Project before sending any GET",async()=>{
+  const h=coordinatedReads();let release;
+  h.state.holdDetail=new Promise(resolve=>release=resolve);
+  h.run("mayCloseComposer=()=>true");
+  const detail=h.run("readSelectedTeamDetail()");await h.detailStarted;
+  const polling=h.run("refresh()");
+  for(let turn=0;turn<30 && h.run("teamReadWaiters.size") !== 1;turn++) await Promise.resolve();
+  assert.equal(h.run("teamReadWaiters.size"),1);
+  const navigation=h.run('refresh("project_next")');
+  for(let turn=0;turn<20;turn++) await Promise.resolve();
+  assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team-summary")).length,0,
+    "a browser abort alone must not retire a still-pending HTTP reader");
+  release();await Promise.all([detail,polling,navigation]);
+  const projects=h.calls.filter(url=>url.startsWith("/api/v1/team-summary"))
+    .map(url=>new URL(url,"http://fixture").searchParams.get("project_id"));
+  assert.deepEqual(projects,["project_next"]);
+  assert.equal(h.run("currentProjectId()"),"project_next");
+  assert.equal(h.run("teamReadWaiters.size"),0);
+  assert.equal(h.run("teamReadFlight"),null);
+  assert.equal(h.run("refreshing || refreshFlight !== null"),false);
+});
+
+test("external detail busy uses exactly three delayed retries then an explicit current-source retry",async()=>{
+  const h=harness();
+  for(let attempt=0;attempt<4;attempt++) h.replies.push({status:503,body:{error:{code:"TEAM_READ_IN_PROGRESS",message:"private secret"}}});
+  const reading=h.run("readSelectedTeamDetail()");
+  for(const [index,delay] of [1000,2000,4000].entries()) {
+    for(let turn=0;turn<30 && ![...h.timers.values()].some(timer=>timer.delay === delay);turn++) await Promise.resolve();
+    assert.equal(h.calls.length,index+1);
+    assert.equal(h.run("teamDetailRead.status"),"waiting");
+    assert.equal(h.run("teamDetailRead.issue"),"busy");
+    assert.equal(h.run("productApprovalReadReady(item)"),false);
+    const timer=[...h.timers.values()].find(timer=>timer.delay === delay);
+    assert.ok(timer,"retry delay is bounded and observable");timer.fn();
+  }
+  await reading;
+  assert.equal(h.calls.length,4);
+  assert.equal(h.run("teamDetailRead.status"),"error");
+  assert.equal(h.run("teamDetailRead.issue"),"busy");
+  assert.equal(h.timers.size,0);
+  h.replies.push({body:h.detail()});await h.run("retrySelectedTeamDetail()");
+  assert.equal(h.calls.length,5);
+  assert.equal(h.run("teamDetailRead.status"),"ready");
+});
+
+test("queued body readers detach on selection changes and only the latest owner sends a GET",async()=>{
+  const h=coordinatedReads();let release;
+  h.state.holdSummary=new Promise(resolve=>release=resolve);
+  const refresh=h.run("refresh()");await h.summaryStarted;
+  const pending=[];
+  for(let revision=0;revision<20;revision++) {
+    h.run('selected={kind:"request",id:item.id}');
+    pending.push(h.run("readSelectedTeamDetail()"));
+    for(let turn=0;turn<5;turn++) await Promise.resolve();
+    assert.equal(h.run("teamReadWaiters.size"),1);
+    h.run("selected=null;selectionIntentRevision++;clearTeamDetailRead()");
+    for(let turn=0;turn<5;turn++) await Promise.resolve();
+    assert.equal(h.run("teamReadWaiters.size"),0);
+  }
+  h.run('selected={kind:"request",id:item.id}');
+  pending.push(h.run("readSelectedTeamDetail()"));
+  release();await Promise.all([refresh,...pending]);
+  assert.equal(h.run("teamDetailRead.status"),"ready");
+  assert.equal(h.run("teamReadWaiters.size"),0);
+  assert.equal(h.calls.filter(url=>url.startsWith("/api/v1/team-details")).length,1);
+});
+
+test("a publishing summary changes the queued locator before any old-source body GET",async()=>{
+  const h=coordinatedReads();let release;
+  h.state.holdSummary=new Promise(resolve=>release=resolve);
+  const refresh=h.run("refresh()");await h.summaryStarted;
+  const oldBody=h.run("readSelectedTeamDetail()");
+  const current={...h.item,checkpoint_sha256:digest("f"),detail_source:{...h.item.detail_source,
+    requirement_checkpoint_sha256:digest("f"),resource_checkpoint_sha256:digest("f")}};
+  h.value.requests=[current];h.context.newItem=current;
+  h.context.readFixture=async url=>{
+    h.calls.push(url);
+    const body={...h.detail(current),scope:current.detail_source,resource:{...h.detail(current).resource,
+      checkpoint_sha256:current.checkpoint_sha256}};
+    return {ok:true,status:200,json:async()=>body};
+  };
+  // Only replace the waiting body port; the already held summary owns its frozen response.
+  h.run("fetch=readFixture");
+  release();await Promise.all([refresh,oldBody]);
+  await h.run("readSelectedTeamDetail()");
+  const detailCalls=h.calls.filter(url=>url.startsWith("/api/v1/team-details"));
+  assert.equal(detailCalls.length,1);
+  assert.match(detailCalls[0],new RegExp("expected_requirement_checkpoint_sha256="+digest("f")));
+  assert.equal(h.run("teamDetailRead.status"),"ready");
+});
+
+test("closing a body during external busy cancels its timer and never retries a stale selection",async()=>{
+  const h=harness();h.replies.push({status:503,body:{error:{code:"TEAM_READ_IN_PROGRESS"}}});
+  const reading=h.run("readSelectedTeamDetail()");
+  for(let turn=0;turn<30 && h.run("teamDetailRead.status") !== "waiting";turn++) await Promise.resolve();
+  assert.equal(h.run("teamDetailRead.status"),"waiting");
+  h.run("selected=null;selectionIntentRevision++;clearTeamDetailRead()");await reading;
+  assert.equal(h.timers.size,0);
+  assert.equal(h.calls.length,1);
+  assert.equal(h.run("teamDetailRead"),null);
+});
+
+test("busy retry stops at a genuine unavailable, changed or invalid body and never authorizes Product",async()=>{
+  for(const failure of ["unavailable","changed","invalid"]) {
+    const h=harness();h.replies.push({status:503,body:{error:{code:"TEAM_READ_IN_PROGRESS"}}});
+    const body=h.detail();if(failure === "invalid") body.scope={...body.scope,team_id:"team_foreign"};
+    h.replies.push(failure === "invalid" ? {body} : {status:failure === "changed" ? 409 : 503,
+      body:{error:{code:"TEAM_UNAVAILABLE",message:"private provider details"}}});
+    const reading=h.run("readSelectedTeamDetail()");
+    for(let turn=0;turn<30 && ![...h.timers.values()].some(timer=>timer.delay === 1000);turn++) await Promise.resolve();
+    [...h.timers.values()].find(timer=>timer.delay === 1000).fn();await reading;
+    assert.equal(h.calls.length,2);
+    assert.equal(h.run("teamDetailRead.status"),"error");
+    assert.equal(h.run("teamDetailRead.issue"),failure === "changed" ? "changed" : "unavailable");
+    assert.equal(h.run("productApprovalReadReady(item)"),false);
+    assert.equal(h.timers.size,0);
+    await h.run("readSelectedTeamDetail()");assert.equal(h.calls.length,2);
+  }
+});

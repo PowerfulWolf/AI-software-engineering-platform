@@ -11,8 +11,14 @@ function summarySource(item,kind) {
     task_revision:kind === "request" ? null : item.task_revision,task_intent_sha256:kind === "request" ? null : item.task_intent_sha256,
     source_task_id:null,verification_plan_sha256:null};
 }
-async function summaryBrowser(t,{product=false}={}) {
-  const h=await ui(t),calls=[],state={hold:null,fail:false};
+function summaryWire(team) {
+  const value=structuredClone(team);value.schema_version="v0.1";
+  value.requests.forEach(item=>{delete item.documents;delete item.dialogue;});
+  value.tasks.forEach(item=>{delete item.documents;delete item.timeline;delete item.execution_history;delete item.runs;});
+  return value;
+}
+async function summaryBrowser(t,{product=false,automaticPolling=false}={}) {
+  const h=await ui(t,{automaticPolling}),calls=[],state={hold:null,fail:false};
   const request=h.team.requests[0];
   Object.assign(request,{stage:product?"WAITING_PRODUCT_APPROVAL":"DELIVERING",checkpoint_sha256:sha("a"),
     documents:[{name:"ProductSpec",source_uri:"request://request_fixture/ProductSpec",sha256:sha("d"),
@@ -34,10 +40,7 @@ async function summaryBrowser(t,{product=false}={}) {
     delivery_ready:true,...h.state.operationManifest,team_read_contract_version:"v0.1"}}));
   await h.page.route("http://ui.test/api/v1/team-summary*",route=>{
     calls.push({kind:"summary",url:route.request().url()});
-    const value=structuredClone(h.team);value.schema_version="v0.1";
-    value.requests.forEach(item=>{delete item.documents;delete item.dialogue;});
-    value.tasks.forEach(item=>{delete item.documents;delete item.timeline;delete item.execution_history;delete item.runs;});
-    return route.fulfill({json:value});
+    return route.fulfill({json:summaryWire(h.team)});
   });
   await h.page.route("http://ui.test/api/v1/team-details*",async route=>{
     const query=new URL(route.request().url()).searchParams,kind=query.get("kind"),response=body(kind);
@@ -46,7 +49,7 @@ async function summaryBrowser(t,{product=false}={}) {
     try {await route.fulfill(state.fail?{status:503,json:{error:{code:"UNAVAILABLE"}}}:{json:response});} catch { /* Closed/aborted browser read. */ }
   });
   await h.tick();
-  return {...h,calls,state,request,task};
+  return {...h,calls,state,readPaths:h.state.reads,request,task};
 }
 
 test("summary ticks retain complete selected documents, text selection, scroll and all fourteen rework rounds",async t=>{
@@ -111,4 +114,63 @@ test("Product approval waits for the complete current spec and late closed detai
   await h.page.waitForFunction(()=>productApprovalReadReady(requestById("request_fixture")));
   assert.equal(await approve.isDisabled(),false);
   assert.equal(await h.page.evaluate(()=>snapshot.requests[0].documents),undefined);
+});
+
+test("opening complete body while this page reads summary waits and succeeds without a busy failure",async t=>{
+  const h=await summaryBrowser(t);let release,entered;
+  const held=new Promise(resolve=>release=resolve),started=new Promise(resolve=>entered=resolve);
+  t.after(()=>release());
+  await h.page.route("http://ui.test/api/v1/team-summary*",async route=>{
+    entered();await held;await route.fulfill({json:summaryWire(h.team)});
+  });
+  const refreshing=h.page.evaluate(()=>refresh());await started;
+  await h.page.evaluate(()=>showDetail("task","delivery_fixture"));
+  await h.page.waitForFunction(()=>teamDetailRead?.status === "loading");
+  assert.equal(h.calls.filter(call=>call.kind === "detail").length,0);
+  assert.match(await h.page.locator(".detail-body-read-status").innerText(),/正在读取/);
+  release();await refreshing;await h.page.waitForFunction(()=>teamDetailRead?.status === "ready");
+  assert.equal(h.calls.filter(call=>call.kind === "detail").length,1);
+  assert.equal(await h.page.locator(".execution-history-entry").count(),14);
+  assert.match(await h.page.locator(".detail-body-read-status").innerText(),/完整正文与历史已读取/);
+});
+
+test("automatic summary polling waits for this page's selected body and independent operations still read",async t=>{
+  const h=await summaryBrowser(t,{automaticPolling:true});let release;
+  h.state.hold=new Promise(resolve=>release=resolve);t.after(()=>release());
+  const summaries=h.calls.filter(call=>call.kind === "summary").length;
+  const operations=h.readPaths.filter(path=>path === "/api/v1/operations").length;
+  await h.page.evaluate(()=>showDetail("task","delivery_fixture"));
+  await h.page.waitForFunction(()=>teamReadFlight !== null && teamDetailRead?.status === "loading");
+  await h.page.clock.runFor(5000);
+  await h.page.waitForFunction(()=>refreshing && teamReadWaiters.size === 1);
+  assert.equal(h.calls.filter(call=>call.kind === "summary").length,summaries);
+  assert.ok(h.readPaths.filter(path=>path === "/api/v1/operations").length>operations);
+  release();await h.page.waitForFunction(()=>teamDetailRead?.status === "ready" && !refreshing);
+  assert.equal(h.calls.filter(call=>call.kind === "summary").length,summaries+1);
+  assert.equal(h.calls.filter(call=>call.kind === "detail").length,1);
+});
+
+test("external body busy shows bounded automatic waiting then an explicit retry without leaking server text",async t=>{
+  const h=await summaryBrowser(t,{product:true,automaticPolling:true});let attempts=0;
+  await h.page.route("http://ui.test/api/v1/team-details*",route=>{
+    attempts++;
+    return attempts<=4 ? route.fulfill({status:503,json:{error:{code:"TEAM_READ_IN_PROGRESS",message:"private provider secret"}}})
+      : route.fulfill({json:{schema_version:"v0.1",kind:"request",as_of:h.team.as_of,
+        scope:h.request.detail_source,resource:h.request}});
+  });
+  await h.page.evaluate(()=>showDetail("request","request_fixture"));
+  await h.page.waitForFunction(()=>teamDetailRead?.status === "waiting");
+  assert.match(await h.page.locator(".detail-body-read-status").innerText(),/稍后自动重试/);
+  assert.doesNotMatch(await h.page.locator(".detail-body-read-status").innerText(),/private|secret/);
+  assert.equal(await h.page.getByRole("button",{name:"批准 ProductSpec 并开始交付",exact:true}).isDisabled(),true);
+  for(const [index,delay] of [1000,2000,4000].entries()) {
+    await h.page.clock.runFor(delay);
+    await h.page.waitForFunction(expected=>teamDetailRead?.status === expected,index === 2 ? "error" : "waiting");
+    assert.equal(attempts,index+2);
+  }
+  assert.match(await h.page.locator(".detail-body-read-status").innerText(),/已完成本次自动重试/);
+  await h.page.locator(".detail-body-read-status").getByRole("button",{name:"重新读取完整正文",exact:true}).click();
+  await h.page.waitForFunction(()=>teamDetailRead?.status === "ready");
+  assert.equal(attempts,5);
+  assert.equal(await h.page.getByRole("button",{name:"批准 ProductSpec 并开始交付",exact:true}).isDisabled(),false);
 });

@@ -13,6 +13,10 @@ detailReadingItem(currentItem)              // body fields only, never old curre
 clearTeamDetailRead()                       // abort, generation, release body
 productApprovalReadReady(request)
 requireProductApprovalRead(intent, expectedBinding)
+withTeamRead(read, signal)                 // one page-owned GET/body/publication
+waitForTeamRead(signal)                    // cancelable local wait, no snapshot
+readTeamJson(url, signal, {detail, current, publish})
+waitForTeamDetailRetry(delay, signal)        // one bounded owner/deadline retry
 ```
 
 ## Wire / Current Authority
@@ -38,6 +42,20 @@ requireProductApprovalRead(intent, expectedBinding)
   永远不回填当前状态。DocumentView.sha256是原事实digest，不计算脱敏正文hash代替。
 
 ## Lifetime / Human Interaction
+
+- 同一页面 full/summary/detail 的实际 GET 和 response body 使用一个客户端调度 owner。
+  摘要保留原串行 refresh/latest Project intent；选中正文等待该次 HTTP 完成，不能与本页
+  摘要争抢后端同一个 worker。辅助 Console/Operations/恢复准备保持原独立读取。
+- 等待者随 AbortSignal 立即移除，不能把每次已取消导航永久挂在慢 promise 上。只有最新
+  selection/source 发 GET；每次等待后仍验证 owner、frozen locator 和 deadline。
+  客户端 HTTP 完成/abort 只释放客户端调度，不宣称后端 worker 停止或改变后端 admission。
+- 摘要同样传入 `current: () => !superseded()`；在正文后排队的旧Project摘要醒来必须在
+  GET前跳过，原refresh owner直接drain最新Project。已实际进入的旧GET仍完整读完，禁止
+  将浏览器abort或新导航当作服务器已退休；只丢弃其过期发布。
+- 正文仅识别固定 `error.code=TEAM_READ_IN_PROGRESS` 为外部读取繁忙：同一 frozen owner
+  最多额外三次，分别等待1、2、4秒；40秒总体 deadline 仍有效。等待期间说明正在稍后
+  重读，耗尽保留明确手动入口；不重复读取已成功的相同 source。`TEAM_UNAVAILABLE`、409、
+  非法 JSON/正文/身份不匹配均不自动重试，不能以调度掩盖原错误。任何等待不恢复批准资格。
 
 - 同selection/source自动刷新不重复GET。Team/Project/page/实体/selection revision或关闭
   改变owner，abort旧HTTP、递增generation；每次await后重验owner和source key。冻结
@@ -70,6 +88,13 @@ body owner均零POST。服务端原exact checkpoint/spec批准仍是最终author
 | 14轮失败/返工 | 全部history与finding可读，无默认截断 |
 | native id/joint version、digest或URI不符/空正文 | 批准disabled、旧callback与异步POST边界零写 |
 | Console await前已经timeout，最新Project pending | 旧Team不开始无期限读，串行lane释放并读最新目标 |
+| 本页摘要在读，打开选中正文 | 正文不并发GET；摘要完整验证/发布后仅最新locator读取成功 |
+| 正文在读，自动摘要tick | 摘要等待；Operations等辅助读取继续；无本页跨mode busy |
+| 正文持有→旧摘要排队→用户切Project | 旧摘要零GET；原HTTP真实结束后只读新Project |
+| 摘要期间20轮选择/关闭 | 每次已取消等待者立即从Set移除；零旧owner GET或审批 |
+| 摘要发布新的正文source | 等待中的旧locator不发GET；新source仅一次完整读 |
+| 外部固定busy | 额外1/2/4秒三次；40秒总deadline；耗尽中文说明和显式重读 |
+| busy后真实不可用/409/非法正文 | 停止重读并显示原分类；不发布正文、不恢复Product批准 |
 
 Good：状态快速独立更新，用户稳定阅读完整报告并审阅当前规格后明确批准。Base：首次完整
 历史仍有成本，显示真实loading/旧正文时间。Bad：strip全snapshot冒充省装配、空数组冒充
@@ -78,6 +103,12 @@ Good：状态快速独立更新，用户稳定阅读完整报告并审阅当前�
 Tests：`team-summary-reading.test.cjs`真实HTTP/submitOperation边界，browser同名文件真实
 DOM/文本选区/390px/14轮/失败与关闭测试；readiness/ui/operation-summary-reading/
 preparation-progress/engineering-wait/knowledge-gap回归。仅增量，不运行全量。
+
+根因是两个分别正确的客户端读取owner共用一个后端worker，后端的即时busy被正文永久
+记录为unavailable；只修摘要五秒timer或gate释放并不能消除此交互。新增Node回归调用真实
+`refresh()`，持有两方向HTTP、断言实际请求次数/新locator、abort等待Set和有限timer；Chrome
+同文件覆盖真实用户打开、自动poll、完整14轮历史及busy后精确Product正文批准。客户端
+abort只结束浏览器等待，之后若后端仍忙仍遵循同一固定busy有限策略，不改变服务读取安全。
 
 ## 存量数据处置 / Rollback
 
