@@ -358,6 +358,51 @@ def test_localizes_knowledge_preparation_failure_and_keeps_error_code() -> None:
     ) == ("上下文预算已用尽，平台不会自动重试模型；请缩小精确验证范围后再继续。")
 
 
+def test_localizes_context_capacity_without_calling_it_work_budget_exhaustion() -> None:
+    localized = localize_blocking_text(
+        "CONTEXT_BUDGET_EXHAUSTED: final provider input exceeds the configured Context budget "
+        "(255325 > 252000)"
+    )
+    assert localized == (
+        "执行上下文超过平台输入容量，模型尚未调用；本次未消耗自动重试额度。"
+        "请由平台调整上下文装配或执行能力后，再为原需求准备新的精确恢复方案。"
+    )
+
+
+def test_browser_localizes_context_capacity_with_the_same_read_side_copy() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for the browser/reader wording contract")
+    app = Path(__file__).parents[2] / "src/ai_software_engineer/team_view/app.js"
+    script = r"""
+const fs = require("node:fs");
+const vm = require("node:vm");
+const context = vm.createContext({document: {getElementById: () => ({addEventListener() {}})}});
+const source = fs.readFileSync(process.argv[1], "utf8");
+vm.runInContext(source.slice(0, source.indexOf('for (const target of ["team"')), context);
+context.message = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(vm.runInContext("humanizeBlockingText(message)", context));
+"""
+    # Keep the same boundary text used by the Python presentation contract; the
+    # numeric detail is deliberately ignored by both read-side adapters.
+    value = (
+        "CONTEXT_BUDGET_EXHAUSTED: final provider input exceeds the configured Context budget "
+        "(255325 > 252000)"
+    )
+    result = subprocess.run(
+        (node, "-e", script, str(app)),
+        input=json.dumps(value),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    assert result.stdout == (
+        "执行上下文超过平台输入容量，模型尚未调用；本次未消耗自动重试额度。"
+        "请由平台调整上下文装配或执行能力后，再为原需求准备新的精确恢复方案。"
+    )
+
+
 @pytest.mark.parametrize(
     ("detail", "reason"),
     [
