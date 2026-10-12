@@ -96,7 +96,11 @@ def wait(store: ServiceLifecycleStore, pid: int, request_id: str) -> None:
             if result.recorded_at < value.requested_at or instance.updated_at < value.requested_at:
                 raise ServiceLifecycleError("安全收尾记录时间不匹配; 未启动替代服务。")
             if result.state == ServiceState.REFUSED:
-                raise ServiceLifecycleError(result.safe_summary)
+                raise ServiceLifecycleError(
+                    result.refusal.safe_summary
+                    if result.refusal is not None
+                    else result.safe_summary
+                )
             if (
                 value.action == ServiceShutdownAction.RESUME
                 and result.state == ServiceState.RUNNING
@@ -189,7 +193,20 @@ def main() -> int:
             if instance is None or instance.pid != int(sys.argv[2]):
                 print("当前服务尚不支持受控重启。")
             else:
-                print(instance.safe_summary)
+                result = store.read_result()
+                value = store.read_request()
+                refusal = (
+                    result.refusal
+                    if result is not None
+                    and value is not None
+                    and value.matches(instance)
+                    and result.matches(value)
+                    and result.state is instance.state is ServiceState.REFUSED
+                    and result.recorded_at == instance.updated_at
+                    and result.recorded_at >= value.requested_at
+                    else None
+                )
+                print(refusal.safe_summary if refusal is not None else instance.safe_summary)
         elif command == "instance-id":
             instance = store.read_instance()
             print(instance.instance_id if instance is not None else "")

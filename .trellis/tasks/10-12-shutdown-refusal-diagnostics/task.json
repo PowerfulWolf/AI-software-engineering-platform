@@ -1,0 +1,21 @@
+{
+  "name": "shutdown-refusal-diagnostics",
+  "title": "保留受控关闭拒绝环节与可执行的中文处理说明",
+  "status": "completed",
+  "priority": "P0",
+  "branch": "task/shutdown-diagnostics",
+  "created_at": "2026-10-12",
+  "allowed_paths": [
+    "src/ai_software_engineer/web_console/shutdown.py",
+    "src/ai_software_engineer/web_console/core.py",
+    "src/ai_software_engineer/web_console/service_lifecycle.py",
+    "src/ai_software_engineer/web_console/host.py",
+    "scripts/ase-console-lifecycle.py",
+    "schemas/console-service-shutdown-result.schema.json",
+    "tests/web_console/test_shutdown_refusal_diagnostics.py",
+    ".trellis/spec/core/controlled-service-restart.md",
+    "docs/operations/controlled-service-restart.md",
+    ".trellis/tasks/10-12-shutdown-refusal-diagnostics/**"
+  ],
+  "rollback_commit": "9825b8bccdce2e7a9ff23b78b88070ccfa82efab"
+}

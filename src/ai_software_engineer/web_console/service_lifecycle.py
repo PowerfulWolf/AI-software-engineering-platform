@@ -15,11 +15,19 @@ from pathlib import Path
 from threading import Lock
 from typing import Annotated, Literal, Protocol
 
-from pydantic import Field, StringConstraints, ValidationError, field_validator, model_validator
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from ai_software_engineer.domain.model import DomainModel
 
-from .shutdown import ServiceWriteGate, ShutdownResult, ShutdownState
+from .shutdown import ServiceWriteGate, ShutdownRefusal, ShutdownResult, ShutdownState
 
 ServiceInstanceId = Annotated[str, StringConstraints(pattern=r"^console_instance_[a-f0-9]{32}$")]
 ServiceShutdownRequestId = Annotated[
@@ -144,6 +152,16 @@ class ServiceShutdownResult(DomainModel):
     state: ServiceState
     recorded_at: datetime
     safe_summary: str
+    refusal: ShutdownRefusal | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_optional_refusal(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        values: dict[str, object] = handler(self)
+        if self.refusal is None:
+            values.pop("refusal", None)
+        return values
 
     _timestamp = field_validator("recorded_at")(_aware)
 
@@ -151,11 +169,18 @@ class ServiceShutdownResult(DomainModel):
     def fixed_summary(self) -> ServiceShutdownResult:
         if self.safe_summary != _SUMMARIES[self.state]:
             raise ValueError("service shutdown summary must use safe fixed text")
+        if self.refusal is not None and self.state is not ServiceState.REFUSED:
+            raise ValueError("service shutdown refusal may only explain REFUSED")
         return self
 
     @classmethod
     def for_request(
-        cls, request: ServiceShutdownRequest, *, state: ServiceState, at: datetime
+        cls,
+        request: ServiceShutdownRequest,
+        *,
+        state: ServiceState,
+        at: datetime,
+        refusal: ShutdownRefusal | None = None,
     ) -> ServiceShutdownResult:
         return cls(
             request_id=request.request_id,
@@ -164,6 +189,7 @@ class ServiceShutdownResult(DomainModel):
             state=state,
             recorded_at=at,
             safe_summary=_SUMMARIES[state],
+            refusal=refusal,
         )
 
     def matches(self, request: ServiceShutdownRequest) -> bool:
@@ -340,6 +366,7 @@ class ConsoleShutdownCoordinator:
         self._knowledge_worker = knowledge_worker
         self._owned_processes = owned_processes
         self._sticky_failure = False
+        self._refusal: ShutdownRefusal | None = None
         self._state = ShutdownState.RUNNING
         self._lock = Lock()
 
@@ -350,7 +377,9 @@ class ConsoleShutdownCoordinator:
             if self._knowledge_worker is not None:
                 self._knowledge_worker.begin_shutdown()
             self._state = ShutdownState.REFUSED if self._sticky_failure else ShutdownState.DRAINING
-            return _shutdown_result(self._state)
+            if not self._sticky_failure:
+                self._refusal = None
+            return _shutdown_result(self._state, self._refusal)
 
     def await_shutdown(self, timeout: float) -> ShutdownResult:
         deadline = time.monotonic() + max(0, timeout)
@@ -358,61 +387,105 @@ class ConsoleShutdownCoordinator:
         def remaining() -> float:
             return max(0, deadline - time.monotonic())
 
+        component: Literal[
+            "WRITE_GATE", "CONSOLE", "KNOWLEDGE_INDEX", "OWNED_PROCESSES", "LIFECYCLE"
+        ] = "WRITE_GATE"
         try:
             gate = self.write_gate.await_shutdown(remaining())
             if gate.state is not ShutdownState.READY:
-                return self._refused()
+                return self._refused(
+                    gate.refusal
+                    or ShutdownRefusal(
+                        component=component, reason="TIMEOUT", active_count=gate.active_writes
+                    )
+                )
+            component = "CONSOLE"
             operation = self._console.await_shutdown(remaining())
             if operation.state is not ShutdownState.READY:
-                return self._refused()
+                return self._refused(
+                    operation.refusal
+                    or ShutdownRefusal(
+                        component=component,
+                        reason="UNCONFIRMED",
+                        active_count=operation.active_operations,
+                    )
+                )
+            component = "KNOWLEDGE_INDEX"
             if self._knowledge_worker is not None and not self._knowledge_worker.close(
                 timeout=remaining()
             ):
+                refusal = ShutdownRefusal(
+                    component=component,
+                    reason="UNCONFIRMED" if self._knowledge_worker.shutdown_failed else "TIMEOUT",
+                )
                 if self._knowledge_worker.shutdown_failed:
-                    self.record_failure()
-                return self._refused()
+                    self.record_failure(refusal)
+                return self._refused(refusal)
+            component = "OWNED_PROCESSES"
             if self._owned_processes is not None and not self._owned_processes.await_stopped(
                 remaining()
             ):
+                refusal = ShutdownRefusal(
+                    component=component,
+                    reason="UNCONFIRMED" if self._owned_processes.shutdown_failed else "TIMEOUT",
+                )
                 if self._owned_processes.shutdown_failed:
-                    self.record_failure()
-                return self._refused()
+                    self.record_failure(refusal)
+                return self._refused(refusal)
         except Exception:
             # Store/worker diagnostics belong to their durable history. No payload escapes
             # this trusted stop boundary, and uncertain finishing never permits replacement.
-            with self._lock:
-                self._sticky_failure = True
-            return self._refused()
+            refusal = ShutdownRefusal(component=component, reason="COMPONENT_ERROR")
+            self.record_failure(refusal)
+            return self._refused(refusal)
         with self._lock:
             if self._sticky_failure:
-                return _shutdown_result(ShutdownState.REFUSED)
+                return _shutdown_result(ShutdownState.REFUSED, self._refusal)
             self._state = ShutdownState.READY
         return _shutdown_result(ShutdownState.READY)
 
-    def record_failure(self) -> None:
+    def record_failure(self, refusal: ShutdownRefusal | None = None) -> None:
         with self._lock:
+            if not self._sticky_failure:
+                self._retain_failure_refusal_locked(
+                    refusal or ShutdownRefusal(component="LIFECYCLE", reason="UNCONFIRMED")
+                )
             self._sticky_failure = True
             self._state = ShutdownState.REFUSED
 
+    def _retain_failure_refusal_locked(self, refusal: ShutdownRefusal) -> None:
+        if self._refusal is None or self._refusal.reason == "TIMEOUT":
+            self._refusal = refusal
+
     def shutdown_status(self) -> ShutdownResult:
         with self._lock:
-            return _shutdown_result(self._state)
+            return _shutdown_result(
+                self._state, self._refusal if self._state is ShutdownState.REFUSED else None
+            )
 
-    def _refused(self) -> ShutdownResult:
+    def _refused(self, refusal: ShutdownRefusal | None = None) -> ShutdownResult:
         with self._lock:
+            if not self._sticky_failure:
+                self._refusal = refusal
             self._state = ShutdownState.REFUSED
-        return _shutdown_result(ShutdownState.REFUSED)
+            return _shutdown_result(ShutdownState.REFUSED, self._refusal)
 
     def cancel_shutdown(self, *, before_resume: Callable[[], None] | None = None) -> ShutdownResult:
         with self._lock:
             if self._sticky_failure or self._state is not ShutdownState.REFUSED:
-                return _shutdown_result(ShutdownState.REFUSED)
+                return _shutdown_result(ShutdownState.REFUSED, self._refusal)
             if self._knowledge_worker is not None and self._knowledge_worker.shutdown_failed:
                 self._sticky_failure = True
-                return _shutdown_result(ShutdownState.REFUSED)
+                self._retain_failure_refusal_locked(
+                    ShutdownRefusal(component="KNOWLEDGE_INDEX", reason="UNCONFIRMED")
+                )
+                return _shutdown_result(ShutdownState.REFUSED, self._refusal)
             if self._owned_processes is not None and self._owned_processes.shutdown_failed:
                 self._sticky_failure = True
-                return _shutdown_result(ShutdownState.REFUSED)
+                self._retain_failure_refusal_locked(
+                    ShutdownRefusal(component="OWNED_PROCESSES", reason="UNCONFIRMED")
+                )
+                return _shutdown_result(ShutdownState.REFUSED, self._refusal)
 
             def resume_components() -> None:
                 if self._knowledge_worker is not None:
@@ -427,11 +500,19 @@ class ConsoleShutdownCoordinator:
                 if self._knowledge_worker is not None:
                     self._knowledge_worker.begin_shutdown()
                 self._sticky_failure = True
-                return result
+                self._retain_failure_refusal_locked(
+                    result.refusal or ShutdownRefusal(component="CONSOLE", reason="UNCONFIRMED")
+                )
+                return _shutdown_result(ShutdownState.REFUSED, self._refusal)
             self.write_gate.cancel_shutdown()
             self._state = ShutdownState.RUNNING
+            self._refusal = None
         return _shutdown_result(ShutdownState.RUNNING)
 
 
-def _shutdown_result(state: ShutdownState) -> ShutdownResult:
-    return ShutdownResult(state=state, safe_summary=_SUMMARIES[ServiceState(state.value)])
+def _shutdown_result(
+    state: ShutdownState, refusal: ShutdownRefusal | None = None
+) -> ShutdownResult:
+    return ShutdownResult(
+        state=state, safe_summary=_SUMMARIES[ServiceState(state.value)], refusal=refusal
+    )

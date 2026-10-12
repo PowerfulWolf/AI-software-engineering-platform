@@ -10,6 +10,51 @@
       ],
       "title": "ServiceState",
       "type": "string"
+    },
+    "ShutdownRefusal": {
+      "additionalProperties": false,
+      "description": "Safe, bounded explanation for a refused drain; never contains raw errors.",
+      "properties": {
+        "component": {
+          "enum": [
+            "WRITE_GATE",
+            "CONSOLE",
+            "KNOWLEDGE_INDEX",
+            "OWNED_PROCESSES",
+            "LIFECYCLE"
+          ],
+          "title": "Component",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "TIMEOUT",
+            "UNCONFIRMED",
+            "COMPONENT_ERROR"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "active_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Count"
+        }
+      },
+      "required": [
+        "component",
+        "reason"
+      ],
+      "title": "ShutdownRefusal",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -46,6 +91,17 @@
     "safe_summary": {
       "title": "Safe Summary",
       "type": "string"
+    },
+    "refusal": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ShutdownRefusal"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

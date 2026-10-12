@@ -43,7 +43,7 @@ from .service_lifecycle import (
     ServiceShutdownResult,
     ServiceState,
 )
-from .shutdown import ShutdownResult, ShutdownState
+from .shutdown import ShutdownRefusal, ShutdownResult, ShutdownState
 from .store import ConsoleOperationNotFound, FileConsoleOperationStore
 from .transport import ConsoleApplication, TeamReader, create_console_app
 
@@ -268,7 +268,11 @@ class ControlledConsoleServer(uvicorn.Server):
                     self._seen_request = failed_request.request_id
                     with suppress(ServiceLifecycleError):
                         self._lifecycle.write_request(failed_request)
-                        self._publish(failed_request, ServiceState.REFUSED)
+                        self._publish(
+                            failed_request,
+                            ServiceState.REFUSED,
+                            refusal=self._coordinator.shutdown_status().refusal,
+                        )
             else:
                 # Lifespan can fail after it started work. Its owned final drain
                 # must complete before the failed instance is safe to replace.
@@ -276,7 +280,9 @@ class ControlledConsoleServer(uvicorn.Server):
                 self._lifecycle.write_request(failed_request)
                 self._coordinator.begin_shutdown()
                 result = await asyncio.to_thread(self._coordinator.await_shutdown, 0.0)
-                self._publish(failed_request, ServiceState(result.state.value))
+                self._publish(
+                    failed_request, ServiceState(result.state.value), refusal=result.refusal
+                )
         finally:
             observer.cancel()
             with suppress(asyncio.CancelledError):
@@ -285,12 +291,13 @@ class ControlledConsoleServer(uvicorn.Server):
     async def _watch_startup_drain(self, request: ServiceShutdownRequest) -> None:
         previous = ShutdownState.RUNNING
         while not self.started:
-            state = self._coordinator.shutdown_status().state
+            status = self._coordinator.shutdown_status()
+            state = status.state
             if state is not previous:
                 self._seen_request = request.request_id
                 try:
                     self._lifecycle.write_request(request)
-                    self._publish(request, ServiceState(state.value))
+                    self._publish(request, ServiceState(state.value), refusal=status.refusal)
                 except ServiceLifecycleError:
                     self._coordinator.record_failure()
                 previous = state
@@ -363,7 +370,7 @@ class ControlledConsoleServer(uvicorn.Server):
                     before_resume=lambda: self._publish(request, ServiceState.RUNNING)
                 )
                 if result.state is not ShutdownState.RUNNING:
-                    self._publish(request, ServiceState.REFUSED)
+                    self._publish(request, ServiceState.REFUSED, refusal=result.refusal)
             except Exception:
                 self._coordinator.begin_shutdown()
                 self._coordinator.record_failure()
@@ -371,20 +378,26 @@ class ControlledConsoleServer(uvicorn.Server):
         result = self._coordinator.begin_shutdown()
         if result.state is ShutdownState.REFUSED:
             try:
-                self._publish(request, ServiceState.REFUSED)
+                self._publish(request, ServiceState.REFUSED, refusal=result.refusal)
             except ServiceLifecycleError:
                 self._coordinator.record_failure()
             return
         self._draining = asyncio.create_task(self._drain(request))
 
-    def _publish(self, request: ServiceShutdownRequest, state: ServiceState) -> None:
+    def _publish(
+        self,
+        request: ServiceShutdownRequest,
+        state: ServiceState,
+        *,
+        refusal: ShutdownRefusal | None = None,
+    ) -> None:
         now = datetime.now(UTC)
         # READY is consumed only from this exact result. Publish it after instance state,
         # so any later durable failure cannot leave a consumable success marker.
         self._instance = self._instance.with_state(state, at=now)
         self._lifecycle.publish_instance(self._instance)
         self._lifecycle.write_result(
-            ServiceShutdownResult.for_request(request, state=state, at=now)
+            ServiceShutdownResult.for_request(request, state=state, at=now, refusal=refusal)
         )
 
     async def _drain(self, request: ServiceShutdownRequest) -> None:
@@ -394,7 +407,7 @@ class ControlledConsoleServer(uvicorn.Server):
                 self._coordinator.await_shutdown, request.timeout_seconds
             )
             state = ServiceState(result.state.value)
-            self._publish(request, state)
+            self._publish(request, state, refusal=result.refusal)
             if state is ServiceState.READY:
                 self.should_exit = True
         except Exception:

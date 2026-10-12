@@ -1,5 +1,51 @@
 # Controlled service restart
 
+## Refused drain diagnostics (2026-10-12)
+
+`ShutdownResult.refusal: ShutdownRefusal | None` carries only fixed typed facts:
+`component=WRITE_GATE|CONSOLE|KNOWLEDGE_INDEX|OWNED_PROCESSES|LIFECYCLE`,
+`reason=TIMEOUT|UNCONFIRMED|COMPONENT_ERROR`, and optional `active_count` from a real component.
+An unavailable count remains null, never guessed zero. This diagnostic may only accompany REFUSED.
+It is an explanation, never stop proof, record-save proof, READY, a signal capability or permission
+to reopen admission. The same original conjunctive drain and sticky-failure rules apply.
+
+`ConsoleShutdownCoordinator.await_shutdown(timeout)` preserves the actual failing component.
+An exception records its component and fixed COMPONENT_ERROR without exception body, traceback,
+argv or environment. Repeated `begin_shutdown`, status, and failed cancellation preserve the first
+UNCONFIRMED/COMPONENT_ERROR. A later real uncertainty replaces a merely retriable TIMEOUT explanation.
+Console final-record uncertainty stays distinct from active Operation/dispatcher timeout; index and
+owned-process uncertainty stay distinct from ongoing bounded waiting.
+
+`ServiceShutdownResult.refusal` is an additive optional field; wrap serialization omits absent
+refusal so old v1 wire shape is unchanged. Static `console-service-shutdown-result.schema.json`
+is generated from the typed model. Unknown reason/component, extra field or a diagnostic attached
+to RUNNING/DRAINING/READY is refused by typed validation. The host publishes state and diagnosis
+from one `ShutdownResult` snapshot, including startup observation, avoiding torn state/cause reads.
+The CLI wait reads it only after the existing exact instance/request/PID/time match. CLI status
+additionally requires matching current request/result state and equal instance/result timestamps;
+a stale diagnostic is never attached to another service instance or request.
+
+| Case | Explanation / unchanged action |
+| --- | --- |
+| actual admitted writer/Operation/dispatcher/index/session still waiting | TIMEOUT, wait/retry or existing timeout-only resume |
+| actual record-save/process-stop/index uncertainty | UNCONFIRMED, maintain closed admission and verify original facts |
+| actual component exception | COMPONENT_ERROR, maintain closed admission, fixed Chinese guidance only |
+| known sticky failure then new stop request | preserve first known diagnostic, exact new request binding, no new execution |
+| old REFUSED without diagnostic | preserve unknown summary; never infer which component failed |
+| current diagnostic with foreign/stale request/result/instance time | ignore for status explanation, original safety refusal remains |
+
+Tests: `tests/web_console/test_shutdown_refusal_diagnostics.py` exercises the real coordinator,
+host `_drain`/startup watcher/repeated request, secure private store, CLI wait/status, Schema and
+legacy wire; existing controlled Host, script and Console persistence tests remain incremental gates.
+
+Existing data: no SQL, Task, Run, Operation, approval, retained workspace or historic lifecycle
+rewrite. PID802's old result does not contain a component; offline reproduction cannot backfill it.
+An already running old host cannot acquire this diagnostic by updating disk files. Deploy only
+after an independently verified safe maintenance boundary; this change itself cannot unblock its
+old unknown execution. Once a diagnostic-bearing record exists, rollback must retain an optional-
+field-compatible lifecycle reader; the previous extra-forbid reader cannot consume that extension.
+Preserve new records rather than stripping fields or inventing READY.
+
 ## Scope and failure mode
 
 Applies to one local Console Host, its HTTP writers, Manager Operations, index worker and owned native/tool
