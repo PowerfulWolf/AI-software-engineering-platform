@@ -1,0 +1,34 @@
+{
+  "id": "context-capacity-receipt",
+  "title": "上下文容量停止的可信记录与同需求恢复",
+  "status": "in_progress",
+  "base_commit": "7ef2425427a122aeb4a9282d9fd32da063c8ee25",
+  "goal": "容量不足不伪装预算耗尽；Coder、QA、Review 保留原 checkpoint 并经精确审批继续；历史终态 K1 经完整补丁受控恢复。",
+  "allowlist": [
+    "src/ai_software_engineer/agents/",
+    "src/ai_software_engineer/context/",
+    "src/ai_software_engineer/domain/",
+    "src/ai_software_engineer/manager/",
+    "src/ai_software_engineer/orchestration/",
+    "src/ai_software_engineer/recovery/",
+    "src/ai_software_engineer/work_queue/",
+    "src/ai_software_engineer/team_view/",
+    "src/ai_software_engineer/web_console/",
+    "schemas/",
+    "scripts/sync-*-schema*.py",
+    "tests/",
+    ".trellis/spec/core/",
+    ".trellis/tasks/",
+    "docs/architecture/failure-routing.md"
+  ],
+  "acceptance": [
+    "真实完整最终输入检查、真实 claim fence、零模型启动证明及内容寻址 receipt",
+    "完整阅读投影不截断 Context；不支持的输入回退原文；完整旧补丁只出现一次",
+    "Coder 同 Task 精确 PAUSE/RESUME，QA/Review 同 candidate 精确 RESUME；不退款或改 verdict",
+    "存量 K1 不修改旧 Task/事件、不借旧 Run、不新建同名需求；完整 patch 与授权链验证后产生内部 successor",
+    "独立审查、增量测试、Schema 重生成守卫、Ruff、strict mypy 通过",
+    "部署后通过公开 ASE 操作接口准备、审阅和批准原 K1 的恢复方案，跟踪实际交付"
+  ],
+  "validation": "仅受影响增量 pytest、隔离 MySQL 公开路径、Node 状态测试、变更 Python 的 Ruff 与 strict mypy；不运行全量。",
+  "rollback": "受控停服后回滚执行代码；已发布新 receipt/plan/baseline 后必须保留兼容 reader 与全部审计事实。"
+}

@@ -315,7 +315,7 @@ def test_coder_reapply_deduplicates_complete_patch_when_recovery_source_is_prese
     patch_section = next(item for item in context.sections if item.name == "source:recovery.patch")
     assert patch_section.content == patch
     assert value.complete_patch_uri == patch_section.uri
-    assert "\"complete_patch\":" not in baseline.content
+    assert '"complete_patch":' not in baseline.content
     # The one full body fits the production budget; two copies would not.
     assert context.budget.used_input_tokens < 256_000
     request = _request(
@@ -329,10 +329,7 @@ def test_coder_reapply_deduplicates_complete_patch_when_recovery_source_is_prese
             "execution_base_ref": binding.execution_base_ref,
         }
     )
-    assert (
-        execution_baseline_from_context(context, request, task, verifier=resolver)
-        == binding
-    )
+    assert execution_baseline_from_context(context, request, task, verifier=resolver) == binding
     validate_reapply_context(recovery_plan, context)
 
     missing = context.model_copy(

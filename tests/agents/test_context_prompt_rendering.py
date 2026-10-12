@@ -66,7 +66,7 @@ def test_json_context_sections_are_losslessly_projected_without_changing_sealed_
         '{"tiny":1e-9999999999999999999999}',
         '{"example":"\\ud800"}',
         '{"example":"\\udfff"}',
-        '{"nested":' * 300 + '"complete original value"' + '}' * 300,
+        '{"nested":' * 300 + '"complete original value"' + "}" * 300,
         "plain repository instructions",
         "17",
     ),

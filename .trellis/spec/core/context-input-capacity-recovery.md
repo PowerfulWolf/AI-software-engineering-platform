@@ -36,7 +36,8 @@ Receipt fields are `origin`, `task_id/task_sha256/task_intent_sha256/task_revisi
 `work_item_id/lease_id/assignment_id/claim_sha256/dispatch_sequence/checkpoint_sequence`,
 `role/attempt/source_revision/context_manifest_id/context_sha256`,
 `max_input_tokens/context_input_tokens/final_input_tokens/request`,
-`execution_baseline_sha256/provider_started/observed_at/receipt_sha256`.
+`execution_baseline_sha256/provider_started/observed_at/receipt_sha256`, plus the optional
+paired `legacy_terminal_event_sha256/legacy_terminal_source_revision` for legacy observations.
 
 `origin=final_input` requires the actual `AgentRequest` and actual final estimate strictly
 greater than the limit; request identity/source/baseline must match. The limit is the sealed
@@ -48,6 +49,11 @@ readers must independently prove no invocation, outcome, route or native call, n
 `origin=legacy_terminal_context` is a current retrospective observation and forbids request
 and final-input count. It never invents a missing historical Run, process stop or result.
 The receipt records observation time and hashes its full body excluding its own digest.
+The optional legacy pair pins the original terminal event and its original source without
+rewriting either; final-input receipts reject this pair. Absent legacy fields are omitted from
+wire/hash so existing normal receipts remain byte-compatible. The dedicated terminal reader
+independently establishes actual input source from the complete Context, claim and approved
+baseline; the legacy event source cannot grant a source change by itself.
 
 ## Recovery boundary
 
@@ -56,6 +62,14 @@ existing execution-baseline service validates full claim/Context/source history 
 an exact plan. It requires PAUSE, followed by a separate RESUME with a fresh dispatch/Lease/Run;
 same Task/WorkItem, branch and frozen allowance remain. The uninvoked attempt neither advances
 nor receives a transient refund.
+
+The shared `manager/capacity_input_reader.py` validates complete raw sealed artifacts as well
+as start/outcome, route and native continuation ledgers. Accepted-only artifact views cannot
+prove absence: an unaccepted sealed report with the same Run or complete Context claim still
+contradicts a no-start decision. Existing roots, namespaces and record files must be regular,
+readable and symlink-free; a dangling record cannot be silently skipped. Same-claim alternate
+Run evidence is rejected, and legitimate earlier native preparation history is validated against
+its actual distinct claim. Normal role inputs continue to use accepted artifacts.
 
 QA/Reviewer capacity recovery remains on the same candidate and its verifier-preparation
 path. It must validate original READY intent/checkpoint, complete Context and claim, current
@@ -106,8 +120,9 @@ remain actual historical values; section/Operation preparation success is not de
 Existing Task, Requirement, baseline, Context, queue, invocation and Operation records remain
 immutable. The first implementation is read-only compatible with those records; no SQL migration
 or terminal reset is allowed. Before a new capacity receipt exists, a historical terminal Task
-continues to use its existing safe blocked presentation. Rollback removes new proposal/reader/UI
-code while retaining immutable receipt and plan readers once such records have been published.
+continues to use its existing safe blocked presentation. After new records are published, rollback
+may disable proposal/dispatch changes but must retain compatible immutable receipt, plan and baseline
+readers. Never return to a version that treats a published recovery record as corrupt or unreadable.
 
 ## Validation matrix
 

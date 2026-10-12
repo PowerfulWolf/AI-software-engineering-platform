@@ -188,9 +188,7 @@ def execution_baseline_from_context(
         if verifier is None:
             raise ValueError("重应用基线引用缺少完整执行基线证据校验")
         patch_sections = tuple(
-            item
-            for item in context.sections
-            if item.name == "source:recovery.patch"
+            item for item in context.sections if item.name == "source:recovery.patch"
         )
         if len(patch_sections) != 1:
             raise ValueError("重应用基线引用缺少唯一完整的 recovery.patch")

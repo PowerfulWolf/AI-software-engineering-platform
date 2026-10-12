@@ -158,9 +158,7 @@ class BaselineRunContextBuilder:
         # binding/epoch reference. Other modes and historical contexts keep
         # their original bytes and projection semantics.
         recovery_sections = tuple(
-            item
-            for item in context.sections
-            if item.name == "source:recovery.patch"
+            item for item in context.sections if item.name == "source:recovery.patch"
         )
         if (
             source.baseline.input_mode is BaselineInputMode.CODER_REAPPLY
