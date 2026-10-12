@@ -614,6 +614,28 @@ def test_preflight_detail_action_is_deduplicated_and_chinese() -> None:
     assert "重新调查工程等待" in action
 
 
+def test_owned_discovery_wait_explains_missing_facts_without_an_image_repair() -> None:
+    observation = DeliveryPreflightObservation(
+        requirement_id="requirement",
+        status="WAIT_ENGINEERING",
+        reason_code="CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED",
+        native_wait_reason=NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE,
+        native_wait_detail=NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED,
+    )
+    receipt = cast(
+        DeliveryPreflightReceipt,
+        SimpleNamespace(observations=(observation, observation)),
+    )
+    action = _preflight_detail_action(receipt)
+    assert action is not None
+    assert action.count("验证探测进程的实际停止或记录收尾尚未核验") == 1
+    assert "重复检查 Docker 镜像无法补齐原执行事实" in action
+    assert "平台执行服务核验原探测进程及收尾记录" in action
+    assert "补齐原执行结束事实后再重新调查工程等待" in action
+    assert "本地没有已批准的 MySQL" not in action
+    assert "工程负责人处理后" not in action
+
+
 class WaitQueue:
     def __init__(self, fixture: Fixture) -> None:
         task = fixture.repository.get(fixture.task.id)

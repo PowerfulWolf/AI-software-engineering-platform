@@ -127,6 +127,7 @@
     "NativeVerificationCapabilityDetail": {
       "description": "Safe, bounded cause categories for controlled host discovery.",
       "enum": [
+        "VERIFICATION_PROCESS_STATE_UNCONFIRMED",
         "VERIFICATION_HOST_PLATFORM_UNSUPPORTED",
         "VERIFICATION_CODEX_EXECUTABLE_UNAVAILABLE",
         "VERIFICATION_DOCKER_EXECUTABLE_UNAVAILABLE",
