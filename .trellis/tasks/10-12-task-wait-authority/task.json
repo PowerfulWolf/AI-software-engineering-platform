@@ -1,0 +1,11 @@
+{
+  "name": "task-wait-authority",
+  "title": "按 Task 隔离工程等待授权，保留旧审批与共享预算",
+  "status": "in_progress",
+  "priority": "P0",
+  "description": "修复原 K1 RESUME 在新 Task 自动处理工程等待时，仓库级固定授权目录与旧 Task scope 冲突。",
+  "branch": "task/task-wait-authority",
+  "created_at": "2026-10-12",
+  "allowed_paths": ["src/ai_software_engineer/manager/delivery_wait.py", "tests/manager/test_delivery_wait.py", ".trellis/spec/core/engineering-authority.md", ".trellis/tasks/10-12-task-wait-authority/**"],
+  "rollback_commit": "f91f33a857b34fb5e3f613f655559f676df8a466"
+}

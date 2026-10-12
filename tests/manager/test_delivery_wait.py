@@ -43,6 +43,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     HandleDeliveryWait,
     InspectDeliveryWait,
     ResolveDeliveryWait,
+    delivery_wait_resolution_plan_sha256,
 )
 from ai_software_engineer.domain.engineering_authority import (
     EngineeringCapability,
@@ -96,6 +97,8 @@ from ai_software_engineer.orchestration.continuation_models import ContinuationR
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.orchestration.state_machine import build_event
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
+from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope
+from ai_software_engineer.recovery.store import FileRecoveryStore
 from ai_software_engineer.store import SqliteTaskRepository
 from ai_software_engineer.web_console import (
     ConsoleCommandRejected,
@@ -233,6 +236,137 @@ def test_handling_real_checkpoint_uses_frozen_policy_without_human_actor_and_rep
         )
     with pytest.raises(ValidationError):
         DeliveryResolution.model_validate({**decision.to_wire(), "proof_sha256": "f" * 64})
+
+
+def test_automatic_wait_authority_isolates_tasks_without_overwriting_legacy_scope(
+    native: Fixture, tmp_path: Path
+) -> None:
+    _handling_policy(native, tmp_path)
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    stopped_receipt(native, tmp_path)
+    entry = service(native, queue, tmp_path)
+    ledger = tmp_path / "authority-ledger"
+    ledger.mkdir()
+    entry.engineering_authority = EngineeringAuthority(ledger)
+    legacy_scope = RecoveryScope.model_validate(
+        {
+            "team_id": entry.scope.team_id,
+            "repository_id": entry.scope.repository_id,
+            "repository_root": native.task.repository,
+            "delivery_id": "delivery_wait_task_previous",
+        }
+    )
+    legacy = tmp_path / "delivery-wait-authority"
+    FileRecoveryStore.initialize(legacy, scope=legacy_scope)
+    before = {path.name: path.read_bytes() for path in legacy.glob("*.json")}
+
+    command = HandleDeliveryWait.model_validate(queue.command().to_wire())
+    handling = entry.handle(command)
+
+    assert handling.resolution is not None and handling.status == "RESOLVED"
+    admission = handling.resolution.engineering_admission
+    assert admission is not None and admission.task_id == native.task.id
+    scoped = tmp_path / ("delivery-wait-authority-" + digest(native.task.id))
+    scope = legacy_scope.model_copy(update={"delivery_id": "delivery_wait_" + native.task.id})
+    saved = FileRecoveryStore(scoped, scope=scope)
+    assert saved.get_engineering_admission(admission.plan_sha256) == admission
+    assert entry.handle(command) == handling and len(queue.consumed) == 1
+    assert {path.name: path.read_bytes() for path in legacy.glob("*.json")} == before
+
+
+def test_automatic_wait_reuses_shared_admission_after_legacy_partial_publication(
+    native: Fixture, tmp_path: Path
+) -> None:
+    _handling_policy(native, tmp_path)
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    stopped_receipt(native, tmp_path)
+    entry = service(native, queue, tmp_path)
+    ledger = tmp_path / "authority-ledger"
+    ledger.mkdir()
+    authority = EngineeringAuthority(ledger)
+    entry.engineering_authority = authority
+    proof = entry.inspect(queue.command())
+    scope = RecoveryScope.model_validate(
+        {
+            "team_id": entry.scope.team_id,
+            "repository_id": entry.scope.repository_id,
+            "repository_root": native.task.repository,
+            "delivery_id": "delivery_wait_" + native.task.id,
+        }
+    )
+    legacy = tmp_path / "delivery-wait-authority"
+    original = authority.admit(
+        task=native.task,
+        store=FileRecoveryStore.initialize(legacy, scope=scope),
+        plan_sha256=delivery_wait_resolution_plan_sha256(
+            proof.proof_sha256, DeliveryResolutionKind.RETRY_FROM_CHECKPOINT
+        ),
+        facts_sha256=proof.proof_sha256,
+        capabilities=(EngineeringCapability.DELIVERY_WAIT_RESOLUTION,),
+        at=NOW,
+    )
+    legacy_before = {path.name: path.read_bytes() for path in legacy.glob("*.json")}
+    shared_before = {
+        str(path.relative_to(ledger)): path.read_bytes() for path in ledger.rglob("*.json")
+    }
+
+    handling = entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire()))
+
+    assert handling.resolution is not None and handling.status == "RESOLVED"
+    assert handling.resolution.engineering_admission == original
+    scoped = tmp_path / ("delivery-wait-authority-" + digest(native.task.id))
+    assert (
+        FileRecoveryStore(scoped, scope=scope).get_engineering_admission(original.plan_sha256)
+        == original
+    )
+    assert {path.name: path.read_bytes() for path in legacy.glob("*.json")} == legacy_before
+    assert {
+        str(path.relative_to(ledger)): path.read_bytes() for path in ledger.rglob("*.json")
+    } == shared_before
+    assert len(queue.consumed) == 1
+
+
+@pytest.mark.parametrize("invalid", ("foreign_scope", "symlink", "corrupt_scope"))
+def test_scoped_wait_authority_rejects_invalid_current_root(
+    native: Fixture, tmp_path: Path, invalid: str
+) -> None:
+    _handling_policy(native, tmp_path)
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    stopped_receipt(native, tmp_path)
+    entry = service(native, queue, tmp_path)
+    ledger = tmp_path / "authority-ledger"
+    ledger.mkdir()
+    entry.engineering_authority = EngineeringAuthority(ledger)
+    scoped = tmp_path / ("delivery-wait-authority-" + digest(native.task.id))
+    scope = RecoveryScope.model_validate(
+        {
+            "team_id": entry.scope.team_id,
+            "repository_id": entry.scope.repository_id,
+            "repository_root": native.task.repository,
+            "delivery_id": "delivery_wait_" + native.task.id,
+        }
+    )
+    if invalid == "symlink":
+        other = tmp_path / "foreign-authority"
+        FileRecoveryStore.initialize(other, scope=scope)
+        scoped.symlink_to(other, target_is_directory=True)
+    else:
+        FileRecoveryStore.initialize(
+            scoped,
+            scope=scope.model_copy(update={"delivery_id": "delivery_wait_task_foreign"})
+            if invalid == "foreign_scope"
+            else scope,
+        )
+        if invalid == "corrupt_scope":
+            (scoped / "scope.json").write_text("{}")
+
+    with pytest.raises(RecoveryRejected):
+        entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire()))
+    assert queue.consumed == []
+    assert list(ledger.rglob("engineering-admission-*.json")) == []
 
 
 def test_upgrade_reuses_a_handling_sealed_before_baseline_extension(
