@@ -164,9 +164,11 @@ class BaselineRunContextBuilder:
         )
         if (
             source.baseline.input_mode is BaselineInputMode.CODER_REAPPLY
+            and not isinstance(historical, ExecutionBaselineContext)
             and len(recovery_sections) == 1
             and not recovery_sections[0].truncated
             and recovery_sections[0].content == value.complete_patch
+            and recovery_sections[0].sha256 == source.baseline.retained_patch.sha256
         ):
             payload = ReappliedBaselineReferenceContext(
                 binding=source.baseline,
