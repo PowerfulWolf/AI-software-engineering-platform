@@ -733,6 +733,13 @@ branch/detached 与 HEAD，dirty 现场不得清理。
 
 ## T036 TeamSnapshot read contract
 
+Console additionally supports independent current-card and complete-detail GET contracts:
+`/api/v1/team-summary` and `/api/v1/team-details`, advertised only by
+`team_read_contract_version=v0.1`. Exact typed owner/checkpoint/Task/read-state locators fence
+selected full bodies without granting approval or execution authority. The old v0.2 full contract
+below is unchanged. Schemas, selective assembly, lifecycle/error bounds and existing-data handling:
+[Team summary/detail reads](../../.trellis/spec/core/team-summary-detail.md).
+
 `GET /api/v1/team` 输出 `schemas/team-snapshot.schema.json`：team/as_of、Team 成员、选定 Project 的
 需求、目录范围、Task、分配、时间线、报告和已完成模型路由记录。不接受写入。成员的任务集合为多值，
 current_stage 来自 Task 状态与 Dispatch 的 role 匹配，不代表执行器在线。execution_liveness 仅

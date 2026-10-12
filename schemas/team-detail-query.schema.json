@@ -1,0 +1,270 @@
+{
+  "$id": "https://ai-software-engineer.local/schemas/team-detail-query.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "expected_source_task_id": {
+              "type": "null"
+            },
+            "expected_task_id": {
+              "type": "null"
+            },
+            "expected_task_intent_sha256": {
+              "type": "null"
+            },
+            "expected_task_revision": {
+              "type": "null"
+            },
+            "expected_verification_plan_sha256": {
+              "type": "null"
+            },
+            "expected_work_kind": {
+              "type": "null"
+            },
+            "id": {
+              "pattern": "^delivery_"
+            },
+            "kind": {
+              "const": "request"
+            }
+          }
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "expected_task_id": {
+                  "type": "null"
+                },
+                "expected_task_intent_sha256": {
+                  "type": "null"
+                },
+                "expected_task_revision": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "expected_task_id": {
+                  "type": "string"
+                },
+                "expected_task_intent_sha256": {
+                  "type": "string"
+                },
+                "expected_task_revision": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "expected_task_id",
+                "expected_task_revision",
+                "expected_task_intent_sha256"
+              ]
+            }
+          ],
+          "properties": {
+            "expected_source_task_id": {
+              "type": "null"
+            },
+            "expected_verification_plan_sha256": {
+              "type": "null"
+            },
+            "expected_work_kind": {
+              "enum": [
+                "delivery",
+                "remediation"
+              ]
+            },
+            "id": {
+              "pattern": "^delivery_"
+            },
+            "kind": {
+              "const": "task"
+            }
+          },
+          "required": [
+            "expected_work_kind"
+          ]
+        },
+        {
+          "properties": {
+            "expected_source_task_id": {
+              "type": "string"
+            },
+            "expected_task_id": {
+              "type": "string"
+            },
+            "expected_task_intent_sha256": {
+              "type": "null"
+            },
+            "expected_task_revision": {
+              "type": "null"
+            },
+            "expected_verification_plan_sha256": {
+              "type": "string"
+            },
+            "expected_work_kind": {
+              "const": "candidate_verification"
+            },
+            "id": {
+              "pattern": "^verification_"
+            },
+            "kind": {
+              "const": "task"
+            }
+          },
+          "required": [
+            "expected_work_kind",
+            "expected_task_id",
+            "expected_source_task_id",
+            "expected_verification_plan_sha256"
+          ]
+        }
+      ]
+    }
+  ],
+  "properties": {
+    "expected_requirement_checkpoint_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Expected Requirement Checkpoint Sha256",
+      "type": "string"
+    },
+    "expected_resource_checkpoint_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Expected Resource Checkpoint Sha256",
+      "type": "string"
+    },
+    "expected_resource_state_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Expected Resource State Sha256",
+      "type": "string"
+    },
+    "expected_source_task_id": {
+      "anyOf": [
+        {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Source Task Id"
+    },
+    "expected_task_id": {
+      "anyOf": [
+        {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Task Id"
+    },
+    "expected_task_intent_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Task Intent Sha256"
+    },
+    "expected_task_revision": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Task Revision"
+    },
+    "expected_verification_plan_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Verification Plan Sha256"
+    },
+    "expected_work_kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "delivery",
+            "candidate_verification",
+            "remediation"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Work Kind"
+    },
+    "id": {
+      "pattern": "^(?:delivery_[a-z0-9][a-z0-9_-]{2,95}|verification_[a-f0-9]{32})$",
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "request",
+        "task"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "project_id": {
+      "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "request_id": {
+      "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "team_id": {
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+      "title": "Team Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "team_id",
+    "project_id",
+    "request_id",
+    "kind",
+    "id",
+    "expected_requirement_checkpoint_sha256",
+    "expected_resource_checkpoint_sha256",
+    "expected_resource_state_sha256"
+  ],
+  "title": "TeamDetailQuery",
+  "type": "object"
+}

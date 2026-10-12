@@ -12,7 +12,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from importlib.resources import files
 from threading import Lock
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool as _threadpool
@@ -42,6 +42,14 @@ from ai_software_engineer.recovery.preparation_progress import (
 from ai_software_engineer.repository_workspace import RepositoryWorkspaceError
 from ai_software_engineer.spec_documents import CreateSpecDocument, SpecDocumentError
 from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
+from ai_software_engineer.team_view.read_models import (
+    TEAM_READ_CONTRACT_VERSION,
+    TeamDetail,
+    TeamDetailNotFound,
+    TeamDetailQuery,
+    TeamDetailStale,
+    TeamSummary,
+)
 from ai_software_engineer.team_workspace import MAX_TEAM_KNOWLEDGE_SOURCE_BYTES
 
 from .administration import (
@@ -212,6 +220,12 @@ class _ServiceWriteMiddleware:
 
 class TeamReader(Protocol):
     def snapshot(self, project_id: str | None = None) -> TeamSnapshot: ...
+
+
+@runtime_checkable
+class _TeamDetailReader(Protocol):
+    def summary(self, project_id: str | None = None) -> TeamSummary: ...
+    def detail(self, query: TeamDetailQuery) -> TeamDetail: ...
 
 
 class ConsoleApplication(Protocol):
@@ -385,6 +399,40 @@ def create_console_app(
             return _error(404, "NOT_FOUND", "Project was not found.")
         return await _team_snapshot(reader, project_id, snapshot_gate)
 
+    @app.get("/api/v1/team-summary")
+    async def team_summary(request: Request) -> Response:
+        if not isinstance(reader, _TeamDetailReader):
+            return _error(404, "TEAM_READ_NOT_AVAILABLE", "当前服务不支持团队摘要和完整详情读取。")
+        parameters = request.query_params
+        if any(key != "project_id" or len(parameters.getlist(key)) != 1 for key in parameters):
+            return _error(409, "TEAM_READ_QUERY_INVALID", "团队摘要查询参数无效, 请重新选择项目。")
+        project_id = parameters.get("project_id")
+        if project_id is not None and not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "所选项目不存在, 或已删除。")
+        return await snapshot_gate.response(reader, project_id, mode="summary")
+
+    @app.get("/api/v1/team-details")
+    async def team_details(request: Request) -> Response:
+        if not isinstance(reader, _TeamDetailReader):
+            return _error(404, "TEAM_READ_NOT_AVAILABLE", "当前服务不支持团队摘要和完整详情读取。")
+        parameters = request.query_params
+        try:
+            if any(
+                key not in TeamDetailQuery.model_fields or len(parameters.getlist(key)) != 1
+                for key in parameters
+            ):
+                raise ValueError("invalid Team detail query")
+            payload: dict[str, object] = dict(parameters)
+            revision = parameters.get("expected_task_revision")
+            if revision is not None:
+                if not revision.isascii() or not revision.isdecimal() or len(revision) > 20:
+                    raise ValueError("invalid exact Task revision")
+                payload["expected_task_revision"] = int(revision)
+            query = TeamDetailQuery.model_validate(payload)
+        except ValueError:
+            return _error(409, "TEAM_READ_QUERY_INVALID", "详情查询参数无效, 请刷新后重新打开。")
+        return await snapshot_gate.response(reader, query.project_id, mode="detail", query=query)
+
     @app.get("/api/v1/admin/projects/{project_id}/requirements/{requirement_id}/knowledge-gaps")
     async def knowledge_gaps(project_id: str, requirement_id: str) -> Response:
         if not isinstance(administration, LocalConsoleAdministration):
@@ -477,6 +525,11 @@ def create_console_app(
                 "delivery_ready": delivery_ready,
                 "operation_contract_version": _OPERATION_CONTRACT_VERSION,
                 "supported_actions": supported_actions,
+                **(
+                    {"team_read_contract_version": TEAM_READ_CONTRACT_VERSION}
+                    if isinstance(reader, _TeamDetailReader)
+                    else {}
+                ),
                 **(
                     {"operation_summary_contract_version": SUMMARY_CONTRACT_VERSION}
                     if isinstance(console, _OperationSummaryReader)
@@ -1285,6 +1338,8 @@ class _RenderedTeamResponse:
 @dataclass(slots=True, weakref_slot=True)
 class _TeamReadFlight:
     project_id: str | None
+    mode: Literal["full", "summary", "detail"] = "full"
+    query: TeamDetailQuery | None = None
     task: asyncio.Task[_RenderedTeamResponse] | None = None
     waiters: int = 0
     started: bool = False
@@ -1292,26 +1347,35 @@ class _TeamReadFlight:
 
 
 class _TeamSnapshotReads:
-    """One worker-owned read, with at most two additional same-Project observers."""
+    """One worker-owned read; only two completely identical queries may join."""
 
     def __init__(self) -> None:
         self._lock = Lock()
         self._active: _TeamReadFlight | None = None
 
-    async def response(self, reader: TeamReader, project_id: str | None) -> Response:
+    async def response(
+        self,
+        reader: TeamReader,
+        project_id: str | None,
+        *,
+        mode: Literal["full", "summary", "detail"] = "full",
+        query: TeamDetailQuery | None = None,
+    ) -> Response:
         with self._lock:
             flight = self._active
             joined = flight is not None
             if flight is None:
-                flight = _TeamReadFlight(project_id)
+                flight = _TeamReadFlight(project_id, mode, query)
                 self._active = flight
             elif (
                 flight.project_id != project_id
+                or flight.mode != mode
+                or flight.query != query
                 or flight.waiters >= 2
                 or flight.task is None
                 or flight.task.done()
             ):
-                return _error(503, "TEAM_READ_IN_PROGRESS", "A Team read is already in progress.")
+                return _error(503, "TEAM_READ_IN_PROGRESS", "团队信息正在读取, 请稍后重试。")
             else:
                 flight.waiters += 1
 
@@ -1353,11 +1417,37 @@ class _TeamSnapshotReads:
             flight.started = True
         try:
             try:
-                response: Response = JSONResponse(reader.snapshot(flight.project_id).to_wire())
+                result: TeamSnapshot | TeamSummary | TeamDetail
+                if flight.mode == "full":
+                    result = reader.snapshot(flight.project_id)
+                elif not isinstance(reader, _TeamDetailReader):
+                    raise TeamReadError("Team summary/detail reader is unavailable")
+                elif flight.mode == "summary":
+                    result = reader.summary(flight.project_id)
+                elif flight.query is None or flight.query.project_id != flight.project_id:
+                    raise TeamReadError("Team detail query is missing its exact Project")
+                else:
+                    result = reader.detail(flight.query)
+                response: Response = JSONResponse(result.to_wire())
+            except TeamDetailNotFound:
+                response = _error(
+                    404, "TEAM_RESOURCE_NOT_FOUND", "所选需求或任务不存在, 或已删除。"
+                )
+            except TeamDetailStale:
+                response = _error(
+                    409, "TEAM_DETAIL_STALE", "详情版本或归属已更新, 请刷新后重新打开。"
+                )
             except TeamReadError:
-                response = _error(503, "TEAM_UNAVAILABLE", "Team data is temporarily unavailable.")
+                response = _error(
+                    503, "TEAM_UNAVAILABLE", "团队信息暂时无法完整核验, 原需求和进度保留。"
+                )
             except Exception:
-                return self._unexpected()
+                if flight.mode != "full":
+                    response = _error(
+                        503, "TEAM_UNAVAILABLE", "团队信息暂时无法完整核验, 原需求和进度保留。"
+                    )
+                else:
+                    return self._unexpected()
             return _RenderedTeamResponse(
                 bytes(response.body), response.status_code, response.media_type
             )

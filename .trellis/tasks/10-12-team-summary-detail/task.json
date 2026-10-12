@@ -1,0 +1,42 @@
+{
+  "id": "team-summary-detail-20261012",
+  "title": "Team 当前摘要与精确完整详情只读契约",
+  "status": "completed",
+  "owner": "codex",
+  "baseline": "08a4715",
+  "scope": [
+    "后端 typed TeamSummary v0.1 / TeamDetail v0.1 和独立 Schema",
+    "ProductionTeamReader 装配处跳过未选中正文和历史 Task 展示 hydration",
+    "Web Console 新只读 GET 和共享实际 worker 生命周期 gate",
+    "增量契约、负例、性能装配计数与组织规范"
+  ],
+  "acceptance": [
+    "原 TeamSnapshot v0.2 和 GET /api/v1/team wire 不变",
+    "所有当前字段、完整 role_queue、ownership、execution 与审批来源保留",
+    "摘要不调用 full snapshot 然后裁剪，不装配文档正文或历史 Task 完整详情",
+    "选中资源详情保留全部正文与返工历史，精确 owner/checkpoint/Task 身份漂移拒绝",
+    "full/summary/detail 共用原 worker 并发额度，只合并完全相同 query",
+    "不操作生产配置、服务、数据库或审批，不改 app.js；仅增量测试与独立复核"
+  ],
+  "allowed_paths": [
+    "src/ai_software_engineer/team_view/reader.py",
+    "src/ai_software_engineer/team_view/read_models.py",
+    "src/ai_software_engineer/web_console/transport.py",
+    "scripts/sync-team-read-schemas.py",
+    "schemas/team-summary.schema.json",
+    "schemas/team-detail.schema.json",
+    "schemas/team-detail-query.schema.json",
+    "tests/team_view/",
+    "tests/web_console/",
+    ".trellis/spec/core/",
+    "docs/architecture/contracts.md",
+    "docs/architecture/team-console.md",
+    ".trellis/tasks/10-12-team-summary-detail/"
+  ],
+  "verification": [
+    "focused pytest models/schema/reader/transport/coalescing tests",
+    "Ruff, strict mypy for changed Python files, schema regeneration parity, git diff --check",
+    "independent scoped review before commit"
+  ],
+  "rollback": "停用新能力声明和新 GET 后恢复旧 full 读取；不修改任何持久化事实。"
+}

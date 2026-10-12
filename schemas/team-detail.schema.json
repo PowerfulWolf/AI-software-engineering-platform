@@ -1,0 +1,2472 @@
+{
+  "$defs": {
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "AssignmentView": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "current_stage": {
+          "title": "Current Stage",
+          "type": "boolean"
+        },
+        "planned_model": {
+          "title": "Planned Model",
+          "type": "string"
+        },
+        "planned_provider": {
+          "title": "Planned Provider",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        }
+      },
+      "required": [
+        "agent_id",
+        "role",
+        "planned_provider",
+        "planned_model",
+        "current_stage"
+      ],
+      "title": "AssignmentView",
+      "type": "object"
+    },
+    "BaselineContinueAuthorization": {
+      "additionalProperties": false,
+      "description": "One explicit start decision for the current preserved execution input.",
+      "properties": {
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        },
+        "checkpoint_sequence": {
+          "minimum": 1,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "execution_baseline_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Execution Baseline Sha256",
+          "type": "string"
+        },
+        "expected_disposition_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Expected Disposition Sha256",
+          "type": "string"
+        },
+        "expected_source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Expected Source Revision",
+          "type": "string"
+        },
+        "inventory_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Inventory Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "baseline_continue_authorization",
+          "default": "baseline_continue_authorization",
+          "title": "Kind",
+          "type": "string"
+        },
+        "principal": {
+          "$ref": "#/$defs/LocalOperatorPrincipal"
+        },
+        "reference": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Reference",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "submitted_at": {
+          "format": "date-time",
+          "title": "Submitted At",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "task_id",
+        "task_intent_sha256",
+        "task_revision",
+        "work_item_id",
+        "execution_baseline_sha256",
+        "expected_source_revision",
+        "checkpoint_sequence",
+        "expected_disposition_sha256",
+        "inventory_sha256",
+        "principal",
+        "reference",
+        "submitted_at",
+        "authorization_sha256"
+      ],
+      "title": "BaselineContinueAuthorization",
+      "type": "object"
+    },
+    "CodexConnectionMode": {
+      "enum": [
+        "direct",
+        "proxy"
+      ],
+      "type": "string"
+    },
+    "DeliveryDisposition": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/DeliveryNextAction"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "facts": {
+          "$ref": "#/$defs/DeliveryFailureFacts"
+        },
+        "kind": {
+          "const": "delivery_disposition",
+          "default": "delivery_disposition",
+          "title": "Kind",
+          "type": "string"
+        },
+        "next_action": {
+          "minLength": 1,
+          "title": "Next Action",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "responsibility": {
+          "$ref": "#/$defs/DeliveryResponsibility"
+        },
+        "resume_condition": {
+          "enum": [
+            "fresh_role_claim",
+            "product_resolution",
+            "engineering_authorization",
+            "verified_prerequisites",
+            "verified_execution_resolution",
+            "explicit_baseline_continuation",
+            "none"
+          ],
+          "title": "Resume Condition",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_facts_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Facts Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "facts",
+        "source_facts_sha256",
+        "responsibility",
+        "action",
+        "reason",
+        "next_action",
+        "resume_condition"
+      ],
+      "title": "DeliveryDisposition",
+      "type": "object"
+    },
+    "DeliveryExecutionView": {
+      "additionalProperties": false,
+      "description": "Product-facing execution facts, separate from delivery stage and verdict.",
+      "properties": {
+        "action_required": {
+          "default": false,
+          "title": "Action Required",
+          "type": "boolean"
+        },
+        "available_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available At"
+        },
+        "next_action": {
+          "title": "Next Action",
+          "type": "string"
+        },
+        "policy_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Id"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "receipt_uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Receipt Uri"
+        },
+        "responsibility": {
+          "enum": [
+            "product",
+            "team",
+            "engineering"
+          ],
+          "title": "Responsibility",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "RUNNING",
+            "QUEUED",
+            "WAITING",
+            "RETRY_SCHEDULED",
+            "INTERRUPTED",
+            "STOPPED",
+            "UNKNOWN",
+            "COMPLETED",
+            "SUPERSEDED"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "responsibility",
+        "reason_code",
+        "reason",
+        "next_action"
+      ],
+      "title": "DeliveryExecutionView",
+      "type": "object"
+    },
+    "DeliveryFailureFacts": {
+      "additionalProperties": false,
+      "description": "Facts from trusted application services, never model routing suggestions.",
+      "properties": {
+        "budget_available": {
+          "title": "Budget Available",
+          "type": "boolean"
+        },
+        "checkpoint_sequence": {
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "classification": {
+          "enum": [
+            "TRANSIENT_INFRA",
+            "NONTRANSIENT_INFRA",
+            "INVALID_OUTPUT",
+            "QA_FINDING",
+            "VERIFICATION_INCONCLUSIVE",
+            "REVIEW_FINDING",
+            "POLICY_VIOLATION",
+            "REQUIREMENT_AMBIGUITY",
+            "BUDGET_EXHAUSTED",
+            "CONTEXT_CAPACITY",
+            "PLATFORM_BUG",
+            "EXECUTION_UNCERTAIN",
+            "ENVIRONMENT_UNAVAILABLE",
+            "ENGINEERING_AUTHORIZATION",
+            "SOURCE_PREPARATION_DRIFT",
+            "EXECUTION_BASELINE_PAUSED",
+            "KNOWLEDGE_PREPARATION_LIMIT"
+          ],
+          "title": "Classification",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "execution_baseline_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Baseline Sha256"
+        },
+        "retry_authorized": {
+          "default": false,
+          "title": "Retry Authorized",
+          "type": "boolean"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "work_item_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Item Id"
+        }
+      },
+      "required": [
+        "task_id",
+        "role",
+        "classification",
+        "source_revision",
+        "task_intent_sha256",
+        "checkpoint_sequence",
+        "budget_available"
+      ],
+      "title": "DeliveryFailureFacts",
+      "type": "object"
+    },
+    "DeliveryNextAction": {
+      "enum": [
+        "RETRY",
+        "REMEDIATE_CANDIDATE",
+        "REQUEST_PRODUCT_DECISION",
+        "REQUEST_ENGINEERING_AUTHORIZATION",
+        "WAIT_DEPENDENCY",
+        "INVESTIGATE_EXECUTION",
+        "RESUME_EXECUTION_BASELINE",
+        "TERMINATE"
+      ],
+      "title": "DeliveryNextAction",
+      "type": "string"
+    },
+    "DeliveryResponsibility": {
+      "enum": [
+        "product",
+        "team",
+        "engineering"
+      ],
+      "title": "DeliveryResponsibility",
+      "type": "string"
+    },
+    "DesignBudget": {
+      "additionalProperties": false,
+      "description": "Read-only observation; unknown legacy transient counts default to zero.",
+      "properties": {
+        "design_attempts": {
+          "minimum": 0,
+          "title": "Design Attempts",
+          "type": "integer"
+        },
+        "exhausted": {
+          "anyOf": [
+            {
+              "enum": [
+                "design",
+                "transient"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exhausted"
+        },
+        "max_design_attempts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Design Attempts",
+          "type": "integer"
+        },
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        },
+        "transient_failures": {
+          "minimum": 0,
+          "title": "Transient Failures",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "design_attempts",
+        "transient_failures"
+      ],
+      "title": "DesignBudget",
+      "type": "object"
+    },
+    "DialogueAttachmentView": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "media_type": {
+          "enum": [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+          ],
+          "title": "Media Type",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source_bytes": {
+          "title": "Source Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "media_type",
+        "source_bytes",
+        "sha256"
+      ],
+      "title": "DialogueAttachmentView",
+      "type": "object"
+    },
+    "DialogueTurnView": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DialogueAttachmentView"
+          },
+          "title": "Attachments",
+          "type": "array"
+        },
+        "sequence": {
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "speaker": {
+          "enum": [
+            "user",
+            "product"
+          ],
+          "title": "Speaker",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "speaker"
+      ],
+      "title": "DialogueTurnView",
+      "type": "object"
+    },
+    "DocumentView": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "default": "",
+          "title": "Content",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source_uri": {
+          "title": "Source Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "source_uri",
+        "sha256"
+      ],
+      "title": "DocumentView",
+      "type": "object"
+    },
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        },
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
+      "type": "object"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "KnowledgeGap": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/KnowledgeRunBinding"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "gap_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Gap Id",
+          "type": "string"
+        },
+        "impact": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Impact",
+          "type": "string"
+        },
+        "kind": {
+          "const": "knowledge_gap",
+          "default": "knowledge_gap",
+          "title": "Kind",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "question": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "MISSING",
+            "CONFLICT",
+            "STALE",
+            "UNVERIFIABLE"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "required_decision": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Required Decision",
+          "type": "string"
+        },
+        "risk": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Risk",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "BLOCKING",
+            "NON_BLOCKING"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding",
+        "question",
+        "required_decision",
+        "reason",
+        "severity",
+        "impact",
+        "risk",
+        "evidence_ids",
+        "manifest_sha256",
+        "gap_id"
+      ],
+      "title": "KnowledgeGap",
+      "type": "object"
+    },
+    "KnowledgeGapView": {
+      "additionalProperties": false,
+      "properties": {
+        "gap": {
+          "$ref": "#/$defs/KnowledgeGap"
+        },
+        "is_current": {
+          "title": "Is Current",
+          "type": "boolean"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeResolution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "gap",
+        "is_current"
+      ],
+      "title": "KnowledgeGapView",
+      "type": "object"
+    },
+    "KnowledgeResolution": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "approval_reference": {
+          "minLength": 1,
+          "title": "Approval Reference",
+          "type": "string"
+        },
+        "approved_by": {
+          "minLength": 1,
+          "title": "Approved By",
+          "type": "string"
+        },
+        "disposition": {
+          "default": "REQUIREMENT_ONLY",
+          "enum": [
+            "REQUIREMENT_ONLY",
+            "PROPOSE_LEARNING"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "gap_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Gap Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "knowledge_resolution",
+          "default": "knowledge_resolution",
+          "title": "Kind",
+          "type": "string"
+        },
+        "previous_run_id": {
+          "minLength": 1,
+          "title": "Previous Run Id",
+          "type": "string"
+        },
+        "resolution_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Resolution Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeResolutionSource"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "gap_id",
+        "previous_run_id",
+        "answer",
+        "sources",
+        "approval_reference",
+        "approved_by",
+        "resolution_id"
+      ],
+      "title": "KnowledgeResolution",
+      "type": "object"
+    },
+    "KnowledgeResolutionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "sha256",
+        "content"
+      ],
+      "title": "KnowledgeResolutionSource",
+      "type": "object"
+    },
+    "KnowledgeRunBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_ids": {
+          "items": {
+            "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Repository Ids",
+          "type": "array"
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/TeamRole"
+        },
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "role",
+        "team_id",
+        "project_id",
+        "requirement_id",
+        "repository_ids",
+        "source_revision",
+        "context_manifest_id",
+        "snapshot_sha256"
+      ],
+      "title": "KnowledgeRunBinding",
+      "type": "object"
+    },
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        },
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
+    "ManagerCoordinationAdvice": {
+      "additionalProperties": false,
+      "properties": {
+        "draft": {
+          "$ref": "#/$defs/ManagerCoordinationDraft"
+        },
+        "input_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "manager_stage_advice",
+          "default": "manager_stage_advice",
+          "title": "Kind",
+          "type": "string"
+        },
+        "manager_run_id": {
+          "minLength": 1,
+          "title": "Manager Run Id",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "source_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Checkpoint Sha256",
+          "type": "string"
+        },
+        "source_facts_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Facts Sha256",
+          "type": "string"
+        },
+        "stage": {
+          "minLength": 1,
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "stage",
+        "source_facts_sha256",
+        "source_checkpoint_sha256",
+        "input_sha256",
+        "manager_run_id",
+        "provider",
+        "model",
+        "draft"
+      ],
+      "title": "ManagerCoordinationAdvice",
+      "type": "object"
+    },
+    "ManagerCoordinationDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "RETRY_STAGE",
+            "PROPOSE_RECOVERY",
+            "WAITING_HUMAN"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "next_action": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Next Action",
+          "type": "string"
+        },
+        "responsible_actor": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Responsible Actor",
+          "type": "string"
+        },
+        "resume_condition": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Resume Condition",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "summary",
+        "next_action",
+        "responsible_actor",
+        "resume_condition"
+      ],
+      "title": "ManagerCoordinationDraft",
+      "type": "object"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
+    },
+    "ProjectionEventKind": {
+      "description": "Source fact types rendered in a timeline.",
+      "enum": [
+        "state_event",
+        "evaluation_event",
+        "artifact",
+        "evidence",
+        "handoff",
+        "assignment",
+        "lease"
+      ],
+      "title": "ProjectionEventKind",
+      "type": "string"
+    },
+    "ProviderRouteKind": {
+      "enum": [
+        "codex_cli",
+        "responses"
+      ],
+      "type": "string"
+    },
+    "RequestDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "kind": {
+          "const": "request",
+          "default": "request",
+          "title": "Kind",
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/RequestView"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/TeamDetailSource"
+        }
+      },
+      "required": [
+        "as_of",
+        "scope",
+        "resource"
+      ],
+      "title": "RequestDetail",
+      "type": "object"
+    },
+    "RequestView": {
+      "additionalProperties": false,
+      "properties": {
+        "blocker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blocker"
+        },
+        "checkpoint_sha256": {
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        },
+        "coordination": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagerCoordinationAdvice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "design_budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignBudget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "design_recheck_available": {
+          "default": false,
+          "title": "Design Recheck Available",
+          "type": "boolean"
+        },
+        "design_recheck_pending": {
+          "default": false,
+          "title": "Design Recheck Pending",
+          "type": "boolean"
+        },
+        "design_recovery_available": {
+          "default": false,
+          "title": "Design Recovery Available",
+          "type": "boolean"
+        },
+        "dialogue": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DialogueTurnView"
+          },
+          "title": "Dialogue",
+          "type": "array"
+        },
+        "documents": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DocumentView"
+          },
+          "title": "Documents",
+          "type": "array"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryExecutionView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "failed_stages": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Failed Stages",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "knowledge_gap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeGapView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "knowledge_rechecked_gap_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Knowledge Rechecked Gap Ids",
+          "type": "array"
+        },
+        "knowledge_route": {
+          "anyOf": [
+            {
+              "enum": [
+                "USER",
+                "PRODUCT",
+                "DESIGNER",
+                "RESEARCH",
+                "ACCEPT_RISK",
+                "WAITING_HUMAN",
+                "WAITING_DEPENDENCY"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Route"
+        },
+        "knowledge_wait_stage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Wait Stage"
+        },
+        "next_action": {
+          "title": "Next Action",
+          "type": "string"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "$ref": "#/$defs/ScopeView"
+          },
+          "title": "Scopes",
+          "type": "array"
+        },
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "stage_budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageBudget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "title",
+        "stage",
+        "scopes",
+        "next_action",
+        "checkpoint_sha256"
+      ],
+      "title": "RequestView",
+      "type": "object"
+    },
+    "RoleQueueView": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Id"
+        },
+        "attempt": {
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "available_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available At"
+        },
+        "execution_phase": {
+          "anyOf": [
+            {
+              "enum": [
+                "KNOWLEDGE_PREPARATION",
+                "ROLE_EXECUTION",
+                "FINALIZING"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Phase"
+        },
+        "heartbeat_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Heartbeat At"
+        },
+        "lease_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lease Expires At"
+        },
+        "lease_liveness": {
+          "default": "UNKNOWN",
+          "enum": [
+            "UNKNOWN",
+            "LEASE_VALID",
+            "LEASE_EXPIRED"
+          ],
+          "title": "Lease Liveness",
+          "type": "string"
+        },
+        "pending_baseline_continuation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BaselineContinueAuthorization"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkItemStatus"
+        },
+        "wait_disposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "wait_disposition_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait Disposition Sha256"
+        },
+        "wait_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait Reason"
+        },
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "role",
+        "attempt",
+        "status"
+      ],
+      "title": "RoleQueueView",
+      "type": "object"
+    },
+    "RunView": {
+      "additionalProperties": false,
+      "properties": {
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "connection_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexConnectionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "duration_ms": {
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Code"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "route_index": {
+          "title": "Route Index",
+          "type": "integer"
+        },
+        "route_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderRouteKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source_uri": {
+          "title": "Source Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "role",
+        "provider",
+        "model",
+        "route_index",
+        "outcome",
+        "duration_ms",
+        "completed_at",
+        "source_uri",
+        "sha256"
+      ],
+      "title": "RunView",
+      "type": "object"
+    },
+    "ScopeView": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Id"
+        },
+        "reference_only": {
+          "default": false,
+          "title": "Reference Only",
+          "type": "boolean"
+        },
+        "root": {
+          "title": "Root",
+          "type": "string"
+        },
+        "selected_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Paths",
+          "type": "array"
+        }
+      },
+      "required": [
+        "root",
+        "selected_paths"
+      ],
+      "title": "ScopeView",
+      "type": "object"
+    },
+    "StageBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "capacity_timeouts": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Capacity Timeouts",
+          "type": "integer"
+        },
+        "exhausted": {
+          "anyOf": [
+            {
+              "enum": [
+                "work",
+                "transient",
+                "capacity"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exhausted"
+        },
+        "max_attempts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "max_capacity_timeouts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Capacity Timeouts",
+          "type": "integer"
+        },
+        "max_timeout_seconds": {
+          "default": 2400,
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Max Timeout Seconds",
+          "type": "integer"
+        },
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        },
+        "next_timeout_seconds": {
+          "anyOf": [
+            {
+              "maximum": 86400,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Timeout Seconds"
+        },
+        "role": {
+          "enum": [
+            "product",
+            "designer",
+            "planner"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "transient_failures": {
+          "minimum": 0,
+          "title": "Transient Failures",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "role",
+        "attempts",
+        "transient_failures"
+      ],
+      "title": "StageBudget",
+      "type": "object"
+    },
+    "TaskDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "kind": {
+          "const": "task",
+          "default": "task",
+          "title": "Kind",
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/TaskView"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/TeamDetailSource"
+        }
+      },
+      "required": [
+        "as_of",
+        "scope",
+        "resource"
+      ],
+      "title": "TaskDetail",
+      "type": "object"
+    },
+    "TaskView": {
+      "additionalProperties": false,
+      "properties": {
+        "assignments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AssignmentView"
+          },
+          "title": "Assignments",
+          "type": "array"
+        },
+        "blocker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blocker"
+        },
+        "candidate_branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Branch"
+        },
+        "candidate_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Revision"
+        },
+        "checkpoint_stage": {
+          "title": "Checkpoint Stage",
+          "type": "string"
+        },
+        "documents": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DocumentView"
+          },
+          "title": "Documents",
+          "type": "array"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryExecutionView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "execution_history": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TimelineEntry"
+          },
+          "title": "Execution History",
+          "type": "array"
+        },
+        "execution_liveness": {
+          "const": "UNKNOWN",
+          "default": "UNKNOWN",
+          "title": "Execution Liveness",
+          "type": "string"
+        },
+        "failure_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Code"
+        },
+        "history_task_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "History Task Ids",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "last_activity": {
+          "format": "date-time",
+          "title": "Last Activity",
+          "type": "string"
+        },
+        "next_action": {
+          "title": "Next Action",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan Sha256"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "role_queue": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RoleQueueView"
+          },
+          "title": "Role Queue",
+          "type": "array"
+        },
+        "runs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RunView"
+          },
+          "title": "Runs",
+          "type": "array"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScopeView"
+        },
+        "source_delivery_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Delivery Id"
+        },
+        "source_task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Task Id"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "task_intent_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Intent Sha256"
+        },
+        "task_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Revision"
+        },
+        "terminal": {
+          "title": "Terminal",
+          "type": "boolean"
+        },
+        "timeline": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TimelineEntry"
+          },
+          "title": "Timeline",
+          "type": "array"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "work_kind": {
+          "default": "delivery",
+          "enum": [
+            "delivery",
+            "candidate_verification",
+            "remediation"
+          ],
+          "title": "Work Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "request_id",
+        "title",
+        "scope",
+        "status",
+        "checkpoint_stage",
+        "terminal",
+        "last_activity",
+        "next_action"
+      ],
+      "title": "TaskView",
+      "type": "object"
+    },
+    "TeamDetailSource": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "resource_id": {
+                  "pattern": "^delivery_"
+                },
+                "resource_kind": {
+                  "const": "request"
+                },
+                "source_task_id": {
+                  "type": "null"
+                },
+                "task_id": {
+                  "type": "null"
+                },
+                "task_intent_sha256": {
+                  "type": "null"
+                },
+                "task_revision": {
+                  "type": "null"
+                },
+                "verification_plan_sha256": {
+                  "type": "null"
+                },
+                "work_kind": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "oneOf": [
+                {
+                  "properties": {
+                    "task_id": {
+                      "type": "null"
+                    },
+                    "task_intent_sha256": {
+                      "type": "null"
+                    },
+                    "task_revision": {
+                      "type": "null"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "task_id": {
+                      "type": "string"
+                    },
+                    "task_intent_sha256": {
+                      "type": "string"
+                    },
+                    "task_revision": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "task_id",
+                    "task_revision",
+                    "task_intent_sha256"
+                  ]
+                }
+              ],
+              "properties": {
+                "resource_id": {
+                  "pattern": "^delivery_"
+                },
+                "resource_kind": {
+                  "const": "task"
+                },
+                "source_task_id": {
+                  "type": "null"
+                },
+                "verification_plan_sha256": {
+                  "type": "null"
+                },
+                "work_kind": {
+                  "enum": [
+                    "delivery",
+                    "remediation"
+                  ]
+                }
+              },
+              "required": [
+                "work_kind"
+              ]
+            },
+            {
+              "properties": {
+                "resource_id": {
+                  "pattern": "^verification_"
+                },
+                "resource_kind": {
+                  "const": "task"
+                },
+                "source_task_id": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "task_intent_sha256": {
+                  "type": "null"
+                },
+                "task_revision": {
+                  "type": "null"
+                },
+                "verification_plan_sha256": {
+                  "type": "string"
+                },
+                "work_kind": {
+                  "const": "candidate_verification"
+                }
+              },
+              "required": [
+                "work_kind",
+                "task_id",
+                "source_task_id",
+                "verification_plan_sha256"
+              ]
+            }
+          ]
+        }
+      ],
+      "description": "Reading locator only; no approval or permission can be inferred from it.",
+      "properties": {
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requirement_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Requirement Checkpoint Sha256",
+          "type": "string"
+        },
+        "resource_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Resource Checkpoint Sha256",
+          "type": "string"
+        },
+        "resource_id": {
+          "pattern": "^(?:delivery_[a-z0-9][a-z0-9_-]{2,95}|verification_[a-f0-9]{32})$",
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "resource_kind": {
+          "enum": [
+            "request",
+            "task"
+          ],
+          "title": "Resource Kind",
+          "type": "string"
+        },
+        "resource_state_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Resource State Sha256",
+          "type": "string"
+        },
+        "source_task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Task Id"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "task_intent_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Intent Sha256"
+        },
+        "task_revision": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Revision"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "verification_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Plan Sha256"
+        },
+        "work_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "delivery",
+                "candidate_verification",
+                "remediation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Kind"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "request_id",
+        "resource_kind",
+        "resource_id",
+        "requirement_checkpoint_sha256",
+        "resource_checkpoint_sha256",
+        "resource_state_sha256"
+      ],
+      "title": "TeamDetailSource",
+      "type": "object"
+    },
+    "TeamRole": {
+      "description": "Long-lived roles that a Team-owned AgentProfile may declare.",
+      "enum": [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "TeamRole",
+      "type": "string"
+    },
+    "TimelineEntry": {
+      "additionalProperties": false,
+      "description": "A small, source-addressable timeline item.",
+      "properties": {
+        "details": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Details",
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ProjectionEventKind"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        },
+        "source_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Sha256"
+        },
+        "source_uri": {
+          "minLength": 1,
+          "title": "Source Uri",
+          "type": "string"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "occurred_at",
+        "summary",
+        "source_uri"
+      ],
+      "title": "TimelineEntry",
+      "type": "object"
+    },
+    "WorkItemStatus": {
+      "enum": [
+        "READY",
+        "LEASED",
+        "RUNNING",
+        "WAITING_HUMAN",
+        "WAITING_DEPENDENCY",
+        "RETRY_SCHEDULED",
+        "CLOSED"
+      ],
+      "title": "WorkItemStatus",
+      "type": "string"
+    }
+  },
+  "$id": "https://ai-software-engineer.local/schemas/team-detail.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "discriminator": {
+    "mapping": {
+      "request": "#/$defs/RequestDetail",
+      "task": "#/$defs/TaskDetail"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/RequestDetail"
+    },
+    {
+      "$ref": "#/$defs/TaskDetail"
+    }
+  ]
+}

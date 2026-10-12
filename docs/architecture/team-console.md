@@ -40,6 +40,14 @@ Operation 持久化允许完整恢复结果，使用独立 16 MiB 实际 UTF-8 J
 
 正式 wire contract：[team-snapshot.schema.json](../../schemas/team-snapshot.schema.json) 与
 [console-operation.schema.json](../../schemas/console-operation.schema.json)。
+
+新的定时读取使用 `GET /api/v1/team-summary`，完整选中正文使用 `GET /api/v1/team-details`。
+`/api/v1/console` 仅在 reader 完整支持两端口时声明 `team_read_contract_version=v0.1`；旧 full
+GET 与 v0.2 Schema 保持兼容。摘要保留全部当前控制事实，详情绑定 exact owner/checkpoint/
+Task/read-state 后读取全部历史，再用新当前事实 fence；读取定位不授予审批或执行权限。
+三个独立 Schema、中文 404/409/503、共享 bounded worker 与取消生命周期见
+[Team 摘要与完整详情契约](../../.trellis/spec/core/team-summary-detail.md)。
+
 旧 DashboardRenderer / ReadOnlyProjectionApi 仍为纯、transport-neutral 的基础组件，
 静态 snapshot 工具和 `ase team serve` 只用于只读兼容；日常 socket 由 `web_console.host` composition 持有。
 
