@@ -1,8 +1,10 @@
 """A final-input overflow is a claimed preparation fact, never an invocation."""
 
+import json
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from ai_software_engineer.agents.model_input import FinalModelInputCapacityExceeded
 from ai_software_engineer.context import ContextBudget, ContextBundle
@@ -71,7 +73,22 @@ def test_final_capacity_failure_seals_exact_claim_before_wait_without_a_model_st
     assert not records.list("invocation-starts", DeliveryInvocationStart)
     assert not records.list("invocation-outcomes", DeliveryInvocationOutcome)
     wire = receipt.to_wire()
+    assert "legacy_terminal_event_sha256" not in wire
+    assert "legacy_terminal_source_revision" not in wire
     assert ContextCapacityReceipt.model_validate(wire) == receipt
+    validator = Draft202012Validator(
+        json.loads(
+            (Path(__file__).parents[2] / "schemas/context-capacity-receipt.schema.json").read_text()
+        )
+    )
+    validator.validate(wire)
+    legacy_fields = {
+        "legacy_terminal_event_sha256": "f" * 64,
+        "legacy_terminal_source_revision": "a" * 40,
+    }
+    with pytest.raises(ValueError, match="cannot carry legacy"):
+        ContextCapacityReceipt.model_validate({**wire, **legacy_fields})
+    assert list(validator.iter_errors({**wire, **legacy_fields}))
     with pytest.raises(ValueError):
         ContextCapacityReceipt.model_validate({**wire, "provider_started": True})
     changed = receipt.model_copy(update={"final_input_tokens": 12})
@@ -174,6 +191,37 @@ def test_legacy_capacity_receipt_never_claims_a_missing_original_request(tmp_pat
         }
     )
     receipt.validate_integrity()
+    validator = Draft202012Validator(
+        json.loads(
+            (Path(__file__).parents[2] / "schemas/context-capacity-receipt.schema.json").read_text()
+        )
+    )
+    validator.validate(receipt.to_wire())
+    assert "legacy_terminal_event_sha256" not in receipt.to_wire()
+    observed = ContextCapacityReceipt.model_validate(
+        {
+            **receipt.to_wire(),
+            "legacy_terminal_event_sha256": "e" * 64,
+            "legacy_terminal_source_revision": "f" * 40,
+        }
+    )
+    observed = observed.model_copy(
+        update={
+            "receipt_sha256": digest(observed.model_dump(mode="json", exclude={"receipt_sha256"}))
+        }
+    )
+    observed.validate_integrity()
+    validator.validate(observed.to_wire())
+    for field in ("legacy_terminal_event_sha256", "legacy_terminal_source_revision"):
+        for remove in (True, False):
+            wire = observed.to_wire()
+            if remove:
+                del wire[field]
+            else:
+                wire[field] = None
+            with pytest.raises(ValueError, match="appear together"):
+                ContextCapacityReceipt.model_validate(wire)
+            assert list(validator.iter_errors(wire))
     for field in ({"request": fixture.request.to_wire()}, {"final_input_tokens": 281125}):
         with pytest.raises(ValueError, match="cannot invent"):
             ContextCapacityReceipt.model_validate({**receipt.to_wire(), **field})

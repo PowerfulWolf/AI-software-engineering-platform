@@ -354,10 +354,6 @@ class NativeRecoveryEntry:
         try:
             old = manager.recover(source_spec)
         except WorktreeNotFound:
-            if original.capacity_input is not None:
-                raise RecoveryRejected(
-                    "保留的开发工作区缺失; 暂不能使用当前上下文容量恢复方案"
-                ) from None
             old = manager.restore_clean_coder(source_spec)
             restored_clean_source = True
         if restored_clean_source:

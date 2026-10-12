@@ -45,15 +45,29 @@ class ContextCapacityReceipt(DomainModel):
     final_input_tokens: PositiveInt | None = None
     request: AgentRequest | None = None
     execution_baseline_sha256: Sha256 | None = None
+    legacy_terminal_event_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    legacy_terminal_source_revision: NonEmptyStr | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     provider_started: Literal[False] = False
     observed_at: AwareDatetime
     receipt_sha256: Sha256
 
     @model_validator(mode="after")
     def validate_identity(self) -> Self:
+        if (self.legacy_terminal_event_sha256 is None) != (
+            self.legacy_terminal_source_revision is None
+        ):
+            raise ValueError(
+                "legacy terminal event digest and original source must appear together"
+            )
         if self.role not in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER):
             raise ValueError("capacity receipt requires a delivery role")
         if self.origin == "final_input":
+            if self.legacy_terminal_event_sha256 is not None:
+                raise ValueError("final input receipt cannot carry legacy terminal facts")
             request = self.request
             if request is None or self.final_input_tokens is None:
                 raise ValueError("final input capacity requires its actual request and estimate")

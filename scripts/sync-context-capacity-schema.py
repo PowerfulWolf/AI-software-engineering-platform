@@ -17,6 +17,8 @@ schema["allOf"] = [
             "properties": {
                 "request": {"$ref": "#/$defs/AgentRequest"},
                 "final_input_tokens": {"type": "integer", "minimum": 1},
+                "legacy_terminal_event_sha256": {"type": "null"},
+                "legacy_terminal_source_revision": {"type": "null"},
             },
         },
         "else": {
@@ -25,7 +27,18 @@ schema["allOf"] = [
                 "final_input_tokens": {"type": "null"},
             },
         },
-    }
+    },
+    {
+        "if": {
+            "required": ["legacy_terminal_event_sha256"],
+            "properties": {"legacy_terminal_event_sha256": {"type": "string"}},
+        },
+        "then": {
+            "required": ["legacy_terminal_source_revision"],
+            "properties": {"legacy_terminal_source_revision": {"type": "string"}},
+        },
+        "else": {"properties": {"legacy_terminal_source_revision": {"type": "null"}}},
+    },
 ]
 root = Path(__file__).resolve().parents[1]
 (root / "schemas/context-capacity-receipt.schema.json").write_text(
