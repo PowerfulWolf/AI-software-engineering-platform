@@ -2070,6 +2070,7 @@ class ProductionProjectDeliveryBackend:
         project_id: str,
         purpose: BaselinePurpose = BaselinePurpose.SOURCE_REBIND,
         plan_sha256: str | None = None,
+        knowledge_context_sources: tuple[ContextSource, ...] = (),
     ) -> ExecutionBaselineService:
         """Compose exact same-Task source recovery from frozen approved inputs."""
         from ai_software_engineer.domain.engineering_authority import EngineeringScope
@@ -2095,6 +2096,34 @@ class ProductionProjectDeliveryBackend:
         task = repository.get(checkpoint.task_id)
         if dispatch.task_id != task.id or facts.workspace.manifest.project_id != project_id:
             raise ValueError("执行基线未绑定当前 Project 的原批准交付任务")
+        sources = (*self._delivery_context_sources, *knowledge_context_sources)
+        parent_ids = {
+            source.uri.split("/")[2] for source in sources if source.uri.startswith("joint://")
+        }
+        if isinstance(dispatch, RecoveryDispatchRecord):
+            from ai_software_engineer.manager.baseline_knowledge_scope import (
+                recovery_knowledge_requirement_id,
+            )
+            from ai_software_engineer.recovery.entry import open_recovery_plan
+
+            recovery_root = facts.workspace.root / "state" / f"recovery-{checkpoint.delivery_id}"
+            recovery_store, recovery_plan = open_recovery_plan(
+                self._config, recovery_root / f"plan-{dispatch.recovery_plan_sha256}.json"
+            )
+            sealed = recovery_store.get_task_record(recovery_plan.plan_sha256)
+            if (
+                sealed.task != dispatch.task
+                or sealed.record_sha256 != dispatch.recovery_task_record_sha256
+            ):
+                raise ValueError("基线调查的恢复任务与精确原计划不同")
+            retained_parent = recovery_knowledge_requirement_id(
+                self._config, recovery_plan, checkpoint, load_allocation=authority.get_allocation
+            )
+            if retained_parent is not None:
+                parent_ids.add(retained_parent)
+        if len(parent_ids) > 1:
+            raise ValueError("基线调查的获批父需求知识作用域不唯一")
+        knowledge_requirement_id = next(iter(parent_ids), task.id)
         store = FileExecutionBaselineStore(
             facts.workspace.directory("state") / "execution-baselines" / task.id,
         )
@@ -2119,6 +2148,7 @@ class ProductionProjectDeliveryBackend:
                 repository_root=str(facts.workspace.repository_root),
             ),
             requirement_id=checkpoint.delivery_id,
+            knowledge_requirement_id=knowledge_requirement_id,
             repository=repository,
             queue=queue,
             artifacts=FileArtifactStore(facts.workspace.directory("artifacts"), read_only=True),
