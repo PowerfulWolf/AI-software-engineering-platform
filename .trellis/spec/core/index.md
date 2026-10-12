@@ -78,6 +78,9 @@
 - [Read memory lifecycle](read-memory-lifecycle.md): nested validation-error frame release,
   worker-owned snapshot admission and bounded serial/concurrent memory verification.
 
+- [Team snapshot record scope](team-snapshot-record-scope.md): synchronous full-byte immutable
+  decode reuse, fresh authority reads, copied results and exception-safe request lifetime.
+
 - [`product-approval-read-prefix.md`](product-approval-read-prefix.md): bounded call-local complete approval/spec associations, fresh byte/inventory validation and body-free fallback lifetime.
 
 - [Recovery record read scope](recovery-record-read-scope.md): fixed complete-byte Plan/Start/

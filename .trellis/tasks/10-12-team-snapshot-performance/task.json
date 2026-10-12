@@ -1,0 +1,30 @@
+{
+  "name": "team-snapshot-performance",
+  "title": "Team snapshot 内有界复用完整恢复记录解码",
+  "status": "completed",
+  "created_at": "2026-10-12",
+  "base_commit": "ec55d53498c97d2b99fcd230166ded2cd2a5c1c8",
+  "allowlist": [
+    "src/ai_software_engineer/team_view/reader.py",
+    "tests/team_view/test_snapshot_record_scope.py",
+    ".trellis/spec/core/team-snapshot-record-scope.md",
+    ".trellis/spec/core/index.md",
+    ".trellis/tasks/10-12-team-snapshot-performance/prd.md",
+    ".trellis/tasks/10-12-team-snapshot-performance/task.json",
+    ".trellis/tasks/10-12-team-snapshot-performance/verification.md"
+  ],
+  "constraints": [
+    "Incremental tests only; no production/model/service/shared database access",
+    "Every consumer reopens complete original bytes and hashes them",
+    "No cache of current authority, Task, lease, READY or execution decision",
+    "Call-scoped bounded immutable decoding only; deep-copy isolation and exception release",
+    "Preserve every history record and original read-only error contract"
+  ],
+  "verification_commands": [
+    "PYTHONPATH=src /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/python -m pytest tests/team_view/test_snapshot_record_scope.py tests/team_view/test_baseline_snapshot.py tests/team_view/test_task_read_snapshot.py tests/team_view/test_engineering_snapshot.py tests/recovery/test_record_read_scope.py -q --tb=line",
+    "/Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/python -m ruff check src/ai_software_engineer/team_view/reader.py tests/team_view/test_snapshot_record_scope.py",
+    "MYPYPATH=src PYTHONPATH=src /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/.venv/bin/python -m mypy src/ai_software_engineer/team_view/reader.py tests/team_view/test_snapshot_record_scope.py",
+    "git diff --check"
+  ],
+  "rollback": "Revert only the snapshot reading scope; preserve all durable facts and workspaces."
+}

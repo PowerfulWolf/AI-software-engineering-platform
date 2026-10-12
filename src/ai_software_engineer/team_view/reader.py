@@ -76,6 +76,7 @@ from ai_software_engineer.projection.models import (
     TimelineEntry,
 )
 from ai_software_engineer.projection.projector import RunProjectionBuilder, timeline_sort_key
+from ai_software_engineer.read_record_scope import recovery_record_read_scope
 from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.recovery.store import (
     FileRecoveryStore,
@@ -329,7 +330,7 @@ class ProductionTeamReader:
 
     def snapshot(self, project_id: str | None = None) -> TeamSnapshot:
         try:
-            with source_inspection_scope():
+            with recovery_record_read_scope(), source_inspection_scope():
                 return self._snapshot(project_id)
         except Exception as error:
             # Read failure must not become a successful empty team or expose a DSN/path secret.
