@@ -285,6 +285,11 @@ def localize_blocking_text(value: str | None) -> str | None:
         return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
     if text.startswith("Coder 恢复已安全停止："):
         return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
+    if text.startswith("CONTEXT_BUDGET_EXHAUSTED:"):
+        return (
+            "执行上下文超过平台输入容量，模型尚未调用；本次未消耗自动重试额度。"
+            "请由平台调整上下文装配或执行能力后，再为原需求准备新的精确恢复方案。"
+        )
     if text.startswith("BUDGET_EXHAUSTED") and "上下文" in text:
         return "上下文预算已用尽，平台不会自动重试模型；请缩小精确验证范围后再继续。"
     if "WorktreeAlreadyExists" in text:
