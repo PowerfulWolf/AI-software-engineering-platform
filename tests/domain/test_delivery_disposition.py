@@ -42,6 +42,7 @@ def facts(
         "ENVIRONMENT_UNAVAILABLE",
         "SOURCE_PREPARATION_DRIFT",
         "ENGINEERING_AUTHORIZATION",
+        "CONTEXT_CAPACITY",
     ],
 )
 def test_recoverable_engineering_causes_do_not_request_product_or_terminate(
@@ -63,6 +64,18 @@ def test_only_explicit_business_ambiguity_requests_product_decision() -> None:
     assert decision.responsibility is DeliveryResponsibility.PRODUCT
     assert decision.action is DeliveryNextAction.REQUEST_PRODUCT_DECISION
     assert decision.resume_condition == "product_resolution"
+
+
+@pytest.mark.parametrize("budget", [False, True])
+def test_context_capacity_wait_is_engineering_input_work_without_model_retry(budget: bool) -> None:
+    decision = decide_delivery_disposition(facts("CONTEXT_CAPACITY", budget=budget))
+    assert decision.responsibility is DeliveryResponsibility.ENGINEERING
+    assert decision.action is DeliveryNextAction.WAIT_DEPENDENCY
+    assert decision.resume_condition == "verified_prerequisites"
+    assert not decision.facts.retry_authorized
+    assert "上下文" in decision.reason and "未启动" in decision.reason
+    assert "额度" not in decision.reason
+    assert "ASE" in decision.next_action and "输入" in decision.next_action
 
 
 @pytest.mark.parametrize("classification", ["TRANSIENT_INFRA", "QA_FINDING", "REVIEW_FINDING"])
@@ -181,3 +194,12 @@ def test_failure_facts_published_schema_matches_the_current_model() -> None:
     )
     assert schema.pop("$schema") == "https://json-schema.org/draft/2020-12/schema"
     assert schema == DeliveryFailureFacts.model_json_schema()
+
+
+def test_every_embedded_failure_facts_schema_accepts_the_same_capacity_classification() -> None:
+    classification = DeliveryFailureFacts.model_json_schema()["properties"]["classification"]
+    for path in Path("schemas").glob("*.schema.json"):
+        schema = json.loads(path.read_text())
+        embedded = schema.get("$defs", {}).get("DeliveryFailureFacts")
+        if embedded is not None:
+            assert embedded["properties"]["classification"] == classification, path

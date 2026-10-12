@@ -61,6 +61,7 @@ class RetryClassification(StrEnum):
     POLICY_VIOLATION = "POLICY_VIOLATION"
     REQUIREMENT_AMBIGUITY = "REQUIREMENT_AMBIGUITY"
     BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+    CONTEXT_CAPACITY = "CONTEXT_CAPACITY"
     PLATFORM_BUG = "PLATFORM_BUG"
     KNOWLEDGE_PREPARATION_LIMIT = "KNOWLEDGE_PREPARATION_LIMIT"
 
@@ -130,14 +131,18 @@ class RetryingOrchestrator(SerialOrchestrator):
             artifact_ids = tuple(
                 dict.fromkeys(artifact_id for event in events for artifact_id in event.artifact_ids)
             )
+            source_revision = events[-1].source_revision if events else task.base_ref
+            if task.status is TaskStatus.IMPLEMENTING:
+                source_revision = self._current_coder_input(task).source_revision
             return self._blocked(
                 task,
-                RetryClassification.BUDGET_EXHAUSTED,
-                "Required context exceeds the configured input budget; no automatic retry.",
+                RetryClassification.CONTEXT_CAPACITY,
+                "本次交付角色的输入上下文超过配置容量, 模型调用未启动; "
+                "原交付进度和历史已保留, 需 ASE 核验输入后继续。",
                 max(task.attempts, 1),
                 tuple(event.event_id for event in events),
                 artifact_ids,
-                source_revision=events[-1].source_revision if events else task.base_ref,
+                source_revision=source_revision,
             )
 
     def _run_task(self, task_id: TaskId) -> RetryResult:
@@ -925,6 +930,10 @@ class RetryingOrchestrator(SerialOrchestrator):
         if (
             task.engineering_policy is not None
             and self._delivery_failure_control is not None
+            and (
+                classification is not RetryClassification.CONTEXT_CAPACITY
+                or task.status in {TaskStatus.IMPLEMENTING, TaskStatus.QA, TaskStatus.REVIEW}
+            )
             and classification
             in {
                 RetryClassification.REQUIREMENT_AMBIGUITY,
@@ -933,6 +942,7 @@ class RetryingOrchestrator(SerialOrchestrator):
                 RetryClassification.INVALID_OUTPUT,
                 RetryClassification.TRANSIENT_INFRA,
                 RetryClassification.NONTRANSIENT_INFRA,
+                RetryClassification.CONTEXT_CAPACITY,
             }
         ):
             self._delivery_failure_control.wait(

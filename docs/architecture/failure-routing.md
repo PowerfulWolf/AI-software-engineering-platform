@@ -6,6 +6,7 @@
 |---|---|---|
 | `TRANSIENT_INFRA` | HTTP 504、socket 超时、临时网络错误 | 进入 `RETRY_SCHEDULED`，释放 Lease，退避后重试原角色 |
 | `EXECUTION_CAPACITY` | 联合 Product/Designer/Planner 的本地 CLI 看门狗触顶, 无明确供应商错误 | 保留 checkpoint、退回未完成工作预留；下一次按 600→1200→2400 秒扩容, 三次后拒绝继续 |
+| `CONTEXT_CAPACITY` | required Context 或最终序列化的交付角色输入超过冻结容量，当前角色模型尚未启动 | 有真实工程 claim 时进入 `WAITING_DEPENDENCY` 并释放 Lease，保留 Task checkpoint、进度与历史；不当作额度耗尽或自动重试 |
 | `INVALID_OUTPUT` | JSON 不符合 Schema、缺字段、哈希不匹配 | 重启同角色一次；退避期间释放 Lease，重复失败再终局 `BLOCKED` |
 | `QA_FINDING` | criterion/test 明确 `FAIL`、验收标准未满足 | 将 findings 原样路由给 Coder，创建新 attempt |
 | `QA_INCONCLUSIVE` | 无代码 `FAIL`，但测试为 `ERROR` 或标准为 `NOT_TESTED` | 为同一 Candidate 新建 QA verification plan，重新批准后重跑 QA；不调用 Coder |
@@ -58,7 +59,8 @@
 安全停止兜底解释为预算耗尽。既有 `POLICY_VIOLATION` 映射到 `PERMISSION_DENIED`，
 `PLATFORM_BUG` 映射到 `INVARIANT_VIOLATION`，`INVALID_OUTPUT` 和
 `VERIFICATION_INCONCLUSIVE` 保留各自映射；预算/返工额度耗尽仍保留
-`RETRY_BUDGET_EXHAUSTED`。原 classification、reason、attempt、artifact/event IDs 不变，
+`RETRY_BUDGET_EXHAUSTED`，输入容量拒绝单独映射 `CONTEXT_CAPACITY`。
+原 classification、reason、attempt、artifact/event IDs 不变，
 不退款、不重试 dirty worktree、不重开终态。该边界不新增 wire enum 或改变状态机。
 Good：第 1 次安全拒绝可在重开只读 journal 后保持正确代码；Base：真实额度耗尽仍为预算代码；
 Bad：因为 Task BLOCKED 就显示预算耗尽，或把保留改动当合法 coder-progress 自动继续。
