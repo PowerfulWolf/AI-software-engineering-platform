@@ -173,3 +173,16 @@ source9cccb5b、父checkpoint ea13981...，target54ed9fe8875150c9783ddeceb9ff0b0
 作者暂停runtime-only新功能，继续只读定位精确未覆盖历史claim及可信knowledge lane；
 不能以枚举任意lane、缺start、补造stop或改SQL绕过。仍须加入真实公开联合恢复回归并独立审查。
 生产K1尚未完成；隔离测试DONE不等于本需求交付。
+
+## 精确父知识作用域发布后的容量核验（06:10 UTC）
+
+0434f0019e78a63f89e4112e7ba06d620f84b073已独立审查、push main并受控部署。
+全局338条Operation中active_complete=true、active=[]，PID15469受控stop确认全部保存和结束；
+uv sync --locked通过，PID38551受控start，注册源码clean后fetch/ff同步0434f00。
+原Coder工作区、原Task和全部旧失败历史保留。
+
+公开新proposal operation_318977ea26f7feb68371dc94e7a5dcf4，目标0434f00、preserve_draft，
+仍精确绑定原父checkpoint ea13981...、Task revision2、attempt3 work和source9cccb5b。
+06:10:59.037389Z FAILED/COMMAND_REJECTED：容量停止记录与真实 claim、原权限或工程输入不一致。
+此轮越过原历史知识记录缺口，尚未生成可批准计划；无PAUSE/RESUME、Git移动或模型调用。
+继续按真实capacity receipt7881...逐字段只读诊断claim/权限/工程输入，不能删除校验让它通过。
