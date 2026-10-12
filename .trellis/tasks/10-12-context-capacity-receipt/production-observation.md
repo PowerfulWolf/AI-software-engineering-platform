@@ -114,10 +114,12 @@ K1 注册源码 checkout 原 clean，fetch/ff-only 同步到同一提交；这�
 原批准基线或原 Coder worktree。Console 声明 team_read_contract_version=v0.1、
 operation_contract_version=7、delivery_ready=true。
 
-生产首次若干 HTTP 摘要请求返回 `503 TEAM_READ_IN_PROGRESS`，约九分钟后恢复。
+生产首次若干 HTTP 摘要请求返回 `503 TEAM_READ_IN_PROGRESS`，约九分钟跨度内采样数次后读取成功。
+没有同一 active flight 的身份与起止记录，不能将这些样本称为同一个读取连续卡住九分钟；
+旧页面的完整轮询与其他读请求竞争也尚未排除。
 服务仍响应 Console/Operation 读取；不能凭此称为内部装配异常或已确认的 gate 泄漏。
 独立纯读重放摘要4.463s、full14.912s均成功；macOS 拒绝 Python 进程栈采样，未提权或发信号。
-首次长时间占用的原因尚在单独核对，后续成功不能抹去这项观察。
+首次繁忙样本的具体占用来源仍未证实，后续成功不能抹去这项观察。
 
 恢复后串行 HTTP 验收（单次观察，不是延迟保证）：
 
