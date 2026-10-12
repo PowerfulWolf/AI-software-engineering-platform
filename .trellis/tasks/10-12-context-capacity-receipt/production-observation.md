@@ -155,3 +155,21 @@ HTTP 返回不证明远端停止。此轮没有 main DeliveryInvocationStart；�
 完整知识事实与 no-main 否定扫描的结合；不能仅靠缺 start、PID 消失或空目录猜测未执行。
 原失败 Operation、Task、审批、预算与完整开发进度全部保留，没有 SQL 改写或补造旧 receipt。
 截至本段记录，K1仍为IMPLEMENTING/CONTEXT_CAPACITY等待，未进入QA/Review或交付完成。
+
+## 知识 claim 修复发布后的真实重提（05:20 UTC）
+
+独立审查及增量验证后的54ed9fe已发布：全局337条operation中active_complete=true、active=[]；
+PID37024受控stop保存全部操作/写入并确认执行器和索引结束。维护main与origin/main同步54ed9fe，
+uv sync --locked通过，受控启动PID15469；注册源码checkout原clean，fetch/ff-only同步相同提交。
+没有改变原Coder工作区、Task批准源或旧审批。
+
+公开新PROPOSE_EXECUTION_BASELINE为operation_315f1bab48d195d8138140366e264e99，
+idempotency_key=k1-20261012-baseline-54ed9fe-preserve-v1，原Task revision2、原attempt3 work、
+source9cccb5b、父checkpoint ea13981...，target54ed9fe8875150c9783ddeceb9ff0b04324bf39e。
+05:20:34.753574Z仍FAILED/COMMAND_REJECTED：历史 claim 没有可验证的调用或执行前停止记录。
+没有产生可批准计划，未执行基线PAUSE或RESUME，原分支和完整dirty进度保持。
+
+这说明通过的隔离public知识失败用例尚未覆盖生产的联合父/恢复Task知识作用域组合。
+作者暂停runtime-only新功能，继续只读定位精确未覆盖历史claim及可信knowledge lane；
+不能以枚举任意lane、缺start、补造stop或改SQL绕过。仍须加入真实公开联合恢复回归并独立审查。
+生产K1尚未完成；隔离测试DONE不等于本需求交付。

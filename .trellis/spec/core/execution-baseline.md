@@ -610,7 +610,7 @@ spec owns the detailed guards, public validation matrix, existing-data handling 
 its actual main invocation, claimed Context capacity receipt, failed knowledge preparation,
 or preflight checkpoint. Absence of a main start is never sufficient proof. The internal
 `read_failed_knowledge_claims` reader locates only the exact Team/Project/Repository/Task/role
-lane for the native Requirement and documented legacy Task scope. A returned-only knowledge
+lane for the trusted approved Requirement and documented legacy Task scope. A returned-only knowledge
 lane cannot acquire failure authority; it remains subject to the ordinary invocation/preflight
 checks.
 
@@ -653,3 +653,65 @@ overlays and complete no-start refusals.
 方案，核对并批准暂停，再明确继续即可。若原记录缺失或矛盾则继续保留现场并拒绝，不重建需求。
 本次实现与测试不操作生产。回滚在新方案前撤销代码提交；已经持久化的追加摘要和工程审计历史
 必须保留，回滚本身不授权重新调用模型或重放已消费审批。
+
+### Joint parent knowledge scope is separate from native execution scope
+
+```python
+TeamHost._baseline_knowledge_context(project_id, delivery_id, native) -> tuple[ContextSource, ...]
+ProductionProjectDeliveryBackend.execution_baseline_service(...,
+    knowledge_context_sources=()) -> ExecutionBaselineService
+recovery_knowledge_requirement_id(config, plan, native, *, load_allocation) -> str | None
+ProductionBaselineFactCollector(..., requirement_id, knowledge_requirement_id=None)
+```
+
+The Host resolves the actual current public joint Requirement and exactly one child whose
+complete native checkpoint equals the selected delivery. Only its canonical approved Context
+sources cross this composition seam. The baseline backend derives the knowledge parent ID
+from these trusted sources or the exact sealed recovery plan/Task/authorization association;
+the API does not accept a lane ID. Different parent IDs refuse. A native single-repository
+delivery without a joint parent retains the actual Task knowledge scope. The collector uses
+this separate ID only for the bounded knowledge-lane reader. Proposal, continuation, native
+stop, dispatch and operator approval identities keep the native child ID unchanged.
+
+For a recovered joint child, the frozen `RecoverySource.parent_checkpoint_sha256` is often
+an ancestor of the current parent because delivery facts have advanced. Requiring equality
+with current strands legitimate work; dropping the digest admits unrelated history. The
+baseline-only reader exhausts the full verified joint journal, requires exactly one frozen
+digest and unchanged Team/Project manifests, scope, Product/approval, design and plan between
+that snapshot and current. It reads the complete native journal and verifies exact old-child,
+interruption, current-child and latest native checkpoint ancestry, the same unit/root/repository,
+original interrupted Task and stage references, and the exact new recovery Task. The backend
+also rereads the sealed recovery Task record, including its plan and engineering authorization,
+and matches its full Task and record digest to the immutable dispatch.
+
+`RecoverySource.preparation_sha256` references the original approved READY request preparation;
+the native interruption checkpoint may instead reference a successor allocation's target
+preparation. Read the exact original preparation and request, verify their complete digest and
+registered Team/Project/Repository/root/sidecar bindings, then reuse
+`allocation_preparation_sha256` with the exact original dispatch. Its converted digest must
+equal the interruption checkpoint preparation. The original dispatch itself must retain its
+exact key/digest/Task/repository/request. Directly comparing the two preparation fields would
+reject legitimate recovered sources; accepting any unrelated preparation would weaken lineage.
+
+This helper returns only the parent ID. It does not reconstruct Context, upgrade knowledge
+snapshots or broaden `recovery.context.approved_parent_context` for a new recovery execution.
+Normal resumed delivery still builds its own fresh claimed Context from approved stage
+sources and the full authorized execution baseline; historical Context bytes remain untouched.
+
+| Facts | Result |
+| --- | --- |
+| Real public joint parent-bound FAILED knowledge preparation, later capacity wait | Same original Task source-rebind PAUSE/RESUME; independent QA/Review |
+| Exact sealed recovery parent is a validated ancestor with unchanged approved stage inputs | Read actual parent lane; preserve frozen parent digest and old Context |
+| Foreign/ambiguous parent or child, missing ancestor, changed approval/plan/manifests | Refuse before publishing a proposal or changing queue/source |
+| Stale native cursor, unrelated Task or source stage references | Refuse exact lineage |
+| No joint parent, existing native/legacy Task lane | Existing scope and wire behavior |
+
+Incremental tests: `test_baseline_knowledge_parent_scope.py` uses the public joint create/reply/
+approve path and real isolated MySQL claims plus structured HTTP 503; `test_baseline_recovery_knowledge_scope.py`
+tests exact ancestor retention and seventeen wrong-identity/authority/prefix/preparation cases. The production
+reader can additionally replay existing typed knowledge facts read-only, without constructing a
+Host, invoking a provider, publishing a quiescence record or initializing SQL schemas.
+
+存量数据处置：只修定位，原 K1 知识 parent 与旧恢复批准都保留；没有改库、停止记录回填或
+counter重算。发布后在原需求重提精确方案，独立确认并批准 PAUSE，再从原需求明确继续。
+无可信原记录仍拒绝。回滚保留所有已有 immutable 记录与审批，新记录已发布后需要兼容 reader。

@@ -553,6 +553,9 @@ class TeamHost:
                 native,
                 repository=repository,
                 project_id=project_id,
+                knowledge_context_sources=self._baseline_knowledge_context(
+                    project_id, command.delivery_id, native
+                ),
                 purpose=command.purpose,
             )
             if not isinstance(service.facts, ProductionBaselineFactCollector):
@@ -584,6 +587,9 @@ class TeamHost:
                 native,
                 repository=repository,
                 project_id=project_id,
+                knowledge_context_sources=self._baseline_knowledge_context(
+                    project_id, command.delivery_id, native
+                ),
                 plan_sha256=command.expected_plan_sha256,
             )
             plan = service.store.plan(command.expected_plan_sha256)
@@ -639,7 +645,12 @@ class TeamHost:
             MySqlTaskRepository(self._config.require_mysql_dsn(self._environment))
         ) as repository:
             service = self._runtime(project_id).backend.execution_baseline_service(
-                native, repository=repository, project_id=project_id
+                native,
+                repository=repository,
+                project_id=project_id,
+                knowledge_context_sources=self._baseline_knowledge_context(
+                    project_id, command.delivery_id, native
+                ),
             )
             bindings = service.store.bindings_for_task(command.task_id)
             if (
@@ -689,6 +700,20 @@ class TeamHost:
             if command.delivery_id.startswith("delivery_multi_")
             else self._runtime(project_id).entry.status(command.delivery_id)
         )
+
+    def _baseline_knowledge_context(
+        self, project_id: str, delivery_id: str, native: ProjectDeliveryCheckpoint
+    ) -> tuple[ContextSource, ...]:
+        """Resolve only the validated public parent and its exact native child."""
+        if not delivery_id.startswith("delivery_multi_"):
+            return ()
+        from ai_software_engineer.multi_directory.production import approved_joint_context_sources
+
+        parent = self._runtime(project_id).requirements.status(delivery_id).checkpoint
+        matching = tuple(child for child in parent.children if child.checkpoint == native)
+        if len(matching) != 1:
+            raise ValueError("基线调查的父需求与精确原交付任务不一致")
+        return approved_joint_context_sources(parent, matching[0].unit_id)
 
     def _baseline_native_checkpoint(
         self,

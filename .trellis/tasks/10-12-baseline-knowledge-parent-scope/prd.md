@@ -1,0 +1,7 @@
+# 基线调查保留真实父需求知识作用域
+
+54ed9fe 的知识失败reader限定当前native child+Task lane，生产K1实际知识绑定获批联合parent，因此遗漏真实attempt1。修复composition显式携带经当前联合child匹配或精确recovery plan lineage验证的parent知识作用域。不得枚举任意lane，不允许API自由指定，不改continuation/proposal的native child身份。
+
+范围：baseline_production.py、production_backend.py、production_host.py、knowledge proof相关精确public回归、spec与本任务。v8同源容量开发留在独立树，不混入提交。验收：public联合parent-bound真实知识失败可提案暂停/继续原Task；错误parent/child/recovery lineage拒绝；生产原lane typed只读完整reader核验成功，不写store/SQL，不构Host。
+
+存量处置：不改历史。发布后同原K1重新精确提案；父知识scope与native child continuation职责保持独立。回滚代码前保留所有immutable日志、已发布审批和原进度。

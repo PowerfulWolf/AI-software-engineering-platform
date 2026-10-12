@@ -1,0 +1,19 @@
+{
+  "id": "baseline-knowledge-parent-scope",
+  "title": "基线调查保留真实父需求知识作用域",
+  "status": "completed",
+  "base_commit": "bdab7bf",
+  "allowlist": [
+    "src/ai_software_engineer/manager/baseline_knowledge_scope.py",
+    "src/ai_software_engineer/manager/baseline_production.py",
+    "src/ai_software_engineer/manager/production_backend.py",
+    "src/ai_software_engineer/manager/production_host.py",
+    "tests/manager/test_baseline_recovery_knowledge_scope.py",
+    "tests/manager/test_baseline_knowledge_parent_scope.py",
+    ".trellis/spec/core/execution-baseline.md",
+    ".trellis/tasks/10-12-baseline-knowledge-parent-scope/"
+  ],
+  "verification": "Only targeted lint/format/strict mypy and exact joint/recovery knowledge regressions. Isolated MySQL test window coordinated; production typed read-only reader replay without constructor/schema/provider/store writes.",
+  "rollback": "Revert code before a new proposal; retain immutable history, frozen approvals, original Task and complete draft. No SQL repair, stop backfill, counter refund or arbitrary knowledge lane scan.",
+  "phase": "incremental_verified_and_independently_reviewed"
+}

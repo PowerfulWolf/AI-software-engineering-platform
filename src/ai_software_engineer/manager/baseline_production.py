@@ -425,9 +425,11 @@ class ProductionBaselineFactCollector:
         observer: LocalBootObserver | None = None,
         local_execution_observer: LegacyLocalExecutionObserver | None = None,
         route_root: Path | None = None,
+        knowledge_requirement_id: str | None = None,
     ) -> None:
         allocation.validate_integrity()
         self.allocation, self.scope, self.requirement_id = allocation, scope, requirement_id
+        self.knowledge_requirement_id = knowledge_requirement_id or requirement_id
         self.repository, self.queue, self.git = repository, queue, git
         self.state, self.locks_root, self.permissions = sidecar_state, locks_root, permissions
         self.native_rules, self.runtime_manifest_sha256, self.inputs = (
@@ -1746,7 +1748,7 @@ class ProductionBaselineFactCollector:
             item=item,
             claims=claims,
             scope=self.scope,
-            requirement_id=self.requirement_id,
+            requirement_id=getattr(self, "knowledge_requirement_id", self.requirement_id),
             queue=self.queue,
             require_step=self._require_step,
             no_start_reader=self._capacity_input_reader(),
