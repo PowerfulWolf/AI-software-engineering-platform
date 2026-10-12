@@ -93,3 +93,5 @@ ASE_CONFIG=/absolute/path/config.json .venv/bin/python scripts/ase-console-maint
 和所有HTTP写操作均拒绝。坏marker或损坏档案拒绝启动，不可删除marker或档案绕过。
 退出检查模式与原需求恢复需另行完成工程核验，不包含在本维护动作中。
 详细契约见[故障服务维护规范](../../.trellis/spec/core/faulted-service-maintenance.md)。
+
+检查模式的 `status` 会明确显示“仅可查看记录，需求交付和写入暂停”；生命周期仍保留真实 RUNNING/REFUSED 状态，不改写历史收尾事实。
