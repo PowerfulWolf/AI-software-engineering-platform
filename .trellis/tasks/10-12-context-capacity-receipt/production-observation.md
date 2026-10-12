@@ -93,3 +93,13 @@ RUNNING/KNOWLEDGE_PREPARATION，Task仍IMPLEMENTING，页面明确显示本轮�
 原进度由现有精确continuation路径继续，未新建Requirement或手工改业务文件。
 该轮知识评估的native exit1、sol HTTP504后，astra在03:50:26.689347Z开始并于60107ms后
 HTTP200成功。未触发产品范围问题或人工审批；后续实施与QA/Review仍须真实完成。
+
+## 第三轮主执行前的容量停止
+
+原 Operation operation_4e6715d6917b2d10050d5203c6f24996 已 SUCCEEDED，仅表示本次操作收尾，不是需求完成。当前父 checkpoint 为 ea13981bbf62a8d9d6ad2fd94c421e5585deb740b2fa42375976a214005ed2a5。Task仍IMPLEMENTING，attempt3 WorkItem WAITING_DEPENDENCY，reason_code=CONTEXT_CAPACITY，engineering责任。
+
+精确容量 receipt 7881f2332a7bfef9c73858d6f67c9d0fe7f742a1998ae7d85e3e58cf85afbd19：sealed Context248568，最终native输入285444 >256000，主模型未启动。对应Context ctx_f40fc856979f97e9fbd5f03011311debe76c9356041a9b6ade36f7747987da28。仍必需的完整604438byte历史reapply补丁与本轮当前工作区135493字符草稿是不同内容，不能直接按重复补丁删除。
+
+新独立Trellis任务10-12-preserved-continuation-input仅改变已核验同工作区v2续跑的阅读输入；完整capture/stop/ownership/当前现场校验及旧reapply全文均保留。原Requirement、所有旧Task/Operation/预算和审批保持不变，后续只能走公开exact PAUSE/RESUME。全局operation-summaries已确认active_complete=true、active=[]；部署仍需最终fresh空闲检查和受控stop。
+
+实际native `_compile_input`只读重放（包括当前manager tooling与输出Schema）：原输入精确复现285444，新阅读输入252481 <=256000。零provider调用、零生产事实写入，临时准备资源已正常关闭。纯prompt的251902不包含实际tooling，不能用于宣称最终输入大小。

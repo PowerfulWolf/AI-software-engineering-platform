@@ -38,6 +38,10 @@
 
 ## Files
 
+- [First real Coder admission](first-real-coder-admission.md): durable invocation selection after knowledge-only attempts, exact seed/claim authority and typed pre-provider refusal.
+
+- [Preserved continuation input](preserved-continuation-input.md): complete same-worktree validation, bounded current-file reading, unchanged required historical reapply patch and final capacity gate.
+
 - [Team summary/detail reads](team-summary-detail.md): typed current summaries, exact complete
   resource reads, semantic record versions and unchanged read-only worker admission.
 - [Team summary/detail UI](team-summary-detail-ui.md): current-state summaries, selected complete

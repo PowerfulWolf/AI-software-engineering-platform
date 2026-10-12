@@ -1,0 +1,21 @@
+{
+  "id": "preserved-continuation-input",
+  "title": "已核验同工作区续跑输入不重复内嵌草稿",
+  "status": "completed",
+  "base_commit": "1038ed9",
+  "allowlist": [
+    "src/ai_software_engineer/orchestration/continuation.py",
+    "src/ai_software_engineer/orchestration/continuation_input.py",
+    "tests/orchestration/test_preserved_continuation_input.py",
+    "tests/orchestration/test_native_continuation_v2.py",
+    "tests/agents/test_responses_continuation.py",
+    ".trellis/spec/core/preserved-continuation-input.md",
+    ".trellis/tasks/10-12-preserved-continuation-input/",
+    ".trellis/tasks/10-12-context-capacity-receipt/production-observation.md",
+    ".trellis/spec/core/index.md",
+    "docs/architecture/context-routing.md"
+  ],
+  "validation": "仅定点pytest、Ruff、strict mypy、真实生产输入只读重放；不调用模型或改生产事实",
+  "rollback": "idle时回滚prompt生成；完整历史capture/admission/Context保持可读",
+  "independent_review": "PASS: 30 scoped tests in87.61s; Ruff, strict mypy4 and diff check"
+}

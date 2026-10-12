@@ -497,7 +497,9 @@ def test_progress_then_interruption_retains_exact_progress_input(v2_fixture: V2F
     assert f.reserve(service) == 3
     f.activate(3)
     prompt = f.service().prepare(f.request, f.worktree.path)
-    assert prompt is not None and "VALUE = 3" in prompt
+    assert prompt is not None and "PRESERVED_WORKTREE_INPUT=" in prompt
+    assert hashlib.sha256(b"VALUE = 3\n").hexdigest() in prompt
+    assert (f.worktree.path / "src/app.py").read_text() == "VALUE = 3\n"
     admission = f.store.admission_for_run(f.request.run_id)
     assert admission is not None and admission.new_request.continuation_checkpoint_id == progress_id
     assert admission.new_request.input_artifact_ids == ("art_plan_001", progress_id)

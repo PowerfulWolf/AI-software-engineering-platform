@@ -66,6 +66,8 @@ Builder 始终生成并优先交付 `policy`、`task`、`role`；提供且不同
 实际停止证明或 QA/Review verdict，详见
 [`baseline-context-projection.md`](../../.trellis/spec/core/baseline-context-projection.md)。
 
+已完整核验的 v2 同工作区中断接续使用 `preserved_worktree_continuation_input v1` 阅读清单：完整原回执、停止、当前 claim、补丁与全部变更体每次仍重新校验，Coder 用已有受控工具读取现存文件。清单准确列出删除、重命名以及前后 SHA/字节数/mode，不能还原旧正文或替代审计；sidecar 读取权限不扩大。完整旧 `coder_reapply` recovery.patch 仍保留 required 全文。v1 历史接续不变，最终输入仍包含包装、清单和输出 Schema 并执行容量拒绝。见 [保留进度阅读契约](../../.trellis/spec/core/preserved-continuation-input.md)。
+
 ## 4. 构建算法与确定性
 
 1. 校验 Task、role、`attempt ∈ [1, 10]` 和无控制字符的 `candidate_revision`；未提供 candidate 时使用 `Task.base_ref`。

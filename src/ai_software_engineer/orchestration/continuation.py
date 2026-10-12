@@ -45,6 +45,7 @@ from ai_software_engineer.git.policy import WorkspacePolicy
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSnapshot, WorktreeSpec
 from ai_software_engineer.git.worktree import GitWorkspaceError
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
+from ai_software_engineer.orchestration.continuation_input import preserved_continuation_prompt
 from ai_software_engineer.orchestration.continuation_models import (
     ContinuationAdmission,
     ContinuationRejected,
@@ -221,8 +222,11 @@ class NativeCoderContinuation:
                 self._uncertain(task, "已发布的接续准入不能绑定新的执行或租约。现场已保留。")
         elif len(prior_admissions) >= policy.max_continuations:
             raise InterruptionBudgetExhausted("frozen continuation capability is exhausted")
+        reading = preserved_continuation_prompt(receipt) if receipt.schema_version == "v2" else None
         if publish:
             self._publish_admission(request, receipt, task, claim, existing)
+        if reading is not None:
+            return reading
         return (
             "平台按组织工程授权核验了上次中断的草稿。此次是新的独立执行记录。\n"
             "以下完整补丁是已核验的既有工作; 不是 CoderProgress、候选提交或验收结论。\n"
