@@ -1,0 +1,487 @@
+{
+  "$defs": {
+    "CatalogScope": {
+      "additionalProperties": false,
+      "description": "Diagnostic discovery only; not current execution absence or delivery authority.",
+      "properties": {
+        "platform_root": {
+          "title": "Platform Root",
+          "type": "string"
+        },
+        "config_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Config Sha256",
+          "type": "string"
+        },
+        "manifest_sha256s": {
+          "items": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Manifest Sha256S",
+          "type": "array"
+        },
+        "observation": {
+          "enum": [
+            "CATALOG_OBSERVED",
+            "CATALOG_UNAVAILABLE"
+          ],
+          "title": "Observation",
+          "type": "string"
+        },
+        "execution_completeness": {
+          "const": "UNKNOWN",
+          "default": "UNKNOWN",
+          "title": "Execution Completeness",
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform_root",
+        "config_sha256",
+        "manifest_sha256s",
+        "observation"
+      ],
+      "title": "CatalogScope",
+      "type": "object"
+    },
+    "OriginalFile": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "enum": [
+            "ase-console.pid",
+            "console-service-instance.json",
+            "console-service-shutdown.request.json",
+            "console-service-shutdown.result.json"
+          ],
+          "title": "Name",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "byte_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 8192,
+          "title": "Byte Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "sha256",
+        "byte_count"
+      ],
+      "title": "OriginalFile",
+      "type": "object"
+    },
+    "OwnedProcessIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "process_id": {
+          "exclusiveMinimum": 0,
+          "title": "Process Id",
+          "type": "integer"
+        },
+        "group_id": {
+          "exclusiveMinimum": 0,
+          "title": "Group Id",
+          "type": "integer"
+        },
+        "session_id": {
+          "exclusiveMinimum": 0,
+          "title": "Session Id",
+          "type": "integer"
+        },
+        "birth_identity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Birth Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "process_id",
+        "group_id",
+        "session_id",
+        "birth_identity"
+      ],
+      "title": "OwnedProcessIdentity",
+      "type": "object"
+    },
+    "ServiceInstance": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "instance_id": {
+          "pattern": "^console_instance_[a-f0-9]{32}$",
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "pid": {
+          "exclusiveMinimum": 1,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ServiceState",
+          "default": "RUNNING"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "safe_summary": {
+          "title": "Safe Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id",
+        "pid",
+        "started_at",
+        "updated_at",
+        "safe_summary"
+      ],
+      "title": "ServiceInstance",
+      "type": "object"
+    },
+    "ServiceShutdownAction": {
+      "enum": [
+        "SHUTDOWN",
+        "RESUME"
+      ],
+      "title": "ServiceShutdownAction",
+      "type": "string"
+    },
+    "ServiceShutdownRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^console_shutdown_[a-f0-9]{32}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "instance_id": {
+          "pattern": "^console_instance_[a-f0-9]{32}$",
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "pid": {
+          "exclusiveMinimum": 1,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "action": {
+          "$ref": "#/$defs/ServiceShutdownAction",
+          "default": "SHUTDOWN"
+        },
+        "state": {
+          "const": "REQUESTED",
+          "default": "REQUESTED",
+          "title": "State",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 300.0,
+          "maximum": 3600,
+          "minimum": 0.01,
+          "title": "Timeout Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "request_id",
+        "instance_id",
+        "pid",
+        "requested_at"
+      ],
+      "title": "ServiceShutdownRequest",
+      "type": "object"
+    },
+    "ServiceShutdownResult": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^console_shutdown_[a-f0-9]{32}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "instance_id": {
+          "pattern": "^console_instance_[a-f0-9]{32}$",
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "pid": {
+          "exclusiveMinimum": 1,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ServiceState"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "safe_summary": {
+          "title": "Safe Summary",
+          "type": "string"
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShutdownRefusal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "request_id",
+        "instance_id",
+        "pid",
+        "state",
+        "recorded_at",
+        "safe_summary"
+      ],
+      "title": "ServiceShutdownResult",
+      "type": "object"
+    },
+    "ServiceState": {
+      "enum": [
+        "STARTING",
+        "RUNNING",
+        "DRAINING",
+        "READY",
+        "REFUSED"
+      ],
+      "title": "ServiceState",
+      "type": "string"
+    },
+    "ShutdownRefusal": {
+      "additionalProperties": false,
+      "description": "Safe, bounded explanation for a refused drain; never contains raw errors.",
+      "properties": {
+        "component": {
+          "enum": [
+            "WRITE_GATE",
+            "CONSOLE",
+            "KNOWLEDGE_INDEX",
+            "OWNED_PROCESSES",
+            "LIFECYCLE"
+          ],
+          "title": "Component",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "TIMEOUT",
+            "UNCONFIRMED",
+            "COMPONENT_ERROR"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "active_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Count"
+        }
+      },
+      "required": [
+        "component",
+        "reason"
+      ],
+      "title": "ShutdownRefusal",
+      "type": "object"
+    },
+    "SupervisorIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "process": {
+          "$ref": "#/$defs/OwnedProcessIdentity"
+        },
+        "pid_file_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Pid File Sha256",
+          "type": "string"
+        },
+        "pid_file_mtime_ns": {
+          "exclusiveMinimum": 0,
+          "title": "Pid File Mtime Ns",
+          "type": "integer"
+        },
+        "script": {
+          "title": "Script",
+          "type": "string"
+        }
+      },
+      "required": [
+        "process",
+        "pid_file_sha256",
+        "pid_file_mtime_ns",
+        "script"
+      ],
+      "title": "SupervisorIdentity",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "title": "Recorded At",
+      "type": "string"
+    },
+    "record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Record Sha256",
+      "type": "string"
+    },
+    "kind": {
+      "const": "inspection_fault_retirement_plan",
+      "default": "inspection_fault_retirement_plan",
+      "title": "Kind",
+      "type": "string"
+    },
+    "instance": {
+      "$ref": "#/$defs/ServiceInstance"
+    },
+    "request": {
+      "$ref": "#/$defs/ServiceShutdownRequest"
+    },
+    "result": {
+      "$ref": "#/$defs/ServiceShutdownResult"
+    },
+    "originals": {
+      "items": {
+        "$ref": "#/$defs/OriginalFile"
+      },
+      "title": "Originals",
+      "type": "array"
+    },
+    "boot_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Boot Sha256",
+      "type": "string"
+    },
+    "process": {
+      "$ref": "#/$defs/OwnedProcessIdentity"
+    },
+    "principal_uid": {
+      "minimum": 0,
+      "title": "Principal Uid",
+      "type": "integer"
+    },
+    "log_device": {
+      "minimum": 0,
+      "title": "Log Device",
+      "type": "integer"
+    },
+    "log_inode": {
+      "exclusiveMinimum": 0,
+      "title": "Log Inode",
+      "type": "integer"
+    },
+    "log_byte_count": {
+      "minimum": 0,
+      "title": "Log Byte Count",
+      "type": "integer"
+    },
+    "scope": {
+      "$ref": "#/$defs/CatalogScope"
+    },
+    "supervisor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SupervisorIdentity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "successor_mode": {
+      "const": "inspection",
+      "default": "inspection",
+      "title": "Successor Mode",
+      "type": "string"
+    },
+    "historical_execution_outcome": {
+      "const": "UNKNOWN",
+      "default": "UNKNOWN",
+      "title": "Historical Execution Outcome",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recorded_at",
+    "record_sha256",
+    "instance",
+    "request",
+    "result",
+    "originals",
+    "boot_sha256",
+    "process",
+    "principal_uid",
+    "log_device",
+    "log_inode",
+    "log_byte_count",
+    "scope"
+  ],
+  "title": "FaultRetirementPlan",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

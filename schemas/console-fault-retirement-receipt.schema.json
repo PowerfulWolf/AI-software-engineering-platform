@@ -1,0 +1,128 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "title": "Recorded At",
+      "type": "string"
+    },
+    "record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Record Sha256",
+      "type": "string"
+    },
+    "kind": {
+      "const": "inspection_fault_retirement_receipt",
+      "default": "inspection_fault_retirement_receipt",
+      "title": "Kind",
+      "type": "string"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "instance_id": {
+      "pattern": "^console_instance_[a-f0-9]{32}$",
+      "title": "Instance Id",
+      "type": "string"
+    },
+    "principal_uid": {
+      "minimum": 0,
+      "title": "Principal Uid",
+      "type": "integer"
+    },
+    "signal": {
+      "const": "SIGKILL",
+      "default": "SIGKILL",
+      "title": "Signal",
+      "type": "string"
+    },
+    "signal_sent": {
+      "enum": [
+        "CONFIRMED",
+        "UNKNOWN"
+      ],
+      "title": "Signal Sent",
+      "type": "string"
+    },
+    "execution_scope_completeness": {
+      "const": "UNKNOWN",
+      "default": "UNKNOWN",
+      "title": "Execution Scope Completeness",
+      "type": "string"
+    },
+    "maintenance_started_at": {
+      "format": "date-time",
+      "title": "Maintenance Started At",
+      "type": "string"
+    },
+    "host_absence_observed_at": {
+      "format": "date-time",
+      "title": "Host Absence Observed At",
+      "type": "string"
+    },
+    "signal_sent_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Signal Sent At"
+    },
+    "log_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Log Sha256",
+      "type": "string"
+    },
+    "log_byte_count": {
+      "minimum": 0,
+      "title": "Log Byte Count",
+      "type": "integer"
+    },
+    "historical_state": {
+      "const": "REFUSED",
+      "default": "REFUSED",
+      "title": "Historical State",
+      "type": "string"
+    },
+    "historical_execution_outcome": {
+      "const": "UNKNOWN",
+      "default": "UNKNOWN",
+      "title": "Historical Execution Outcome",
+      "type": "string"
+    },
+    "successor_mode": {
+      "const": "inspection",
+      "default": "inspection",
+      "title": "Successor Mode",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recorded_at",
+    "record_sha256",
+    "plan_sha256",
+    "instance_id",
+    "principal_uid",
+    "signal_sent",
+    "maintenance_started_at",
+    "host_absence_observed_at",
+    "log_sha256",
+    "log_byte_count"
+  ],
+  "title": "FaultRetirementReceipt",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

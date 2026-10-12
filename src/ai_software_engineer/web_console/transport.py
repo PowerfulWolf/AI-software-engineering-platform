@@ -64,6 +64,7 @@ from .administration import (
 )
 from .core import ConsoleCommandRejected
 from .directories import DirectoryChooser, DirectorySelectionError
+from .inspection_console import MAINTENANCE_SUMMARY
 from .lifecycle import (
     ApplyConfigurationRequest,
     ConfigurationApplyError,
@@ -188,12 +189,26 @@ class _ServiceWriteMiddleware:
         *,
         gate: ServiceWriteGate,
         owned_processes: OwnedProcessShutdownPort | None = None,
+        inspection: bool = False,
     ) -> None:
         self._app = app
         self._gate = gate
         self._owned_processes = owned_processes
+        self._inspection = inspection
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] == "http"
+            and self._inspection
+            and (
+                scope["method"] not in {"GET", "HEAD", "OPTIONS"}
+                or scope["path"].startswith("/api/v1/admin/")
+            )
+        ):
+            response = _error(503, "SERVICE_MAINTENANCE", MAINTENANCE_SUMMARY)
+            _security_headers(response)
+            await response(scope, receive, send)
+            return
         if scope["type"] != "http" or scope["method"] in {"GET", "HEAD", "OPTIONS"}:
             await self._app(scope, receive, send)
             return
@@ -286,6 +301,7 @@ def create_console_app(
     directory_chooser: DirectoryChooser | None = None,
     delivery_ready: bool = True,
     owned_processes: OwnedProcessShutdownPort | None = None,
+    inspection: bool = False,
 ) -> FastAPI:
     if isinstance(port, bool) or not 1 <= port <= 65535:
         raise ValueError("invalid console server port")
@@ -298,11 +314,11 @@ def create_console_app(
         route: (files("ai_software_engineer.team_view").joinpath(name).read_bytes(), content_type)
         for route, (name, content_type) in _ASSETS.items()
     }
-    supported_actions = tuple(action.value for action in ConsoleAction)
+    supported_actions = () if inspection else tuple(action.value for action in ConsoleAction)
     snapshot_gate = _TeamSnapshotReads()
     knowledge_worker = (
         KnowledgeIndexWorker(administration.tick_knowledge_indexes)
-        if isinstance(administration, LocalConsoleAdministration)
+        if not inspection and isinstance(administration, LocalConsoleAdministration)
         else None
     )
     write_gate = ServiceWriteGate()
@@ -320,7 +336,8 @@ def create_console_app(
             # All startup work is owned by this same final drain, including failures.
             if knowledge_worker is not None:
                 knowledge_worker.start()
-            console.start()
+            if not inspection:
+                console.start()
             yield
         finally:
             shutdown.begin_shutdown()
@@ -344,7 +361,12 @@ def create_console_app(
         lifespan=lifespan,
     )
     app.state.console_shutdown = shutdown
-    app.add_middleware(_ServiceWriteMiddleware, gate=write_gate, owned_processes=owned_processes)
+    app.add_middleware(
+        _ServiceWriteMiddleware,
+        gate=write_gate,
+        owned_processes=owned_processes,
+        inspection=inspection,
+    )
 
     @app.middleware("http")
     async def protect_loopback(request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -522,7 +544,9 @@ def create_console_app(
             {
                 "schema_version": "v0.2",
                 "team_id": command_team_id,
-                "delivery_ready": delivery_ready,
+                "delivery_ready": delivery_ready and not inspection,
+                "mode": "inspection" if inspection else "normal",
+                "maintenance_summary": MAINTENANCE_SUMMARY if inspection else None,
                 "operation_contract_version": _OPERATION_CONTRACT_VERSION,
                 "supported_actions": supported_actions,
                 **(

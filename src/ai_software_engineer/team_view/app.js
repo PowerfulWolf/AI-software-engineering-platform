@@ -425,7 +425,7 @@ const operationSummaryScopeKey = (projectId, deliveryId) => JSON.stringify([cons
 const operationReadOwnerSignature = () => JSON.stringify([operationReadOwnerGeneration,
   snapshot?.team_id, consoleTeamId, currentProjectId(), selectionIntentRevision]);
 const operationWriteOwnerSignature = () => JSON.stringify([operationReadOwnerSignature(),
-  consoleAvailable, consoleDeliveryReady, consoleOperationContractVersion, consoleSupportedActions,
+  consoleAvailable, consoleDeliveryReady, consoleMode, consoleOperationContractVersion, consoleSupportedActions,
   consoleOperationSummaryContractVersion]);
 function operationReadingRecords() {
   if (!operationSummaryMode()) return operations;
@@ -724,6 +724,8 @@ let consoleAvailable = null;
 let consoleConnectionFailed = false;
 let consoleTeamId = null;
 let consoleDeliveryReady = null;
+let consoleMode = null;
+const inspectionSummary = "平台处于维护仅查看模式：可以查看已保存的需求和执行记录；交付与修改操作已暂停。";
 let consoleOperationContractVersion = null;
 let consoleSupportedActions = null;
 let administrationAvailable = null;
@@ -875,7 +877,7 @@ function renderView(container, key, facts, build, incremental) {
   renderedSurfaces.set(container, {key, signature: JSON.stringify(facts())});
 }
 function pollingControlFacts() {
-  return [consoleAvailable, consoleTeamId, consoleDeliveryReady, consoleOperationContractVersion,
+  return [consoleAvailable, consoleTeamId, consoleDeliveryReady, consoleMode, consoleOperationContractVersion,
     consoleSupportedActions, consoleOperationSummaryContractVersion, operationsAvailable, operationDetailReadyScope, teamReadIssue,
     snapshot?.team_id, currentProjectId(), projectSwitchPending(), consoleTeamReadContractVersion];
 }
@@ -1419,6 +1421,11 @@ const latestApproval = (deliveryId, checkpoint, projectId = null) => {
 };
 const operationKey = () => `browser-${Date.now()}-${++actionSerial}`;
 function deliveryControlUnavailableReason() {
+  if (consoleMode === "inspection") return {
+    title: "维护中 · 仅查看",
+    reason: inspectionSummary,
+    next_action: "需求线保持暂停。待平台维护完成并明确恢复交付后，再继续原需求。",
+  };
   if (projectSwitchPending()) return {
     title: "正在切换项目",
     reason: "正在切换项目，暂不能对当前需求提交操作。",
@@ -5596,7 +5603,7 @@ function systemOperationNotices() {
       title: "交付记录读取失败",
       message: "交付操作记录暂时无法读取；恢复连接后可继续操作。",
     });
-  if (consoleAvailable === true && consoleDeliveryReady === false)
+  if (consoleAvailable === true && consoleDeliveryReady === false && consoleMode !== "inspection")
     notices.push({
       key: "system:delivery-not-ready",
       kind: "warning",
@@ -7300,8 +7307,10 @@ function administrationUnavailable(content) {
   content.append(
     el(
       "div",
-      "当前服务没有启用管理能力。请使用 ase-console 启动本地 Web Console。",
-      "operation-error",
+      consoleMode === "inspection"
+        ? "维护仅查看模式暂不开放设置和知识管理；需求、任务与执行历史仍可查看，交付保持暂停。"
+        : "当前服务没有启用管理能力。请使用 ase-console 启动本地 Web Console。",
+      consoleMode === "inspection" ? "admin-notice" : "operation-error",
     ),
   );
 }
@@ -8782,7 +8791,7 @@ function renderSettings(content) {
       settingsVersionMismatchMessage,
       "admin-notice operation-error",
     ));
-  if (consoleDeliveryReady === false)
+  if (consoleDeliveryReady === false && consoleMode !== "inspection")
     content.append(
       el(
         "div",
@@ -11232,7 +11241,21 @@ function buildDetail(panel = document.getElementById("detail")) {
   dialog.append(executionRecords, reference);
   panel.append(dialog);
 }
+function renderMaintenanceBanner() {
+  let banner = document.getElementById("service-maintenance");
+  if (!banner && consoleMode === "inspection") {
+    banner = el("div", undefined, "admin-notice");
+    banner.id = "service-maintenance";
+    banner.setAttribute("role", "status");
+    document.getElementById("connection").before(banner);
+  }
+  if (banner) {
+    banner.hidden = consoleMode !== "inspection";
+    banner.textContent = inspectionSummary;
+  }
+}
 function render({ preserveComposer = false, incremental = false } = {}) {
+  renderMaintenanceBanner();
   const focused = document.activeElement;
   const selection = incremental ? globalThis.getSelection?.() : null;
   const selectedText = selection && !selection.isCollapsed
@@ -11361,6 +11384,7 @@ async function refreshConsoleInfo(signal) {
       consoleConnectionFailed = false;
       consoleTeamId = null;
       consoleDeliveryReady = null;
+      consoleMode = null;
       consoleOperationContractVersion = null;
       consoleSupportedActions = null;
       consoleOperationSummaryContractVersion = null;
@@ -11380,6 +11404,11 @@ async function refreshConsoleInfo(signal) {
     consoleConnectionFailed = false;
     if (consoleTeamId && consoleTeamId !== info.team_id) { clearOperationReadScope(); clearTeamDetailRead(); }
     consoleTeamId = info.team_id;
+    const mode = info.mode ?? "normal";
+    if (!["normal", "inspection"].includes(mode) ||
+        mode === "inspection" && info.delivery_ready !== false)
+      throw new Error("invalid console mode");
+    consoleMode = mode;
     consoleDeliveryReady = info.delivery_ready;
     const actions = info.supported_actions;
     const validManifest = Number.isInteger(info.operation_contract_version) &&
@@ -11397,6 +11426,7 @@ async function refreshConsoleInfo(signal) {
     consoleConnectionFailed = true;
     consoleTeamId = null;
     consoleDeliveryReady = null;
+    consoleMode = null;
     consoleOperationContractVersion = null;
     consoleSupportedActions = null;
     consoleOperationSummaryContractVersion = null;
@@ -11509,6 +11539,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
   const controller = new AbortController(),
     timeout = setTimeout(() => controller.abort(), 40000);
   const priorConsoleReady = consoleDeliveryReady;
+  const priorConsoleMode = consoleMode;
   const priorConsoleTeam = consoleTeamId;
   const priorConsoleCapabilities = JSON.stringify([consoleOperationContractVersion, consoleSupportedActions]);
   const priorSettings = JSON.stringify(settingsSnapshot);
@@ -11546,7 +11577,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       await loadRuntimeStatus(controller.signal);
   };
   const systemViewsChanged = () =>
-    priorConsoleTeam !== consoleTeamId || priorConsoleReady !== consoleDeliveryReady ||
+    priorConsoleTeam !== consoleTeamId || priorConsoleReady !== consoleDeliveryReady || priorConsoleMode !== consoleMode ||
     priorConsoleCapabilities !== JSON.stringify([consoleOperationContractVersion, consoleSupportedActions]) ||
     priorOperationsAvailable !== operationsAvailable ||
     priorSettings !== JSON.stringify(settingsSnapshot) ||
@@ -11654,7 +11685,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
     }
     status.className = operationsAvailable && consoleAvailable === true ? "" : "error";
     status.textContent = consoleAvailable
-      ? (consoleDeliveryReady
+      ? (consoleMode === "inspection" ? "维护仅查看服务已连接 · 需求交付已暂停" : consoleDeliveryReady
           ? "团队与交付控制台已连接"
           : "设置控制台已连接 · 交付运行时尚未就绪") +
         " · 最近读取 " +

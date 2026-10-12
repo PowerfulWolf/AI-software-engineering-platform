@@ -11,7 +11,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
-from typing import cast
+from typing import Literal, cast
 
 import uvicorn
 from fastapi import FastAPI
@@ -29,10 +29,11 @@ from ai_software_engineer.work_queue import QueueError
 from .administration import LocalConsoleAdministration
 from .core import ConsoleCommandRejected, ProjectConsole
 from .directories import NativeDirectoryChooser
+from .inspection_console import InspectionConsole
 from .lifecycle import ConfigurationApplyError, FileConfigurationLifecycle
 from .manager import ManagerConsoleAdapter
 from .models import ConsoleIntent, ConsoleOperation
-from .preparation_store import open_preparation_progress_store
+from .preparation_store import FilePreparationProgressStore, open_preparation_progress_store
 from .service_lifecycle import (
     ConsoleShutdownCoordinator,
     ServiceInstance,
@@ -129,12 +130,29 @@ def _load_console_config(environment: Mapping[str, str]) -> tuple[ProductionConf
     return config, config_path
 
 
+def _inspection_required(environment: Mapping[str, str]) -> bool:
+    from .fault_retirement import inspection_required
+
+    # Embedded callers may supply only config overrides; still inspect the real
+    # default lifecycle directory rather than silently skipping its maintenance marker.
+    return inspection_required({"HOME": str(Path.home()), **environment})
+
+
+def _console_mode(environment: Mapping[str, str]) -> Literal["normal", "inspection"]:
+    value = environment.get("ASE_CONSOLE_MODE", "normal")
+    if value not in {"normal", "inspection"}:
+        raise ValueError("控制台模式无效, 仅支持 normal 或 inspection。")
+    required = _inspection_required(environment)
+    return "inspection" if required or value == "inspection" else "normal"
+
+
 def production_console_app(
     environment: Mapping[str, str] | None = None,
     *,
     port: int | None = None,
 ) -> FastAPI:
     variables = dict(environment if environment is not None else os.environ)
+    mode = _console_mode(variables)
     config, config_path = _load_console_config(variables)
     selected_port = config.console_port if port is None else port
     _validate_port(selected_port)
@@ -142,6 +160,28 @@ def production_console_app(
     reader: TeamReader
     delivery_runtime_ready = True
     owned_processes = HostOwnedProcessRegistry()
+    if mode == "inspection":
+        teams = discover_team_workspaces(config.platform_root)
+        if len(teams) != 1 or teams[0].manifest.team_id != config.team_id:
+            raise ValueError("仅查看控制台无法核验现有 Team 工作空间。")
+        work_items = teams[0].directory("work-items")
+        console = InspectionConsole(
+            FileConsoleOperationStore(
+                work_items / "console-operations", team_id=config.team_id, read_only=True
+            ),
+            FilePreparationProgressStore(
+                work_items / "console-preparation-progress", read_only=True
+            ),
+        )
+        return create_console_app(
+            console,
+            ProductionTeamReader(config, variables),
+            team_id=config.team_id,
+            port=selected_port,
+            delivery_ready=False,
+            owned_processes=owned_processes,
+            inspection=True,
+        )
     try:
         # Avoid TeamHost's writer boundary when first-run delivery prerequisites are absent.
         config.require_mysql_dsn(variables)

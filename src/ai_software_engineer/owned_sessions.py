@@ -289,6 +289,52 @@ def _inspector() -> _SessionInspector:
     raise OwnedSessionUnknown("complete owned-session inspection is unsupported")
 
 
+def observe_current_process(pid: int) -> tuple[str, OwnedProcessIdentity | None]:
+    """Read current kernel boot/birth identity; no signal or historical stop authority."""
+    if type(pid) is not int or pid <= 1:
+        raise OwnedSessionUnknown("current process observation requires a positive host PID")
+    inspector = _inspector()
+    boot = inspector.boot_identity()
+    identity = inspector.identity(pid)
+    if inspector.boot_identity() != boot:
+        raise OwnedSessionUnknown("current process boot identity changed during observation")
+    return boot, identity
+
+
+def current_process_executable(pid: int) -> Path:
+    """Kernel executable path only; never executes code inside the observed process."""
+    observe_current_process(pid)
+    if platform.system() == "Linux":
+        return Path(os.readlink(f"/proc/{pid}/exe"))
+    if platform.system() != "Darwin":
+        raise OwnedSessionUnknown("kernel executable observation is unsupported")
+    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    library.proc_pidpath.restype = ctypes.c_int
+    output = ctypes.create_string_buffer(4096)
+    count = library.proc_pidpath(pid, output, len(output))
+    if count <= 0 or count >= len(output):
+        raise OwnedSessionUnknown("kernel executable observation is unavailable")
+    return Path(os.fsdecode(output.value))
+
+
+def current_process_birth_at(identity: OwnedProcessIdentity) -> datetime:
+    """Translate kernel birth to UTC for binding a preexisting service publication."""
+    if identity.birth_identity.startswith("darwin-time:"):
+        seconds, microseconds = identity.birth_identity.removeprefix("darwin-time:").split(":")
+        return datetime.fromtimestamp(int(seconds) + int(microseconds) / 1_000_000, UTC)
+    if identity.birth_identity.startswith("linux-ticks:"):
+        body = Path("/proc/stat").read_text()
+        if len(body) > 1024 * 1024:
+            raise OwnedSessionUnknown("kernel boot time exceeds observation bound")
+        rows = [line.split() for line in body.splitlines() if line.startswith("btime ")]
+        if len(rows) != 1 or len(rows[0]) != 2:
+            raise OwnedSessionUnknown("kernel boot time is unavailable")
+        ticks = int(identity.birth_identity.removeprefix("linux-ticks:"))
+        return datetime.fromtimestamp(int(rows[0][1]) + ticks / os.sysconf("SC_CLK_TCK"), UTC)
+    raise OwnedSessionUnknown("kernel birth timestamp is unavailable")
+
+
 def require_recorded_session_empty(proof: OwnedSessionStopProof) -> None:
     """Read-only current-fact recheck of a new proof; grants no signal capability."""
     proof.validate_integrity()

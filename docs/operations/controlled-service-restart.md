@@ -63,3 +63,33 @@ ASE CLI 仍需各自的恢复流程；本流程不能保证任意脱离拥有进
 
 如需回滚代码，先让新版本完成受控 `stop`，再切回之前的提交、同步依赖并启动。不要在活动执行期间直接
 换代码或强杀新服务。本改造没有数据库迁移，不改写历史 Task、Run、审批或 verdict。
+
+
+## 故障服务替换为只读检查服务
+
+若旧服务sticky REFUSED且控制台读取已故障，可由明确获授权的本机工程维护者使用以下入口。
+它会归档全部旧生命周期/PID文件和完整日志，核验精确旧实例的kernel身份与实际冻结状态，
+结束对应控制supervisor与Host，然后只允许新的只读检查服务。不会继续任何需求，也不会把
+原Run UNKNOWN或服务REFUSED改成成功/READY。普通重启仍使用上面的受控流程。
+
+```bash
+ASE_CONFIG=/absolute/path/config.json .venv/bin/python scripts/ase-console-maintenance.py prepare
+ASE_CONFIG=/absolute/path/config.json .venv/bin/python scripts/ase-console-maintenance.py execute \
+  --plan <prepare输出的record_sha256> --confirm-fault-retirement
+./scripts/ase-console-service.sh start
+```
+
+沿用同一`ASE_SERVICE_STATE_DIR`。prepare要求原Host已经真实挂起；没有自动SIGCONT或任意
+进程选择。execute前审阅exact计划，显式confirm只批准这次故障Host退休。实际执行只处理
+计划绑定的Host和固定supervisor，不停止历史开发工具。
+
+若rename/chmod/实际终止后的日志hash/receipt/marker封存失败，完整现场保留在state目录的
+`console-fault-retirements/<planSHA>/`；使用同一个execute命令重试即可完成尚缺阶段。
+旧Host已消失时只finalize，不再对其他PID发信号。未知日志writer仍存在时等待它自行退出后
+同plan重试；调查失败/身份、config或原文件漂移会拒绝，需要先核对实际原事实。
+原服务完整日志不截断，大文件首次核验需要等待。新服务只读启动最多等待120秒建立生命周期。
+
+永久`console-inspection.json`会强制后续重启仍只读，设置normal环境也不能恢复写入；配置apply
+和所有HTTP写操作均拒绝。坏marker或损坏档案拒绝启动，不可删除marker或档案绕过。
+退出检查模式与原需求恢复需另行完成工程核验，不包含在本维护动作中。
+详细契约见[故障服务维护规范](../../.trellis/spec/core/faulted-service-maintenance.md)。
