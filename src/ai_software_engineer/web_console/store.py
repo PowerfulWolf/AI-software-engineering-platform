@@ -268,14 +268,16 @@ class InMemoryConsoleOperationStore:
 class FileConsoleOperationStore:
     """Append-only team-sidecar adapter with process-safe admission."""
 
-    def __init__(self, root: Path, *, team_id: str) -> None:
+    def __init__(self, root: Path, *, team_id: str, read_only: bool = False) -> None:
         self.root = root.absolute()
+        self.read_only = read_only
         self.team_id = team_id
         self._idle_inventory_sha256: str | None = None
         self._summary_cache = OperationSummaryCache()
         self._summary_cache_lock = Lock()
         _reject_symlinks(self.root)
-        self.root.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            self.root.mkdir(parents=True, exist_ok=True)
 
     def record_model_call(self, operation_id: str, call: ModelCallDiagnostic) -> None:
         record = ConsoleModelCall(operation_id=operation_id, call=call)
@@ -518,10 +520,18 @@ class FileConsoleOperationStore:
 
     @contextmanager
     def _locked(self, *, shared: bool = False) -> Iterator[None]:
+        if self.read_only and not shared:
+            raise ConsoleOperationConflict("console operation store is read only")
         _reject_symlinks(self.root)
-        descriptor = os.open(
-            self.root / "console.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
-        )
+        if self.read_only and not self.root.exists():
+            yield
+            if self.root.exists():
+                raise ConsoleOperationConflict("console operation store appeared during read")
+            return
+        if self.read_only:
+            _read_regular(self.root / "console.lock", 0)
+        flags = os.O_RDONLY if self.read_only else os.O_CREAT | os.O_RDWR
+        descriptor = os.open(self.root / "console.lock", flags | os.O_NOFOLLOW, 0o600)
         try:
             fcntl.flock(descriptor, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
             yield
