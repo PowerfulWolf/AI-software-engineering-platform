@@ -1,0 +1,30 @@
+{
+  "name": "owned-verification-diagnosis",
+  "title": "保留受控验证探测进程未知状态的真实诊断",
+  "status": "completed",
+  "phase": "independent_review_passed",
+  "created_at": "2026-10-12",
+  "base_commit": "ad898e5f045d0d5ec5befb6b4ba0fd0f01278e8e",
+  "allowed_paths": [
+    "src/ai_software_engineer/domain/native_verification.py",
+    "src/ai_software_engineer/manager/python_verification_discovery.py",
+    "src/ai_software_engineer/manager/delivery_wait.py",
+    "schemas/delivery-preflight.schema.json",
+    ".trellis/spec/core/owned-session-stop.md",
+    "tests/manager/test_owned_verification_discovery_diagnosis.py",
+    "tests/manager/test_python_verification_discovery.py",
+    "tests/manager/test_native_verification.py",
+    "tests/manager/test_delivery_preflight.py",
+    "tests/manager/test_delivery_wait.py",
+    ".trellis/tasks/10-12-owned-verification-diagnosis/**"
+  ],
+  "constraints": [
+    "Read-only production boundary: no production HTTP, data, SQL, signals, Host or service restart",
+    "Use actual HostOwnedProcessRegistry, bounded_verification_command and short spawned fixture processes",
+    "Inject OS inspection failure only through the existing private inspector seam",
+    "Do not weaken unknown process or output stop proof",
+    "Report possible causal chain separately from unproven production incident cause",
+    "Do not edit owned session/registry or service lifecycle implementation",
+    "Incremental tests only; fixed typed diagnosis and Chinese waiting instructions only"
+  ]
+}

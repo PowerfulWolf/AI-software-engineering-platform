@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Literal, Never, cast
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.domain import AgentDefinition, AgentRole, ArtifactKind, Task, TaskStatus
@@ -264,8 +265,15 @@ def test_registered_discovery_failure_retains_typed_root_cause_without_executing
         ).validate_integrity()
 
 
+@pytest.mark.parametrize(
+    "detail",
+    [
+        NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE,
+        NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED,
+    ],
+)
 def test_registered_discovery_detail_is_safe_and_part_of_receipt_integrity(
-    tmp_path: Path,
+    tmp_path: Path, detail: NativeVerificationCapabilityDetail
 ) -> None:
     task, definitions, environment, sentinel = _prepare(tmp_path)
     receipt = _inspect(
@@ -275,14 +283,20 @@ def test_registered_discovery_detail_is_safe_and_part_of_receipt_integrity(
         route="codex_cli",
         requirement=_requirement(capability=_CAPABILITY),
         discovery_failure=NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE,
-        discovery_detail=NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE,
+        discovery_detail=detail,
     )
     observation = receipt.observations[0]
-    assert (
-        observation.native_wait_detail
-        is NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+    assert observation.native_wait_detail is detail
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/delivery-preflight.schema.json").read_text()
     )
-    assert "docker" in observation.native_wait_detail.value.lower()
+    Draft202012Validator(schema).validate(receipt.to_wire())
+    assert (
+        DeliveryPreflightReceipt.model_validate(receipt.to_wire())
+        .observations[0]
+        .native_wait_detail
+        is detail
+    )
     assert "stderr" not in json.dumps(receipt.to_wire()).lower()
     assert not sentinel.exists()
     tampered = receipt.model_copy(
@@ -300,6 +314,14 @@ def test_registered_discovery_detail_is_safe_and_part_of_receipt_integrity(
     )
     with pytest.raises(ValueError, match="changed"):
         tampered.validate_integrity()
+
+
+def test_published_preflight_schema_matches_domain_contract() -> None:
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/delivery-preflight.schema.json").read_text()
+    )
+    del schema["$schema"], schema["$id"]
+    assert schema == DeliveryPreflightReceipt.model_json_schema()
 
 
 def test_unused_registered_discovery_failure_does_not_block_ordinary_responses_tools(
@@ -425,7 +447,7 @@ def test_production_backend_preserves_actual_registered_discovery_failure(
 
         def unavailable(**kwargs: object) -> Never:
             raise PythonMysqlDiscoveryError(
-                NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+                NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED
             )
 
         monkeypatch.setattr(
@@ -487,7 +509,7 @@ def test_production_backend_preserves_actual_registered_discovery_failure(
     if reason is NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE:
         assert (
             receipt.observations[0].native_wait_detail
-            is NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+            is NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED
         )
     assert _SECRET_SENTINEL not in json.dumps(receipt.to_wire())
     assert not (tmp_path / "sidecar/native-role-verification").exists()

@@ -21,6 +21,7 @@ from ai_software_engineer.manager.python_verification_discovery import (
     discover_python_mysql_host_prerequisites,
     require_selected_candidate_files,
 )
+from ai_software_engineer.owned_processes import OwnedProcessesUncertain
 
 
 def test_host_discovery_classifies_unsupported_platform_without_host_details() -> None:
@@ -87,6 +88,68 @@ def _bound_unix_socket() -> tuple[socket.socket, Path]:
     return server, socket_path
 
 
+@pytest.mark.parametrize("stage", ["context", "daemon", "image"])
+@pytest.mark.parametrize("uncertain", [True, False])
+def test_discovery_command_preserves_owned_uncertainty_at_each_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, uncertain: bool
+) -> None:
+    _host_discovery_fixture(tmp_path, monkeypatch)
+    server, docker_socket = _bound_unix_socket()
+
+    def command(argv: tuple[str, ...], **kwargs: object) -> bytes:
+        actual = "context" if "context" in argv else "image" if "image" in argv else "daemon"
+        if actual == stage:
+            if uncertain:
+                raise OwnedProcessesUncertain("secret-sentinel")
+            raise ValueError("secret-sentinel")
+        if actual == "context":
+            return ("unix://" + str(docker_socket)).encode()
+        return b"daemon-id"
+
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.python_verification_discovery.bounded_verification_command",
+        command,
+    )
+    try:
+        with pytest.raises(PythonMysqlDiscoveryError) as caught:
+            discover_python_mysql_host_prerequisites(codex_executable="codex")
+    finally:
+        server.close()
+        docker_socket.unlink(missing_ok=True)
+    ordinary = {
+        "context": NativeVerificationCapabilityDetail.DOCKER_CONTEXT_UNAVAILABLE,
+        "daemon": NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE,
+        "image": NativeVerificationCapabilityDetail.MYSQL_IMAGE_UNAVAILABLE,
+    }
+    expected = (
+        NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED
+        if uncertain
+        else ordinary[stage]
+    )
+    assert caught.value.code is expected
+    assert str(caught.value) == expected.value
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__
+
+
+def test_discovery_does_not_invent_owned_uncertainty_from_generic_runtime_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _host_discovery_fixture(tmp_path, monkeypatch)
+    failure = RuntimeError("fixture unrelated runtime error")
+
+    def command(*args: object, **kwargs: object) -> bytes:
+        raise failure
+
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.python_verification_discovery.bounded_verification_command",
+        command,
+    )
+    with pytest.raises(RuntimeError) as caught:
+        discover_python_mysql_host_prerequisites(codex_executable="codex")
+    assert caught.value is failure
+
+
 @pytest.mark.parametrize(
     ("stage", "expected"),
     [
@@ -145,9 +208,11 @@ def test_host_discovery_classifies_each_safe_boundary(
         monkeypatch.setattr(
             "ai_software_engineer.manager.python_verification_discovery._read_command",
             (
-                lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("secret-sentinel"))
-                if stage == "daemon"
-                else next(calls)
+                lambda *args, **kwargs: (
+                    (_ for _ in ()).throw(ValueError("secret-sentinel"))
+                    if stage == "daemon"
+                    else next(calls)
+                )
             ),
         )
         if stage == "python":

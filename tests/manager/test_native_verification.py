@@ -797,8 +797,15 @@ def test_prepared_receipt_rechecks_facts_without_rediscovery_or_reexecution(
     assert len(resources) == len(executions) == 1
 
 
+@pytest.mark.parametrize(
+    "detail",
+    [
+        NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE,
+        NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED,
+    ],
+)
 def test_evidence_revalidation_preserves_host_discovery_detail(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, detail: NativeVerificationCapabilityDetail
 ) -> None:
     fixture = _fixture(tmp_path)
     _fake_ports(monkeypatch, fixture)
@@ -806,20 +813,16 @@ def test_evidence_revalidation_preserves_host_discovery_detail(
         request=fixture.request, workspace_root=fixture.root, guard=fixture.guard
     )
     fixture.registry._prepared.clear()
-    provider = fixture.registry.provider_for(
-        workspace_root=fixture.root, guard=fixture.guard
-    )
+    provider = fixture.registry.provider_for(workspace_root=fixture.root, guard=fixture.guard)
 
     def unavailable(*args: object, **kwargs: object) -> Never:
-        raise PythonMysqlDiscoveryError(
-            NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
-        )
+        raise PythonMysqlDiscoveryError(detail)
 
     monkeypatch.setattr(_PREFIX + "discover_python_mysql_capability", unavailable)
     with pytest.raises(NativeVerificationWaiting) as failure:
         provider.evidence_for(fixture.request, fixture.root, fixture.guard)
     assert failure.value.reason is NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE
-    assert failure.value.detail_code is NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+    assert failure.value.detail_code is detail
 
 
 def test_ordinary_responses_plan_uses_original_tools_without_registered_command_execution(

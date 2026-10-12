@@ -135,6 +135,9 @@ class DeliveryWaitRejected(ValueError):
 
 
 _CAPABILITY_DETAIL_ACTIONS: dict[NativeVerificationCapabilityDetail, str] = {
+    NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED: (
+        "验证探测进程的实际停止或记录收尾尚未核验; 重复检查 Docker 镜像无法补齐原执行事实"
+    ),
     NativeVerificationCapabilityDetail.PLATFORM_UNSUPPORTED: "服务主机不是受控 macOS 验证环境",
     NativeVerificationCapabilityDetail.CODEX_EXECUTABLE_UNAVAILABLE: "找不到已配置的 Codex 执行器",
     NativeVerificationCapabilityDetail.DOCKER_EXECUTABLE_UNAVAILABLE: "找不到 Docker 执行器",
@@ -170,7 +173,16 @@ def _preflight_detail_action(
     )
     if not details:
         return None
-    return "执行前提尚未满足: " + "; ".join(details) + "。工程负责人处理后请重新调查工程等待。"
+    if any(
+        item.native_wait_detail is NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED
+        for item in prerequisites.observations
+    ):
+        next_step = (
+            "。需由平台执行服务核验原探测进程及收尾记录; 补齐原执行结束事实后再重新调查工程等待。"
+        )
+    else:
+        next_step = "。工程负责人处理后请重新调查工程等待。"
+    return "执行前提尚未满足: " + "; ".join(details) + next_step
 
 
 class DeliveryNativeExecutionUncertain(DeliveryWaitRejected):

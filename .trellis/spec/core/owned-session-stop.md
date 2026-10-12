@@ -138,6 +138,49 @@ coverage; no real Linux host or MySQL runtime is claimed by this task.
 
 ## Existing-data treatment and rollback
 
+### Controlled verification discovery diagnosis
+
+`manager.python_verification_discovery._read_command(argv, ...)` maps only
+`OwnedProcessesUncertain` from the actual bounded command to
+`PythonMysqlDiscoveryError(NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED)`.
+Its wire value is `VERIFICATION_PROCESS_STATE_UNCONFIRMED`; it is a capability-discovery
+detail, not a QA/Review verdict or a new execution/recovery authorization.
+Docker context, daemon and image exception boundaries must rethrow this typed discovery
+error before handling their ordinary stage-specific errors. A generic `RuntimeError` must
+never be accepted as proof of this specific owned-process uncertainty.
+
+The existing `NativeVerificationWaiting(CAPABILITY_UNAVAILABLE, detail_code=...)` and
+`DeliveryPreflightObservation.native_wait_detail` preserve the exact fixed reason into the
+digest-bound preflight receipt and its published Schema. Engineering-wait text must state
+that original probe stop or record finalization remains unverified, that inspecting/pulling
+an image cannot supply the missing facts, and that reinspection is appropriate after the
+platform execution service has verified the original stop/finalization facts. The text must
+not offer a false successful-stop claim, arbitrary kill instruction or repeated image repair.
+
+| Observation | Required diagnosis and unchanged safety gate |
+|---|---|
+| Actual owned capture/finish uncertainty at context, daemon or image command | fixed process-state detail; preserve original registry unknown |
+| Ordinary context/daemon/image failure with no owned uncertainty | retain corresponding existing capability detail |
+| Two later successful image inspections after one failed original capture | later image fact can be READY; original registry unknown still blocks drain |
+| Native verifier → preflight → Chinese engineering-wait rendering | preserve typed detail and receipt integrity; no extra approval or state mutation |
+| New enum wire value, absent/null legacy optional detail | published Schema matches model; legacy bytes/digests unchanged |
+
+Required incremental tests are `tests/manager/test_owned_verification_discovery_diagnosis.py`
+(real registry, subprocess and inspector seam), `test_python_verification_discovery.py`
+(all three stage boundaries and negatives), `test_native_verification.py`,
+`test_delivery_preflight.py` (including Schema parity) and `test_delivery_wait.py`.
+The real reproduction establishes a possible code path, not the unobserved initial cause of
+production PID 802's earlier stop failure. Do not infer that cause from later successful probes.
+
+Good: a real image probe loses owned capture and the platform presents the fixed missing-stop
+detail while retaining its unknown registry entry. Base: an ordinary missing image still uses the
+original image-unavailable detail. Bad: report every `RuntimeError` as process uncertainty, advise
+pulling an image to clear a lost stop proof, or use later successful probes to erase an old unknown.
+
+No historical records are rewritten and no missing stop proof is backfilled. The new reason
+is recorded only by new observations under the fixed binary; an already-running old instance
+keeps its own registry and must follow the separately verified service maintenance route.
+
 No migration, MySQL access, historical stop backfill, Task/queue/approval rewrite or K1 resume.
 Old records retain their original scope and current-fact recovery gates. New code changes do not
 prove that an already-running old binary or historical execution stopped. Root integrates only after

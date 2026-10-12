@@ -23,6 +23,7 @@ from ai_software_engineer.manager.python_verification import (
 )
 from ai_software_engineer.manager.python_verification_runner import __file__ as runner_file
 from ai_software_engineer.manager.verification_process import bounded_verification_command
+from ai_software_engineer.owned_processes import OwnedProcessesUncertain
 from ai_software_engineer.redaction import redact_text
 
 _ENVIRONMENT = {
@@ -104,6 +105,10 @@ def _read_command(
             argv, cwd=cwd, environment=_ENVIRONMENT, limit=limit
         ).decode("utf-8")
         return text.strip() if trim else text
+    except OwnedProcessesUncertain:
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED
+        ) from None
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         raise ValueError("verification host discovery failed") from error
 
@@ -190,6 +195,8 @@ def discover_python_mysql_host_prerequisites(
             endpoint = _read_command(
                 (str(docker), "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
             )
+        except PythonMysqlDiscoveryError:
+            raise
         except ValueError:
             raise PythonMysqlDiscoveryError(
                 NativeVerificationCapabilityDetail.DOCKER_CONTEXT_UNAVAILABLE
@@ -211,6 +218,8 @@ def discover_python_mysql_host_prerequisites(
         prefix = (str(docker), "--config", directory, "--host", f"unix://{socket}")
         try:
             daemon = _read_command((*prefix, "info", "--format", "{{.ID}}"))
+        except PythonMysqlDiscoveryError:
+            raise
         except (OSError, RuntimeError, ValueError):
             raise PythonMysqlDiscoveryError(
                 NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
@@ -221,6 +230,8 @@ def discover_python_mysql_host_prerequisites(
             )
         try:
             image = _read_command((*prefix, "image", "inspect", "--format", "{{.Id}}", mysql_image))
+        except PythonMysqlDiscoveryError:
+            raise
         except (OSError, RuntimeError, ValueError):
             raise PythonMysqlDiscoveryError(
                 NativeVerificationCapabilityDetail.MYSQL_IMAGE_UNAVAILABLE
