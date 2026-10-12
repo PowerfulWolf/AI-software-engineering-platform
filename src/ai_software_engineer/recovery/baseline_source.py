@@ -5,9 +5,12 @@ from pathlib import Path
 
 from ai_software_engineer.context.execution_baseline import execution_baseline_from_context
 from ai_software_engineer.context.models import ContextBundle
-from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.enums import AgentRole, TaskStatus
 from ai_software_engineer.domain.event import StateEvent
-from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineInputMode,
+    ExecutionBaselineBinding,
+)
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
@@ -16,6 +19,10 @@ from ai_software_engineer.manager.execution_baseline import StoredCoderExecution
 from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.team_workspace import _reject_symlinks
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
+
+LEGACY_CAPACITY_REASON = (
+    "BUDGET_EXHAUSTED: Required context exceeds the configured input budget; no automatic retry."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +70,55 @@ def validate_pre_candidate_sources(
     epochs: tuple[RecoveryBaselineEpoch, ...],
 ) -> None:
     """An arbitrary source appearing somewhere in the history never qualifies."""
+    _validate_source_epochs(task, events, epochs, legacy_capacity_terminal=False)
+
+
+def validate_legacy_capacity_pre_candidate_sources(
+    task: Task,
+    events: tuple[StateEvent, ...],
+    epochs: tuple[RecoveryBaselineEpoch, ...],
+) -> None:
+    """Accept only the known terminal no-start bug; never rewrite the original event.
+
+    The dedicated capacity reader must additionally verify the complete final Context,
+    latest retained baseline, ended claim and absence of all invocation facts.
+    """
+    if (
+        not events
+        or not epochs
+        or task.status is not TaskStatus.BLOCKED
+        or epochs[-1].binding.input_mode is not BaselineInputMode.CODER_REAPPLY
+        or events[-1].task_id != task.id
+        or events[-1].from_status is not TaskStatus.IMPLEMENTING
+        or events[-1].to_status is not TaskStatus.BLOCKED
+        or events[-1].attempt != task.attempts
+        or events[-1].reason != LEGACY_CAPACITY_REASON
+    ):
+        raise ValueError("not the exact legacy terminal capacity source exception")
+    if events[-1].artifact_ids:
+        plans = tuple(
+            event
+            for event in events[:-1]
+            if event.from_status is TaskStatus.PLANNING
+            and event.to_status is TaskStatus.IMPLEMENTING
+            and event.reason == "plan_validated"
+        )
+        if (
+            len(plans) != 1
+            or len(plans[0].artifact_ids) != 1
+            or events[-1].artifact_ids != plans[0].artifact_ids
+        ):
+            raise ValueError("legacy capacity terminal differs from its original Plan reference")
+    _validate_source_epochs(task, events, epochs, legacy_capacity_terminal=True)
+
+
+def _validate_source_epochs(
+    task: Task,
+    events: tuple[StateEvent, ...],
+    epochs: tuple[RecoveryBaselineEpoch, ...],
+    *,
+    legacy_capacity_terminal: bool,
+) -> None:
     previous = None
     for epoch in epochs:
         binding = epoch.binding
@@ -87,6 +143,13 @@ def validate_pre_candidate_sources(
                 raise ValueError("pre-candidate event source precedes its exact execution epoch")
             expected = binding.execution_source_revision
         if event.source_revision != expected:
+            if (
+                legacy_capacity_terminal
+                and selected is not None
+                and revision == len(events)
+                and event.source_revision == task.base_ref
+            ):
+                continue
             raise ValueError("pre-candidate event source revision mismatch")
 
 

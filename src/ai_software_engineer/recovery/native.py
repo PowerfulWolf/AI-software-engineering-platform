@@ -67,6 +67,7 @@ from ai_software_engineer.recovery.allocation_lineage import (
     resolve_planner_dispatch,
 )
 from ai_software_engineer.recovery.baseline_source import (
+    RecoveryBaselineEpoch,
     read_recovery_baseline_epochs,
     require_terminal_baseline_context,
     validate_pre_candidate_sources,
@@ -567,7 +568,7 @@ class NativeRecoverySourceReader:
                     epochs = read_recovery_baseline_epochs(
                         sidecar, task, scope, project_id=project_id
                     )
-                    validate_pre_candidate_sources(task, event_tuple, epochs)
+                    self._validate_pre_candidate_sources(task, event_tuple, epochs)
                 else:
                     snapshot = CandidateRuntimeSnapshot(
                         task=task,
@@ -583,6 +584,15 @@ class NativeRecoverySourceReader:
         finally:
             connection.rollback()
             connection.close()
+
+    @staticmethod
+    def _validate_pre_candidate_sources(
+        task: Task,
+        events: tuple[StateEvent, ...],
+        epochs: tuple[RecoveryBaselineEpoch, ...],
+    ) -> None:
+        """Strict ordinary source validation; specialized readers own compatibility."""
+        validate_pre_candidate_sources(task, events, epochs)
 
 
 @dataclass(frozen=True)

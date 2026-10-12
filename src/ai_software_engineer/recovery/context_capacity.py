@@ -18,26 +18,33 @@ from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents import FileModelRouteAttemptStore
 from ai_software_engineer.agents.fallback import model_route_root
+from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.context.execution_baseline import (
     ExecutionBaselineContext,
     parse_execution_baseline_context,
 )
-from ai_software_engineer.context.models import ContextBundle
+from ai_software_engineer.context.models import ContextBundle, ContextId
 from ai_software_engineer.domain import (
     AgentPermissions,
     AgentRole,
+    PlanArtifact,
     Task,
     TaskStatus,
     WorkItemStatus,
 )
 from ai_software_engineer.domain.continuation import task_intent_sha256
-from ai_software_engineer.domain.execution_baseline import BaselineInputMode
+from ai_software_engineer.domain.event import StateEvent
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineInputMode,
+    ExecutionBaselineBinding,
+)
 from ai_software_engineer.domain.identity import RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import StageSha256
-from ai_software_engineer.git import GitWorktreeManager, WorktreeSpec
+from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound, WorktreeSpec
+from ai_software_engineer.git.capture import WorktreeChangeCapture
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.context_capacity import ContextCapacityReceipt
@@ -48,8 +55,10 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.read_record_scope import recovery_record_read_scope
 from ai_software_engineer.recovery.baseline_source import (
+    LEGACY_CAPACITY_REASON,
     RecoveryBaselineEpoch,
     read_recovery_baseline_epochs,
+    validate_legacy_capacity_pre_candidate_sources,
 )
 from ai_software_engineer.recovery.models import (
     ContextCapacityRecoveryInput,
@@ -88,9 +97,6 @@ from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
 from ai_software_engineer.work_queue.mysql import _RISK_RANK, MySqlPersistentWorkQueue
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
-LEGACY_CAPACITY_REASON = (
-    "BUDGET_EXHAUSTED: Required context exceeds the configured input budget; no automatic retry."
-)
 LEGACY_CAPACITY_SUMMARY = LEGACY_CAPACITY_REASON.removeprefix("BUDGET_EXHAUSTED: ")
 
 
@@ -156,12 +162,22 @@ def validate_capacity_context(
     return ValidatedCapacityContext(claim, complete, available)
 
 
+class _CapacityNativeRecoverySourceReader(NativeRecoverySourceReader):
+    @staticmethod
+    def _validate_pre_candidate_sources(
+        task: Task,
+        events: tuple[StateEvent, ...],
+        epochs: tuple[RecoveryBaselineEpoch, ...],
+    ) -> None:
+        validate_legacy_capacity_pre_candidate_sources(task, events, epochs)
+
+
 class LegacyContextCapacitySourceReader:
     """Separate no-start reader; ordinary failed-route recovery stays strict."""
 
     def __init__(self, config: ProductionConfig, environment: Mapping[str, str]) -> None:
         self.config, self.environment = config, dict(environment)
-        self.native = NativeRecoverySourceReader(config, environment)
+        self.native = _CapacityNativeRecoverySourceReader(config, environment)
 
     @source_inspection_scope()
     @recovery_record_read_scope()
@@ -246,6 +262,7 @@ class LegacyContextCapacitySourceReader:
             stages = read_approved_stages(
                 self.config, root, scope, cp, task, planner, current_dispatch=dispatch
             )
+            original_plan = self._require_original_plan(root, task, events)
             context, value = self._context(root, task, epochs[-1], terminal.occurred_at, receipt)
             baseline_store = FileExecutionBaselineStore(
                 root / "state/execution-baselines" / task.id, read_only=True
@@ -256,7 +273,14 @@ class LegacyContextCapacitySourceReader:
                     "saved Context differs from complete store-verified retained patch"
                 )
             claim = self._claim(
-                scope, task, revision, dispatch.dispatch_sha256, value.claim, context, epochs
+                scope,
+                task,
+                revision,
+                dispatch.dispatch_sha256,
+                value.claim,
+                context,
+                epochs,
+                original_plan=original_plan,
             )
             self._require_no_start(root, task, claim)
             policy_sections = tuple(s for s in context.sections if s.name == "policy")
@@ -277,26 +301,9 @@ class LegacyContextCapacitySourceReader:
                 Path(self.config.platform_root) / "worktrees" / scope.repository_id,
                 branch_names={task.id: task.branch_name},
             )
-            old = manager.recover(
-                WorktreeSpec(
-                    task_id=task.id,
-                    role=AgentRole.CODER,
-                    attempt=1,
-                    source_revision=context.source_revision,
-                )
+            current_capture = _capacity_capture(
+                manager, task, epochs[-1].binding, permissions, denied
             )
-            current_capture = manager.capture_changes(
-                old,
-                permissions,
-                denied_paths=denied,
-                base_revision=epochs[-1].binding.execution_base_ref,
-            )
-            if (
-                current_capture.patch
-                or current_capture.changed_paths
-                or str(old.path) != epochs[-1].binding.worktree_path
-            ):
-                raise ValueError("capacity recovery must retain its exact clean execution worktree")
             parent_id, parent_sha = _parent(team, cp, stages.approval)
             observed = ContextCapacityReceipt(
                 origin="legacy_terminal_context",
@@ -318,6 +325,8 @@ class LegacyContextCapacitySourceReader:
                 max_input_tokens=value.available_input_tokens,
                 context_input_tokens=context.budget.used_input_tokens,
                 execution_baseline_sha256=epochs[-1].binding.binding_sha256,
+                legacy_terminal_event_sha256=digest(terminal.to_wire()),
+                legacy_terminal_source_revision=terminal.source_revision,
                 observed_at=receipt.observed_at if receipt else datetime.now(UTC),
                 receipt_sha256="0" * 64,
             )
@@ -388,15 +397,27 @@ class LegacyContextCapacitySourceReader:
                 self.config, root, scope, cp, task, planner, current_dispatch=dispatch
             ) != stages or _parent(team, cp, stages.approval) != (parent_id, parent_sha):
                 raise ValueError("capacity approved Requirement changed while observing")
+            if self._require_original_plan(root, task, events) != original_plan:
+                raise ValueError("capacity original Plan changed while observing")
             if (
                 self._claim(
-                    scope, task, revision, dispatch.dispatch_sha256, value.claim, context, epochs
+                    scope,
+                    task,
+                    revision,
+                    dispatch.dispatch_sha256,
+                    value.claim,
+                    context,
+                    epochs,
+                    original_plan=original_plan,
                 )
                 != claim
             ):
                 raise ValueError("capacity queue changed while observing")
             self._require_no_start(root, task, claim)
-            manager.verify_capture(current_capture, permissions, denied_paths=denied)
+            if _capacity_capture(manager, task, epochs[-1].binding, permissions, denied) != (
+                current_capture
+            ):
+                raise ValueError("capacity retained workspace changed while observing")
             return result
 
     def _context(
@@ -445,6 +466,8 @@ class LegacyContextCapacitySourceReader:
         expected: CapacityContextClaim,
         context: ContextBundle,
         epochs: tuple[RecoveryBaselineEpoch, ...],
+        *,
+        original_plan: PlanArtifact | None = None,
     ) -> QueueClaim:
         connection = open_mysql_connection(self.config.require_mysql_dsn(self.environment))
         try:
@@ -603,13 +626,65 @@ class LegacyContextCapacitySourceReader:
                 )
                 if any(record.work_item_id == item.id for record in published):
                     raise ValueError("capacity work item already published an artifact")
+                if original_plan is not None:
+                    _require_plan_queue_reference(original_plan, admission, published)
                 return claim
         finally:
             connection.rollback()
             connection.close()
 
     @staticmethod
+    def _require_original_plan(
+        root: Path, task: Task, events: tuple[StateEvent, ...]
+    ) -> PlanArtifact:
+        plans = tuple(
+            event
+            for event in events[:-1]
+            if event.from_status is TaskStatus.PLANNING
+            and event.to_status is TaskStatus.IMPLEMENTING
+            and event.reason == "plan_validated"
+        )
+        if len(plans) != 1 or len(plans[0].artifact_ids) != 1:
+            raise ValueError("capacity original Plan event missing or ambiguous")
+        event = plans[0]
+        if events[-1].artifact_ids not in ((), event.artifact_ids):
+            raise ValueError("capacity terminal references non-Plan delivery output")
+        artifact_id = event.artifact_ids[0]
+        _read_regular(root / "artifacts" / f"{artifact_id}.json", 8_000_000)
+        plan = FileArtifactStore(root / "artifacts", read_only=True).get(artifact_id)
+        if (
+            not isinstance(plan, PlanArtifact)
+            or plan.task_id != task.id
+            or plan.source_revision != event.source_revision
+            or plan.created_at > event.occurred_at
+        ):
+            raise ValueError("capacity original Plan differs from its accepted event")
+        context_id = TypeAdapter(ContextId).validate_python(plan.context_manifest_id)
+        context = FileContextStore(root / "contexts", read_only=True).get(context_id)
+        if (context.task_id, context.role, context.attempt, context.source_revision) != (
+            task.id,
+            AgentRole.ORCHESTRATOR,
+            event.attempt,
+            event.source_revision,
+        ) or context.built_at > event.occurred_at:
+            raise ValueError("capacity original Plan differs from its real planning Context")
+        return plan
+
+    @staticmethod
     def _require_no_start(root: Path, task: Task, claim: QueueClaim) -> None:
+        artifact_root = root / "artifacts"
+        _reject_symlinks(artifact_root)
+        for path in sorted(artifact_root.glob("art_*.json")):
+            _read_regular(path, 8_000_000)
+        for artifact in FileArtifactStore(artifact_root, read_only=True).list_for_task(task.id):
+            if artifact.producer.role is not AgentRole.CODER:
+                continue
+            context_id = TypeAdapter(ContextId).validate_python(artifact.context_manifest_id)
+            context = FileContextStore(root / "contexts", read_only=True).get(context_id)
+            if (context.task_id, context.role) != (task.id, AgentRole.CODER):
+                raise ValueError("capacity historical output lacks its exact original Context")
+            if context.attempt >= task.attempts:
+                raise ValueError("capacity original invocation already has a sealed output")
         invocation_root = root / "state/invocations"
         _reject_symlinks(invocation_root)
         if invocation_root.exists():
@@ -653,6 +728,18 @@ class LegacyContextCapacitySourceReader:
         _reject_symlinks(capture_root)
         if capture_root.exists():
             ledger = FileContinuationStore(capture_root, task_id=task.id)
+            for receipt in ledger.receipts_for_task(task.id):
+                if (
+                    receipt.original_work_item_id == claim.work_item.id
+                    or receipt.request.attempt >= task.attempts
+                ):
+                    raise ValueError("capacity original invocation has an interruption receipt")
+            for admission in ledger.admissions_for_task(task.id):
+                if (
+                    admission.next_work_item_id == claim.work_item.id
+                    or admission.new_request.attempt >= task.attempts
+                ):
+                    raise ValueError("capacity original invocation has a continuation admission")
             for path in sorted(capture_root.glob("capture-start-*.json")):
                 capture = ledger.capture_start(path.stem.removeprefix("capture-start-"))
                 capture.validate_integrity()
@@ -668,6 +755,82 @@ class LegacyContextCapacitySourceReader:
                 captured_start = ledger.capture_start(run_id)
                 if captured_start.request.attempt == task.attempts:
                     raise ValueError("capacity original invocation has a stop record")
+
+
+def _capacity_capture(
+    manager: GitWorktreeManager,
+    task: Task,
+    binding: ExecutionBaselineBinding,
+    permissions: AgentPermissions,
+    denied_paths: tuple[str, ...],
+) -> WorktreeChangeCapture | None:
+    """Read an actual clean checkout or prove its exact manager-owned clean removal.
+
+    An absent checkout has no capture. Public proposal alone may restore the same
+    clean checkout through the existing bounded Git seam before taking a real capture.
+    """
+    binding.require_task(task)
+    spec = WorktreeSpec(
+        task_id=task.id,
+        role=AgentRole.CODER,
+        attempt=1,
+        source_revision=binding.execution_source_revision,
+    )
+    if (
+        binding.worktree_path != str(manager._target_path(spec))
+        or binding.branch_name != task.branch_name
+    ):
+        raise ValueError("capacity retained checkout differs from exact baseline ownership")
+    try:
+        old = manager.recover(spec)
+    except WorktreeNotFound:
+        manager.require_clean_coder(spec)
+        return None
+    capture = manager.capture_changes(
+        old, permissions, denied_paths=denied_paths, base_revision=binding.execution_base_ref
+    )
+    if (
+        capture.patch
+        or capture.changed_paths
+        or capture.index_diff_sha256 != hashlib.sha256(b"").hexdigest()
+    ):
+        raise ValueError("capacity recovery requires its exact unchanged clean checkout")
+    return capture
+
+
+def _require_plan_queue_reference(
+    plan: PlanArtifact,
+    admission: RoleQueueAdmission,
+    published: tuple[AcceptedRoleArtifact, ...],
+) -> None:
+    legacy = tuple(
+        item for item in admission.legacy_artifacts if item.artifact_id == plan.artifact_id
+    )
+    accepted = tuple(item for item in published if item.receipt.artifact_id == plan.artifact_id)
+    if (
+        admission.task_id != plan.task_id
+        or (not legacy and not accepted)
+        or any(item.sha256 != plan.integrity.sha256 for item in legacy)
+        or any(
+            (
+                item.task_id,
+                item.receipt.sha256,
+                item.run_id,
+                item.context_manifest_id,
+                item.source_revision,
+            )
+            != (
+                plan.task_id,
+                plan.integrity.sha256,
+                plan.producer.run_id,
+                plan.context_manifest_id,
+                plan.source_revision,
+            )
+            for item in accepted
+        )
+        or len(accepted) > 1
+    ):
+        raise ValueError("capacity original Plan lacks its exact queue acceptance")
 
 
 def _closed_item(row: Mapping[str, object]) -> QueuedWorkItem:

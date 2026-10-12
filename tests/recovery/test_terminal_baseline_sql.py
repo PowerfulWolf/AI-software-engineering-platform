@@ -13,6 +13,10 @@ from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
 from ai_software_engineer.recovery import native
 from ai_software_engineer.recovery.baseline_source import RecoveryBaselineEpoch
+from ai_software_engineer.recovery.context_capacity import (
+    LEGACY_CAPACITY_REASON,
+    _CapacityNativeRecoverySourceReader,
+)
 from ai_software_engineer.recovery.models import RecoveryScope
 from tests.domain.factories import NOW, make_state_event
 from tests.manager.test_dispatch import RecordingDispatchStore, _facts, _service
@@ -20,8 +24,12 @@ from tests.manager.test_terminal_candidate_reconstruction import _binding
 
 
 @pytest.mark.parametrize("wrong_source", [False, True])
+@pytest.mark.parametrize("capacity_compatibility", [False, True])
 def test_native_sql_gate_accepts_only_the_exact_terminal_epoch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wrong_source: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wrong_source: bool,
+    capacity_compatibility: bool,
 ) -> None:
     request, workforce = _facts(tmp_path)
     dispatch = _service(RecordingDispatchStore(), workforce, request).commit_dispatch(request)
@@ -60,6 +68,10 @@ def test_native_sql_gate_accepts_only_the_exact_terminal_epoch(
                 }
             )
         )
+    if capacity_compatibility:
+        events[-1] = events[-1].model_copy(
+            update={"reason": LEGACY_CAPACITY_REASON, "artifact_ids": ()}
+        )
     checkpoint = ProjectDeliveryCheckpoint.model_construct(
         delivery_id="delivery_epoch",
         repository_id=dispatch.repository_id,
@@ -97,7 +109,12 @@ def test_native_sql_gate_accepts_only_the_exact_terminal_epoch(
         return (RecoveryBaselineEpoch(binding, 2),)
 
     monkeypatch.setattr(native, "read_recovery_baseline_epochs", epochs)
-    reader = native.NativeRecoverySourceReader(
+    reader_type = (
+        _CapacityNativeRecoverySourceReader
+        if capacity_compatibility
+        else native.NativeRecoverySourceReader
+    )
+    reader = reader_type(
         ProductionConfig(
             platform_root=str(tmp_path / "platform"),
             model_routes=(
@@ -108,7 +125,7 @@ def test_native_sql_gate_accepts_only_the_exact_terminal_epoch(
         ),
         {"ASE_MYSQL_DSN": "mysql://offline@localhost/isolated"},
     )
-    if wrong_source:
+    if wrong_source and not capacity_compatibility:
         with pytest.raises(ValueError, match="source revision mismatch"):
             reader._sql(checkpoint, (checkpoint,), sidecar=sidecar, project_id="project_exact")
     else:
