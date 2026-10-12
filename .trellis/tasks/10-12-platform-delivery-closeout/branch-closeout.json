@@ -1,0 +1,903 @@
+{
+  "date": "2026-10-12",
+  "main_before_documentation": "15b2bec364f218ae1ab818e9ad279879b6a023f5",
+  "remote_deleted_count": 20,
+  "remote_branches": [
+    {
+      "branch": "ai/task_t001_python_cli/attempt-1",
+      "head": "4b7902590815ff54e5e9831e34ac4371af4057c2",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: bootstrap Python CLI"
+    },
+    {
+      "branch": "ai/task_t002_domain_models/attempt-1",
+      "head": "fc1fd77538b3125021adc296dde077a1ff45098a",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add typed domain contracts"
+    },
+    {
+      "branch": "ai/task_t003_sqlite_repository/attempt-1",
+      "head": "2e7ed76ad422d000d07d67ebfa5798f3a782fdc8",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add sqlite task repository"
+    },
+    {
+      "branch": "ai/task_t004_state_machine/attempt-1",
+      "head": "e6c869fcd806f4320b398bc1f58fceecd747fd5a",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add task state machine reducer"
+    },
+    {
+      "branch": "ai/task_t005_artifact_store/attempt-1",
+      "head": "b08ab8cf68543be72e0b373f61efe6c9ed3e768e",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add immutable artifact store"
+    },
+    {
+      "branch": "ai/task_t006_git_worktree/attempt-1",
+      "head": "bd52bc4e7e998a987835e0ee001034123f352ecd",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add isolated git worktree manager"
+    },
+    {
+      "branch": "ai/task_t007_context/attempt-1",
+      "head": "402c49fd9726e47c3a322a8df65d6ca91c5b3b48",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add deterministic context builder"
+    },
+    {
+      "branch": "ai/task_t008_fake_agent/attempt-1",
+      "head": "7143b46752469651ecf4ec3721588dc0251e9ffe",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add deterministic fake agent adapter"
+    },
+    {
+      "branch": "ai/task_t009_orchestrator/attempt-1",
+      "head": "3ea3523bd9b6c9a4ca726fc058701a21910f5524",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add serial orchestrator happy path"
+    },
+    {
+      "branch": "ai/task_t010_retry/attempt-1",
+      "head": "4f3ed83343a66eb92d25df8c8c085f6ea0d62134",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add bounded retry and recovery orchestration"
+    },
+    {
+      "branch": "ai/task_t011_real_agent/attempt-1",
+      "head": "52ee828482543dbd489d0b39394ab20d7b7ca2d6",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add real agent adapter and context store"
+    },
+    {
+      "branch": "ai/task_t012_evaluation_handoff/attempt-1",
+      "head": "e2ecaf4101ece1cfa94b6bdc40023bba752e815d",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add replayable evaluation and handoff"
+    },
+    {
+      "branch": "ai/task_t013_cli_runtime/attempt-1",
+      "head": "601ffb3b2c1631da2693d73c917bcb8ede2219d7",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat: add offline cli runtime commands"
+    },
+    {
+      "branch": "codex/baseline-read-performance-20261011",
+      "head": "b812c4d0d785b0bc485f6e66cf049a8db4167de6",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "perf(read): reuse the validated plan within a complete baseline read"
+    },
+    {
+      "branch": "codex/maintenance-completion-20261012",
+      "head": "daa96b7c3f97a11c624fee8c67e196dec3b40227",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "feat(console): add controlled maintenance completion and normal-mode admission"
+    },
+    {
+      "branch": "codex/native-output-bounds-20261011",
+      "head": "fba82f3adba1fb1f11c015b809beae65d9c37de4",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "fix(runtime): bound native process output while execution is running"
+    },
+    {
+      "branch": "codex/t046-worker-integration-20260919",
+      "head": "9c21431300386225a043d4d40d917202fe65d2c7",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "add trellis"
+    },
+    {
+      "branch": "codex/team-read-performance-20261011",
+      "head": "fa8ffee1ca5379c7bbf6cdc97d11bc356eb90b03",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "fix(console): bound repeated history reads and back off slow polling"
+    },
+    {
+      "branch": "task/capacity-receipt",
+      "head": "bdab7bf1cae9fcb1e39927b3c518929b5ffd6ce5",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "docs(delivery): retain failed production knowledge scope proposal"
+    },
+    {
+      "branch": "task/delivery-input-recovery-integration",
+      "head": "770c02e85e4bafa01fcef3d69e1d409869848251",
+      "merged_into_main": true,
+      "remote_deleted": true,
+      "subject": "docs(delivery): record first preserved K1 Coder claim and invocation"
+    }
+  ],
+  "local_deleted_count": 94,
+  "local_cleanup": {
+    "main": "15b2bec364f218ae1ab818e9ad279879b6a023f5",
+    "worktrees": [
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-baseline-context-projection",
+        "branch": "task/baseline-context-projection",
+        "head": "9a747944973511ddd34c5c5c7c574c86c190c7e0",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-baseline-read-performance",
+        "branch": "codex/baseline-read-performance-20261011",
+        "head": "b812c4d0d785b0bc485f6e66cf049a8db4167de6",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-baseline-read-scope",
+        "branch": "task/baseline-read-scope",
+        "head": "b7ddfa53b306069436f50209211e6f0a585d87d0",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-baseline-transient-guard",
+        "branch": "task/baseline-transient-guard",
+        "head": "2bd78e59887078c02c9628afa5353423c09d622e",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-capacity-failure-route",
+        "branch": "task/capacity-failure-route",
+        "head": "e254074ff25b8e2d029110834d0b32eb28e85e1d",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-capacity-receipt",
+        "branch": "task/capacity-receipt",
+        "head": "87459275327de3662c0d8a03f3d4631035eecde3",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-cli-failure-classification",
+        "branch": "fix/cli-failure-classification",
+        "head": "3a1f6d4924ec09089d5a35f90bd74559cc7d8aa2",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-coder-slice-output-guidance",
+        "branch": "task/coder-slice-output-guidance",
+        "head": "050faba9033bbbe61135ea4113e2a065dde35175",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-console-idle-backoff",
+        "branch": "task/console-idle-backoff",
+        "head": "eed6dce0b4910f8bc075e87e148c11508f367f82",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-console-operation-summary-ui",
+        "branch": "task/console-operation-summary-ui",
+        "head": "657f6ea28fd296b5e6037ad53f572b5e05c71217",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-console-reading-identity",
+        "branch": "codex/console-reading-identity-20261012",
+        "head": "bf3f3a80c6aeffeaac9423ffde7105d785a83d3a",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-context-capacity-delivery",
+        "branch": "task/context-capacity-delivery",
+        "head": "7ef2425427a122aeb4a9282d9fd32da063c8ee25",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-context-capacity-projection",
+        "branch": "task/context-capacity-projection",
+        "head": "d4d51151af96d20e4e981f09eb6ee8519f93e5df",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-current-receipt-projection",
+        "branch": "fix/current-receipt-projection",
+        "head": "36972a9db61b9e281d9ae57b8b4d940e94c4b573",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-delivery-input-recovery-integration",
+        "branch": "task/delivery-input-recovery-integration",
+        "head": "770c02e85e4bafa01fcef3d69e1d409869848251",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-dynamic-credential-fixture",
+        "branch": "task/dynamic-credential-fixture",
+        "head": "1ef4fcfecaf2157dcacf7b6fdf945959c0c5c3a9",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-final-input-preflight",
+        "branch": "fix/final-input-preflight",
+        "head": "f6e8c94efb4600ccc111f6f8441848134c490184",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-inspection-console",
+        "branch": "codex/inspection-console",
+        "head": "f9ac032c2e5f1c7611ed8e526d2026dd272858ef",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-k1-completed-output-integration",
+        "branch": "task/k1-completed-output-integration",
+        "head": "ead05e7d8b5c55345b6d346bd4704db8dfd35400",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-k1-maintenance-integration",
+        "branch": "codex/k1-fixture-maintenance-20261011",
+        "head": "8c7cafa4a11617ec3e32169549233919dd4ee99a",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-native-coder-diagnostic-envelope",
+        "branch": "task/native-coder-diagnostic-envelope",
+        "head": "8cfa9d27715b93a733b0251dc9ba0c6ace08eacb",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-native-output-bounds",
+        "branch": "codex/native-output-bounds-20261011",
+        "head": "fba82f3adba1fb1f11c015b809beae65d9c37de4",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-negative-token-guidance",
+        "branch": "codex/negative-token-guidance-20261011",
+        "head": "00494263bffb20073faaa8563870ee3f02e1c6f3",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-operation-result-scope-compat",
+        "branch": "task/k1-deployment-verification-closeout",
+        "head": "e0cd6d5f9b5a5db33b9cab2633cd4cdfa59c777d",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-operation-summary-read",
+        "branch": "task/operation-summary-read",
+        "head": "621a035c1cc4a913dac611ed5193c28c5d4a1f7b",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-owned-session-stop",
+        "branch": "fix/owned-session-stop",
+        "head": "60a619c5307642ced162e2dacfa8c0b5e03005f5",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-owned-verification-diagnosis",
+        "branch": "task/owned-verification-diagnosis",
+        "head": "30d898e021cca0d0c46225e132a3d0131ef3598f",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-product-approval-linear-read",
+        "branch": "task/product-approval-linear-read",
+        "head": "51985fb0a70cf3135948d62e2bdc72bd91a52db2",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-provenance-recovery",
+        "branch": "codex/provenance-recovery-fix",
+        "head": "892f87e92e26575159c1770216ea46979968b2e3",
+        "disposition": "missing-registration-pruned"
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-provider-source-plan-ui",
+        "branch": "fix/provider-source-plan-ui",
+        "head": "c97c077e5a6a7900e5e3c245d75b634d866e08c8",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-recovery-admission-facts",
+        "branch": "task/recovery-admission-facts",
+        "head": "f301e27c4a1ecf5b5f8b01e12bf6a8b0021fa94d",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-recovery-facts-window",
+        "branch": "task/recovery-facts-window",
+        "head": "0f08eca808ae0c9b2625f306ceebfc1ccb866a03",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-recovery-progress-ui",
+        "branch": "task/recovery-progress-ui",
+        "head": "d319dee7549b5ed7eaec6a438ade09a8a25c8849",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-recovery-record-read-scope",
+        "branch": "task/recovery-record-read-scope",
+        "head": "aeca8a92c854d10249f8ea05a373736a398b014f",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-retired-rejected-tests",
+        "branch": "test/retired-rejected-publications",
+        "head": "99e94aaee3ac26c66dec8c051a4ceeec300d271e",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-same-source-capacity",
+        "branch": "task/same-source-capacity",
+        "head": "9825b8bccdce2e7a9ff23b78b88070ccfa82efab",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-service-maintenance",
+        "branch": "task/faulted-service-maintenance",
+        "head": "fc6854664302346a583a787c09e7d25dc06fd136",
+        "disposition": "detached-files-preserved",
+        "dirty": true
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-shutdown-diagnostics",
+        "branch": "task/shutdown-diagnostics",
+        "head": "a528047910d35498103e8269bc8864317ce09e4e",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-stopped-budget-planner-lineage",
+        "branch": "task/stopped-budget-planner-lineage",
+        "head": "1ddc7d42a7f30200c177c9ff6a583c439a6a79b2",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-stopped-exhausted-settlement",
+        "branch": "task/stopped-exhausted-settlement",
+        "head": "edaac21b0c06598e772c12209b5918db6f03f9cb",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-stopped-provider-retry",
+        "branch": "task/stopped-provider-retry",
+        "head": "90f3dbedab2a49401602022a1a91aeb62800e72b",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-task-wait-authority",
+        "branch": "task/task-wait-authority",
+        "head": "ad898e5f045d0d5ec5befb6b4ba0fd0f01278e8e",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-team-read-coordination",
+        "branch": "task/team-read-coordination",
+        "head": "133a5a051c0b12798a23c06f883954102d29f423",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-team-read-performance",
+        "branch": "codex/team-read-performance-20261011",
+        "head": "fa8ffee1ca5379c7bbf6cdc97d11bc356eb90b03",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-terminal-context-capacity-recovery",
+        "branch": "task/terminal-context-capacity-recovery",
+        "head": "01b765ae80884c345456c3b21dd2ecca2bb46ab0",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-trusted-query-spawn-gate",
+        "branch": "task/trusted-query-spawn-gate",
+        "head": "35a50d8b315410ee69c29ac7d76d2a90a39999c4",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-unaccepted-coder-draft-resume",
+        "branch": "task/unaccepted-coder-draft-resume",
+        "head": "896132dbaa73c013d1d5b86e616a063f1874c5fa",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ai-workspace/ase-unaccepted-coder-draft-ui",
+        "branch": "task/unaccepted-coder-draft-ui",
+        "head": "fe70ea81c512f59c6d053e38a1eb050af30325ca",
+        "disposition": "detached-files-preserved",
+        "dirty": false
+      },
+      {
+        "path": "/Users/zhangjunshuai/workspace/code/ase-coder-knowledge-recovery",
+        "branch": "ai/bugfix/coder-knowledge-recovery",
+        "head": "d87f0bb399b0c1906e0715be9b07c50c70df54fe",
+        "disposition": "missing-registration-pruned"
+      }
+    ],
+    "deleted_branches": [
+      {
+        "branch": "ai/bugfix/coder-knowledge-recovery",
+        "head": "d87f0bb399b0c1906e0715be9b07c50c70df54fe"
+      },
+      {
+        "branch": "ai/t018-organization-workforce/attempt-1",
+        "head": "da5b70df1104adb948561c47e00ed76893a603bb"
+      },
+      {
+        "branch": "ai/task_t001_python_cli/attempt-1",
+        "head": "4b7902590815ff54e5e9831e34ac4371af4057c2"
+      },
+      {
+        "branch": "ai/task_t002_domain_models/attempt-1",
+        "head": "fc1fd77538b3125021adc296dde077a1ff45098a"
+      },
+      {
+        "branch": "ai/task_t003_sqlite_repository/attempt-1",
+        "head": "2e7ed76ad422d000d07d67ebfa5798f3a782fdc8"
+      },
+      {
+        "branch": "ai/task_t004_state_machine/attempt-1",
+        "head": "e6c869fcd806f4320b398bc1f58fceecd747fd5a"
+      },
+      {
+        "branch": "ai/task_t005_artifact_store/attempt-1",
+        "head": "b08ab8cf68543be72e0b373f61efe6c9ed3e768e"
+      },
+      {
+        "branch": "ai/task_t006_git_worktree/attempt-1",
+        "head": "bd52bc4e7e998a987835e0ee001034123f352ecd"
+      },
+      {
+        "branch": "ai/task_t007_context/attempt-1",
+        "head": "402c49fd9726e47c3a322a8df65d6ca91c5b3b48"
+      },
+      {
+        "branch": "ai/task_t008_fake_agent/attempt-1",
+        "head": "7143b46752469651ecf4ec3721588dc0251e9ffe"
+      },
+      {
+        "branch": "ai/task_t009_orchestrator/attempt-1",
+        "head": "3ea3523bd9b6c9a4ca726fc058701a21910f5524"
+      },
+      {
+        "branch": "ai/task_t010_retry/attempt-1",
+        "head": "4f3ed83343a66eb92d25df8c8c085f6ea0d62134"
+      },
+      {
+        "branch": "ai/task_t011_real_agent/attempt-1",
+        "head": "52ee828482543dbd489d0b39394ab20d7b7ca2d6"
+      },
+      {
+        "branch": "ai/task_t012_evaluation_handoff/attempt-1",
+        "head": "e2ecaf4101ece1cfa94b6bdc40023bba752e815d"
+      },
+      {
+        "branch": "ai/task_t013_cli_runtime/attempt-1",
+        "head": "601ffb3b2c1631da2693d73c917bcb8ede2219d7"
+      },
+      {
+        "branch": "ai/task_t014_runtime_run/attempt-1",
+        "head": "905b5ef64d5dbdf813cc11c141b8cadc92d1ed6a"
+      },
+      {
+        "branch": "ai/task_t014_runtime_run/format-fix",
+        "head": "4235021e3d3fb0873e15dcd5d9fd63c4e79731e1"
+      },
+      {
+        "branch": "ai/task_t014_runtime_run/verification",
+        "head": "3a8db3b2971dc10019ef18c11ea922b48797bed5"
+      },
+      {
+        "branch": "ai/task_t015_command_executor/attempt-1",
+        "head": "3dfef7d05658c2fbe551345ace779d7a2ace9ae7"
+      },
+      {
+        "branch": "ai/task_t016_role_worktree_execution/attempt-1",
+        "head": "174426ba404e660ec739d3f1515815ed6e9c1965"
+      },
+      {
+        "branch": "ai/task_t017_project_workspace/attempt-1",
+        "head": "1d7393d0661df123271782dca660b3d9d5ada993"
+      },
+      {
+        "branch": "codex/baseline-read-performance-20261011",
+        "head": "b812c4d0d785b0bc485f6e66cf049a8db4167de6"
+      },
+      {
+        "branch": "codex/console-readiness-20260919",
+        "head": "c280310062240b9fb673b8ca6cc25bedb310ec4d"
+      },
+      {
+        "branch": "codex/console-reading-identity-20261012",
+        "head": "bf3f3a80c6aeffeaac9423ffde7105d785a83d3a"
+      },
+      {
+        "branch": "codex/docs-cleanup-20260919",
+        "head": "1879792eb43536389b9ffe69d623f1f85b0b4ec3"
+      },
+      {
+        "branch": "codex/inspection-console",
+        "head": "f9ac032c2e5f1c7611ed8e526d2026dd272858ef"
+      },
+      {
+        "branch": "codex/k1-fixture-maintenance-20261011",
+        "head": "8c7cafa4a11617ec3e32169549233919dd4ee99a"
+      },
+      {
+        "branch": "codex/maintenance-completion-20261012",
+        "head": "daa96b7c3f97a11c624fee8c67e196dec3b40227"
+      },
+      {
+        "branch": "codex/native-output-bounds-20261011",
+        "head": "fba82f3adba1fb1f11c015b809beae65d9c37de4"
+      },
+      {
+        "branch": "codex/negative-token-guidance-20261011",
+        "head": "00494263bffb20073faaa8563870ee3f02e1c6f3"
+      },
+      {
+        "branch": "codex/provenance-recovery-fix",
+        "head": "892f87e92e26575159c1770216ea46979968b2e3"
+      },
+      {
+        "branch": "codex/requirement-git-error-20260920",
+        "head": "0c5d0bb9cf42ae75ce5d43acbfa11379a58db124"
+      },
+      {
+        "branch": "codex/t046-worker-integration-20260919",
+        "head": "9c21431300386225a043d4d40d917202fe65d2c7"
+      },
+      {
+        "branch": "codex/t047-t049-20260918",
+        "head": "977a9c20f0506fd16a6e000fbc728fe74d75fa3b"
+      },
+      {
+        "branch": "codex/team-read-performance-20261011",
+        "head": "fa8ffee1ca5379c7bbf6cdc97d11bc356eb90b03"
+      },
+      {
+        "branch": "docs/doc001-readme-stage-archive",
+        "head": "3da45b323805fbc46b6dbc1ac1f635488bece4c2"
+      },
+      {
+        "branch": "feat/t044-coder-reapply",
+        "head": "100090e12e8c2182b3fce9d61f0d2163ce4b1e44"
+      },
+      {
+        "branch": "feat/t044-native-recovery-facts",
+        "head": "33164d3c624c78a2d6cd6b259d351cea95ebcdf7"
+      },
+      {
+        "branch": "feat/t044-recovery-capture",
+        "head": "6ae060897303ad98ce9b8e6851a326979c5eafe5"
+      },
+      {
+        "branch": "feat/t044-recovery-current-facts",
+        "head": "dea60abea1dfb709b284b331617864722e32a058"
+      },
+      {
+        "branch": "feat/t044-recovery-execution",
+        "head": "b2d211d57c91188cf443109f59850a805e68c48d"
+      },
+      {
+        "branch": "feat/t044-recovery-records",
+        "head": "70bcb299d664e39e9439e26840b4aad252127b94"
+      },
+      {
+        "branch": "feat/t044-recovery-seed",
+        "head": "8e907cf9d27ade77e555ebc37ef82e9406063717"
+      },
+      {
+        "branch": "feat/t044-recovery-task-record",
+        "head": "581432eb27a4a7f5fc5596a3d9a63fa0c7a48c24"
+      },
+      {
+        "branch": "fix/bounded-delivery-context",
+        "head": "68f8f8c3226a043dba37ddc30429fa17e35d8e89"
+      },
+      {
+        "branch": "fix/cli-failure-classification",
+        "head": "3a1f6d4924ec09089d5a35f90bd74559cc7d8aa2"
+      },
+      {
+        "branch": "fix/coder-completion-budget",
+        "head": "94c35e66df3114ae624cacc37c5ef79e492130c4"
+      },
+      {
+        "branch": "fix/codex-failure-diagnostics",
+        "head": "b8fce54ee0f382f374f9b07d7ece842b3e504b38"
+      },
+      {
+        "branch": "fix/current-receipt-projection",
+        "head": "36972a9db61b9e281d9ae57b8b4d940e94c4b573"
+      },
+      {
+        "branch": "fix/final-input-preflight",
+        "head": "f6e8c94efb4600ccc111f6f8441848134c490184"
+      },
+      {
+        "branch": "fix/integration-planner-command-contract",
+        "head": "4f97deb65a4a6468c9fce0a5447a4b2dd9e62a7b"
+      },
+      {
+        "branch": "fix/model-policy-revisions",
+        "head": "400dab7dcc2fbf90cf3fe43d9c3409eff21f213c"
+      },
+      {
+        "branch": "fix/owned-session-stop",
+        "head": "60a619c5307642ced162e2dacfa8c0b5e03005f5"
+      },
+      {
+        "branch": "fix/planner-coverage-feedback",
+        "head": "cfca1e2938af7879dede8a89ad8d89cfc6b46fb7"
+      },
+      {
+        "branch": "fix/production-role-timeouts",
+        "head": "006054da3393c5e35268f6279c5779db2b582e7c"
+      },
+      {
+        "branch": "fix/provider-source-plan-ui",
+        "head": "c97c077e5a6a7900e5e3c245d75b634d866e08c8"
+      },
+      {
+        "branch": "fix/versioned-project-preparation",
+        "head": "831587b4ac971cee09a85382716bec1afc8d8d70"
+      },
+      {
+        "branch": "task/baseline-context-projection",
+        "head": "9a747944973511ddd34c5c5c7c574c86c190c7e0"
+      },
+      {
+        "branch": "task/baseline-read-scope",
+        "head": "b7ddfa53b306069436f50209211e6f0a585d87d0"
+      },
+      {
+        "branch": "task/baseline-transient-guard",
+        "head": "2bd78e59887078c02c9628afa5353423c09d622e"
+      },
+      {
+        "branch": "task/capacity-failure-route",
+        "head": "e254074ff25b8e2d029110834d0b32eb28e85e1d"
+      },
+      {
+        "branch": "task/capacity-receipt",
+        "head": "87459275327de3662c0d8a03f3d4631035eecde3"
+      },
+      {
+        "branch": "task/coder-slice-output-guidance",
+        "head": "050faba9033bbbe61135ea4113e2a065dde35175"
+      },
+      {
+        "branch": "task/console-idle-backoff",
+        "head": "eed6dce0b4910f8bc075e87e148c11508f367f82"
+      },
+      {
+        "branch": "task/console-operation-summary-ui",
+        "head": "657f6ea28fd296b5e6037ad53f572b5e05c71217"
+      },
+      {
+        "branch": "task/context-capacity-delivery",
+        "head": "7ef2425427a122aeb4a9282d9fd32da063c8ee25"
+      },
+      {
+        "branch": "task/context-capacity-projection",
+        "head": "d4d51151af96d20e4e981f09eb6ee8519f93e5df"
+      },
+      {
+        "branch": "task/delivery-input-recovery-integration",
+        "head": "770c02e85e4bafa01fcef3d69e1d409869848251"
+      },
+      {
+        "branch": "task/dynamic-credential-fixture",
+        "head": "1ef4fcfecaf2157dcacf7b6fdf945959c0c5c3a9"
+      },
+      {
+        "branch": "task/faulted-service-maintenance",
+        "head": "fc6854664302346a583a787c09e7d25dc06fd136"
+      },
+      {
+        "branch": "task/k1-completed-output-integration",
+        "head": "ead05e7d8b5c55345b6d346bd4704db8dfd35400"
+      },
+      {
+        "branch": "task/k1-deployment-verification-closeout",
+        "head": "e0cd6d5f9b5a5db33b9cab2633cd4cdfa59c777d"
+      },
+      {
+        "branch": "task/native-coder-diagnostic-envelope",
+        "head": "8cfa9d27715b93a733b0251dc9ba0c6ace08eacb"
+      },
+      {
+        "branch": "task/operation-result-scope-compat",
+        "head": "edf5c77f852227e477c9adbb878140e991f89337"
+      },
+      {
+        "branch": "task/operation-summary-read",
+        "head": "621a035c1cc4a913dac611ed5193c28c5d4a1f7b"
+      },
+      {
+        "branch": "task/owned-verification-diagnosis",
+        "head": "30d898e021cca0d0c46225e132a3d0131ef3598f"
+      },
+      {
+        "branch": "task/product-approval-linear-read",
+        "head": "51985fb0a70cf3135948d62e2bdc72bd91a52db2"
+      },
+      {
+        "branch": "task/recovery-admission-facts",
+        "head": "f301e27c4a1ecf5b5f8b01e12bf6a8b0021fa94d"
+      },
+      {
+        "branch": "task/recovery-facts-window",
+        "head": "0f08eca808ae0c9b2625f306ceebfc1ccb866a03"
+      },
+      {
+        "branch": "task/recovery-progress-ui",
+        "head": "d319dee7549b5ed7eaec6a438ade09a8a25c8849"
+      },
+      {
+        "branch": "task/recovery-record-read-scope",
+        "head": "aeca8a92c854d10249f8ea05a373736a398b014f"
+      },
+      {
+        "branch": "task/same-source-capacity",
+        "head": "9825b8bccdce2e7a9ff23b78b88070ccfa82efab"
+      },
+      {
+        "branch": "task/shutdown-diagnostics",
+        "head": "a528047910d35498103e8269bc8864317ce09e4e"
+      },
+      {
+        "branch": "task/stopped-budget-planner-lineage",
+        "head": "1ddc7d42a7f30200c177c9ff6a583c439a6a79b2"
+      },
+      {
+        "branch": "task/stopped-exhausted-settlement",
+        "head": "edaac21b0c06598e772c12209b5918db6f03f9cb"
+      },
+      {
+        "branch": "task/stopped-provider-retry",
+        "head": "90f3dbedab2a49401602022a1a91aeb62800e72b"
+      },
+      {
+        "branch": "task/task-wait-authority",
+        "head": "ad898e5f045d0d5ec5befb6b4ba0fd0f01278e8e"
+      },
+      {
+        "branch": "task/team-read-coordination",
+        "head": "133a5a051c0b12798a23c06f883954102d29f423"
+      },
+      {
+        "branch": "task/terminal-context-capacity-recovery",
+        "head": "01b765ae80884c345456c3b21dd2ecca2bb46ab0"
+      },
+      {
+        "branch": "task/trusted-query-spawn-gate",
+        "head": "35a50d8b315410ee69c29ac7d76d2a90a39999c4"
+      },
+      {
+        "branch": "task/unaccepted-coder-draft-resume",
+        "head": "896132dbaa73c013d1d5b86e616a063f1874c5fa"
+      },
+      {
+        "branch": "task/unaccepted-coder-draft-ui",
+        "head": "fe70ea81c512f59c6d053e38a1eb050af30325ca"
+      },
+      {
+        "branch": "test/retired-rejected-publications",
+        "head": "99e94aaee3ac26c66dec8c051a4ceeec300d271e"
+      },
+      {
+        "branch": "codex/platform-delivery-closeout-20261012",
+        "head": "15b2bec364f218ae1ab818e9ad279879b6a023f5"
+      }
+    ],
+    "retained_branches": [
+      "main",
+      "task/offline-native-recovery-fixtures"
+    ]
+  },
+  "remaining": {
+    "main": "production trunk",
+    "task/offline-native-recovery-fixtures": {
+      "head": "c210c22081c30abffd1fb47b617db16b62e9d8ca",
+      "merged": false,
+      "work": "offline native recovery fixtures and queue-wait design",
+      "production_code_changes": false,
+      "verification": "not_passed; pending test-only edits are retained"
+    }
+  },
+  "service": {
+    "mode": "normal",
+    "delivery_ready": true,
+    "summary_http": 200,
+    "summary_seconds": 3.386,
+    "detail_first_http": 503,
+    "detail_retry_http": 200,
+    "detail_retry_seconds": 13.793
+  },
+  "k1": {
+    "task_id": "task_recovery_45588301d1b35b02f44762650b6195e4",
+    "task_checkpoint": "IMPLEMENTING",
+    "execution_state": "WAITING",
+    "reason_code": "ENVIRONMENT_UNAVAILABLE",
+    "delivery_completed": false,
+    "operation_this_audit": "READ_ONLY"
+  }
+}
