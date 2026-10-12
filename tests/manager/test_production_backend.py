@@ -830,7 +830,8 @@ def test_host_records_isolated_delivery_without_polluting_project(
         assert approved.checkpoint.task_revision == 2
         assert approved.checkpoint.stage_attempts.delivering == 1
         assert isinstance(approved.delivery, BlockedResult)
-        assert approved.delivery.classification.value == "BUDGET_EXHAUSTED"
+        assert approved.delivery.classification.value == "CONTEXT_CAPACITY"
+        assert approved.checkpoint.failure_code is DeliveryFailureCode.CONTEXT_CAPACITY
         assert approved.delivery.artifact_ids == ()
         assert approved.checkpoint.candidate_revision is None
         assert (project / "hello.txt").read_text(encoding="utf-8") == "hello\n"

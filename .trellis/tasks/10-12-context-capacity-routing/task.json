@@ -1,0 +1,32 @@
+{
+  "id": "context-capacity-routing",
+  "title": "交付角色上下文容量失败独立分类与非终态工程等待",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "base_commit": "7ef2425427a122aeb4a9282d9fd32da063c8ee25",
+  "allowlist": [
+    "src/ai_software_engineer/orchestration/retry.py",
+    "src/ai_software_engineer/domain/delivery_disposition.py",
+    "src/ai_software_engineer/manager/delivery.py",
+    "src/ai_software_engineer/manager/delivery_checkpoint.py",
+    "schemas/*.schema.json",
+    "tests/orchestration/test_context_capacity_wait.py",
+    "tests/domain/test_delivery_disposition.py",
+    "tests/work_queue/test_worker_mysql.py",
+    "tests/manager/test_production_backend.py",
+    "tests/manager/test_context_capacity_failure_code.py",
+    "tests/e2e/test_unified_project_entry.py",
+    ".trellis/spec/core/delivery-disposition.md",
+    "docs/architecture/failure-routing.md",
+    ".trellis/tasks/10-12-context-capacity-routing/",
+    ".trellis/tasks/README.md"
+  ],
+  "validation": [
+    "123 related offline tests passed",
+    "19 capacity/failure-code/public checkpoint tests passed",
+    "1 real isolated MySQL claimed-worker context_capacity test passed",
+    "1 real isolated MySQL initial Planner capacity test passed",
+    "Ruff check/format and strict mypy passed for 10 changed Python files"
+  ],
+  "rollback": "仅空闲时回滚代码；已存在 CONTEXT_CAPACITY 等待时保留兼容 reader。不得删除等待、旧执行、工作区或直接重写生产 SQL。"
+}

@@ -90,6 +90,8 @@ class DeliveryCatalogError(UnifiedProjectEntryError):
 
 def _blocked_failure_code(delivery: BlockedResult) -> DeliveryFailureCode:
     """Keep the durable Delivery failure aligned with the retry classification."""
+    if delivery.classification is RetryClassification.CONTEXT_CAPACITY:
+        return DeliveryFailureCode.CONTEXT_CAPACITY
     if delivery.classification is RetryClassification.INVALID_OUTPUT:
         return DeliveryFailureCode.INVALID_AGENT_OUTPUT
     if delivery.classification is RetryClassification.VERIFICATION_INCONCLUSIVE:

@@ -52,6 +52,7 @@ class DeliveryFailureFacts(DomainModel):
         "POLICY_VIOLATION",
         "REQUIREMENT_AMBIGUITY",
         "BUDGET_EXHAUSTED",
+        "CONTEXT_CAPACITY",
         "PLATFORM_BUG",
         "EXECUTION_UNCERTAIN",
         "ENVIRONMENT_UNAVAILABLE",
@@ -175,6 +176,12 @@ def decide_delivery_disposition(facts: DeliveryFailureFacts) -> DeliveryDisposit
         action, condition = DeliveryNextAction.TERMINATE, "none"
         reason = "执行违反已冻结的权限, 当前交付已停止, 违规证据和现场保留。"
         next_action = "工程授权者需查看违规证据; 原授权不能用于接纳违规改动。"
+    elif reason_code == "CONTEXT_CAPACITY":
+        reason = "本次交付角色的输入上下文超过配置容量, 模型调用未启动, 交付进度和历史已保留。"
+        next_action = (
+            "由 ASE 工程处理核验完整输入和配置容量; 输入满足冻结权限与容量后, "
+            "再通过受控流程继续原需求。当前等待不要求修改业务目标或验收标准。"
+        )
     elif reason_code == "BUDGET_EXHAUSTED" or (
         not facts.budget_available
         and reason_code

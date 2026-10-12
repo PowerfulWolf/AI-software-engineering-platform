@@ -779,6 +779,7 @@ def test_delivery_budget_exhaustion_returns_stable_blocked_checkpoint(
     [
         (RetryClassification.POLICY_VIOLATION, DeliveryFailureCode.PERMISSION_DENIED),
         (RetryClassification.PLATFORM_BUG, DeliveryFailureCode.INVARIANT_VIOLATION),
+        (RetryClassification.CONTEXT_CAPACITY, DeliveryFailureCode.CONTEXT_CAPACITY),
     ],
 )
 def test_first_execution_safety_stop_does_not_report_budget_exhaustion(
@@ -1024,7 +1025,7 @@ def test_resume_retries_delivery_startup_before_any_coder_run(
     if inherited_delivery_attempts:
         payload = blocked.to_wire()
         payload["stage_attempts"] = {
-            **payload["stage_attempts"],
+            **blocked.stage_attempts.to_wire(),
             "delivering": inherited_delivery_attempts,
         }
         blocked = ProjectDeliveryCheckpoint.create(

@@ -24,7 +24,7 @@ from ai_software_engineer.agents.execution import current_execution_guard
 from ai_software_engineer.agents.structured import StructuredModelResult
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.artifacts.ordering import ArtifactOrderingError
-from ai_software_engineer.context import FileContextStore
+from ai_software_engineer.context import ContextBudgetExceeded, FileContextStore
 from ai_software_engineer.domain import AgentRole, RiskTier, StateEvent, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.engineering_authority import (
     EngineeringPolicy,
@@ -1013,3 +1013,63 @@ def test_ambiguous_accepted_history_waits_and_releases_the_real_claim(
             run_supervisor(runtime, supervisor)
         assert len(observations) == 1
         assert queue.get(item.id) == item
+
+
+def test_context_capacity_failure_waits_and_releases_real_claim_without_role_launch(
+    mysql_dsn: str,
+    tmp_path: Path,
+) -> None:
+    class PreflightCapacityAdapter(ObservedAdapter):
+        def run(self, request: AgentRequest) -> AgentResult:
+            if request.role is AgentRole.CODER:
+                # This trusted pre-provider boundary must not create an invocation.
+                raise ContextBudgetExceeded("final provider input exceeds its frozen capacity")
+            return super().run(request)
+
+    queue = MySqlRoleQueue(mysql_dsn)
+    adapter = PreflightCapacityAdapter(queue)
+    root = tmp_path / "repository"
+    policy = EngineeringPolicy.bounded_local(
+        scope=EngineeringScope(
+            team_id="team_worker",
+            project_id="project_worker",
+            repository_id=REPOSITORY_ID,
+            repository_root=str(root),
+        ),
+        principal=LocalOperatorPrincipal.trusted_local(),
+    )
+    with runtime_fixture(tmp_path, mysql_dsn, queue, adapter, engineering_policy=policy) as (
+        runtime,
+        supervisor,
+    ):
+        with pytest.raises(DeliveryWaiting) as waiting:
+            run_supervisor(runtime, supervisor)
+        (item,) = tuple(
+            item
+            for item in queue.items_for_task("task_domain_001")
+            if item.status is not WorkItemStatus.CLOSED
+        )
+        current = runtime.task_repository.get(item.task_id)
+        events = runtime.task_repository.list_events(item.task_id)
+        assert current.status is TaskStatus.IMPLEMENTING
+        assert current.attempts == 1 and not current.retry_failures
+        assert all(event.to_status is not TaskStatus.BLOCKED for event in events)
+        assert item.status is WorkItemStatus.WAITING_DEPENDENCY
+        assert item.wait_disposition == waiting.value.disposition
+        assert item.wait_disposition.facts.classification == "CONTEXT_CAPACITY"
+        assert (
+            item.wait_disposition.facts.source_revision
+            == queue.step(item.id).boundary.source_revision
+        )
+        assert item.wait_disposition.responsibility.value == "engineering"
+        assert item.wait_disposition.action.value == "WAIT_DEPENDENCY"
+        assert item.wait_disposition.resume_condition == "verified_prerequisites"
+        assert not queue.list_active_leases(now=datetime.now(UTC))
+        assert supervisor.guard.lease is None
+        assert adapter.invocation_claims == []
+        assert [request.role for request in adapter.requests] == [AgentRole.ORCHESTRATOR]
+        with pytest.raises(DeliveryWaiting):
+            run_supervisor(runtime, supervisor)
+        assert queue.get(item.id) == item
+        assert runtime.task_repository.get(item.task_id) == current
+        assert runtime.task_repository.list_events(item.task_id) == events
