@@ -1,0 +1,38 @@
+{
+  "name": "recovery-history-observation",
+  "title": "恢复准备完整历史的compact验证receipt与真实service红测设计",
+  "status": "design_review",
+  "created_at": "2026-10-12",
+  "base_commit": "3723a0b",
+  "phase": "research_and_design_only",
+  "allowlist": [
+    ".trellis/tasks/10-12-recovery-history-observation/"
+  ],
+  "proposed_implementation_paths": [
+    "src/ai_software_engineer/recovery/requirement_history_observer.py",
+    "src/ai_software_engineer/recovery/context_capacity.py",
+    "src/ai_software_engineer/read_record_scope.py",
+    "tests/recovery/test_requirement_history_observer.py",
+    "tests/recovery/test_requirement_history_service_scope.py",
+    ".trellis/spec/core/recovery-history-observation.md"
+  ],
+  "pending_bridge_review": [
+    "src/ai_software_engineer/multi_directory/retirement.py: optional internal typed compact history port, preserving full history fallback and all decisions",
+    "src/ai_software_engineer/recovery/native.py: internal parent history adapter only, preserving complete parent search and authority checks"
+  ],
+  "constraints": [
+    "Documentation only until root and independent design review; no implementation now",
+    "No production operation, model call, Host initialization, service restart or database access",
+    "Not alone; never revert or commit other authors' edits",
+    "Shared owner aggregate 512 records and 32MiB accounted bytes; complete overflow fallback",
+    "Fresh full bytes/hash/path/inventory and all authorization SQL Task claim lease Git checks remain",
+    "No public JointJournal.history semantics change, no current/head/READY cache",
+    "Separate preparation performance from provider outage; no cross-HTTP or pre-model retained cache",
+    "Incremental tests only after implementation is explicitly assigned"
+  ],
+  "review_targets": [
+    "/root",
+    "/root/summary_result_scope_compat"
+  ],
+  "rollback": "No implementation or durable data change in design phase. Future rollback restores ordinary full history decoding without rewriting approvals or recreating requirements."
+}
