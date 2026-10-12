@@ -238,3 +238,58 @@ scope旧SHA0d73eca6...、当前7ee97ec6...，唯一delivery_id不同；旧文件
 独立Trellis10-12-task-wait-authority真实复现同RecoveryConflict RED5.57s，再以Task hash
 隔离本地root，保持共享Team账本计费和exact replay。8增量PASS29.72s、静态/独立审查PASS，
 提交ad898e5。原审批、基线绑定、失败Operation、Task和草稿完整保留，发布后从原等待入口处理。
+
+## 前端读取修复已推送，故障旧实例尚未替换（2026-10-12 17:37 CST）
+
+维护 `main=origin/main=88128c3cf31804ed6f6e3eeff52e03382f250c09`，包含前端读取协调
+`133a5a0`、受控关闭拒绝诊断 `a528047`（merge `8a7d29b`）和 owned verification
+诊断 `88128c3`。这些是已提交、已推送的代码，尚未部署到 PID802；此前实际生产资产 SHA
+`cb9d655768a6f8b1ab2229e21d12dcdef2e2a6dd27fc5f6f31560912b8dffe9a`
+精确匹配旧 `f91f33a`。没有以磁盘代码或隔离 Chrome 通过宣称生产页面恢复。
+
+前端真实症状已有旧资产回放：固定 `TEAM_READ_IN_PROGRESS` 被详情记成 unavailable/error，
+同 source 后续读取不再发 GET。新资产统一 summary/full/detail 读取 owner，busy 详情按
+1/2/4 秒最多三次自动重读，保留总 40 秒 deadline 和明确手动重读入口；项目切换时跳过旧
+排队请求。Node 111 项、Chrome 15 项通过；独立审查修正旧 Project 排队问题后相关 Node
+80 项、Chrome 10 项通过。详见 `10-12-team-read-coordination/verification.md`。
+真实 `TEAM_UNAVAILABLE` 与所有其他全局读取失败不能一概归因为这条 busy 缺陷。
+
+旧服务受控 stop 仍因历史工具登记 UNKNOWN 保持 sticky REFUSED。一次 LLDB 调查读到当时
+writer=0、active Operations=0、dispatcher threads=0、index stopped，registry 唯一项为原
+Operation `operation_9d60ce47bda23ddc9dd58813b43ad721` 的 tool/PID49011/uncertain。
+该调查未绑定完整采集时间与前后 kernel identity，且调用了 CPython getters，不能作为新的
+安全收尾或维护批准证明。PID49011 当前消失也不能补造历史 birth/SID/stop proof。
+
+本机 scanner 的另一次真实调查在 `/bin/ps` 初始 birth capture 得到 EPERM，实际 ps 存活
+期间 euid=0/ruid=501，退出前 WNOWAIT 未观察到退出；普通 sleep 对照可读。这定位了
+Darwin setuid 查询与同账户捕获顺序的缺陷。独立任务 `10-12-trusted-query-spawn-gate`
+在目标 exec 前先捕获真实 Popen，再通过私有 ACK 释放，不修改旧 UNKNOWN；当前尚未集成。
+独立维护归档任务尚缺可信 producer，不允许仅以 typed JSON、SHA 和 PID absence 放行启动。
+
+17:29 CST 附近新只读 `/api/v1/console` 请求在 10 秒内未返回任何响应；`lsof` 确认仍为
+PID802 监听。17:33 的只读 `sample` 显示主线程位于 `PyThread_release_lock`，工作线程的
+`PyThread_acquire_lock_timed`/fprintf 热点与日志反复
+`pthread_cond_wait: Invalid argument` 一致。不能凭此把原 stop 首因、前端 busy、CPython
+线程故障或之前 debugger 调查直接认定为同一根因，也不能声称已排除调查对进程的影响。
+
+用户本轮明确授权“授权临时挂起 PID 802”后，17:37:14.854769 CST 精确核对原实例字节、
+kernel boot 和 birth，再对 PID802 单独发送 SIGSTOP。kernel birth 为
+`darwin-time:1791788657:752332`，PGID=SID=PID802；随后同一 identity、状态 Ts，日志两次
+观测均为 10176428176 bytes。私有临时回执 `/tmp/ase-802-freeze-20261012.json` 明确
+`not_shutdown_proof=true`、`not_delivery_resume=true`。日志未截断、生命周期原字节未改、
+未终止旧进程或启动替代服务；页面在挂起维护期间不可访问。
+
+存量数据处置：本段未改 SQL、Requirement、Task、审批、预算、事件或原 12 个开发草稿，
+未新建同名需求，未手工移动 Coder 分支。K1 本轮尚未进入 QA/Review，未交付。后续必须先
+完成可信维护核验与真实故障实例替换，验证新资产与生产页面，再从当前工程等待入口推进。
+SIGSTOP 只冻结这个已核验故障实例；任何后续终止/替换仍需各自真实维护事实和相应授权，
+不能把冻结状态当 READY 或原执行结束。
+
+17:46 CST，可信探测启动门 `35a50d8b315410ee69c29ac7d76d2a90a39999c4` 经独立
+审查 PASS、独立 35 项增量通过后 ff-only 集成维护 main。用新代码进行一次只读本机调查：
+`.ase/worktrees` 范围返回 blockers=[]，本次查询 registry 的 `require_stopped()` 实际通过。
+精确 survey SHA 为 `3a97ef0f49abfb26fff8704131bb906b002e07d52d436a85c297b80216610a7b`，
+回执 `/tmp/ase-maintenance-worktree-survey-after-gate-20261012.json`。这是当前单一配置范围
+的观察，不能代替全 Host/scope/durable/容器核验、旧 PID802 停止证明或工程替换授权。
+调用新 scanner 前的第一次临时脚本因模块路径误写在任何 survey 执行前退出；修正导入后
+成功，不将这个脚本错误记成平台缺陷。仍未部署新服务或继续交付。
