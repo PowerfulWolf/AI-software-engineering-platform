@@ -78,3 +78,18 @@ attempt1没有主岗位start/outcome，只有知识模型失败。当前缺少pl
 invocation记录，代码初查为FirstCoderRunWorkspaceAdmission按attempt>1跳过；单列后续
 合同排查，不能用这项待查缺口否定当前全部进度或补造已发生的准入事实。当前Operation
 仍运行，主Coder outcome/完整implementation/QA/Review尚未封存，不宣称已交付。
+
+## 本轮到时后的原 Task 自动继续
+
+attempt2 已封存 exact `DeliveryInvocationOutcome`：FAILED / WORK_INTERRUPTED、
+transient=false、无artifact。独立 `FileContinuationStore.capture_stop` 完整核验通过：
+kind=local_execution_limit，stopped_at=03:47:08.182689Z，有session_proof，SHA
+`f5af03c8f185e5a4ae2738bb6f902ac16af1fb8134e31a4a05ef7478522200ea`。这是真实受控
+本地窗口结束，不是凭PID消失补造停止，也不是代码验收失败。
+
+03:49:08.793839Z 公开 Team 读：attempt2 CLOSED，attempt3的
+`work_b6d99b642d61ff305b09dcde1aac04050ce768cab597e94eb49afdaa7d7e86f9`
+RUNNING/KNOWLEDGE_PREPARATION，Task仍IMPLEMENTING，页面明确显示本轮主执行尚未开始。
+原进度由现有精确continuation路径继续，未新建Requirement或手工改业务文件。
+该轮知识评估的native exit1、sol HTTP504后，astra在03:50:26.689347Z开始并于60107ms后
+HTTP200成功。未触发产品范围问题或人工审批；后续实施与QA/Review仍须真实完成。
