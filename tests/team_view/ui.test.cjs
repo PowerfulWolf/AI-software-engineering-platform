@@ -132,6 +132,21 @@ test("agent queue cards keep long task metadata readable", () => {
   );
   assert.match(
     styles,
+    /\.work-row-heading\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*align-items:\s*stretch;/s,
+    "task titles and status badges must render on separate lines in narrow queue cards",
+  );
+  assert.match(
+    styles,
+    /\.work-row-heading\s*>\s*\.badge\s*\{[^}]*align-self:\s*flex-start;/s,
+    "queue status badges must keep their intrinsic width below the full-width title",
+  );
+  assert.match(
+    styles,
+    /\.work-row-title\s*\{[^}]*width:\s*100%;/s,
+    "queue titles must use the full card width instead of collapsing to a character-wide column",
+  );
+  assert.match(
+    styles,
     /\.agent-workspace\s*\{[^}]*align-items:\s*stretch;/s,
     "the queue panel must share its bottom edge with the Agent roster",
   );

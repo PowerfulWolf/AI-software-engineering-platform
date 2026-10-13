@@ -453,12 +453,16 @@ h3 {
   outline-offset: 2px;
 }
 .work-row-heading {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 10px;
 }
+.work-row-heading > .badge {
+  align-self: flex-start;
+}
 .work-row-title {
+  width: 100%;
   min-width: 0;
   color: var(--ink);
   font-size: 1rem;
