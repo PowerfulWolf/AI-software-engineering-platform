@@ -403,7 +403,19 @@ class JointDeliveryService:
             retirement = self.retirements.entry(command.delivery_id)
             if retirement is not None and retirement.reason != "deleted":
                 raise ValueError("Requirement input was superseded by a newer draft")
-            self._require_deletable(checkpoint)
+            legacy_preparation = (
+                retirement is not None
+                and retirement.checkpoint_sha256 == checkpoint.checkpoint_sha256
+                and checkpoint.stage is JointStage.PREPARING
+                and checkpoint.requirement is None
+                and checkpoint.approval is None
+                and checkpoint.design is None
+                and checkpoint.plan is None
+                and not checkpoint.children
+                and checkpoint.integration is None
+            )
+            if not legacy_preparation:
+                self._require_deletable(checkpoint)
             if isinstance(guard, RequirementPhysicalDeletionGuard):
                 with guard.protect_physical_delete(checkpoint) as plan:
                     self._retire_deleted(checkpoint, command.submitted_at)

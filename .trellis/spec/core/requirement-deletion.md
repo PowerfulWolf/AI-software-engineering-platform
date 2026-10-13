@@ -128,3 +128,9 @@ Completion publication followed by pending-plan removal interruption must replay
 A branch shared by multiple stopped Task identities inside the same complete deletion scope
 can be selected only with exact verified removal provenance. A holder outside the scope
 still refuses deletion. Historical continuation aliases are not foreign resource owners.
+
+
+Legacy PREPARING snapshots already revoked by an exact deleted retirement may be physically
+purged when checkpoint digest matches and no approved requirement/design/plan/child/integration
+exists. Fresh PREPARING remains ineligible; the execution/Operation/resource guard still applies.
+This compatibility rule never appends a new approval or revives the retired identity.
