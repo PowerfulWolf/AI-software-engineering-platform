@@ -1,0 +1,265 @@
+{
+  "$defs": {
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "PurgeFile": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/PurgeScope"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "maximum": 2281701376,
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "path",
+        "sha256",
+        "size"
+      ],
+      "title": "PurgeFile",
+      "type": "object"
+    },
+    "PurgeGitRef": {
+      "additionalProperties": false,
+      "properties": {
+        "repository_id": {
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "ref_name": {
+          "title": "Ref Name",
+          "type": "string"
+        },
+        "expected_revision": {
+          "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$",
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "retained",
+            "task-branch"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository_id",
+        "ref_name",
+        "expected_revision",
+        "kind"
+      ],
+      "title": "PurgeGitRef",
+      "type": "object"
+    },
+    "PurgeRow": {
+      "additionalProperties": false,
+      "properties": {
+        "table": {
+          "title": "Table",
+          "type": "string"
+        },
+        "key": {
+          "$ref": "#/$defs/WirePayload"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "table",
+        "key",
+        "sha256"
+      ],
+      "title": "PurgeRow",
+      "type": "object"
+    },
+    "PurgeScope": {
+      "enum": [
+        "project",
+        "operations",
+        "preparations",
+        "worktrees",
+        "team-records"
+      ],
+      "type": "string"
+    },
+    "WirePayload": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "team_id": {
+      "title": "Team Id",
+      "type": "string"
+    },
+    "team_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Team Manifest Sha256",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "project_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Manifest Sha256",
+      "type": "string"
+    },
+    "delivery_id": {
+      "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+      "title": "Delivery Id",
+      "type": "string"
+    },
+    "checkpoint_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Checkpoint Sha256",
+      "type": "string"
+    },
+    "native_delivery_ids": {
+      "items": {
+        "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+        "type": "string"
+      },
+      "maxItems": 1024,
+      "title": "Native Delivery Ids",
+      "type": "array"
+    },
+    "native_repositories": {
+      "$ref": "#/$defs/WirePayload"
+    },
+    "task_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Task Ids",
+      "type": "array"
+    },
+    "task_repositories": {
+      "$ref": "#/$defs/WirePayload"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/PurgeFile"
+      },
+      "maxItems": 100000,
+      "title": "Files",
+      "type": "array"
+    },
+    "directories": {
+      "items": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "$ref": "#/$defs/PurgeScope"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "title": "Directories",
+      "type": "array"
+    },
+    "rows": {
+      "items": {
+        "$ref": "#/$defs/PurgeRow"
+      },
+      "maxItems": 100000,
+      "title": "Rows",
+      "type": "array"
+    },
+    "git_refs": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PurgeGitRef"
+      },
+      "title": "Git Refs",
+      "type": "array"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "team_id",
+    "team_manifest_sha256",
+    "project_id",
+    "project_manifest_sha256",
+    "delivery_id",
+    "checkpoint_sha256",
+    "native_delivery_ids",
+    "native_repositories",
+    "task_ids",
+    "task_repositories",
+    "files",
+    "directories",
+    "rows",
+    "plan_sha256"
+  ],
+  "title": "RequirementPurgePlan",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/requirement-purge-plan.schema.json"
+}

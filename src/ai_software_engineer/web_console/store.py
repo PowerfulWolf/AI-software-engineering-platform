@@ -11,7 +11,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Protocol
+from time import monotonic
+from typing import Literal, Protocol
 
 from pydantic import TypeAdapter
 
@@ -287,6 +288,7 @@ class FileConsoleOperationStore:
         self._idle_inventory_sha256: str | None = None
         self._summary_cache = OperationSummaryCache()
         self._summary_cache_lock = Lock()
+        self._deleted_completions: dict[str, tuple[float, ConsoleOperation]] = {}
         _reject_symlinks(self.root)
         if not read_only:
             self.root.mkdir(parents=True, exist_ok=True)
@@ -350,7 +352,16 @@ class FileConsoleOperationStore:
             requested_at=requested_at,
         )
         with self._locked():
+            summary = OperationSummary.from_operation(proposed)
+            if (
+                proposed.intent.action != "DELETE_REQUIREMENT"
+                and not self._read_visibility().visible(summary.project_id, summary.delivery_id)
+            ):
+                raise ConsoleOperationConflict("Requirement has been deleted or replaced")
             existing = self._current(proposed.operation_id)
+            self._expire_deleted_completions()
+            if existing is None and proposed.operation_id in self._deleted_completions:
+                existing = self._deleted_completions[proposed.operation_id][1]
             if existing is not None:
                 return _same_submission(existing, proposed)
             if proposed.delivery_id is not None and any(
@@ -365,6 +376,9 @@ class FileConsoleOperationStore:
         TypeAdapter(OperationId).validate_python(operation_id)
         with self._locked(shared=True):
             current = self._current(operation_id)
+            self._expire_deleted_completions()
+            if current is None and operation_id in self._deleted_completions:
+                current = self._deleted_completions[operation_id][1]
         if current is None:
             raise ConsoleOperationNotFound("console operation not found")
         return current
@@ -433,9 +447,14 @@ class FileConsoleOperationStore:
     def _summary_inventory(self) -> tuple[str, tuple[tuple[str, str], ...]]:
         inventory = hashlib.sha256()
         operations = []
-        for directory in sorted(self.root.glob("operation_*")):
+        for directory in sorted(
+            {
+                *self.root.glob("operation_*"),
+                *(self.root / key for key in self._pending_operations()),
+            }
+        ):
             _reject_symlinks(directory)
-            if not directory.is_dir():
+            if not directory.is_dir() and directory.name not in self._pending_operations():
                 continue
             TypeAdapter(OperationId).validate_python(directory.name)
             digest = self._summary_directory_digest(directory)
@@ -448,6 +467,9 @@ class FileConsoleOperationStore:
 
     def _summary_directory_digest(self, directory: Path) -> str:
         _reject_symlinks(directory)
+        pending = self._pending_operations().get(directory.name)
+        if pending is not None:
+            return pending[0]
         inventory = hashlib.sha256()
         for path in sorted(directory.glob("*.json")):
             _reject_symlinks(path)
@@ -552,8 +574,139 @@ class FileConsoleOperationStore:
                 error_code=error_code,
                 error_summary=error_summary,
             )
-            self._append(item, expected=expected)
+            if (
+                status is ConsoleOperationStatus.SUCCEEDED
+                and current.intent.action == "DELETE_REQUIREMENT"
+                and result is not None
+                and result.stage == "REQUIREMENT_DELETED"
+            ):
+                self._remove_deleted_operations(current, item)
+            else:
+                self._append(item, expected=expected)
             return item
+
+    def _expire_deleted_completions(self) -> None:
+        now = monotonic()
+        self._deleted_completions = {
+            key: value for key, value in self._deleted_completions.items() if value[0] > now
+        }
+
+    def _remove_deleted_operations(
+        self, current: ConsoleOperation, completed: ConsoleOperation
+    ) -> None:
+        owner = OperationSummary.from_operation(current)
+        selected = tuple(
+            item
+            for item in self._list_current()
+            if OperationSummary.from_operation(item).project_id == owner.project_id
+            and OperationSummary.from_operation(item).delivery_id == owner.delivery_id
+        )
+        if any(
+            not item.terminal and item.operation_id != current.operation_id for item in selected
+        ):
+            raise ConsoleOperationConflict("deleted requirement has another active operation")
+        if len(completed.model_dump_json().encode()) > 16_000:
+            raise ConsoleOperationConflict("delete acknowledgement exceeds byte budget")
+        from .preparation_store import FilePreparationProgressStore
+
+        with FilePreparationProgressStore(
+            self.root.parent / "console-preparation-progress"
+        )._locked(shared=False):
+            for operation in sorted(
+                selected, key=lambda item: item.operation_id == current.operation_id
+            ):
+                self._cleanup_operations((operation,))
+        self._expire_deleted_completions()
+        while len(self._deleted_completions) >= 64:
+            self._deleted_completions.pop(next(iter(self._deleted_completions)))
+        self._deleted_completions[current.operation_id] = (monotonic() + 120, completed)
+
+    def remove_terminal_operations(self, operation_ids: set[str]) -> None:
+        """Caller holds both Operation and preparation fences for its verified plan."""
+        selected = tuple(
+            item for item in self._list_current() if item.operation_id in operation_ids
+        )
+        if any(not item.terminal for item in selected):
+            raise ConsoleOperationConflict("Requirement history has an active Operation")
+        # One admitted Operation fits its independent sealed pending budget.
+        # Parent/native identity groups and large aggregate histories are safe.
+        for item in selected:
+            self._cleanup_operations((item,))
+
+    def _cleanup_operations(self, selected: tuple[ConsoleOperation, ...]) -> None:
+        from ai_software_engineer.multi_directory.purge import PurgeFile, _file_sha, _regular_files
+
+        from .deletion_cleanup import MAX_CLEANUP_BYTES, ConsoleDeletionCleanup, execute_cleanup
+
+        prep_root = self.root.parent / "console-preparation-progress"
+        # The parent Requirement purger may already hold this preparation fence.
+        # Its caller uses this helper only after releasing that nested fence.
+        inventory: list[PurgeFile] = []
+        directories: list[tuple[Literal["operations", "preparations"], str]] = []
+        bases: tuple[tuple[Literal["operations", "preparations"], Path], ...] = (
+            ("operations", self.root),
+            ("preparations", prep_root),
+        )
+        for operation in selected:
+            for scope, base in bases:
+                directory = base / operation.operation_id
+                _reject_symlinks(directory)
+                if not directory.exists():
+                    continue
+                for path in _regular_files(directory):
+                    size, sha = _file_sha(path)
+                    inventory.append(
+                        PurgeFile(
+                            scope=scope,
+                            path=path.relative_to(base).as_posix(),
+                            size=size,
+                            sha256=sha,
+                        )
+                    )
+                directories.extend(
+                    (scope, path.relative_to(base).as_posix())
+                    for path in directory.rglob("*")
+                    if path.is_dir()
+                )
+                directories.append((scope, operation.operation_id))
+        record = ConsoleDeletionCleanup(
+            team_id=self.team_id,
+            operations=selected,
+            files=tuple(inventory),
+            directories=tuple(directories),
+            cleanup_sha256="0" * 64,
+        )
+        record = record.model_copy(update={"cleanup_sha256": record.recompute_sha256()})
+        record.validate_integrity()
+        directory = self.root.parent / "console-deletion-pending"
+        _reject_symlinks(directory)
+        directory.mkdir(exist_ok=True)
+        payload = _bounded_json_bytes(record.model_dump_json(indent=2), MAX_CLEANUP_BYTES)
+        _publish_json(directory / (record.cleanup_sha256 + ".json"), payload)
+        execute_cleanup(self.root, record)
+        self._idle_inventory_sha256 = None
+
+    def _pending_operations(self) -> dict[str, tuple[str, ConsoleOperation]]:
+        from .deletion_cleanup import pending_cleanups
+
+        return {
+            item.operation_id: (record.cleanup_sha256, item)
+            for record in pending_cleanups(self.root, self.team_id)
+            for item in record.operations
+        }
+
+    def _recover_deleted_operations(self) -> None:
+        from .deletion_cleanup import execute_cleanup, pending_cleanups
+        from .preparation_store import FilePreparationProgressStore
+
+        records = pending_cleanups(self.root, self.team_id)
+        if records:
+            with FilePreparationProgressStore(
+                self.root.parent / "console-preparation-progress"
+            )._locked(shared=False):
+                for record in records:
+                    execute_cleanup(self.root, record)
+            self._idle_inventory_sha256 = None
 
     @contextmanager
     def _locked(self, *, shared: bool = False) -> Iterator[None]:
@@ -571,6 +724,8 @@ class FileConsoleOperationStore:
         descriptor = os.open(self.root / "console.lock", flags | os.O_NOFOLLOW, 0o600)
         try:
             fcntl.flock(descriptor, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+            if not shared:
+                self._recover_deleted_operations()
             yield
         finally:
             os.close(descriptor)
@@ -579,8 +734,13 @@ class FileConsoleOperationStore:
         with source_inspection_scope():
             return tuple(
                 item
-                for path in sorted(self.root.glob("operation_*"))
-                if path.is_dir() and (item := self._current(path.name)) is not None
+                for key in sorted(
+                    {
+                        *(path.name for path in self.root.glob("operation_*") if path.is_dir()),
+                        *self._pending_operations(),
+                    }
+                )
+                if (item := self._current(key)) is not None
             )
 
     def _operation_inventory_sha256(self) -> str:
@@ -610,6 +770,9 @@ class FileConsoleOperationStore:
 
     def _read_current(self, operation_id: str) -> ConsoleOperation | None:
         TypeAdapter(OperationId).validate_python(operation_id)
+        pending = self._pending_operations().get(operation_id)
+        if pending is not None:
+            return pending[1]
         directory = self.root / operation_id
         _reject_symlinks(directory)
         if not directory.exists():

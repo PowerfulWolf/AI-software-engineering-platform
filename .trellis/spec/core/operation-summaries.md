@@ -130,12 +130,8 @@ any execution/approval.
 
 ## Deleted Requirement visibility (2026-10-13)
 
-`ProductionRequirementOperationVisibility.read() -> RequirementOperationVisibility`重验所有Team/Project
-manifest、retirement和完整父历史；排除retired父、所有历史child及plan确定性派生native identities。
-`FileConsoleOperationStore(..., visibility=reader)`在完整Operation链校验后过滤list_current及summary。
-CREATE通过原OperationSummary的result identity归属。active/count/items/pages必须来自同一集合；
-inventory SHA同时绑定整个visibility集合，retirement变化使cursor409/ETag变化。全Team/Project过滤一致。
-get/claim/admission仍读原完整journal，不把隐藏当取消权限；隐藏记录损坏依然503。
-Good：删除后父和子操作不在日常历史/计数。Base：直接GET仍供完整audit。Bad：只在JS隐藏/只过滤items
-却保留total_count，或用快照缺失推断删除。tests/web_console/test_retired_operation_visibility.py覆盖
-正式retirement、CREATE、active/count/page/cursor/ETag、完整GET和隐藏损坏。无需修改存量journal。
+`ProductionRequirementOperationVisibility.read() -> RequirementOperationVisibility` 重验 Team/Project manifest、retirement 和有界无正文 purge completion。尚未清理的旧身份仍校验完整历史；已物理删除的身份不得重新读取原正文。父和派生 native IDs 同时退出 list/current/summary/count/page，inventory SHA 绑定 visibility 集合。
+
+DELETE 成功物理移除 Requirement 的 Operation/preparation 历史。当前删除操作仅保留进程内确认（64 条、每条 <=16KB、120 秒）；GET 在确认到期或重启后返回 404。非 DELETE 的旧身份提交即拒绝。物理清理前发布 `ConsoleDeletionCleanup`（完整 scope、原真实快照、精确文件 SHA/size 和相对目录）；当前 DELETE 与旧终态 Operation 共用该契约。独占 Console fence 先回放 pending 再解析链；只读读取 pending 的原快照，不把 RUNNING 伪装成成功。剩余字节全部重验，新增/变更拒绝；全部清理后删除 pending 正文。
+
+Good：清理中断后只读列表可用、正式 Worker 重启先恢复清理，无关需求可继续。Base：删除确认短暂可查询，之后 404。Bad：只隐藏旧 Operation、逐文件断链导致整个 Console 不可用，或重启伪造成功。测试覆盖正式根目录 HTTP 删除、两类中断回放、foreign preservation 和原始刷新测量。

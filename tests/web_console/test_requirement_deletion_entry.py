@@ -1,4 +1,4 @@
-"""Public Console deletion leaves immutable audit and refuses execution afterward."""
+"""Public Console deletion removes Requirement data and refuses stale execution."""
 
 from __future__ import annotations
 
@@ -48,7 +48,6 @@ def test_http_delete_replay_hidden_snapshot_audit_and_execution_refusal(
     original = service.create(
         CreateRequirement(name="K1", repository_roots=(str(root),))
     ).checkpoint
-    history = service.journal.history(original.delivery_id)
     config = ProductionConfig(
         platform_root=service.team.manifest.platform_root,
         team_id=service.team.manifest.team_id,
@@ -58,9 +57,14 @@ def test_http_delete_replay_hidden_snapshot_audit_and_execution_refusal(
         model_routes=ProductionConfig.default().model_routes,
     )
     reader = ProductionTeamReader(config, {})
+    from ai_software_engineer.web_console.requirement_visibility import (
+        ProductionRequirementOperationVisibility,
+    )
+
     store = FileConsoleOperationStore(
-        service.team.directory("work-items") / "deletion-operations",
+        service.team.directory("work-items") / "console-operations",
         team_id=service.team.manifest.team_id,
+        visibility=ProductionRequirementOperationVisibility(service.team),
     )
     console = ProjectConsole(
         store=store, executor=ManagerConsoleAdapter(cast(TeamConsoleHost, _Host(service)))
@@ -88,6 +92,7 @@ def test_http_delete_replay_hidden_snapshot_audit_and_execution_refusal(
         )
         assert replay.status_code == 202
         assert replay.json()["operation_id"] == deletion.operation_id
+        assert _finished(console, deletion.operation_id).status is ConsoleOperationStatus.SUCCEEDED
         second = client.post(
             "/api/v1/operations", json={"intent": intent, "idempotency_key": "delete-k1-002"}
         )
@@ -107,12 +112,8 @@ def test_http_delete_replay_hidden_snapshot_audit_and_execution_refusal(
                     "idempotency_key": "deleted-k1-" + action,
                 },
             )
-            assert denied.status_code == 202
-            operation = _finished(console, denied.json()["operation_id"])
-            assert operation.status is ConsoleOperationStatus.FAILED
-            assert operation.error_code == "COMMAND_REJECTED"
-            assert operation.error_summary is not None and "需求已删除" in operation.error_summary
-            assert console.model_calls(operation.operation_id) == ()
+            assert denied.status_code == 409
+            assert denied.json()["error"]["code"] == "OPERATION_CONFLICT"
         wrong_project = client.post(
             "/api/v1/operations",
             json={
@@ -124,7 +125,8 @@ def test_http_delete_replay_hidden_snapshot_audit_and_execution_refusal(
             _finished(console, wrong_project.json()["operation_id"]).status
             is ConsoleOperationStatus.FAILED
         )
-    assert service.journal.history(original.delivery_id) == history
+    assert service.journal.history(original.delivery_id) == ()
+    assert not service.journal.directory(original.delivery_id).exists()
     assert service.retirements.path.read_bytes() == tombstone_bytes
     schema = json.loads(Path("schemas/requirement-retirement.schema.json").read_text())
     Draft202012Validator(schema).validate(service.retirements.retirement().to_wire())

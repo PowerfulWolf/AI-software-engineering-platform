@@ -140,8 +140,9 @@ def _close(platform: JointDeliveryService, checkpoint: JointCheckpoint) -> Joint
     ).checkpoint
 
 
+@pytest.mark.mysql
 def test_waiting_close_then_delete_uses_new_digest_and_preserves_close_receipt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mysql_dsn: str
 ) -> None:
     platform, checkpoint, repository, queue, _ = _waiting(tmp_path, monkeypatch)
     task = next(iter(repository.tasks.values()))
@@ -168,9 +169,13 @@ def test_waiting_close_then_delete_uses_new_digest_and_preserves_close_receipt(
     before = records.path.read_bytes()
     with pytest.raises(DeliveryCheckpointStale, match="checkpoint"):
         _delete(platform, checkpoint)
-    _delete(platform, closed)
-    _delete(platform, closed)
+    from tests.manager.test_requirement_resource_release import _persist_physical_delete_facts
+
     assert records.path.read_bytes() == before
+    _persist_physical_delete_facts(platform, repository, mysql_dsn, tmp_path)
+    _delete(platform, closed)
+    _delete(platform, closed)
+    assert not records.path.exists()
     assert platform.retirements.entry(closed.delivery_id) is not None
     assert len(repository.events[task.id]) == 3
 
@@ -448,7 +453,6 @@ def test_public_waiting_close_with_real_mysql_queue_and_partial_replay(
         platform.project.requirements_root / checkpoint.delivery_id
     )
     before = records.path.read_bytes()
-    _delete(platform, closed)
     assert records.path.read_bytes() == before
     assert (
         tuple((path.name, path.read_bytes()) for path in sorted(native_root.glob("*.json")))
@@ -462,3 +466,12 @@ def test_public_waiting_close_with_real_mysql_queue_and_partial_replay(
     with MySqlTaskRepository(mysql_dsn) as repository:
         assert repository.get(task.id).status is TaskStatus.BLOCKED
         assert len(repository.list_events(task.id)) == 3
+    _delete(platform, closed)
+    _delete(platform, closed)
+    assert not records.path.exists()
+    assert not native_root.exists()
+    assert queue.items_for_task(task.id) == ()
+    from ai_software_engineer.store.repository import TaskNotFound
+
+    with MySqlTaskRepository(mysql_dsn) as repository, pytest.raises(TaskNotFound):
+        repository.get(task.id)

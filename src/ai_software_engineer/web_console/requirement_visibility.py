@@ -50,6 +50,20 @@ class ProductionRequirementOperationVisibility:
             )
             for parent_id in retirements.retired_delivery_ids(journal):
                 excluded.add((project.manifest.project_id, parent_id))
+                entry = retirements.entry(parent_id)
+                assert entry is not None
+                completion = retirements.purged_entry(entry)
+                if completion is not None:
+                    from ai_software_engineer.multi_directory.purge import (
+                        RequirementPurgeCompletion,
+                    )
+
+                    assert isinstance(completion, RequirementPurgeCompletion)
+                    excluded.update(
+                        (project.manifest.project_id, child_id)
+                        for child_id in completion.native_delivery_ids
+                    )
+                    continue
                 for record in journal.history(parent_id):
                     if (
                         record.team_id,

@@ -544,3 +544,36 @@ def test_file_store_rejects_rehashed_illegal_transition(tmp_path: Path) -> None:
 
     with pytest.raises(ConsoleOperationConflict, match="transition is invalid"):
         FileConsoleOperationStore(root, team_id=TEAM_ID).get(queued.operation_id)
+
+
+def test_deleted_requirement_operations_are_physically_removed(tmp_path: Path) -> None:
+    from ai_software_engineer.web_console.models import DeleteRequirementIntent
+    from ai_software_engineer.web_console.store import ConsoleOperationNotFound
+    from ai_software_engineer.web_console.summary_models import OperationSummaryQuery
+
+    store = FileConsoleOperationStore(tmp_path / "operations", team_id=TEAM_ID)
+    at = datetime(2026, 10, 13, tzinfo=UTC)
+    queued = store.submit(
+        intent=DeleteRequirementIntent(
+            project_id="project_test",
+            delivery_id="delivery_multi_" + "a" * 40,
+            expected_checkpoint_sha256=CHECKPOINT,
+        ),
+        idempotency_key="physical-delete-0001",
+        requested_at=at,
+    )
+    running = store.claim_next(at=at)
+    assert running is not None
+    completed = store.succeed(
+        running.operation_id,
+        expected=running.operation_sha256,
+        result=ConsoleCommandResult(
+            project_id="project_test", stage="REQUIREMENT_DELETED", next_action="需求数据已删除。"
+        ),
+        at=at,
+    )
+    assert not (store.root / queued.operation_id).exists()
+    assert store.summary_page(OperationSummaryQuery()).total_count == 0
+    assert store.get(queued.operation_id) == completed
+    with pytest.raises(ConsoleOperationNotFound):
+        FileConsoleOperationStore(store.root, team_id=TEAM_ID).get(queued.operation_id)

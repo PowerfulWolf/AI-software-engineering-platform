@@ -80,6 +80,9 @@ class PlanningBackend:
     def integrate(self, checkpoint: JointCheckpoint) -> IntegrationEvidence:
         raise AssertionError("no delivery verdict exists")
 
+    def verify_unstarted_design_rejection(self, checkpoint: JointCheckpoint) -> NoReturn:
+        raise AssertionError("design correction is outside this planning fixture")
+
     def accept_single_repository(self, checkpoint: JointCheckpoint) -> NoReturn:
         raise AssertionError("no native acceptance exists in this planning fixture")
 
@@ -463,13 +466,16 @@ def test_failed_integration_replans_without_redelivering_done_children(
                 )
                 with pytest.raises(ValueError, match=r"approval|cannot be reset"):
                     service.journal.append(illegal, expected=current.checkpoint_sha256)
-            closed = service.close_requirement(
-                CloseRequirement(
-                    delivery_id=current.delivery_id,
-                    expected_checkpoint_sha256=current.checkpoint_sha256,
+            # This planner-only fixture has no execution-stop/resource guard.
+            # Existing child Tasks require that proof before a public close.
+            with pytest.raises(ValueError, match="未配置工程执行停止校验"):
+                service.close_requirement(
+                    CloseRequirement(
+                        delivery_id=current.delivery_id,
+                        expected_checkpoint_sha256=current.checkpoint_sha256,
+                    )
                 )
-            ).checkpoint
-            assert service.resume(command).checkpoint == closed
+            assert service.journal.current(current.delivery_id) == current
             assert backend.integrate_calls == 1
     history = [
         JointCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))

@@ -3181,7 +3181,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.tag === "button" && node.textContent === "删除需求",
   );
   await deleteEdited.events.click();
-  assert.match(text(get("composer")), /历史记录会保留/);
+  assert.match(text(get("composer")), /需求资料、操作记录和临时资源将永久删除/);
   const confirmDelete = descend(get("composer")).find(
     (node) => node.tag === "button" && node.textContent === "确认删除",
   );

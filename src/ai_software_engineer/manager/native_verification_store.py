@@ -66,7 +66,9 @@ class NativeRoleVerificationBinding(DomainModel):
 class NativeRoleVerificationStore:
     """One original Run's journal; no Task/verdict/recovery mutations exist here."""
 
-    def __init__(self, root: Path, binding: NativeRoleVerificationBinding) -> None:
+    def __init__(
+        self, root: Path, binding: NativeRoleVerificationBinding, *, read_only: bool = False
+    ) -> None:
         binding.validate_integrity()
         root = root.absolute()
         repository = Path(binding.plan.scope.repository_root)
@@ -74,11 +76,14 @@ class NativeRoleVerificationStore:
             path.is_symlink() for path in (root, *root.parents)
         ):
             raise ValueError("native verification records require an external canonical sidecar")
-        root.mkdir(parents=True, mode=0o700, exist_ok=True)
+        self.read_only = read_only
+        if not read_only:
+            root.mkdir(parents=True, mode=0o700, exist_ok=True)
         if root.resolve(strict=True) != root:
             raise ValueError("native verification sidecar root changed")
         self.root = root / hashlib.sha256(binding.plan.run_id.encode()).hexdigest()
-        self.root.mkdir(mode=0o700, exist_ok=True)
+        if not read_only:
+            self.root.mkdir(mode=0o700, exist_ok=True)
         if self.root.resolve(strict=True) != self.root:
             raise ValueError("native verification Run directory changed")
         try:
@@ -96,6 +101,8 @@ class NativeRoleVerificationStore:
 
     @contextmanager
     def execution_lock(self) -> Iterator[None]:
+        if self.read_only:
+            raise ValueError("native verification store is read only")
         descriptor = os.open(
             self.root / "execution.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600
         )
@@ -122,6 +129,8 @@ class NativeRoleVerificationStore:
         return record
 
     def _put(self, name: str, record: M, model: type[M]) -> M:
+        if self.read_only:
+            raise ValueError("native verification store is read only")
         typed = model.model_validate(record.to_wire())
         try:
             previous = self._get(name, model)

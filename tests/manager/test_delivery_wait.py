@@ -464,6 +464,21 @@ def test_handling_pins_proof_across_partial_admission_publication_and_clock_chan
         entry.handle(command)
     assert queue.consumed == []
     original = entry.records.list("wait-handling-proofs", DeliveryWaitInvestigation)[0]
+    from ai_software_engineer.multi_directory.purge_state import (
+        StateDeletionScope,
+        verified_state_record,
+    )
+
+    frozen_path = next(entry.records.root.glob("wait-handling-proofs-*.json"))
+    expected = StateDeletionScope(
+        team_id=entry.scope.team_id,
+        project_id=entry.scope.project_id,
+        repository_id=entry.scope.repository_id,
+        repository_root=native.task.repository,
+        requirement_ids=frozenset({native.scope.requirement_id}),
+        task_ids=frozenset({native.task.id}),
+    )
+    assert verified_state_record(frozen_path, tmp_path, {}, expected) == original.to_wire()
     monkeypatch.setattr(entry.records, "put", put)
     entry.clock = lambda: NOW + timedelta(seconds=5)
     handling = entry.handle(command)

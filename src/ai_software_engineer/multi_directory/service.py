@@ -62,6 +62,7 @@ from ai_software_engineer.multi_directory.budget import (
 from ai_software_engineer.multi_directory.cancellation import FileRequirementCancellationStore
 from ai_software_engineer.multi_directory.deletion import (
     RequirementDeletionGuard,
+    RequirementPhysicalDeletionGuard,
     RequirementWaitingCloseGuard,
 )
 from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
@@ -209,6 +210,11 @@ class DeleteRequirement(DomainModel):
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class RequirementDeletionResult(DomainModel):
+    delivery_id: DeliveryId
+    checkpoint_sha256: CheckpointDigest
+
+
 class CloseRequirement(DomainModel):
     """Close a blocked Requirement while preserving its visible journal history."""
 
@@ -334,34 +340,90 @@ class JointDeliveryService:
             )
             return replacement
 
-    def delete_requirement(self, command: DeleteRequirement) -> JointDeliveryResult:
-        """Retire the exact displayed Requirement without deleting its journal."""
+    def delete_requirement(self, command: DeleteRequirement) -> RequirementDeletionResult:
+        """Physically delete exact stopped Requirement-owned data; close retains data."""
+        from ai_software_engineer.multi_directory.purge import (
+            RequirementPurger,
+            read_purge_completion,
+        )
+
         self.operator_principal.require_duty(OperatorDuty.PRODUCT)
+        purger = RequirementPurger(self.project)
+        completion = read_purge_completion(self.project.requirements_root, command.delivery_id)
+        if completion is not None:
+            purger._owner(completion)
+            retirement = self.retirements.entry(command.delivery_id)
+            if retirement is None or self.retirements.purged_entry(retirement) != completion:
+                raise ValueError("需求删除标记缺少对应的完整撤销记录。")
+            if completion.checkpoint_sha256 != command.expected_checkpoint_sha256:
+                raise DeliveryCheckpointStale("Requirement checkpoint changed")
+            purger.finish_completed(completion)
+            self.journal.forget(command.delivery_id)
+            return RequirementDeletionResult(
+                delivery_id=command.delivery_id, checkpoint_sha256=completion.checkpoint_sha256
+            )
+        pending = purger.pending(command.delivery_id)
+        guard = self.deletion_guard
+        if pending is not None:
+            if pending.checkpoint_sha256 != command.expected_checkpoint_sha256:
+                raise DeliveryCheckpointStale("Requirement checkpoint changed")
+            # A plan is sealed before retirement so the crash window must finish
+            # revocation before any destructive replay. Never recreate identity.
+            retirement = self.retirements.entry(command.delivery_id)
+            if retirement is None:
+                with self.journal.lock(command.delivery_id):
+                    checkpoint = self.journal.current(command.delivery_id)
+                    if checkpoint is None:
+                        raise ValueError("需求清理缺少原始停止记录。")
+                    self._team_binding(checkpoint)
+                    self._expected(checkpoint, pending.checkpoint_sha256)
+                    self._require_deletable(checkpoint)
+                    self._retire_deleted(checkpoint, command.submitted_at)
+            elif (
+                retirement.reason != "deleted"
+                or retirement.checkpoint_sha256 != pending.checkpoint_sha256
+            ):
+                raise ValueError("需求清理与删除决定不一致。")
+            if isinstance(guard, RequirementPhysicalDeletionGuard):
+                guard.purge_storage(pending)
+            elif not pending.task_ids:
+                purger.execute(pending)
+            else:
+                raise ValueError("缺少完整需求数据清理能力, 请检查后重试。")
+            self.journal.forget(command.delivery_id)
+            return RequirementDeletionResult(
+                delivery_id=command.delivery_id, checkpoint_sha256=pending.checkpoint_sha256
+            )
         with self.journal.lock(command.delivery_id):
             checkpoint = self.journal.current(command.delivery_id)
             if checkpoint is None:
                 raise ValueError("joint delivery not found")
             self._team_binding(checkpoint)
             self._expected(checkpoint, command.expected_checkpoint_sha256)
-            retired_ids = self.retirements.retired_delivery_ids(self.journal)
-            if command.delivery_id in retired_ids:
-                retirement = self.retirements.entry(command.delivery_id)
-                if retirement is None or retirement.reason != "deleted":
-                    raise ValueError("Requirement input was superseded by a newer draft")
-                return JointDeliveryResult(checkpoint=checkpoint)
+            retirement = self.retirements.entry(command.delivery_id)
+            if retirement is not None and retirement.reason != "deleted":
+                raise ValueError("Requirement input was superseded by a newer draft")
             self._require_deletable(checkpoint)
-            if self.deletion_guard is None:
+            if isinstance(guard, RequirementPhysicalDeletionGuard):
+                with guard.protect_physical_delete(checkpoint) as plan:
+                    self._retire_deleted(checkpoint, command.submitted_at)
+                    guard.purge_storage(plan, already_fenced=True)
+            elif guard is None:
                 if any(
                     child.checkpoint.task_id is not None
                     for item in self.journal.history(checkpoint.delivery_id)
                     for child in item.children
                 ):
                     raise ValueError("未配置工程执行停止校验, 不能删除已有执行任务的需求。")
+                plan = purger.prepare(checkpoint, {}, native_ids={})
                 self._retire_deleted(checkpoint, command.submitted_at)
+                purger.execute(plan)
             else:
-                with self.deletion_guard.protect(checkpoint):
-                    self._retire_deleted(checkpoint, command.submitted_at)
-            return JointDeliveryResult(checkpoint=checkpoint)
+                raise ValueError("未配置需求物理清理能力, 暂不能删除。")
+            self.journal.forget(command.delivery_id)
+            return RequirementDeletionResult(
+                delivery_id=command.delivery_id, checkpoint_sha256=checkpoint.checkpoint_sha256
+            )
 
     def _retire_deleted(self, checkpoint: JointCheckpoint, submitted_at: datetime) -> None:
         self.retirements.retire(checkpoint, reason="deleted", retired_at=submitted_at)
@@ -1577,6 +1639,8 @@ class JointDeliveryService:
         )
 
     def _current(self, delivery_id: str) -> JointCheckpoint:
+        if self.retirements.entry(delivery_id) is not None:
+            raise RequirementRetiredError()
         result = self.journal.current(delivery_id)
         if result is None:
             raise ValueError("joint delivery not found")

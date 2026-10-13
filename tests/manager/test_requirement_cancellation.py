@@ -434,10 +434,13 @@ def test_receipt_wrong_checkpoint_cannot_be_reused_or_overwritten(
     assert service.records.path.read_bytes() == original_bytes
 
 
+@pytest.mark.mysql
 def test_public_delete_settles_legacy_task_and_preserves_checkpoint_journal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mysql_dsn: str
 ) -> None:
-    platform, checkpoint, _, dirty, _ = _delivery(tmp_path, monkeypatch)
+    from ai_software_engineer.store.repository import TaskNotFound
+
+    platform, checkpoint, _, dirty, _ = _delivery(tmp_path, monkeypatch, dsn=mysql_dsn)
     child = checkpoint.children[0].checkpoint
     assert child.task_id is not None
     task = make_task().model_copy(
@@ -448,35 +451,21 @@ def test_public_delete_settles_legacy_task_and_preserves_checkpoint_journal(
             "attempts": 1,
         }
     )
-    item = queued_item().model_copy(
-        update={
-            "task_id": task.id,
-            "repository_id": child.repository_id,
-            "repository_scopes": (task.repository,),
-            "status": WorkItemStatus.RETRY_SCHEDULED,
-            "wait_reason": "lease_expired",
-            "available_at": datetime.now(UTC),
-        }
-    )
-    repository, queue = _Repository(task), _Queue(item)
-    guard = ProductionRequirementDeletionGuard(platform.project, queue, "unused")
-    monkeypatch.setattr(
-        guard,
-        "_read_tasks",
-        lambda targets: {task_id: repository.get(task_id) for task_id in targets},
-    )
-    monkeypatch.setattr(
-        "ai_software_engineer.multi_directory.deletion.MySqlTaskRepository", lambda dsn: repository
-    )
-    platform.deletion_guard = guard
-    history = platform.journal.history(checkpoint.delivery_id)
+    with MySqlTaskRepository(mysql_dsn) as repository:
+        repository.create(task)
+    queue = MySqlRoleQueue(mysql_dsn)
+    platform.deletion_guard = ProductionRequirementDeletionGuard(platform.project, queue, mysql_dsn)
     _delete(platform, checkpoint)
-    assert platform.journal.history(checkpoint.delivery_id) == history
+    _delete(platform, checkpoint)
+    assert not platform.journal.directory(checkpoint.delivery_id).exists()
+    assert platform.journal.history(checkpoint.delivery_id) == ()
     assert platform.retirements.entry(checkpoint.delivery_id) is not None
-    assert repository.get(task.id).status is TaskStatus.BLOCKED
     assert (dirty / "draft.txt").read_text() == "uncommitted business draft\n"
-    _delete(platform, checkpoint)
-    assert len(repository.list_events(task.id)) == 1
+    with MySqlTaskRepository(mysql_dsn) as repository:
+        with pytest.raises(TaskNotFound):
+            repository.get(task.id)
+        with pytest.raises(TaskNotFound):
+            repository.list_events(task.id)
 
 
 def test_production_guard_rejects_valid_lease_before_writer_or_receipt(
@@ -542,30 +531,55 @@ def test_public_delete_real_queue_settles_nonterminal_and_retains_immutable_hist
         (p.name, p.read_bytes())
         for p in sorted((sidecar / "state/project-deliveries" / child.delivery_id).glob("*.json"))
     )
-    _delete(platform, checkpoint)
-    _delete(platform, checkpoint)
-    assert platform.journal.history(checkpoint.delivery_id) == parent_history
-    assert (
-        tuple(
-            (p.name, p.read_bytes())
-            for p in sorted(
-                (sidecar / "state/project-deliveries" / child.delivery_id).glob("*.json")
-            )
-        )
-        == native_bytes
+    from ai_software_engineer.multi_directory.purge import (
+        RequirementPurgeCompletion,
+        RequirementPurgePlan,
+        RequirementPurger,
     )
+    from ai_software_engineer.store.repository import TaskNotFound
+
+    execute = RequirementPurger.execute
+    observed = []
+
+    def verify_then_purge(
+        self: RequirementPurger, plan: RequirementPurgePlan, *, already_fenced: bool = False
+    ) -> RequirementPurgeCompletion:
+        assert platform.journal.history(checkpoint.delivery_id) == parent_history
+        assert (
+            tuple(
+                (p.name, p.read_bytes())
+                for p in sorted(
+                    (sidecar / "state/project-deliveries" / child.delivery_id).glob("*.json")
+                )
+            )
+            == native_bytes
+        )
+        receipt = FileRequirementCancellationStore(
+            platform.project.requirements_root / checkpoint.delivery_id
+        ).find()
+        assert receipt is not None and receipt.tasks[0].task == task
+        assert all(item.status is WorkItemStatus.CLOSED for item in queue.items_for_task(task.id))
+        with MySqlTaskRepository(mysql_dsn) as repository:
+            assert repository.get(task.id).status is TaskStatus.BLOCKED
+            events = repository.list_events(task.id)
+            assert len(events) == 1 and receipt.uri in events[0].reason
+        observed.append(receipt.cancellation_sha256)
+        return execute(self, plan, already_fenced=already_fenced)
+
+    monkeypatch.setattr(RequirementPurger, "execute", verify_then_purge)
+    _delete(platform, checkpoint)
+    _delete(platform, checkpoint)
+    assert len(observed) == 1
+    assert not platform.journal.directory(checkpoint.delivery_id).exists()
+    assert not (sidecar / "state/project-deliveries" / child.delivery_id).exists()
     assert (dirty / "draft.txt").read_text() == "uncommitted business draft\n"
     assert platform.retirements.entry(checkpoint.delivery_id) is not None
     assert platform.retirements.retired_delivery_ids(platform.journal) == frozenset(
         {checkpoint.delivery_id}
     )
-    receipt = FileRequirementCancellationStore(
-        platform.project.requirements_root / checkpoint.delivery_id
-    ).find()
-    assert receipt is not None and receipt.tasks[0].task == task
-    assert all(item.status is WorkItemStatus.CLOSED for item in queue.items_for_task(task.id))
+    assert queue.items_for_task(task.id) == ()
     with MySqlTaskRepository(mysql_dsn) as repository:
-        assert repository.get(task.id).status is TaskStatus.BLOCKED
-        events = repository.list_events(task.id)
-        assert len(events) == 1
-        assert receipt.uri in events[0].reason
+        with pytest.raises(TaskNotFound):
+            repository.get(task.id)
+        with pytest.raises(TaskNotFound):
+            repository.list_events(task.id)

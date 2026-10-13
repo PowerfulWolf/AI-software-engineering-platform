@@ -120,6 +120,22 @@ from ai_software_engineer.work_queue.ports import DeliveryQueuePending, QueueErr
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
 
+def delivery_wait_recovery_scope(task: Task, scope: EngineeringScope) -> RecoveryScope:
+    """The exact Task-owned ledger scope shared by its writer and physical cleanup."""
+    if (
+        task.repository != scope.repository_root
+        or task.engineering_policy is None
+        or (task.engineering_policy.scope != scope)
+    ):
+        raise ValueError("delivery wait ledger does not match frozen Task authority")
+    return RecoveryScope(
+        team_id=scope.team_id,
+        repository_id=scope.repository_id,
+        repository_root=scope.repository_root,
+        delivery_id="delivery_wait_" + task.id,
+    )
+
+
 class DeliveryWaitQueue(Protocol):
     def get(self, work_item_id: str) -> QueuedWorkItem: ...
     def step(self, work_item_id: str) -> QueuedRoleStep: ...
@@ -662,12 +678,7 @@ class DeliveryWaitService:
                         )
                     store = FileRecoveryStore.initialize(
                         self.sidecar_state / ("delivery-wait-authority-" + digest(task.id)),
-                        scope=RecoveryScope(
-                            team_id=self.scope.team_id,
-                            repository_id=self.scope.repository_id,
-                            repository_root=self.scope.repository_root,
-                            delivery_id="delivery_wait_" + task.id,
-                        ),
+                        scope=delivery_wait_recovery_scope(task, self.scope),
                     )
                     admission = self.engineering_authority.admit(
                         task=task,

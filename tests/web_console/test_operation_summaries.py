@@ -529,7 +529,7 @@ def test_cursor_schema_validates_actual_wire_and_changed_completion_is_stale(
         store.summary_page(OperationSummaryQuery(page_size=1, cursor=page.next_cursor))
 
 
-def test_actual_delete_producer_roundtrips_summary_http_and_complete_bytes(tmp_path: Path) -> None:
+def test_actual_delete_producer_removes_history_and_has_transient_http_ack(tmp_path: Path) -> None:
     from ai_software_engineer.web_console.models import DeleteRequirementIntent
     from tests.web_console.test_manager import DELIVERY_ID, PROJECT_ID, _adapter
 
@@ -560,11 +560,8 @@ def test_actual_delete_producer_roundtrips_summary_http_and_complete_bytes(tmp_p
         "/api/v1/operation-summaries", params={"project_id": PROJECT_ID, "delivery_id": DELIVERY_ID}
     )
     assert response.status_code == 200, response.text
-    item = response.json()["items"][0]
-    assert item["delivery_id"] == DELIVERY_ID
-    assert item["result_scope_relation"] == "NO_RESOURCE"
-    assert item["result_delivery_id"] is None and item["result_stage"] is None
-    assert item["next_step"] is None
+    assert response.json()["items"] == []
+    assert before == {}
     assert (
         client.get(
             "/api/v1/operation-summaries",

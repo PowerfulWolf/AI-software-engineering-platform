@@ -219,7 +219,7 @@ class ManagerConsoleAdapter:
                 return ConsoleCommandResult(
                     project_id=intent.project_id,
                     stage="REQUIREMENT_DELETED",
-                    next_action="需求已删除, 历史交付记录保留用于审计。",
+                    next_action="需求数据已删除, 执行资源已释放。",
                 )
             if isinstance(intent, ProductReplyIntent):
                 replied = self._entry(intent.project_id, intent.delivery_id).reply(

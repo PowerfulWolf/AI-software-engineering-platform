@@ -1,141 +1,55 @@
-# 产品需求删除与工程历史保全
+# Requirement close and physical deletion
 
 ## Scope / Trigger
-
-适用于 `DeleteRequirement`、Console `DELETE_REQUIREMENT`、Project reader 及删除后重新创建。
-删除是产品目录的永久 tombstone，不是关闭、重启、销毁 dirty worktree 或覆盖已封存历史。
-生产入口必须核验已显示的 Project / Requirement / checkpoint 精确身份，并证明工程执行停止。
+The user explicitly chose physical deletion (2026-10-13). DELETE_REQUIREMENT removes Requirement-owned bodies and execution resources. CLOSE_REQUIREMENT stops execution and retains Requirement data. There is no archive feature. Already merged repository code and shared Team/Project knowledge survive deletion.
 
 ## Signatures
-
-```text
-DeleteRequirement(delivery_id, expected_checkpoint_sha256, submitted_at)
-JointDeliveryService.delete_requirement(command) -> JointDeliveryResult
-RequirementDeletionGuard.protect(checkpoint) -> AbstractContextManager[None]
-ProductionRequirementDeletionGuard(project, queue, dsn)
-RequirementRetirementStore.retire(checkpoint, reason="deleted", retired_at=...)
-RequirementRetirementStore.require_native_active(delivery_id, journal) -> None
-ConsoleIntent(action="DELETE_REQUIREMENT", project_id, delivery_id, expected_checkpoint_sha256)
-```
-
-Console 的现有 Operation journal 先封存用户意图，再由 Manager adapter 调用服务；不新增第二套
-HTTP 删除或目录清理入口。tombstone 继续使用 `requirement-retirement.schema.json`，旧 digest
-与原历史保持可读。checkpoint digest 已绑定 scope，不另设可覆盖 scope 的删除参数。
+- `JointDeliveryService.delete_requirement(DeleteRequirement(delivery_id, expected_checkpoint_sha256, submitted_at)) -> RequirementDeletionResult(delivery_id, checkpoint_sha256)`.
+- `RequirementPhysicalDeletionGuard.protect_physical_delete(checkpoint) -> ContextManager[RequirementPurgePlan]`; `purge_storage(plan, already_fenced=False)`.
+- `RequirementPurger.prepare(checkpoint, targets, native_ids, persist=True) -> RequirementPurgePlan`; `persist=False` is a read-only inventory preview.
+- `RequirementPurger.execute(plan, already_fenced=False) -> RequirementPurgeCompletion`.
+- `delivery_wait_recovery_scope(task: Task, scope: EngineeringScope) -> RecoveryScope` is the shared deterministic producer/cleanup scope for Task engineering authority. It checks exact repository root and frozen policy scope before deriving the `delivery_wait_` identity.
+- Console retains POST `/api/v1/operations` with `action=DELETE_REQUIREMENT`, Project/Requirement and exact checkpoint digest. No arbitrary-path or raw-SQL cleanup API.
 
 ## Contracts
-
-- 支持未批准的 Product draft，以及已停止的 `BLOCKED` / `CLOSED` / `DONE`。不允许删除正在交付的需求。
-- 在现有 Requirement operation lock 内验证完整 journal、owner 和 expected digest；同一精确
-  deleted checkpoint 重放成功且不改 tombstone 时间/字节，其他 digest 或 replaced 记录拒绝。
-- 有 Task 的历史必须配置 production deletion guard；guard 遍历所有联合及原生子交付历史，
-  保留全部历史 Task，持有现有 `state/queue-worker-locks/<sha256(task_id)>.lock`；资源按下节完整保全后释放。
-- 最终删除准入时 Task 必须是 `DONE/BLOCKED/FAILED`，queue steps 必须 `CLOSED`，无有效 Lease 且进程锁可独占。
-  Task/queue facts 从 typed 端口与只读 SQL 获得。明确用户删除可先调用下节取消服务终止已停止的旧执行，
-  使用现有 TaskRepository/StateEvent 和队列 service，不能手工改 SQL 或 verdict。无取消能力的 guard 仍严格拒绝非终态/未closed队列。
-  缺失、漂移、跨仓归属、live process、有效 lease 都拒绝，不能靠 UI 隐藏处理。
-- 新建同名、同scope需求派生新的 delivery identity；仍保留当前输入的幂等创建，永不调用
-  `retirements.restore(old_id)`，不复用旧 Product approval / design / plan / Task /候选或预算。
-- 已删 parent 的列表、计数、详情、child Tasks、Agent assignment 均从同一 retirement 事实过滤。
-  Continue、Product approval、restart、知识审批和原生 child recovery 也必须拒绝 deleted parent；
-  原 immutable audit 文件只能用于工程审计读取，不授予再次执行的能力。
-- `require_native_active` 校验所有retirement的owner/current digest，并核对完整父历史children
-  和未attach子交付的确定性派生identity。Host native Continue在构造recovery controller前调用；
-  NativeRecoverySourceReader在读SQL前调用，shared `_parent`重复核验给Candidate/restart使用。
-  matched retired parent抛中文`RequirementRetiredError`，不能跳过它并降为standalone恢复。
+1. Validate the complete parent/native histories, manifests, exact Project/Repository/Task owners, stopped process locks, terminal Tasks, CLOSED queue and absence of valid leases. Independent verification must be released and have its existing sealed plan/completion provenance. Reject active or unverifiable resources.
+2. Settle abandoned delivery through the existing cancellation service before removal; never manufacture QA/Review verdicts. Close keeps cancellation receipts, journals and archived worktree drafts; explicit delete removes them after validation.
+3. Seal a pending plan containing exact relative paths, complete streamed file SHA/size, exact SQL primary keys/row SHA and Git ref expected revisions. No Requirement body is copied into this plan. Validate fresh source bytes, typed SQL identities/digests and storage ownership before irreversible changes. Missing sealed files/rows/refs are accepted only for this exact plan's replay; new files, rows, owners or changed bytes reject.
+4. Cleanup covers the parent journal/attachments/release archives, all native children and old Tasks, SQL Task/events/dispatch/queue/Manager facts, sidecar artifacts/context/evidence/run/invocation/knowledge facts, owned Operation/preparation histories, Team Task authority ledger and exact temporary worktree metadata/references. Current and legacy FK families never share an identity set. Matching unsupported legacy contracts refuse cleanup.
+5. Knowledge uses namespace → typed model → exact hashed storage key. Invocation lanes must match every intent's complete binding and lane digest; execution records must reference a verified owned intent. Query-only knowledge-intents derive scope from their verified run binding. A nested reference or arbitrary filename is never deletion authority. Shared Manager contexts are removed only if no unrelated run references them.
+6. Team ledger paths are `team/work-items/digest({repository_id, task_id})`. Verify its `RecoveryScope`, every EngineeringAdmission via `EngineeringAuthority.validate`, and either native delivery scope or exact scope produced by `delivery_wait_recovery_scope` for the already verified Task. This is the existing writer's contract (manager/delivery_wait.py), not a caller-selected identity exception.
+7. Git retained refs derive from verified release archive owner/path digests. Coder branches come from the same exact archive/Task identity. Ref deletion uses expected-SHA CAS, refuses still registered worktrees, drift and protected refs. Main commits and shared Git objects are preserved; normal Git GC may reclaim unreachable objects. No direct `.git/objects` deletion or aggressive GC.
+8. Publish deleted retirement before destructive replay, including a crash after prepare but before retirement. Completion retains only bounded body-free identity revocation digests/native IDs; it contains no Requirement content, artifact, diff or operation history. Old commands cannot recreate journals; same-name creation uses a new identity. Release private decoded journal caches after completion.
+9. Before removing any Operation chain (terminal historical or current DELETE), publish a bounded, sealed ConsoleDeletionCleanup outside the history root. It binds the exact Team/Project/Requirement and original typed snapshots, paths and byte digests. Exclusive Console entry replays cleanup before parsing histories; read-only queries consume the original pending snapshots. Delete the pending body only after every selected file/directory is gone.
+10. The current DELETE Operation is physically removed after successful execution. A bounded in-memory exact acknowledgement (64 entries, <=16KB each, 120 seconds) supports immediate GET; it is excluded from history and disappears on restart/expiry. Failure must not be reported as successful cleanup.
 
 ## Validation / Error Matrix
-
-| 输入 | 行为 |
-|---|---|
-| exact idle BLOCKED/CLOSED | 写一次 tombstone，原 journal / verdict / artifact 保留，完整保全后释放受管工作区 |
-| 相同删除重放 | 返回原 checkpoint，原 tombstone 字节不变 |
-| stale checkpoint / other Project | 拒绝，无 tombstone |
-| live Worker lock /有效 Lease /不可核验的队列或任务 | `RequirementDeletionRejected`，Console `REQUIREMENT_ACTIVE`，中文下一步 |
-| deleted parent Continue/approval/restart | 拒绝，零新增模型调用 |
-| 同名新建 | 新 identity + 原产品准备流程，旧 tombstone/history永久保留 |
-| corrupted retirement/history | fail closed，不能用缺失数据冒充无活动 |
+| Case | Required behavior |
+| --- | --- |
+| Exact stopped draft/closed/blocked/done | Physically remove owned data and resources; publish minimal revocation |
+| Stale checkpoint, foreign repository, corrupt record/digest | Refuse before deletion |
+| Live process/lease, unreleased independent verification | Refuse; retain resources |
+| Prepare/retirement/SQL/file cleanup interruption | Preserve exact pending plan; replay without reviving identity |
+| Unrelated Task, shared organization knowledge, main branch | Preserve |
+| Deleted parent/native continue/approve/restart | Reject before model/claim creation |
+| Same name after deletion | New Requirement identity |
 
 ## Good / Base / Bad
+Good: deleted K1 histories, owned queue rows and temporary references disappear; unrelated current Requirement remains readable.
+Base: a draft and its attachment are removed, exact delete replay succeeds, stale commands fail.
+Bad: silently hiding 329 MB of old journals, leaving current delete Operation on disk, recursively treating reference IDs as ownership, or skipping verifier release safety.
 
-Good：删除用户不再需要的两份已停止 K1，产品页无残留，审计保留，并且不新建/执行。
-Base：尚未开始讨论的草稿删除，同一精确命令可安全重放。
-Bad：同名create撤销tombstone、直接删除sidecar、只过滤列表而child仍可执行、改旧Task终态。
+## Tests and assertions
+`tests/manager/test_requirement_physical_delete.py` covers real public deletion, query closure/foreign preservation, pre-retirement crash, partial file replay, equal-size drift and stale direct append. Related deletion/cancellation/resource-release tests must assert physical absence in dedicated MySQL and real Git fixtures, and keep active/process/lease/tamper rejection. Console tests verify physical removal and transient GET acknowledgement. Schema fixtures validate purge plan/completion. Original HTTP latency harness must pass on team summary and operation summaries including 304, followed by browser checks.
 
-## Tests / Existing Data / Rollback
+## Existing-data handling and rollback
+Inventory exact deleted Requirement IDs/digests and release conditions first; deploy at idle, then replay the same typed service for those IDs. Any old verifier reservation without release must be reconciled through the existing typed dispatch abandonment service only after controlled Host stop/process proof; record the precise decision before mutation. Do not reset a Task or revive a deleted Requirement. Verify file/SQL/ref counts before and after plus the unrelated current Requirement. Physical deletion is irreversible; rollback is code-only at idle and must preserve revocation compatibility. No deletion backup containing Requirement bodies is retained.
 
-增量 `tests/manager/test_requirement_retirement.py`、`tests/manager/test_requirement_deletion.py`、
-`tests/web_console/test_manager.py`、`tests/team_view/test_live.py` retirement case。
-覆盖公开typed入口、实际process锁、历史owner与原生Task inventory、lease/queue/Task负向、
-同名新identity、删除重放与旧审批保持；不跑全量。
+## Performance failure mode
+Retirement visibility formerly reparsed 271 JSON files / 328,576,222 bytes on every read (3–5 seconds CPU). Operation summary caches did not include this dependency; 304 only reduced response transfer. Purged identities now use small verified completion markers and never reload deleted bodies. Measure the complete endpoint dependency chain rather than only a projection cache.
 
-存量两 K1 只能在空闲部署后，用当前 Project/ID/digest 提交正式 Console deletion Operation；
-检查Operation成功、reader列表/详情/计数/child一致，以及原历史/hash不变。不得直接生产SQL写入、
-删目录或绕过完整保全清理dirty worktree。回滚代码需在空闲时进行，保留已删 retirement；旧版本同名create
-会复活记录，应暂停create直到修复版本重新加载，不能把回滚作为撤销删除。
-
-
-## Explicit deletion settles abandoned execution (2026-10-05)
-
-Scope: an exact DELETE_REQUIREMENT of a stopped BLOCKED/CLOSED parent explicitly withdraws
-all its historical delivery work. Closing the parent alone never proves its historical Tasks
-are terminal. Legacy lease-expired IMPLEMENTING Tasks with RETRY_SCHEDULED items must be
-cancelled through the typed application service; rejecting forever or editing SQL manually
-is not an acceptable product workflow.
-
-Interfaces: `RequirementCancellationReceipt` binds Project/Requirement/checkpoint, exact Task
-snapshots and queue inventory, requested user deletion and SHA-256; the immutable resolution
-receipt is written before cancelling. `MySqlRoleQueue.cancellation_fence(cursor, task_id)`
-uses the queue authority lock and refuses any valid Lease.
-`MySqlRoleQueue.close_cancelled_task(task, *, expected_items, cancellation_sha256, now)` requires the current
-exact terminal Task snapshot, closes abandoned work and appends REQUIREMENT_CANCELLED facts.
-`verify_cancelled_inventory(cursor, task, expected_items, *, cancellation_sha256, now)` also
-checks the sealed inventory under the same authority fence; it rejects new items or drift
-and accepts only a receipt-bound exact CLOSED successor with its cancellation event.
-The production deletion guard holds all historical Task process locks, checks all owners,
-Task snapshots and leases before mutation, then uses existing TaskRepository/StateEvent to
-terminate nonterminal Tasks as BLOCKED (NEW uses the existing FAILED edge) with a
-receipt-bound Chinese reason. Terminal Tasks
-and old events/verdicts/artifacts remain unchanged. No Worker/model call or new claim is made.
-Only after all Tasks and queues satisfy the original stop guard may retirement be committed.
-
-| Condition | Required behavior |
-| --- | --- |
-| Exact requested delete + stopped legacy Task + expired/released Lease | Seal resolution, append cancellation StateEvent, close queue, retire parent |
-| Live process lock / valid Lease / owner or snapshot drift | Refuse; no automatic termination of live work |
-| Receipt exists, Task/queue settlement interrupted | Revalidate unchanged scope and replay remaining steps; no model or duplicate event |
-| Queue close with nonterminal/mismatched Task | Refuse; no CLOSED fact |
-| Repeated deleted identity | Original tombstone and resolution preserved; no new event |
-
-Good: user deletes the old stopped K1 and its three abandoned retries are audited as cancelled.
-Base: already terminal/closed work needs no settlement. Bad: clearing queue without terminating
-Task, claiming a model Run to simulate cancellation, or using terminal cancellation to reopen work.
-
-Required incremental tests: manager cancellation process/lease/ownership/drift and partial
-restart cases; work_queue cancellation MySQL validates current terminal snapshot, active Lease
-rejection, expired owner fencing, idempotency and no new claim. Existing deletion negative guard
-remains strict when the optional cancellation service is unavailable. No production SQL patch.
-
-
-Receipt signatures and storage:
-
-```text
-RequirementCancellationReceipt(team_id, team_manifest_sha256, project_id,
-  project_manifest_sha256, delivery_id, checkpoint_sha256, human_action,
-  tasks: tuple[CancellationTaskInventory, ...], cancellation_sha256)
-CancellationTaskInventory(task, repository_id, task_snapshot_sha256,
-  state_revision, state_events_sha256, source_revision, queue_items,
-  queue_inventory_sha256)
-FileRequirementCancellationStore(requirement_root).find()/put(receipt)
-# <requirements>/<delivery_id>/cancellations/receipt.json (0600)
-```
-
-The receipt MUST NOT be a top-level JSON beside numbered JointCheckpoint files, because
-JointJournal validates all top-level JSON as its immutable sequence. Native Task scalar
-status and typed snapshot must agree; a deletion never silently repairs corrupted indexes.
-Current operator origin denotes a trusted local submission, not authenticated RBAC or a
-model self-approval. This session's submission is explicitly delegated by the user's request.
-Original StateEvents, queue history and verdicts remain unchanged; audit adds cancellation
-resolution/state/queue events, retirement and resource preservation/release records.
+## Close waiting execution contract
+Close retains cancellation receipts and drafts. Hold all historical process locks, reject valid leases and validate exact typed WAITING facts before cancellation. Terminal state events use the effective admitted execution baseline, not an obsolete Task base revision. A cancellation is final for that execution; restart cannot revive cancelled work.
 
 ## Explicit close of stopped engineering waits (2026-10-13)
 
@@ -164,8 +78,9 @@ Required tests: public waiting close/delete, stale/missing/nonengineering dispos
 nonwaiting queue, worker lock/valid and racing lease, owner/digest/inventory drift,
 receipt-before-event and event-before-queue replay, and unchanged BLOCKED lifecycle.
 Existing K1: reload at an idle controlled restart; submit formal CLOSE with current Project/ID/
-digest, reread the new CLOSED digest, then submit formal DELETE. Preserve old Operations,
-Task/event/queue/artifact history and dirty code; no direct SQL or directory deletion.
+digest and retain Operations, Task/event/queue/artifact history and captured drafts under CLOSE.
+Reread the new CLOSED digest, then submit formal DELETE to physically remove the exact owned,
+validated records and release resources. Do not bypass the service with ad hoc SQL or directory deletion.
 
 已由 CLOSE_REQUIREMENT 取消工程的需求不得 RESTART_REQUIREMENT 复活；明确提示新建身份。
 Console只显示关闭/删除，不显示重启；低层兼容接口仍可读旧普通关闭记录。单份immutable cancellation receipt
@@ -191,67 +106,20 @@ unchanged. A real baseline regression must call `validate_pre_candidate_sources`
 resulting terminal Task/events and full baseline epoch; original old-source events cannot be
 copied as the source of the post-binding cancellation.
 
-## 通用关闭、删除和资源释放（2026-10-13）
 
-产品不提供归档。空闲 Product 草稿、BLOCKED 和严格已停止工程等待可关闭；DONE可删除。
-Console不提供关闭后的重启按钮；已取消执行必须新建身份。保全压缩包是恢复资料，不是产品归档。
+Task branch declarations do not authorize removing a pre-existing colliding branch. Semantic refs require an exact release archive or clean removal marker reconstructed from the durable Task/StateEvent/Artifact revisions and actual attempt. Unverifiable legacy default refs refuse full deletion; an operator can inspect and authorize exact ref/SHA cleanup, then replay.
 
-### Signatures / facts
 
-```text
-GitWorktreeManager.archive_and_remove(ref, *, archive_root, owner_sha256)
-  -> WorktreeReleaseArchive
-ProductionRequirementDeletionGuard._verification_resources(checkpoint, targets)
-  -> fenced context of released independent verification worktree identities
-SELECT id FROM dispatch_authority_lock WHERE id=1 FOR UPDATE
-SELECT plan_sha256,payload_json,completion_sha256,abandonment_sha256
-  FROM verification_reservations ORDER BY plan_sha256
-```
+Task-owned continuation and execution-baseline directories are not selected by Task ID alone.
+`task_state_directories(sidecar, StateDeletionScope)` validates every receipt, admission,
+capture claim, plan, authority, binding, native-rule epoch, continuation authorization and
+quiescence record against exact Team/Project/Repository/Requirement scope and writer keys.
+The complete baseline namespaces are `baseline-plans`, `baseline-authorities`, `baseline-starts`,
+`baseline-bindings`, `baseline-native-rules`, `baseline-continuations`, `baseline-quiescence`.
+Validate the formal `invocations[*].legacy_containment` and original claim repository scopes;
+Task IDs or directory names alone cannot authorize deletion. The only non-JSON baseline file
+is the private regular `execution.lock`.
+Unknown additional files or foreign scope refuse deletion before mutation. Persisted purge
+plans use the same indent=2 byte budget at preparation and publication as pending replay.
 
-guard读取所有父历史、附着child和所有历史plan确定性派生的真实native journal，持有每个历史Task锁，
-核对owner、terminal Task、CLOSED queue和无live Lease。未附着但已持久化native Task同样在范围内；
-不存在的native journal不能凭名称猜成任务。独立VerificationReservation不是tasks表里的Task；
-其source必须属于已核验原生Task，repository必须为当前Project，计划scope/input/execution identity必须
-精确，completion或abandonment仅一个合法SHA。未释放reservation即使lease时间已过也拒绝。
-先短暂取得fence只读预检并拒绝未完成验证，再settle普通队列，后取得现有dispatch authority fence，重读reservation并保持到CLOSED/tombstone发布；
-fence内不再调用会在另一连接写入dispatch lock的settlement服务。不能伪造abandonment或verdict。
-
-释放只接受上述历史Task的受管角色路径、精确需求baseline/candidate reviewer路径、已释放独立验证
-QA/Reviewer attempt01。完整保全tracked/unstaged/untracked/ignored/目录/链接、raw index及所有stage blobs；
-记录archive/entry/index/object SHA和scope digest；给HEAD建立`refs/ase/retained/<owner>/<path-sha>`避免detached
-成果在Git GC后丢失。branch、commit、artifact、audit和共享数据库保留。每工作区上限100000条/2GiB，
-单stage blob32MiB、manifest32MiB；split-index、nested Git/submodule、特殊文件或超限均拒绝并保留现场。
-压缩包、immutable archive.json、release-intent.json、released.json存于
-`<project>/requirements/<parent>/resource-archives/<sha256(abs-worktree-path)>/`，0600文件/0700目录。
-原像封存和校验完成后才reset/clean，再调用原有非force remove。新保全契约见
-`schemas/worktree-release-archive.schema.json`与`git/release.py`。
-
-### Validation / recovery matrix
-
-| 输入/中断 | 必须行为 |
-|---|---|
-| 完整停止且全部资源可核验 | 保存全部原像、释放临时工作区后发布CLOSED/tombstone |
-| live process/lease、未释放独立验证、owner/hash漂移 | 拒绝，不丢弃原文件或伪造停止 |
-| tar已发布但manifest未发布 | 保留unsealed副本，从仍在的完整原像重新保全 |
-| settlement完成但archive失败 | 父checkpoint不变，原receipt可重放；页面终态Task/CLOSED队列允许重试关闭 |
-| reset后、remove前失败 | 只有index及逐文件byte/mode/kind都为HEAD后像，且未tracked资源为原保全子集可重放 |
-| assume-unchanged/skip-worktree或未保全新增文件 | 拒绝，不能只靠git diff为空证明干净 |
-| remove后released发布失败 | 从完整manifest重新核验owner/path/tar/intent/retained ref，补同字节completion |
-| CLOSE后DELETE | 复核所有保全及完成记录，不能重写CLOSE receipt/时间/原文件 |
-
-Good：关闭一个停止的需求，全部受管草稿私密保全，角色/基线临时工作区释放，无关目录不动。
-Base：无Task草稿仍释放其精确baseline。Bad：只写CLOSED、只存diff遗漏ignored/staged、用force-remove、
-把reservation当普通Task或从expired lease猜provider停止。
-
-Required tests：真实Git staged/unstaged/ignored/link、GC恢复stage blobs及detached commit、partial reset
-重放/hidden flags拒绝、tar/manifest/completion中断、公开close→delete多角色/基线释放、未attach native
-锁、独立验证released/unreleased/foreign scope和dispatch fence竞争；Operation过滤测试同时验证完整audit。
-Wrong：通过直接SQL/tombstone隐藏活动资源。Correct：typed停止+完整scope锁/fence+verified原像+正式产品操作。
-
-### 存量数据处置 / rollback
-
-旧K1已正式CLOSE/DELETE且30临时工作区已另行完整保全释放；不重跑清理、不改旧journal或共享数据库。
-新K1暂停在产品待批准，部署不批准或恢复。日常读取按retirement实时过滤旧操作，无需改库。
-代码回滚只在空闲受控重启，必须保留CLOSE receipt兼容读取、tombstone、archive与retained refs；
-回滚不恢复已取消执行。资源恢复由维护者在隔离位置校验manifest/tar并恢复stage blobs/index，
-不能解压覆盖主checkout或自动复活旧需求。
+Completion publication followed by pending-plan removal interruption must replay via `finish_completed(completion)`: exact owner/checkpoint/plan digest equality before unlink; disagreement refuses and no deleted identity is revived.

@@ -556,14 +556,14 @@ production_console_app(
 - Requirements 页把 Project 创建放在 Project 上下文区，把 Requirement 创建放在需求列表标题与
   数量旁；两者不得作为脱离所有权上下文的全局页头动作。
 - 只有尚未开始 Product 对话且无活动 Operation 的 `READY_FOR_DISCUSSION` Requirement 显示编辑；
-  ProductSpec 批准前的 READY/Product 对话阶段均可逻辑删除。编辑复用预填名称与精确目录的弹窗；
+  ProductSpec 批准前的 READY/Product 对话阶段均可物理删除。编辑复用预填名称与精确目录的弹窗；
   目录新增仍只来自原生目录选择器。删除必须先确认。
   UPDATE 成功后选中返回的 replacement Delivery；DELETE 成功后清除已退休选择。
 - 终态 `BLOCKED` Requirement 可在 exact checkpoint fence 下“关闭需求”或直接“删除需求”。关闭追加
   `CLOSED` checkpoint、停止继续交付并进入独立“已关闭”清单；`CLOSED` 可通过
-  `RESTART_REQUIREMENT` 追加 `BLOCKED` checkpoint，之后再由现有“继续交付”显式恢复执行。删除只追加
-  Project retirement 记录，完整 journal、子 Task 与证据不擦除，但父需求及其所有派生子 Task 必须
-  同时退出当前 Project 与 Agent 队列投影。活动中的批准后 Requirement 仍不得删除。
+  `RESTART_REQUIREMENT` 追加 `BLOCKED` checkpoint，之后再由现有“继续交付”显式恢复执行。删除物理移除
+  Requirement journal、子 Task、证据和操作记录，清理其队列、临时资源与 Git 引用；仅保留无正文的身份撤销摘要，
+  父需求及其所有派生子 Task 同时退出当前 Project 与 Agent 队列投影。活动中的批准后 Requirement 仍不得删除。
   DELIVERING 的完整工程等待可请求关闭，后端须持有全历史进程锁、拒绝有效 Lease、校验当前
   typed waiting facts，再按真实 CLOSE_REQUIREMENT 封存取消记录并结束旧 Task/queue；CLOSED
   发布后才能按新 digest 删除。已取消工程不得重新启动，提示新建需求。细则见

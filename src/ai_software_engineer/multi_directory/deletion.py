@@ -38,6 +38,7 @@ from ai_software_engineer.multi_directory.cancellation import (
 )
 from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
+from ai_software_engineer.multi_directory.purge import RequirementPurgePlan, RequirementPurger
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.recovery.store import FileRecoveryStore
@@ -71,6 +72,16 @@ class RequirementWaitingCloseGuard(Protocol):
     ) -> AbstractContextManager[None]: ...
 
 
+@runtime_checkable
+class RequirementPhysicalDeletionGuard(RequirementDeletionGuard, Protocol):
+    def protect_physical_delete(
+        self, checkpoint: JointCheckpoint
+    ) -> AbstractContextManager[RequirementPurgePlan]: ...
+    def purge_storage(
+        self, plan: RequirementPurgePlan, *, already_fenced: bool = False
+    ) -> None: ...
+
+
 class RequirementExecutionQueue(Protocol):
     def items_for_task(self, task_id: str) -> tuple[QueuedWorkItem, ...]: ...
     def list_active_leases(self, *, now: datetime) -> tuple[TaskLease, ...]: ...
@@ -85,15 +96,52 @@ class ProductionRequirementDeletionGuard:
         self.project, self.queue, self._dsn = project, queue, dsn
 
     def protect(self, checkpoint: JointCheckpoint) -> AbstractContextManager[None]:
-        return self._protect(checkpoint, action="DELETE_REQUIREMENT")
+        return self._protect_stopped(checkpoint, action="DELETE_REQUIREMENT")
 
     def protect_waiting_close(self, checkpoint: JointCheckpoint) -> AbstractContextManager[None]:
-        return self._protect(checkpoint, action="CLOSE_REQUIREMENT")
+        return self._protect_stopped(checkpoint, action="CLOSE_REQUIREMENT")
+
+    @contextmanager
+    def _protect_stopped(
+        self, checkpoint: JointCheckpoint, *, action: RequirementCancellationAction
+    ) -> Iterator[None]:
+        with self._protect(checkpoint, action=action):
+            yield
+
+    @contextmanager
+    def protect_physical_delete(
+        self, checkpoint: JointCheckpoint
+    ) -> Iterator[RequirementPurgePlan]:
+        with self._protect(checkpoint, action="DELETE_REQUIREMENT", physical=True) as plan:
+            assert plan is not None
+            yield plan
+
+    def purge_storage(self, plan: RequirementPurgePlan, *, already_fenced: bool = False) -> None:
+        RequirementPurger(self.project, self._dsn).execute(plan, already_fenced=already_fenced)
+
+    def _native_identities(self, checkpoint: JointCheckpoint) -> dict[str, str]:
+        identities: dict[str, str] = {}
+        for record in JointJournal(self.project.requirements_root, read_only=True).history(
+            checkpoint.delivery_id
+        ):
+            for child in record.children:
+                identities[child.checkpoint.delivery_id] = child.checkpoint.repository_id
+            if record.plan is not None:
+                for unit in record.plan.units:
+                    derived = DerivedStageInputs(record, unit.unit_id)
+                    identities[
+                        _delivery_id(derived.root, derived.requirement, namespace=record.project_id)
+                    ] = derived.preparation.repository_id
+        return identities
 
     @contextmanager
     def _protect(
-        self, checkpoint: JointCheckpoint, *, action: RequirementCancellationAction
-    ) -> Iterator[None]:
+        self,
+        checkpoint: JointCheckpoint,
+        *,
+        action: RequirementCancellationAction,
+        physical: bool = False,
+    ) -> Iterator[RequirementPurgePlan | None]:
         targets = self._targets(checkpoint)
         with ExitStack() as stack:
             for task_id, (sidecar, _) in sorted(targets.items()):
@@ -125,12 +173,61 @@ class ProductionRequirementDeletionGuard:
                 else:
                     self._require_cancellation_history(checkpoint, targets)
             self._require_inactive(targets)
+            stack.enter_context(self._native_resource_cleanup(checkpoint, targets))
             # Settlement may take the dispatch fence itself. Acquire it only after
             # settlement, and hold it through resource release and parent publication.
             with self._verification_resources(checkpoint, targets) as verification:
                 self._require_inactive(targets)
                 self._release_worktrees(checkpoint, targets, verification=verification)
-                yield
+                plan = (
+                    RequirementPurger(self.project, self._dsn).prepare(
+                        checkpoint,
+                        {**targets, **verification},
+                        native_ids=self._native_identities(checkpoint),
+                    )
+                    if physical
+                    else None
+                )
+                yield plan
+
+    @contextmanager
+    def _native_resource_cleanup(
+        self, checkpoint: JointCheckpoint, targets: dict[str, tuple[Path, str]]
+    ) -> Iterator[None]:
+        from ai_software_engineer.domain.engineering_authority import EngineeringScope
+        from ai_software_engineer.manager.python_mysql_execution import (
+            reconcile_python_mysql_resources,
+        )
+        from ai_software_engineer.multi_directory.purge_resources import native_stores
+        from ai_software_engineer.recovery.store import RecoveryRecordMissing
+
+        with ExitStack() as stack:
+            try:
+                for repo in self.project.repository_registry().discover():
+                    tasks = {
+                        task_id for task_id, (sidecar, _) in targets.items() if sidecar == repo.root
+                    }
+                    scope = EngineeringScope(
+                        team_id=checkpoint.team_id,
+                        project_id=checkpoint.project_id,
+                        repository_id=repo.repository_id,
+                        repository_root=str(repo.repository_root),
+                    )
+                    for store in native_stores(repo.root, tasks, scope, read_only=False):
+                        stack.enter_context(store.execution_lock())
+                        reconcile_python_mysql_resources(store, clock=lambda: datetime.now(UTC))
+                        for resource in store.list_mysql_resource_intents():
+                            try:
+                                store.get_mysql_resource(resource.intent.resource_id, "CLEANED")
+                            except RecoveryRecordMissing as error:
+                                raise RequirementDeletionRejected(
+                                    "验证隔离资源尚未释放, 请等待已到期资源回收后重试。"
+                                ) from error
+            except (OSError, ValueError) as error:
+                raise RequirementDeletionRejected(
+                    "原生验证停止或资源归属无法核验, 原资源保留。"
+                ) from error
+            yield
 
     def _settle_cancelled(
         self,
@@ -428,7 +525,7 @@ class ProductionRequirementDeletionGuard:
             )
             directory = root / task_id
             _reject_symlinks(directory)
-            for path in sorted(directory.glob("*-attempt-*")):
+            for path in sorted(directory.glob("[a-z]*-attempt-*")):
                 _reject_symlinks(path)
                 role_text, attempt_text = path.name.split("-attempt-", 1)
                 role, attempt = AgentRole(role_text), int(attempt_text)

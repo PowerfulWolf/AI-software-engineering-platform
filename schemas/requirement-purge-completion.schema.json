@@ -1,0 +1,74 @@
+{
+  "additionalProperties": false,
+  "description": "Body-free revocation; no product/plan/artifact/log or SQL payload is retained.",
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "team_id": {
+      "title": "Team Id",
+      "type": "string"
+    },
+    "team_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Team Manifest Sha256",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "project_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Manifest Sha256",
+      "type": "string"
+    },
+    "delivery_id": {
+      "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+      "title": "Delivery Id",
+      "type": "string"
+    },
+    "checkpoint_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Checkpoint Sha256",
+      "type": "string"
+    },
+    "native_delivery_ids": {
+      "items": {
+        "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+        "type": "string"
+      },
+      "maxItems": 1024,
+      "title": "Native Delivery Ids",
+      "type": "array"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "completion_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Completion Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "team_id",
+    "team_manifest_sha256",
+    "project_id",
+    "project_manifest_sha256",
+    "delivery_id",
+    "checkpoint_sha256",
+    "native_delivery_ids",
+    "plan_sha256",
+    "completion_sha256"
+  ],
+  "title": "RequirementPurgeCompletion",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/requirement-purge-completion.schema.json"
+}

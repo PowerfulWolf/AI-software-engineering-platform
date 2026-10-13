@@ -90,6 +90,9 @@ def _delivery(
         facts_root.mkdir()
         _, _, _, plans, revisions = _durable_facts(facts_root)
         MySqlDispatchAuthority(dsn, request_revisions=revisions, planner_records=plans)
+        from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
+
+        MySqlRoleQueue(dsn)
     original = service.create(
         CreateRequirement(name="K1", repository_roots=(str(root),))
     ).checkpoint
@@ -284,7 +287,7 @@ def test_public_native_continue_refuses_deleted_parent_before_recovery_controlle
 
 @pytest.mark.mysql
 @pytest.mark.parametrize("closed", [False, True])
-def test_public_deletion_preserves_task_native_history_and_dirty_code(
+def test_public_deletion_removes_task_native_history_and_preserves_unrelated_code(
     tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, closed: bool
 ) -> None:
     service, blocked, sidecar, dirty, queue = _delivery(tmp_path, monkeypatch, dsn=mysql_dsn)
@@ -319,19 +322,19 @@ def test_public_deletion_preserves_task_native_history_and_dirty_code(
         if closed
         else blocked
     )
-    before = service.journal.history(checkpoint.delivery_id)
     native = FileProjectDeliveryCheckpointStore(
         sidecar / "state/project-deliveries", read_only=True
     )
-    native_history = native.list(blocked.children[0].checkpoint.delivery_id)
     _delete(service, checkpoint)
     _delete(service, checkpoint)
-    assert service.journal.history(checkpoint.delivery_id) == before
-    assert native.list(blocked.children[0].checkpoint.delivery_id) == native_history
+    assert service.journal.history(checkpoint.delivery_id) == ()
+    assert native.list(blocked.children[0].checkpoint.delivery_id) == ()
     assert (dirty / "draft.txt").read_text() == "uncommitted business draft\n"
     with MySqlTaskRepository(mysql_dsn) as repository:
-        assert repository.get(task_id) == task
-        assert repository.list_events(task_id) == ()
+        from ai_software_engineer.store.repository import TaskNotFound
+
+        with pytest.raises(TaskNotFound):
+            repository.get(task_id)
     assert service.retirements.entry(checkpoint.delivery_id) is not None
 
 

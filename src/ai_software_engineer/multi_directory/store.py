@@ -44,6 +44,11 @@ class JointJournal:
     def lock(self, delivery_id: str) -> Iterator[None]:
         if self._read_only:
             raise ValueError("journal is read-only")
+        from ai_software_engineer.multi_directory.purge import read_purge_completion
+        from ai_software_engineer.multi_directory.retirement import RequirementRetiredError
+
+        if read_purge_completion(self.root, delivery_id) is not None:
+            raise RequirementRetiredError()
         directory = self.directory(delivery_id)
         directory.mkdir(parents=True, exist_ok=True)
         fd = os.open(directory / "operation.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -55,6 +60,13 @@ class JointJournal:
             yield
         finally:
             os.close(fd)
+
+    def forget(self, delivery_id: str) -> None:
+        """Release private validation models when their Requirement is deleted."""
+        directory = self.directory(delivery_id)
+        for path in tuple(self._verified):
+            if path.parent == directory:
+                del self._verified[path]
 
     def current(self, delivery_id: str) -> JointCheckpoint | None:
         latest: JointCheckpoint | None = None
@@ -94,6 +106,11 @@ class JointJournal:
     def append(self, checkpoint: JointCheckpoint, *, expected: str | None) -> JointCheckpoint:
         if self._read_only:
             raise ValueError("journal is read-only")
+        from ai_software_engineer.multi_directory.purge import read_purge_completion
+        from ai_software_engineer.multi_directory.retirement import RequirementRetiredError
+
+        if read_purge_completion(self.root, checkpoint.delivery_id) is not None:
+            raise RequirementRetiredError()
         checkpoint.validate_integrity()
         previous = self.current(checkpoint.delivery_id)
         if (previous.checkpoint_sha256 if previous else None) != expected:

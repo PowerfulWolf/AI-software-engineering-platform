@@ -118,9 +118,9 @@
 - [`engineering-continuation.md`](engineering-continuation.md): frozen Coder interruption policy,
   owned process-stop facts, complete mutation receipts, one-use admission and claimed restart.
 
-- [`requirement-deletion.md`](requirement-deletion.md): exact product deletion, permanent tombstones,
-  idle execution checks, native/independent verifier fences, complete resource preservation/release,
-  fresh identities and retained immutable engineering history.
+- [`requirement-deletion.md`](requirement-deletion.md): exact close/physical deletion, bounded identity revocation,
+  idle execution checks, native/independent verifier fences, scope-exact file/SQL/Git cleanup,
+  restartable deletion and measured refresh regression.
 
 - [`incremental-polling.md`](incremental-polling.md): scoped read-side updates, retained DOM and drafts,
   source-signature invalidation for exact approvals and Project boundaries.

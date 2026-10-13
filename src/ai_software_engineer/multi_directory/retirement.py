@@ -19,6 +19,10 @@ from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId, Sha256
 from ai_software_engineer.multi_directory.history_observation import JointRecordFacts
 from ai_software_engineer.multi_directory.models import JointCheckpoint
+from ai_software_engineer.multi_directory.purge import (
+    RequirementPurgeCompletion,
+    read_purge_completion,
+)
 
 RetirementReason = Literal["deleted", "replaced"]
 _MAX_RETIREMENT_BYTES = 256_000
@@ -149,9 +153,33 @@ class RequirementRetirementStore:
     def retired_delivery_ids(self, journal: RequirementCheckpointReader) -> frozenset[str]:
         record = self.retirement()
         for entry in record.entries:
+            if self.purged_entry(entry) is not None:
+                continue
             self._validate_retirement_entry(entry, journal.current(entry.delivery_id))
             self._validate_retirement_replacement(entry, journal)
         return frozenset(entry.delivery_id for entry in record.entries)
+
+    def purged_entry(self, entry: RequirementRetirementEntry) -> RequirementPurgeCompletion | None:
+        completion = read_purge_completion(self.root, entry.delivery_id)
+        if completion is None:
+            return None
+        if (
+            completion.team_id,
+            completion.team_manifest_sha256,
+            completion.project_id,
+            completion.project_manifest_sha256,
+            completion.checkpoint_sha256,
+        ) != (
+            self.team_id,
+            self.team_manifest_sha256,
+            self.project_id,
+            self.project_manifest_sha256,
+            entry.checkpoint_sha256,
+        ):
+            raise RequirementRetirementError("purged Requirement owner or checkpoint mismatch")
+        if entry.reason != "deleted" or (self.root / entry.delivery_id).exists():
+            raise RequirementRetirementError("purged Requirement still has a journal")
+        return completion
 
     def _validate_retirement_entry(
         self, entry: RequirementRetirementEntry, checkpoint: JointCheckpoint | None
@@ -173,6 +201,9 @@ class RequirementRetirementStore:
     ) -> None:
         if entry.replacement_delivery_id is None:
             return
+        replacement_entry = self.entry(entry.replacement_delivery_id)
+        if replacement_entry is not None and self.purged_entry(replacement_entry) is not None:
+            return
         replacement = journal.current(entry.replacement_delivery_id)
         if replacement is None:
             raise RequirementRetirementError("Requirement replacement journal is missing")
@@ -193,6 +224,11 @@ class RequirementRetirementStore:
         record = self.retirement()
         is_retired = False
         for entry in record.entries:
+            completion = self.purged_entry(entry)
+            if completion is not None:
+                if delivery_id in completion.native_delivery_ids:
+                    is_retired = True
+                continue
             if isinstance(journal, NativeChildHistoryReader):
                 compact = journal.native_child_history(entry.delivery_id)
                 parent = journal.current(entry.delivery_id)

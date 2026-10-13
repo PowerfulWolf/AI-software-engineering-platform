@@ -215,7 +215,7 @@ def test_edit_replaces_exact_draft_and_preserves_original_journal(
         service.status(original.delivery_id)
 
 
-def test_delete_is_logical_and_exact_checkpoint_bound(
+def test_delete_is_physical_and_exact_checkpoint_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, repository = _service(tmp_path, monkeypatch)
@@ -239,7 +239,7 @@ def test_delete_is_logical_and_exact_checkpoint_bound(
         )
     )
 
-    assert service.journal.current(checkpoint.delivery_id) == checkpoint
+    assert service.journal.current(checkpoint.delivery_id) is None
     retired = service.retirements.entry(checkpoint.delivery_id)
     assert retired is not None and retired.reason == "deleted"
 
@@ -393,7 +393,7 @@ def test_idle_product_draft_can_be_closed(tmp_path: Path, monkeypatch: pytest.Mo
     assert closed.previous_checkpoint_sha256 == checkpoint.checkpoint_sha256
 
 
-def test_blocked_requirement_can_be_logically_deleted_directly(
+def test_blocked_requirement_can_be_physically_deleted_directly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, repository = _service(tmp_path, monkeypatch)
@@ -415,7 +415,7 @@ def test_blocked_requirement_can_be_logically_deleted_directly(
     )
 
     assert service.retirements.entry(blocked.delivery_id) is not None
-    assert service.journal.current(blocked.delivery_id) == blocked
+    assert service.journal.current(blocked.delivery_id) is None
 
 
 def test_unapproved_product_spec_can_be_logically_deleted(
@@ -579,7 +579,7 @@ def test_delete_replay_keeps_exact_tombstone_and_rejects_other_checkpoint(
     )
     service.delete_requirement(command)
     original_bytes = service.retirements.path.read_bytes()
-    assert service.delete_requirement(command).checkpoint == checkpoint
+    assert service.delete_requirement(command).checkpoint_sha256 == checkpoint.checkpoint_sha256
     assert service.retirements.path.read_bytes() == original_bytes
     with pytest.raises(DeliveryCheckpointStale):
         service.delete_requirement(

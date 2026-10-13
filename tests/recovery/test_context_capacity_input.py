@@ -68,21 +68,26 @@ def test_capacity_wire_keeps_ordinary_run_required_and_exact_no_start_input(tmp_
     assert RecoveryPlan.model_validate(capacity.to_wire()) == capacity
     for fault in ("run", "receipt", "input", "mode", "files"):
         wire = capacity.to_wire()
+        source = wire["source"]
+        capture = wire["capture"]
+        assert isinstance(source, dict) and isinstance(capture, dict)
         if fault == "run":
-            wire["source"]["failed_run_id"] = "run_invented"
+            source["failed_run_id"] = "run_invented"
         elif fault == "receipt":
-            del wire["source"]["context_capacity_receipt_sha256"]
+            del source["context_capacity_receipt_sha256"]
         elif fault == "input":
             del wire["context_capacity_input"]
         elif fault == "mode":
             wire["input_mode"] = None
         else:
-            wire["capture"]["files"] = [{"path": "src/app.py", "sha256": "a" * 64}]
+            capture["files"] = [{"path": "src/app.py", "sha256": "a" * 64}]
         assert list(validator.iter_errors(wire)), fault
         with pytest.raises(ValidationError):
             RecoveryPlan.model_validate(wire)
     wire = ordinary.to_wire()
-    del wire["source"]["failed_run_id"]
+    source = wire["source"]
+    assert isinstance(source, dict)
+    del source["failed_run_id"]
     assert list(validator.iter_errors(wire))
     with pytest.raises(ValidationError):
         RecoveryPlan.model_validate(wire)
@@ -107,8 +112,10 @@ def test_capacity_source_schema_and_python_require_nonnull_exact_baseline(
     source_validator = Draft202012Validator({**schema, "$ref": "#/$defs/RecoverySource"})
     plan_validator = Draft202012Validator(schema)
     wire = capacity_plan(tmp_path / "project").to_wire()
+    source = wire["source"]
+    assert isinstance(source, dict)
     for field in null_fields:
-        wire["source"][field] = None
+        source[field] = None
     with pytest.raises(ValidationError):
         RecoverySource.model_validate(wire["source"])
     assert list(source_validator.iter_errors(wire["source"]))

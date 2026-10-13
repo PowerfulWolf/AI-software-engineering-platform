@@ -10904,7 +10904,7 @@ function buildDetail(panel = document.getElementById("detail")) {
           () =>
             confirmMutation(
               "删除需求",
-              `确认从当前 Project 删除“${item.title}”吗？平台会保存成果并释放临时工作区，历史记录会保留，但该需求将不能继续交付。`,
+              `确认从当前 Project 删除“${item.title}”吗？需求资料、操作记录和临时资源将永久删除，已合入代码仓库的成果保留。此操作无法撤销。`,
               "确认删除",
               async () => {
                 const accepted = await submitOperation({
