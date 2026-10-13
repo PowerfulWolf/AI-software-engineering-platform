@@ -15,7 +15,9 @@ from typing import Annotated, Literal, Protocol, Self, runtime_checkable
 from pydantic import AwareDatetime, Field, StrictInt, model_validator
 from pymysql.cursors import DictCursor
 
-from ai_software_engineer.domain.enums import TaskStatus, WorkItemStatus
+from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.delivery_disposition import DeliveryResponsibility
+from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.identity import ProjectId, RepositoryId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
@@ -30,6 +32,7 @@ from ai_software_engineer.orchestration.state_machine import (
 )
 from ai_software_engineer.store.mysql_repository import _decode_task
 from ai_software_engineer.store.repository import StoreCorruption, StoreError
+from ai_software_engineer.work_queue.execution_store import QueuedRoleStep
 from ai_software_engineer.work_queue.models import QueuedWorkItem
 from ai_software_engineer.work_queue.ports import (
     QueueConflict,
@@ -39,6 +42,7 @@ from ai_software_engineer.work_queue.ports import (
 )
 
 _MAX_RECEIPT_BYTES = 8_000_000
+RequirementCancellationAction = Literal["DELETE_REQUIREMENT", "CLOSE_REQUIREMENT"]
 
 
 class RequirementCancellationRejected(ValueError):
@@ -68,6 +72,11 @@ class RequirementCancellationQueue(Protocol):
         cancellation_sha256: str,
         now: datetime,
     ) -> tuple[QueuedWorkItem, ...]: ...
+
+
+@runtime_checkable
+class RequirementCancellationStepReader(Protocol):
+    def step(self, work_item_id: str) -> QueuedRoleStep: ...
 
 
 class CancellationTaskRepository(Protocol):
@@ -117,10 +126,10 @@ class CancellationTaskInventory(DomainModel):
 
 
 class RequirementCancellationHumanAction(DomainModel):
-    """The explicit product deletion command, never an Agent approval."""
+    """The explicit product withdrawal command, never an Agent approval."""
 
     kind: Literal["HumanActionEvent"] = "HumanActionEvent"
-    action: Literal["DELETE_REQUIREMENT"] = "DELETE_REQUIREMENT"
+    action: RequirementCancellationAction = "DELETE_REQUIREMENT"
     actor: Literal["operator:local-console"] = "operator:local-console"
     project_id: ProjectId
     requirement_id: DeliveryId
@@ -254,9 +263,11 @@ class RequirementCancellationService:
         self,
         checkpoint: JointCheckpoint,
         targets: tuple[RequirementCancellationTarget, ...],
+        *,
+        action: RequirementCancellationAction = "DELETE_REQUIREMENT",
     ) -> RequirementCancellationReceipt:
         try:
-            return self._cancel(checkpoint, targets)
+            return self._cancel(checkpoint, targets, action=action)
         except QueueLeaseLost as error:
             raise RequirementCancellationRejected(
                 "工程执行许可已变化或尚未释放, 删除未完成, 请等待执行停止后重试。"
@@ -278,8 +289,15 @@ class RequirementCancellationService:
         self,
         checkpoint: JointCheckpoint,
         targets: tuple[RequirementCancellationTarget, ...],
+        *,
+        action: RequirementCancellationAction,
     ) -> RequirementCancellationReceipt:
-        if checkpoint.stage not in {JointStage.BLOCKED, JointStage.CLOSED}:
+        allowed = (
+            {JointStage.DELIVERING}
+            if action == "CLOSE_REQUIREMENT"
+            else {JointStage.BLOCKED, JointStage.CLOSED}
+        )
+        if checkpoint.stage not in allowed:
             raise RequirementCancellationRejected("仅能撤销已经停止的需求执行。")
         identities = tuple(target.task.id for target in targets)
         if len(set(identities)) != len(identities):
@@ -297,6 +315,7 @@ class RequirementCancellationService:
                 delivery_id=checkpoint.delivery_id,
                 checkpoint_sha256=checkpoint.checkpoint_sha256,
                 human_action=RequirementCancellationHumanAction(
+                    action=action,
                     project_id=checkpoint.project_id,
                     requirement_id=checkpoint.delivery_id,
                     expected_checkpoint_sha256=checkpoint.checkpoint_sha256,
@@ -305,6 +324,10 @@ class RequirementCancellationService:
                 tasks=inventory,
             )
         self._require_scope(receipt, checkpoint, targets)
+        if receipt.human_action.action != action:
+            raise RequirementCancellationRejected("需求取消记录的用户操作不一致。")
+        if action == "CLOSE_REQUIREMENT":
+            self._require_engineering_waits(receipt)
         # Validate the complete scope before publishing a receipt or mutating any Task.
         for original in receipt.tasks:
             self._require_current(receipt, original)
@@ -328,6 +351,87 @@ class RequirementCancellationService:
         finally:
             self.repository.mutation_fence = previous_fence
         return receipt
+
+    def _require_engineering_waits(self, receipt: RequirementCancellationReceipt) -> None:
+        waiting = False
+        for original in receipt.tasks:
+            open_items = tuple(
+                item for item in original.queue_items if item.status is not WorkItemStatus.CLOSED
+            )
+            if original.task.status not in TERMINAL_STATUSES and not open_items:
+                raise RequirementCancellationRejected("工程任务没有可核验的等待, 暂不能关闭。")
+            expected_role = {
+                TaskStatus.IMPLEMENTING: AgentRole.CODER,
+                TaskStatus.QA: AgentRole.QA,
+                TaskStatus.REVIEW: AgentRole.REVIEWER,
+            }.get(original.task.status)
+            for item in open_items:
+                disposition = item.wait_disposition
+                if (
+                    item.status
+                    not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+                    or disposition is None
+                    or disposition.responsibility is not DeliveryResponsibility.ENGINEERING
+                ):
+                    raise RequirementCancellationRejected("需求仍有非工程等待的队列, 暂不能关闭。")
+                facts = disposition.facts
+                if (
+                    item.role is not expected_role
+                    or item.attempt != original.task.attempts
+                    or facts.task_id != original.task.id
+                    or facts.work_item_id != item.id
+                    or facts.role is not item.role
+                    or facts.task_intent_sha256 != task_intent_sha256(original.task)
+                    or facts.source_revision != self._waiting_source(original, item)
+                    or facts.checkpoint_sequence != original.state_revision
+                    or item.checkpoint_sequence != original.state_revision
+                ):
+                    raise RequirementCancellationRejected(
+                        "工程等待与当前任务事实不一致, 暂不能关闭。"
+                    )
+                waiting = True
+        if not waiting:
+            raise RequirementCancellationRejected("需求没有可核验的工程等待, 暂不能关闭。")
+
+    def _waiting_source(self, original: CancellationTaskInventory, item: QueuedWorkItem) -> str:
+        if not isinstance(self.queue, RequirementCancellationStepReader):
+            return original.source_revision
+        step = self.queue.step(item.id)
+        bound = step.work_item
+        if (
+            bound.id,
+            bound.task_id,
+            bound.role,
+            bound.attempt,
+            bound.checkpoint_sequence,
+            bound.repository_id,
+            bound.repository_scopes,
+        ) != (
+            item.id,
+            original.task.id,
+            item.role,
+            item.attempt,
+            original.state_revision,
+            original.repository_id,
+            (original.task.repository,),
+        ) or (
+            step.boundary.task_id,
+            step.boundary.role,
+            step.boundary.attempt,
+            step.boundary.checkpoint_sequence,
+        ) != (original.task.id, item.role, item.attempt, original.state_revision):
+            raise RequirementCancellationRejected("工程等待与当前队列执行边界不一致, 暂不能关闭。")
+        return step.boundary.source_revision
+
+    def _require_wait_sources(self, original: CancellationTaskInventory) -> None:
+        for item in original.queue_items:
+            if item.status is WorkItemStatus.CLOSED:
+                continue
+            disposition = item.wait_disposition
+            if disposition is None or disposition.facts.source_revision != self._waiting_source(
+                original, item
+            ):
+                raise RequirementCancellationRejected("工程等待与当前任务事实不一致, 暂不能关闭。")
 
     def _inventory(self, target: RequirementCancellationTarget) -> CancellationTaskInventory:
         task = self.repository.get(target.task.id)
@@ -380,6 +484,8 @@ class RequirementCancellationService:
     def _require_current(
         self, receipt: RequirementCancellationReceipt, original: CancellationTaskInventory
     ) -> None:
+        if receipt.human_action.action == "CLOSE_REQUIREMENT":
+            self._require_wait_sources(original)
         current = self.repository.get(original.task.id)
         events = self.repository.list_events(original.task.id)
         revision = self.repository.current_revision(original.task.id)
@@ -410,6 +516,7 @@ class RequirementCancellationService:
                     "status": WorkItemStatus.CLOSED,
                     "updated_at": receipt.human_action.requested_at,
                     "wait_reason": None,
+                    "wait_disposition": None,
                     "available_at": None,
                 }
             )
@@ -427,12 +534,23 @@ class RequirementCancellationService:
         target_status = (
             TaskStatus.FAILED if original.task.status is TaskStatus.NEW else TaskStatus.BLOCKED
         )
+        action = "关闭" if receipt.human_action.action == "CLOSE_REQUIREMENT" else "删除"
+        source_revision = original.source_revision
+        if receipt.human_action.action == "CLOSE_REQUIREMENT":
+            sources = {
+                item.wait_disposition.facts.source_revision
+                for item in original.queue_items
+                if item.status is not WorkItemStatus.CLOSED and item.wait_disposition is not None
+            }
+            if len(sources) != 1:
+                raise RequirementCancellationRejected("工程取消缺少唯一的已核验执行来源。")
+            source_revision = sources.pop()
         return build_event(
             original.task,
             target_status,
             event_id="evt_cancel_" + _digest((receipt.cancellation_sha256, original.task.id))[:40],
-            reason="用户已明确删除该需求, 终止保留的旧工程执行; 取消记录: " + receipt.uri,
-            source_revision=original.source_revision,
+            reason=f"用户已明确{action}该需求, 终止保留的旧工程执行; 取消记录: " + receipt.uri,
+            source_revision=source_revision,
             attempt=max(1, original.task.attempts),
             occurred_at=receipt.human_action.requested_at,
         )
@@ -448,6 +566,8 @@ class RequirementCancellationService:
             if task_id != original.task.id:
                 raise RequirementCancellationRejected("取消写入超出了已批准的任务范围。")
             self.queue.cancellation_fence(cursor, task_id)
+            if receipt.human_action.action == "CLOSE_REQUIREMENT":
+                self._require_wait_sources(original)
             self.queue.verify_cancelled_inventory(
                 cursor,
                 original.task,

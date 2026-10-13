@@ -59,7 +59,11 @@ from ai_software_engineer.multi_directory.budget import (
     stage_budget,
     stage_timeout_seconds,
 )
-from ai_software_engineer.multi_directory.deletion import RequirementDeletionGuard
+from ai_software_engineer.multi_directory.cancellation import FileRequirementCancellationStore
+from ai_software_engineer.multi_directory.deletion import (
+    RequirementDeletionGuard,
+    RequirementWaitingCloseGuard,
+)
 from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
 from ai_software_engineer.multi_directory.models import (
     Candidate,
@@ -363,19 +367,30 @@ class JointDeliveryService:
         self.retirements.retire(checkpoint, reason="deleted", retired_at=submitted_at)
 
     def close_requirement(self, command: CloseRequirement) -> JointDeliveryResult:
-        """Close the exact displayed blocker without erasing delivery evidence."""
+        """Withdraw an exact blocker or verified stopped engineering wait."""
         self.operator_principal.require_duty(OperatorDuty.PRODUCT)
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
             self._expected(checkpoint, command.expected_checkpoint_sha256)
-            if checkpoint.stage is not JointStage.BLOCKED:
-                raise ValueError("Requirement can only be closed while blocked")
-            closed = self._save(
-                checkpoint,
-                stage=JointStage.CLOSED,
-                next_action="Requirement closed by user; delivery history is retained.",
+            if checkpoint.stage is JointStage.BLOCKED:
+                return self._close_checkpoint(checkpoint)
+            if checkpoint.stage is JointStage.DELIVERING:
+                guard: object = self.deletion_guard
+                if not isinstance(guard, RequirementWaitingCloseGuard):
+                    raise ValueError("未配置工程执行停止校验, 不能关闭正在交付的需求。")
+                with guard.protect_waiting_close(checkpoint):
+                    return self._close_checkpoint(checkpoint)
+            raise ValueError(
+                "Requirement can only be closed while blocked or in a stopped engineering wait"
             )
-            return JointDeliveryResult(checkpoint=closed)
+
+    def _close_checkpoint(self, checkpoint: JointCheckpoint) -> JointDeliveryResult:
+        closed = self._save(
+            checkpoint,
+            stage=JointStage.CLOSED,
+            next_action="Requirement closed by user; delivery history is retained.",
+        )
+        return JointDeliveryResult(checkpoint=closed)
 
     def restart_requirement(self, command: RestartRequirement) -> JointDeliveryResult:
         """Reopen the exact displayed closed Requirement without starting execution."""
@@ -385,6 +400,11 @@ class JointDeliveryService:
             self._expected(checkpoint, command.expected_checkpoint_sha256)
             if checkpoint.stage is not JointStage.CLOSED:
                 raise ValueError("Requirement can only be restarted while closed")
+            cancellation = FileRequirementCancellationStore(
+                self.project.requirements_root / checkpoint.delivery_id
+            ).find()
+            if cancellation is not None and cancellation.human_action.action == "CLOSE_REQUIREMENT":
+                raise ValueError("该需求的工程执行已按关闭决定取消, 请基于当前工作空间新建需求。")
             restarted = self._save(
                 checkpoint,
                 stage=JointStage.BLOCKED,

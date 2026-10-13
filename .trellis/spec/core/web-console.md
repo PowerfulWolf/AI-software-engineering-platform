@@ -564,6 +564,10 @@ production_console_app(
   `RESTART_REQUIREMENT` 追加 `BLOCKED` checkpoint，之后再由现有“继续交付”显式恢复执行。删除只追加
   Project retirement 记录，完整 journal、子 Task 与证据不擦除，但父需求及其所有派生子 Task 必须
   同时退出当前 Project 与 Agent 队列投影。活动中的批准后 Requirement 仍不得删除。
+  DELIVERING 的完整工程等待可请求关闭，后端须持有全历史进程锁、拒绝有效 Lease、校验当前
+  typed waiting facts，再按真实 CLOSE_REQUIREMENT 封存取消记录并结束旧 Task/queue；CLOSED
+  发布后才能按新 digest 删除。已取消工程不得重新启动，提示新建需求。细则见
+  [`requirement-deletion.md`](requirement-deletion.md)。
 - `CLOSE_REQUIREMENT`、`RESTART_REQUIREMENT`、`DELETE_REQUIREMENT` 的 QUEUED/RUNNING Operation
   只表示生命周期命令正在处理，不得把原本阻塞或关闭的 Requirement 显示成“进行中”。只有
   `PRODUCT_REPLY`、`PRODUCT_APPROVAL`、`CONTINUE_DELIVERY` 或真实活动子 Task 可以覆盖交付展示阶段。

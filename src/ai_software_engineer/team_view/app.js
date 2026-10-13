@@ -3516,6 +3516,31 @@ function requestGroup(request) {
 function requestTasks(request) {
   return snapshot.tasks.filter((task) => task.request_id === request.id);
 }
+function canCloseRequirement(request) {
+  if (request.stage === "BLOCKED") return true;
+  if (request.stage !== "DELIVERING") return false;
+  const tasks = requestTasks(request);
+  if (!tasks.length) return false;
+  let waiting = false;
+  for (const task of tasks) {
+    const steps = (task.role_queue || []).filter(step => step.status !== "CLOSED");
+    if (!task.terminal && !steps.length) return false;
+    for (const step of steps) {
+      const facts = step.wait_disposition?.facts;
+      const expectedRole = {IMPLEMENTING: "coder", QA: "qa", REVIEW: "reviewer"}[task.status];
+      if (task.terminal || !["WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(step.status) ||
+          step.lease_liveness === "LEASE_VALID" || step.wait_disposition?.responsibility !== "engineering" ||
+          !facts || facts.task_id !== task.task_id || facts.work_item_id !== step.work_item_id ||
+          step.role !== expectedRole || facts.role !== step.role ||
+          facts.task_intent_sha256 !== task.task_intent_sha256 ||
+          !Number.isInteger(task.task_revision) || task.task_revision !== facts.checkpoint_sequence ||
+          !/^[a-f0-9]{40}$/.test(facts.source_revision || "")) return false;
+      waiting = true;
+    }
+  }
+  // The command still rechecks complete history, process locks and current leases.
+  return waiting;
+}
 function currentRequestTasks(request) {
   const currentDeliveryIds = new Set((request.scopes || [])
     .map(scope => scope.delivery_id).filter(Boolean));
@@ -10911,14 +10936,16 @@ function buildDetail(panel = document.getElementById("detail")) {
           "secondary",
         ),
       );
-    if (item.stage === "BLOCKED")
+    if (canCloseRequirement(item))
       topActions.append(
         deliveryButton(
           "关闭需求",
           () =>
             confirmMutation(
               "关闭需求",
-              `确认关闭“${item.title}”吗？交付会停止，需求与交付历史仍会保留。`,
+              item.stage === "DELIVERING"
+                ? `确认关闭“${item.title}”吗？平台会核验工程执行已停止，再取消等待中的交付；需求与历史仍会保留。如需重新交付，请新建需求。`
+                : `确认关闭“${item.title}”吗？交付会停止，需求与交付历史仍会保留。`,
               "确认关闭",
               async () => {
                 const accepted = await submitOperation({

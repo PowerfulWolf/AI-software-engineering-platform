@@ -136,6 +136,7 @@ class _Queue:
                     "status": WorkItemStatus.CLOSED,
                     "updated_at": now,
                     "wait_reason": None,
+                    "wait_disposition": None,
                     "available_at": None,
                 }
             )
@@ -171,6 +172,7 @@ class _Queue:
                         "status": WorkItemStatus.CLOSED,
                         "updated_at": now,
                         "wait_reason": None,
+                        "wait_disposition": None,
                         "available_at": None,
                     }
                 )

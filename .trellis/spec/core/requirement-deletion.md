@@ -136,3 +136,57 @@ Current operator origin denotes a trusted local submission, not authenticated RB
 model self-approval. This session's submission is explicitly delegated by the user's request.
 Original StateEvents, queue history, verdicts and dirty worktrees remain unchanged; audit
 adds only exact cancellation resolution/state/queue events and the retirement tombstone.
+
+## Explicit close of stopped engineering waits (2026-10-13)
+
+`CLOSE_REQUIREMENT` also accepts a `DELIVERING` parent only through
+`RequirementWaitingCloseGuard.protect_waiting_close(checkpoint)`. The production guard holds
+all historical Task worker locks and rejects any valid Lease, unverifiable owner or inventory.
+No guard/cancellation capability means rejection. Existing BLOCKED close behavior is unchanged.
+
+`RequirementCancellationService.cancel(..., action="CLOSE_REQUIREMENT")` binds the real user
+action in the immutable receipt. All open historical queue items must be WAITING_HUMAN or
+WAITING_DEPENDENCY with a typed engineering disposition bound to the original Task intent,
+current effective queue source revision and current checkpoint. Each nonterminal Task must have such a wait; READY,
+RETRY_SCHEDULED, LEASED/RUNNING and missing/stale waiting facts reject. A waiting label alone
+does not prove execution stopped: the existing full-history locks and lease fence remain required.
+The original sealed inventory decides replay eligibility, including when some Tasks/queues have
+already been cancelled. Cancellation uses existing state events and queue fences, then CLOSED
+is appended only after every Task and queue satisfies the original inactive guard.
+
+Closing produces a new parent checkpoint. A subsequent exact DELETE of this CLOSED checkpoint
+checks terminal Tasks/closed queues directly and preserves the existing close receipt; it must
+not try to rewrite that receipt under the new digest or describe the close as a deletion.
+Waiting cancellation replay clears wait_disposition together with wait_reason/available_at,
+matching the production queue's exact CLOSED successor.
+
+Required tests: public waiting close/delete, stale/missing/nonengineering disposition,
+nonwaiting queue, worker lock/valid and racing lease, owner/digest/inventory drift,
+receipt-before-event and event-before-queue replay, and unchanged BLOCKED lifecycle.
+Existing K1: reload at an idle controlled restart; submit formal CLOSE with current Project/ID/
+digest, reread the new CLOSED digest, then submit formal DELETE. Preserve old Operations,
+Task/event/queue/artifact history and dirty code; no direct SQL or directory deletion.
+
+已由 CLOSE_REQUIREMENT 取消工程的需求不得 RESTART_REQUIREMENT 复活；明确提示新建身份。
+旧 BLOCKED 普通关闭未取消工程，继续保留原重新启动行为。单份immutable cancellation receipt
+不扩展为多轮恢复策略。terminal/closed删除跳过新settlement前仍核验既有receipt的typed/digest、
+Team/Project/Requirement、完整Task/repository范围与journal祖先；CLOSE receipt必须对应已完成的
+CLOSED直接后继。损坏/外项目/缺失完成链拒绝，不以新checkpoint规避原审计完整性。
+
+
+### Rebound execution sources
+
+Task.base_ref and previous StateEvents remain immutable after an approved ExecutionBaseline.
+For CLOSE, sealed wait facts must match the current typed `queue.step(work_item_id)` boundary,
+including exact Task/work identity, role, attempt, checkpoint and repository scopes. Production
+`MySqlRoleQueue.step` validates immutable SQL step bytes and resolves same-item baseline overlays;
+a reserved successor already has its own fenced, immutable current-source boundary. Missing
+step/overlay or a changed effective source rejects. No second baseline approval/resolver is added.
+Fakes without this typed step capability retain the original event-source equality.
+
+Recheck the effective boundary during current-state preflight and inside the existing queue
+mutation authority fence, before and after the cancellation event. The new terminal event uses
+the unique sealed, verified current waiting source. Old Task.base_ref and event bytes remain
+unchanged. A real baseline regression must call `validate_pre_candidate_sources` over the
+resulting terminal Task/events and full baseline epoch; original old-source events cannot be
+copied as the source of the post-binding cancellation.

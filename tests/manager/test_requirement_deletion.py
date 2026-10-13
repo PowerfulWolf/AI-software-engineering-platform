@@ -278,7 +278,14 @@ def test_public_deletion_preserves_task_native_history_and_dirty_code(
     with MySqlTaskRepository(mysql_dsn) as repository:
         repository.create(task)
     queue.items = (
-        queued_item().model_copy(update={"task_id": task_id, "status": WorkItemStatus.CLOSED}),
+        queued_item().model_copy(
+            update={
+                "task_id": task_id,
+                "status": WorkItemStatus.CLOSED,
+                "repository_id": blocked.children[0].checkpoint.repository_id,
+                "repository_scopes": (task.repository,),
+            }
+        ),
     )
     checkpoint = (
         service.close_requirement(

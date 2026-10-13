@@ -111,6 +111,214 @@
       "title": "CancellationTaskInventory",
       "type": "object"
     },
+    "DeliveryDisposition": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "delivery_disposition",
+          "default": "delivery_disposition",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "facts": {
+          "$ref": "#/$defs/DeliveryFailureFacts"
+        },
+        "source_facts_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Facts Sha256",
+          "type": "string"
+        },
+        "responsibility": {
+          "$ref": "#/$defs/DeliveryResponsibility"
+        },
+        "action": {
+          "$ref": "#/$defs/DeliveryNextAction"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "next_action": {
+          "minLength": 1,
+          "title": "Next Action",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "resume_condition": {
+          "enum": [
+            "fresh_role_claim",
+            "product_resolution",
+            "engineering_authorization",
+            "verified_prerequisites",
+            "verified_execution_resolution",
+            "explicit_baseline_continuation",
+            "none"
+          ],
+          "title": "Resume Condition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "facts",
+        "source_facts_sha256",
+        "responsibility",
+        "action",
+        "reason",
+        "next_action",
+        "resume_condition"
+      ],
+      "title": "DeliveryDisposition",
+      "type": "object"
+    },
+    "DeliveryFailureFacts": {
+      "additionalProperties": false,
+      "description": "Facts from trusted application services, never model routing suggestions.",
+      "properties": {
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "work_item_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Item Id"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "classification": {
+          "enum": [
+            "TRANSIENT_INFRA",
+            "NONTRANSIENT_INFRA",
+            "INVALID_OUTPUT",
+            "QA_FINDING",
+            "VERIFICATION_INCONCLUSIVE",
+            "REVIEW_FINDING",
+            "POLICY_VIOLATION",
+            "REQUIREMENT_AMBIGUITY",
+            "BUDGET_EXHAUSTED",
+            "CONTEXT_CAPACITY",
+            "PLATFORM_BUG",
+            "EXECUTION_UNCERTAIN",
+            "ENVIRONMENT_UNAVAILABLE",
+            "ENGINEERING_AUTHORIZATION",
+            "SOURCE_PREPARATION_DRIFT",
+            "EXECUTION_BASELINE_PAUSED",
+            "KNOWLEDGE_PREPARATION_LIMIT"
+          ],
+          "title": "Classification",
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "checkpoint_sequence": {
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "budget_available": {
+          "title": "Budget Available",
+          "type": "boolean"
+        },
+        "retry_authorized": {
+          "default": false,
+          "title": "Retry Authorized",
+          "type": "boolean"
+        },
+        "evidence_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "execution_baseline_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Baseline Sha256"
+        }
+      },
+      "required": [
+        "task_id",
+        "role",
+        "classification",
+        "source_revision",
+        "task_intent_sha256",
+        "checkpoint_sequence",
+        "budget_available"
+      ],
+      "title": "DeliveryFailureFacts",
+      "type": "object"
+    },
+    "DeliveryNextAction": {
+      "enum": [
+        "RETRY",
+        "REMEDIATE_CANDIDATE",
+        "REQUEST_PRODUCT_DECISION",
+        "REQUEST_ENGINEERING_AUTHORIZATION",
+        "WAIT_DEPENDENCY",
+        "INVESTIGATE_EXECUTION",
+        "RESUME_EXECUTION_BASELINE",
+        "TERMINATE"
+      ],
+      "title": "DeliveryNextAction",
+      "type": "string"
+    },
+    "DeliveryResponsibility": {
+      "enum": [
+        "product",
+        "team",
+        "engineering"
+      ],
+      "title": "DeliveryResponsibility",
+      "type": "string"
+    },
     "DeliveryRetryFailure": {
       "additionalProperties": false,
       "properties": {
@@ -191,6 +399,138 @@
         }
       },
       "title": "DeliveryRetryPolicy",
+      "type": "object"
+    },
+    "EngineeringCapability": {
+      "enum": [
+        "delivery_wait_resolution",
+        "verification_refresh",
+        "swift_sandbox",
+        "python_mysql_sandbox",
+        "native_ui_sandbox",
+        "in_scope_prerequisite_repair",
+        "pre_execution_rebind",
+        "execution_baseline_rebind",
+        "owned_mysql_cleanup"
+      ],
+      "title": "EngineeringCapability",
+      "type": "string"
+    },
+    "EngineeringGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/EngineeringCapability"
+        },
+        "max_admissions": {
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Max Admissions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "capability",
+        "max_admissions"
+      ],
+      "title": "EngineeringGrant",
+      "type": "object"
+    },
+    "EngineeringPolicy": {
+      "additionalProperties": false,
+      "description": "Versioned organization decision frozen only on newly admitted Tasks.",
+      "properties": {
+        "kind": {
+          "const": "engineering_policy",
+          "default": "engineering_policy",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "policy_id": {
+          "default": "local-bounded-engineering-v1",
+          "minLength": 1,
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Policy Version",
+          "type": "integer"
+        },
+        "authorization_source": {
+          "const": "organization_engineering_policy",
+          "default": "organization_engineering_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "issued_by": {
+          "$ref": "#/$defs/LocalOperatorPrincipal"
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/EngineeringGrant"
+          },
+          "minItems": 1,
+          "title": "Grants",
+          "type": "array"
+        },
+        "max_total_admissions": {
+          "default": 12,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Total Admissions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "issued_by",
+        "grants"
+      ],
+      "title": "EngineeringPolicy",
+      "type": "object"
+    },
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
       "type": "object"
     },
     "InterruptionContinuationPolicy": {
@@ -352,6 +692,45 @@
         }
       ]
     },
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
+    },
     "QueuedWorkItem": {
       "additionalProperties": false,
       "description": "One executable delivery-role Run in the organization queue.",
@@ -418,6 +797,17 @@
           ],
           "default": null,
           "title": "Wait Reason"
+        },
+        "wait_disposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "available_at": {
           "anyOf": [
@@ -511,7 +901,7 @@
     },
     "RequirementCancellationHumanAction": {
       "additionalProperties": false,
-      "description": "The explicit product deletion command, never an Agent approval.",
+      "description": "The explicit product withdrawal command, never an Agent approval.",
       "properties": {
         "kind": {
           "const": "HumanActionEvent",
@@ -520,8 +910,11 @@
           "type": "string"
         },
         "action": {
-          "const": "DELETE_REQUIREMENT",
           "default": "DELETE_REQUIREMENT",
+          "enum": [
+            "DELETE_REQUIREMENT",
+            "CLOSE_REQUIREMENT"
+          ],
           "title": "Action",
           "type": "string"
         },
@@ -858,177 +1251,6 @@
       ],
       "title": "WorkItemStatus",
       "type": "string"
-    },
-    "EngineeringCapability": {
-      "enum": [
-        "delivery_wait_resolution",
-        "verification_refresh",
-        "swift_sandbox",
-        "python_mysql_sandbox",
-        "native_ui_sandbox",
-        "in_scope_prerequisite_repair",
-        "pre_execution_rebind",
-        "execution_baseline_rebind",
-        "owned_mysql_cleanup"
-      ],
-      "title": "EngineeringCapability",
-      "type": "string"
-    },
-    "EngineeringGrant": {
-      "additionalProperties": false,
-      "properties": {
-        "capability": {
-          "$ref": "#/$defs/EngineeringCapability"
-        },
-        "max_admissions": {
-          "maximum": 20,
-          "minimum": 1,
-          "title": "Max Admissions",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "capability",
-        "max_admissions"
-      ],
-      "title": "EngineeringGrant",
-      "type": "object"
-    },
-    "EngineeringPolicy": {
-      "additionalProperties": false,
-      "description": "Versioned organization decision frozen only on newly admitted Tasks.",
-      "properties": {
-        "kind": {
-          "const": "engineering_policy",
-          "default": "engineering_policy",
-          "title": "Kind",
-          "type": "string"
-        },
-        "schema_version": {
-          "const": "v1",
-          "default": "v1",
-          "title": "Schema Version",
-          "type": "string"
-        },
-        "policy_id": {
-          "default": "local-bounded-engineering-v1",
-          "minLength": 1,
-          "title": "Policy Id",
-          "type": "string"
-        },
-        "policy_version": {
-          "default": 1,
-          "minimum": 1,
-          "title": "Policy Version",
-          "type": "integer"
-        },
-        "authorization_source": {
-          "const": "organization_engineering_policy",
-          "default": "organization_engineering_policy",
-          "title": "Authorization Source",
-          "type": "string"
-        },
-        "scope": {
-          "$ref": "#/$defs/EngineeringScope"
-        },
-        "issued_by": {
-          "$ref": "#/$defs/LocalOperatorPrincipal"
-        },
-        "grants": {
-          "items": {
-            "$ref": "#/$defs/EngineeringGrant"
-          },
-          "minItems": 1,
-          "title": "Grants",
-          "type": "array"
-        },
-        "max_total_admissions": {
-          "default": 12,
-          "maximum": 100,
-          "minimum": 1,
-          "title": "Max Total Admissions",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "scope",
-        "issued_by",
-        "grants"
-      ],
-      "title": "EngineeringPolicy",
-      "type": "object"
-    },
-    "EngineeringScope": {
-      "additionalProperties": false,
-      "properties": {
-        "team_id": {
-          "minLength": 1,
-          "title": "Team Id",
-          "type": "string"
-        },
-        "project_id": {
-          "minLength": 1,
-          "title": "Project Id",
-          "type": "string"
-        },
-        "repository_id": {
-          "minLength": 1,
-          "title": "Repository Id",
-          "type": "string"
-        },
-        "repository_root": {
-          "minLength": 1,
-          "title": "Repository Root",
-          "type": "string"
-        }
-      },
-      "required": [
-        "team_id",
-        "project_id",
-        "repository_id",
-        "repository_root"
-      ],
-      "title": "EngineeringScope",
-      "type": "object"
-    },
-    "LocalOperatorPrincipal": {
-      "additionalProperties": false,
-      "description": "Trusted local composition identity; request/model text cannot add duties.",
-      "properties": {
-        "kind": {
-          "const": "trusted_local_operator",
-          "default": "trusted_local_operator",
-          "title": "Kind",
-          "type": "string"
-        },
-        "operator_id": {
-          "minLength": 1,
-          "title": "Operator Id",
-          "type": "string"
-        },
-        "duties": {
-          "items": {
-            "$ref": "#/$defs/OperatorDuty"
-          },
-          "minItems": 1,
-          "title": "Duties",
-          "type": "array"
-        }
-      },
-      "required": [
-        "operator_id",
-        "duties"
-      ],
-      "title": "LocalOperatorPrincipal",
-      "type": "object"
-    },
-    "OperatorDuty": {
-      "enum": [
-        "PRODUCT",
-        "ENGINEERING"
-      ],
-      "title": "OperatorDuty",
-      "type": "string"
     }
   },
   "additionalProperties": false,
@@ -1098,6 +1320,6 @@
   ],
   "title": "RequirementCancellationReceipt",
   "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/requirement-cancellation.schema.json"
+  "$id": "https://ai-software-engineer.local/schemas/requirement-cancellation.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
 }
