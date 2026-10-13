@@ -134,3 +134,27 @@ Legacy PREPARING snapshots already revoked by an exact deleted retirement may be
 purged only at initial sequence=1 with no predecessor, when checkpoint digest matches and no approved requirement/design/plan/child/integration
 exists. Fresh PREPARING remains ineligible; the execution/Operation/resource guard still applies.
 This compatibility rule never appends a new approval or revives the retired identity.
+
+## Unapproved Product lifecycle verification
+
+`WAITING_PRODUCT_APPROVAL` with a sealed ProductSpec and no Product approval permits
+both explicit CLOSE and direct DELETE after the existing inactive-execution guards.
+CLOSE retains the ProductSpec, leaves approval absent, and publishes a new CLOSED
+checkpoint; subsequent DELETE must bind that new checkpoint digest. Neither command
+invokes Product/Designer or implicitly approves the ProductSpec. An active Operation,
+process/Lease or unverified resource still refuses; an old displayed digest is not
+permission to mutate a newer checkpoint.
+
+`tests/web_console/test_requirement_deletion_entry.py` verifies the actual public
+POST/worker/store/GET chain for idle draft versus unapproved ProductSpec, each with
+direct DELETE versus CLOSE → DELETE. Assert terminal SUCCEEDED, retained ProductSpec
+and no approval after CLOSE, exact new digest, successful temporary DELETE GET
+acknowledgement, prior CLOSE Operation 404 after physical purge, empty Requirement
+projection/history and refusal of stale recovery/approval commands. Frontend eligibility
+is checked by `tests/team_view/waiting-requirement-close.test.cjs`; submission and
+refresh rendering are covered by `tests/team_view/ui.test.cjs`.
+
+A successful current reproduction cannot establish the cause of a historical error
+whose Operation was intentionally physically removed. Report current verification
+separately from the unknown historical message; never restore deleted bodies merely
+to investigate an old notice.

@@ -114,3 +114,32 @@ removed Requirement bodies, rows or unmerged refs. Do not reset terminal Tasks o
 revive a deleted identity. Git objects already reachable from main remain; unreferenced
 objects are reclaimed by normal Git maintenance, not aggressive GC or manual object
 removal. This is a generic platform contract, not a K1-specific exception.
+
+## Follow-up: unapproved Product close/delete (2026-10-13)
+
+The user recalled that K1 had a Product document awaiting review, but not the old error
+text/time. Current frontend and service both permit CLOSE and DELETE in
+WAITING_PRODUCT_APPROVAL; existing active-execution/ownership/current-checkpoint guards
+remain. The old Requirement and its Operation bodies have intentionally been physically
+purged, so the historical error cause is unknown.
+
+Extended the public HTTP fixture to four actual paths: idle draft and Product awaiting
+approval, each deleted directly or closed first. All four passed (2.27 s). CLOSE keeps
+the exact ProductSpec and no approval, then DELETE binds the new CLOSED digest. DELETE
+GET returns SUCCEEDED through the bounded transient acknowledgement, the earlier CLOSE
+Operation returns 404 after purge, and no Requirement/journal survives. The existing
+fake backend rejects model execution, so these paths cannot quietly start delivery.
+
+Commands/results:
+
+- `python -m pytest -q tests/web_console/test_requirement_deletion_entry.py tests/manager/test_waiting_requirement_close.py -m 'not mysql'`: 25 passed, 3 MySQL cases deliberately deselected; no production DSN.
+- Extended `python -m pytest -q tests/web_console/test_requirement_deletion_entry.py`: 4 passed.
+- `node --test tests/team_view/waiting-requirement-close.test.cjs`: 13 passed.
+- `node --test --test-name-pattern='team, multi-directory requests, detail, refresh preservation and stale errors' tests/team_view/ui.test.cjs`: 1 complete UI-flow case passed.
+- Changed-file `ruff format --check`, `ruff check --no-cache`, `MYPYPATH=src mypy --strict --follow-imports=silent`, and `git diff --check`: passed. Explicit MYPYPATH binds local source contracts instead of the installed editable package.
+
+Existing-data disposition: no additional production facts changed. K1 remains deleted;
+no approval, Requirement recreation or automation resume. This follow-up adds regression
+coverage and explicit knowledge only; production close/delete logic is unchanged. Code
+rollback for the follow-up is a normal test/documentation commit revert; deleted bodies
+are not recreated.
