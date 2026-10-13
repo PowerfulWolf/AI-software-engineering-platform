@@ -34,6 +34,7 @@ from .lifecycle import ConfigurationApplyError, FileConfigurationLifecycle
 from .manager import ManagerConsoleAdapter
 from .models import ConsoleIntent, ConsoleOperation
 from .preparation_store import FilePreparationProgressStore, open_preparation_progress_store
+from .requirement_visibility import ProductionRequirementOperationVisibility
 from .service_lifecycle import (
     ConsoleShutdownCoordinator,
     ServiceInstance,
@@ -170,7 +171,10 @@ def production_console_app(
         work_items = teams[0].directory("work-items")
         console = InspectionConsole(
             FileConsoleOperationStore(
-                work_items / "console-operations", team_id=config.team_id, read_only=True
+                work_items / "console-operations",
+                team_id=config.team_id,
+                read_only=True,
+                visibility=ProductionRequirementOperationVisibility(teams[0]),
             ),
             FilePreparationProgressStore(
                 work_items / "console-preparation-progress", read_only=True
@@ -202,6 +206,7 @@ def production_console_app(
         store = FileConsoleOperationStore(
             host.team_workspace.directory("work-items") / "console-operations",
             team_id=config.team_id,
+            visibility=ProductionRequirementOperationVisibility(host.team_workspace),
         )
         console = ProjectConsole(
             store=store,

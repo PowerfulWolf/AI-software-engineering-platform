@@ -271,14 +271,10 @@ function requireProductApprovalRead(intent, expectedBinding) {
 }
 function teamDetailReadNotice() {
   const state = teamDetailRead, target = selectedTeamDetailTarget();
+  if (state?.status === "ready" && state.loadedKey === target?.key) return null;
   const box = viewBlock(el("div", undefined, "detail-body-read-status admin-notice"), "detail-body-read-status",
     [state?.status, state?.issue, state?.loadedKey, target?.key, state?.value?.as_of]);
   box.setAttribute("role", "status");
-  const ready = state?.status === "ready" && state.loadedKey === target?.key;
-  if (ready) {
-    box.append(el("p", "完整正文与历史已读取 · " + time(state.value.as_of), "muted"));
-    return box;
-  }
   const saved = state?.value ? "下方保留上次读取的正文，仅供阅读；当前状态和操作以上方最新记录为准。" : "正文尚未读取，不能据此判断没有产物或历史。";
   const reason = state?.status === "error" ? state.issue === "changed"
     ? "记录已有更新，请刷新当前状态后重新读取正文。"
@@ -3517,7 +3513,7 @@ function requestTasks(request) {
   return snapshot.tasks.filter((task) => task.request_id === request.id);
 }
 function canCloseRequirement(request) {
-  if (request.stage === "BLOCKED") return true;
+  if (request.stage === "BLOCKED" || productDiscussionStages.has(request.stage)) return true;
   if (request.stage !== "DELIVERING") return false;
   const tasks = requestTasks(request);
   if (!tasks.length) return false;
@@ -3539,7 +3535,8 @@ function canCloseRequirement(request) {
     }
   }
   // The command still rechecks complete history, process locks and current leases.
-  return waiting;
+  return waiting || tasks.every(task => task.terminal &&
+    (task.role_queue || []).every(step => step.status === "CLOSED"));
 }
 function currentRequestTasks(request) {
   const currentDeliveryIds = new Set((request.scopes || [])
@@ -6749,67 +6746,6 @@ function deliveryResult(panel, request) {
   section.append(result);
   panel.append(section);
 }
-function projectOperationHistory(content) {
-  if (operationSummaryMode()) {
-    renderSummaryOperationHistory(content, currentProjectId(), null);
-    return;
-  }
-  const projectId = currentProjectId();
-  if (!projectId) return;
-  const records = operations.filter(operation => operationProject(operation) === projectId &&
-    (!operation.team_id || operation.team_id === snapshot?.team_id) && !operationRequest(operation))
-    .sort((a, b) => Date.parse(a.updated_at) - Date.parse(b.updated_at) || a.operation_id.localeCompare(b.operation_id));
-  if (!records.length) return;
-  const fold = viewGroup(el("details", undefined, "request-history-fold project-operation-history"),
-    "project-operation-history:" + snapshot.team_id + "/" + projectId);
-  fold.dataset.key = "project-operation-history:" + snapshot.team_id + "/" + projectId;
-  fold.append(
-    viewBlock(el("summary", `项目操作记录 · ${records.length} 条`), "project-operation-history-summary", records.length),
-    viewBlock(el("p", "以下操作未关联当前可访问的需求，包含需求创建和已删除需求的记录。全部记录保留；这里描述当次操作，当前需求的进度和下一步请查看需求详情。", "muted"),
-      "project-operation-history-explanation", null),
-  );
-  if (!operationsAvailable)
-    fold.append(el("p", "操作记录暂时无法读取。以下保留上次读取的记录，不能代表当前执行状态。", "error"));
-  const list = viewGroup(el("ol", undefined, "execution-history"), "project-operation-history-list");
-  for (const record of records) {
-    const item = viewBlock(el("li", undefined, "execution-history-entry"), "project-operation:" + record.operation_id, operationRenderFact(record));
-    item.append(el("strong", operationActionLabel(record)));
-    if (record.intent?.name) item.append(el("p", record.intent?.name));
-    const status = el("p", "操作状态 · ", "muted");
-    const commandStatus = badge(record.status);
-    if (record.status === "SUCCEEDED") {
-      commandStatus.textContent = "命令已完成";
-      commandStatus.className = "badge";
-    }
-    status.append(commandStatus);
-    item.append(status, el("p", "操作更新 · " + time(record.updated_at), "muted"));
-    if (operationResult(record)?.stage) item.append(el("p", "当次需求阶段 · " + label(operationResult(record).stage), "muted"));
-    appendIndependentOperationResult(item, record);
-    if (record.error_summary) item.append(el("p", humanizeBlockingText(record.error_summary), "error"));
-    if (operationResult(record)?.diagnostic) item.append(el("p", "当次原因 · " + humanizeBlockingText(operationResult(record).diagnostic)));
-    if (operationResult(record)?.next_action) item.append(el("p", "当次下一步 · " + humanizeBlockingText(operationResult(record).next_action)));
-    const handling = operationResult(record)?.engineering_wait_handling;
-    if (handling?.summary) item.append(el("p", "当次平台处理 · " + humanizeBlockingText(handling.summary)));
-    if (handling?.user_action) item.append(el("p", "当次用户操作 · " + humanizeBlockingText(handling.user_action), "muted"));
-    if (handling?.recheck_when) item.append(el("p", "当次复查时机 · " + humanizeBlockingText(handling.recheck_when), "muted"));
-    const technical = engineeringDetails("排障信息（供工程人员使用）", record.operation_id);
-    technical.append(el("p", "Team · " + snapshot.team_id, "paths"),
-      el("p", "Project · " + projectId, "paths"), el("p", "操作 · " + record.operation_id, "paths"));
-    if (record.error_code) technical.append(el("p", "平台错误编号 · " + record.error_code, "paths"));
-    const target = operationTarget(record);
-    if (target) technical.append(el("p", "原需求 · " + target, "paths"));
-    const proof = operationResult(record)?.engineering_wait_investigation || handling?.investigation;
-    if (proof) appendEngineeringInvestigation(item, proof, {historical: true});
-    const decision = operationResult(record)?.engineering_wait_resolution || handling?.resolution;
-    if (decision) appendEngineeringExecutionDetails(item, technical, {
-      ...decision, operator_id: decision.operator_principal?.operator_id,
-    });
-    item.append(technical);
-    list.append(item);
-  }
-  fold.append(list);
-  content.append(fold);
-}
 function renderSummaryOperationHistory(panel, projectId, deliveryId) {
   if (!projectId) return;
   const state = operationHistoryPage(projectId, deliveryId);
@@ -6998,7 +6934,6 @@ function renderRequests(content) {
         ),
       );
     content.append(n);
-    projectOperationHistory(content);
     return;
   }
   const groups = [
@@ -7051,7 +6986,6 @@ function renderRequests(content) {
     group.append(el("p", `暂无${currentTitle}需求。`, "muted"));
   for (const request of requests) group.append(requestCard(request));
   content.append(group);
-  projectOperationHistory(content);
 }
 async function adminFetch(url, options = {}) {
   const response = await fetch(url, { cache: "no-store", ...options });
@@ -10945,7 +10879,7 @@ function buildDetail(panel = document.getElementById("detail")) {
               "关闭需求",
               item.stage === "DELIVERING"
                 ? `确认关闭“${item.title}”吗？平台会核验工程执行已停止，再取消等待中的交付；需求与历史仍会保留。如需重新交付，请新建需求。`
-                : `确认关闭“${item.title}”吗？交付会停止，需求与交付历史仍会保留。`,
+                : `确认关闭“${item.title}”吗？平台会核验执行已停止、保存成果并释放临时工作区，需求与交付历史仍会保留。`,
               "确认关闭",
               async () => {
                 const accepted = await submitOperation({
@@ -10960,31 +10894,9 @@ function buildDetail(panel = document.getElementById("detail")) {
           "secondary",
         ),
       );
-    if (item.stage === "CLOSED")
-      topActions.append(
-        deliveryButton(
-          "重新启动需求",
-          () =>
-            confirmMutation(
-              "重新启动需求",
-              `确认重新启动“${item.title}”吗？需求会回到待继续交付状态，并保留此前的全部交付历史。`,
-              "确认重新启动",
-              async () => {
-                const accepted = await submitOperation({
-                  action: "RESTART_REQUIREMENT",
-                  project_id: item.project_id,
-                  delivery_id: item.id,
-                  expected_checkpoint_sha256: item.checkpoint_sha256,
-                });
-                if (!accepted) throw new Error("重新启动操作未被接受。");
-              },
-            ),
-          "primary",
-        ),
-      );
     if (
       productDiscussionStages.has(item.stage) ||
-      ["BLOCKED", "CLOSED"].includes(item.stage)
+      ["BLOCKED", "CLOSED", "DONE"].includes(item.stage)
     )
       topActions.append(
         deliveryButton(
@@ -10992,7 +10904,7 @@ function buildDetail(panel = document.getElementById("detail")) {
           () =>
             confirmMutation(
               "删除需求",
-              `确认从当前 Project 删除“${item.title}”吗？历史记录会保留，但该需求将不能继续交付。`,
+              `确认从当前 Project 删除“${item.title}”吗？平台会保存成果并释放临时工作区，历史记录会保留，但该需求将不能继续交付。`,
               "确认删除",
               async () => {
                 const accepted = await submitOperation({
@@ -11038,7 +10950,10 @@ function buildDetail(panel = document.getElementById("detail")) {
       viewBlock(requestNodeBadge(item), "request-heading-status", [deliveryPhase(item), requestNodeExecution(item)]));
     masthead.append(viewBlock(top, "request-heading-actions", [currentItem, pollingControlFacts(), operationRenderFacts()]), titleRow,
       detailReadFreshnessSlot());
-    if (teamSummaryMode()) masthead.append(teamDetailReadNotice());
+    if (teamSummaryMode()) {
+      const notice = teamDetailReadNotice();
+      if (notice) masthead.append(notice);
+    }
     panel.append(masthead, requestChapterNavigation(item));
     const current = requestChapter("current");
     const processingControlIssue = requestNodeExecution(item).platformProcessing
@@ -11156,7 +11071,10 @@ function buildDetail(panel = document.getElementById("detail")) {
   const header = viewGroup(el("header", undefined, "task-detail-header"), "task-detail-header");
   viewBlock(top, "task-heading", [item.id, historicalTask]);
   header.append(top, taskReadingToolbar(), detailReadFreshnessSlot());
-  if (teamSummaryMode()) header.append(teamDetailReadNotice());
+  if (teamSummaryMode()) {
+    const notice = teamDetailReadNotice();
+    if (notice) header.append(notice);
+  }
   dialog.append(header);
   const masthead = viewGroup(el("div", undefined, "task-detail-masthead"), "task-detail-masthead");
   const taskTitleRow = viewGroup(el("div", undefined, "task-title-row"), "task-title-row");

@@ -5,6 +5,8 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import os
+from collections.abc import Iterator
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -68,6 +70,26 @@ def _delivery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, dsn: str = "unused"
 ) -> tuple[JointDeliveryService, JointCheckpoint, Path, Path, _Queue]:
     service, root = _service(tmp_path, monkeypatch)
+    if dsn == "unused":
+        from contextlib import contextmanager
+
+        @contextmanager
+        def no_verification(
+            self: object, checkpoint: object, targets: object
+        ) -> Iterator[dict[str, tuple[Path, str]]]:
+            yield {}
+
+        monkeypatch.setattr(
+            ProductionRequirementDeletionGuard, "_verification_resources", no_verification
+        )
+    if dsn != "unused":
+        from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
+        from tests.manager.test_dispatch_authority import _durable_facts
+
+        facts_root = tmp_path / "dispatch-fixture"
+        facts_root.mkdir()
+        _, _, _, plans, revisions = _durable_facts(facts_root)
+        MySqlDispatchAuthority(dsn, request_revisions=revisions, planner_records=plans)
     original = service.create(
         CreateRequirement(name="K1", repository_roots=(str(root),))
     ).checkpoint
@@ -333,3 +355,109 @@ def test_deletion_refuses_nonterminal_durable_task(
     with pytest.raises(RequirementDeletionRejected, match="工程任务尚未终止"):
         _delete(service, blocked)
     assert not service.retirements.retirement().entries
+
+
+def test_unattached_derived_native_history_is_in_complete_resource_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_software_engineer.manager.delivery import _delivery_id
+    from ai_software_engineer.multi_directory.production import DerivedStageInputs
+    from tests.manager.test_joint_contracts import checkpoint as planned_checkpoint
+
+    service, _draft, _sidecar, _, _ = _delivery(tmp_path, monkeypatch)
+    template = planned_checkpoint(tmp_path)
+    # Use the real registered project/preparation and a full approved artifact chain.
+    # The two-unit fixture is projected onto both real registered repositories.
+    repositories = []
+    preparations = []
+    for index, unit in enumerate(template.scope.units):
+        Path(unit.root).mkdir(exist_ok=True)
+        repo = service.project.repository_registry().register(unit.root)
+        repositories.append(repo)
+        preparation = template.preparations[index].result.preparation
+        assert preparation is not None
+        from ai_software_engineer.domain.project_delivery import ProjectPreparation
+        from ai_software_engineer.manager.preparation import PrepareProjectResult
+        from ai_software_engineer.multi_directory.models import PreparedUnit
+
+        updated = ProjectPreparation.create(
+            team_id=service.team.manifest.team_id,
+            project_id=service.project.manifest.project_id,
+            project_manifest_sha256=service.project.manifest.manifest_sha256,
+            repository_id=repo.repository_id,
+            repository_root=unit.root,
+            repository_workspace_root=str(repo.root),
+            team_root=str(service.team.root),
+            repository_profile_sha256=preparation.repository_profile_sha256,
+            runtime_binding_sha256=preparation.runtime_binding_sha256,
+            baseline_spec_sha256=preparation.baseline_spec_sha256,
+            prepared_at=NOW,
+        )
+        preparations.append(
+            PreparedUnit(
+                unit_id=unit.id,
+                result=PrepareProjectResult(
+                    status=template.preparations[index].result.status,
+                    repository_id=repo.repository_id,
+                    baseline_compilation_sha256="1" * 64,
+                    preparation=updated,
+                ),
+            )
+        )
+    parent = JointCheckpoint.seal(
+        {
+            **template.to_wire(),
+            "team_id": service.team.manifest.team_id,
+            "team_manifest_sha256": service.team.manifest.manifest_sha256,
+            "project_id": service.project.manifest.project_id,
+            "project_manifest_sha256": service.project.manifest.manifest_sha256,
+            "preparations": tuple(preparations),
+            "stage": JointStage.BLOCKED,
+            "children": (),
+        }
+    )
+    service.journal.append(parent, expected=None)
+    assert parent.plan is not None
+    derived = DerivedStageInputs(parent, parent.plan.units[0].unit_id)
+    native_id = _delivery_id(derived.root, derived.requirement, namespace=parent.project_id)
+    source = _done_child(parent, 0).checkpoint
+    native = ProjectDeliveryCheckpoint.create(**{**source.to_wire(), "delivery_id": native_id})
+    store = FileProjectDeliveryCheckpointStore(repositories[0].root / "state/project-deliveries")
+    store.put_intake(
+        ProjectDeliveryIntake.create(
+            delivery_id=native_id,
+            repository_id=native.repository_id,
+            repository_root=native.repository_root,
+            title="unattached",
+            requirement=derived.requirement,
+            submitted_at=NOW,
+        )
+    )
+    store.put(native)
+    assert native.task_id is not None
+    assert not parent.children
+    guard = service.deletion_guard
+    assert isinstance(guard, ProductionRequirementDeletionGuard)
+    assert guard._targets(parent) == {
+        native.task_id: (repositories[0].root, native.repository_root)
+    }
+    # The unattached Task receives the same live process lock rejection.
+    with ExitStack() as stack:
+        from ai_software_engineer.multi_directory.deletion import _task_lock
+
+        stack.enter_context(
+            _task_lock(repositories[0].root / "state/queue-worker-locks", native.task_id)
+        )
+        with pytest.raises(RequirementDeletionRejected, match="进程正在运行"):
+            _delete(service, parent)
+
+    # Ordinary Operation visibility binds the same unattached deterministic identity.
+    from ai_software_engineer.web_console.requirement_visibility import (
+        ProductionRequirementOperationVisibility,
+    )
+
+    service.retirements.retire(parent, reason="deleted", retired_at=NOW)
+    visible = ProductionRequirementOperationVisibility(service.team).read()
+    assert not visible.visible(parent.project_id, parent.delivery_id)
+    assert not visible.visible(parent.project_id, native_id)
+    assert visible.visible("project_other", native_id)

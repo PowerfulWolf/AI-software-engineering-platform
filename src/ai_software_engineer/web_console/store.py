@@ -28,6 +28,10 @@ from .models import (
     IdempotencyKey,
     OperationId,
 )
+from .requirement_visibility import (
+    RequirementOperationVisibility,
+    RequirementOperationVisibilityReader,
+)
 from .summary_models import OperationSummary, OperationSummaryPage, OperationSummaryQuery
 from .summary_projection import (
     OperationSummaryCache,
@@ -268,9 +272,17 @@ class InMemoryConsoleOperationStore:
 class FileConsoleOperationStore:
     """Append-only team-sidecar adapter with process-safe admission."""
 
-    def __init__(self, root: Path, *, team_id: str, read_only: bool = False) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        team_id: str,
+        read_only: bool = False,
+        visibility: RequirementOperationVisibilityReader | None = None,
+    ) -> None:
         self.root = root.absolute()
         self.read_only = read_only
+        self._visibility = visibility
         self.team_id = team_id
         self._idle_inventory_sha256: str | None = None
         self._summary_cache = OperationSummaryCache()
@@ -359,7 +371,23 @@ class FileConsoleOperationStore:
 
     def list_current(self) -> tuple[ConsoleOperation, ...]:
         with self._locked(shared=True):
-            return self._list_current()
+            complete = self._list_current()
+            visibility = self._read_visibility()
+            return tuple(
+                item
+                for item in complete
+                if visibility.visible(
+                    OperationSummary.from_operation(item).project_id,
+                    OperationSummary.from_operation(item).delivery_id,
+                )
+            )
+
+    def _read_visibility(self) -> RequirementOperationVisibility:
+        return (
+            self._visibility.read()
+            if self._visibility is not None
+            else RequirementOperationVisibility()
+        )
 
     def summary_page(self, query: OperationSummaryQuery) -> OperationSummaryPage:
         # Separate lock serializes this tiny cache, not authoritative store reads.
@@ -381,9 +409,18 @@ class FileConsoleOperationStore:
                 summary = self._summary_cache.project(operation_id, digest, read_current)
                 if summary is not None:
                     summaries.append(summary)
+            visibility = self._read_visibility()
+            if self._visibility is not None:
+                inventory = hashlib.sha256(
+                    bytes.fromhex(inventory) + bytes.fromhex(visibility.sha256)
+                ).hexdigest()
             try:
                 return build_summary_page(
-                    summaries=tuple(summaries),
+                    summaries=tuple(
+                        item
+                        for item in summaries
+                        if visibility.visible(item.project_id, item.delivery_id)
+                    ),
                     inventory_sha256=inventory,
                     query=query,
                     team_id=self.team_id,

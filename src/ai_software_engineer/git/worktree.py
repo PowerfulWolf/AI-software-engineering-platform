@@ -1,5 +1,7 @@
 """Local Git CLI adapter for isolated role worktrees."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import os
@@ -10,7 +12,7 @@ import subprocess
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 from pydantic import TypeAdapter
 
@@ -35,6 +37,9 @@ from ai_software_engineer.git.mutation_capture import (
 from ai_software_engineer.git.policy import PathPolicyViolation, WorkspacePolicy
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSnapshot, WorktreeSpec
 from ai_software_engineer.redaction import patch_secret_occurrences
+
+if TYPE_CHECKING:
+    from ai_software_engineer.git.release import WorktreeReleaseArchive
 
 _GIT_ENV: Final[dict[str, str]] = {
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -319,6 +324,15 @@ class GitWorktreeManager:
             marker = self._removal_marker(spec, self._branch_name(spec))
             self._write_removal_marker(marker)
         self._run_git(("worktree", "remove", str(worktree.path.resolve())), cwd=self._repository)
+
+    def archive_and_remove(
+        self, worktree: WorktreeRef, *, archive_root: Path, owner_sha256: str
+    ) -> WorktreeReleaseArchive:
+        from ai_software_engineer.git.release import archive_and_remove
+
+        return archive_and_remove(
+            self, worktree, archive_root=archive_root, owner_sha256=owner_sha256
+        )
 
     def _removal_marker(self, spec: WorktreeSpec, branch: str) -> Path:
         target = self._target_path(spec)

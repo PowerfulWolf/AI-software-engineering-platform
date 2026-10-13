@@ -293,9 +293,9 @@ class RequirementCancellationService:
         action: RequirementCancellationAction,
     ) -> RequirementCancellationReceipt:
         allowed = (
-            {JointStage.DELIVERING}
+            {JointStage.DELIVERING, JointStage.BLOCKED}
             if action == "CLOSE_REQUIREMENT"
-            else {JointStage.BLOCKED, JointStage.CLOSED}
+            else {JointStage.BLOCKED, JointStage.CLOSED, JointStage.DONE}
         )
         if checkpoint.stage not in allowed:
             raise RequirementCancellationRejected("仅能撤销已经停止的需求执行。")
@@ -326,7 +326,7 @@ class RequirementCancellationService:
         self._require_scope(receipt, checkpoint, targets)
         if receipt.human_action.action != action:
             raise RequirementCancellationRejected("需求取消记录的用户操作不一致。")
-        if action == "CLOSE_REQUIREMENT":
+        if action == "CLOSE_REQUIREMENT" and checkpoint.stage is JointStage.DELIVERING:
             self._require_engineering_waits(receipt)
         # Validate the complete scope before publishing a receipt or mutating any Task.
         for original in receipt.tasks:
@@ -425,12 +425,10 @@ class RequirementCancellationService:
 
     def _require_wait_sources(self, original: CancellationTaskInventory) -> None:
         for item in original.queue_items:
-            if item.status is WorkItemStatus.CLOSED:
+            if item.status is WorkItemStatus.CLOSED or item.wait_disposition is None:
                 continue
             disposition = item.wait_disposition
-            if disposition is None or disposition.facts.source_revision != self._waiting_source(
-                original, item
-            ):
+            if disposition.facts.source_revision != self._waiting_source(original, item):
                 raise RequirementCancellationRejected("工程等待与当前任务事实不一致, 暂不能关闭。")
 
     def _inventory(self, target: RequirementCancellationTarget) -> CancellationTaskInventory:
@@ -542,9 +540,10 @@ class RequirementCancellationService:
                 for item in original.queue_items
                 if item.status is not WorkItemStatus.CLOSED and item.wait_disposition is not None
             }
-            if len(sources) != 1:
+            if len(sources) > 1:
                 raise RequirementCancellationRejected("工程取消缺少唯一的已核验执行来源。")
-            source_revision = sources.pop()
+            if sources:
+                source_revision = sources.pop()
         return build_event(
             original.task,
             target_status,

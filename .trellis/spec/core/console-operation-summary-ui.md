@@ -264,3 +264,11 @@ when production work is idle through controlled restart, then refresh the origin
 Requirement. Roll back frontend reading code/assets with backend compatibility;
 retain every durable fact. This reduces transfer/retention and does not alone
 prove absence of a platform memory leak or complete K1 delivery.
+
+## Requirement-only history placement (2026-10-13)
+
+`renderRequests()`只展示需求列表/空态，不调用项目汇总操作历史。需求详情继续调用
+`renderSummaryOperationHistory`/完整兼容历史；当前审批与控制来源读取保持。删除由服务端同一
+retirement集合过滤operations/count/active/page，前端不再复制deleted筛选权威。
+Good：列表简洁、打开需求可读过程。Base：空列表无残留操作块。Bad：删掉详情历史或审批hydration。
+回归tests/team_view/ui.test.cjs及真实Python→JS Operation摘要导航。

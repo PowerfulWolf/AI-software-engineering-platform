@@ -741,6 +741,9 @@ def test_real_update_producer_snapshot_and_shipped_summary_refresh_select_replac
         fixture = {
             "before": before,
             "after": after,
+            "after_summary": client.get(
+                "/api/v1/team-summary", params={"project_id": original.project_id}
+            ).json(),
             "original": before["requests"][0],
             "replacement": after["requests"][0],
             "operation": client.get(f"/api/v1/operations/{completed.operation_id}").json(),

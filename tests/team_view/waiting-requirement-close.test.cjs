@@ -44,11 +44,15 @@ for (const change of [
   assert.equal(h.run('canCloseRequirement(snapshot.requests[0])'), false);
 });
 
-test("existing blocked close stays available and other upstream stages remain unchanged", () => {
+test("blocked and idle product drafts offer close while active engineering stages remain guarded", () => {
   const h = harness();
   h.run('snapshot.requests[0].stage = "BLOCKED"; snapshot.tasks = []');
   assert.equal(h.run('canCloseRequirement(snapshot.requests[0])'), true);
-  for (const stage of ["READY_FOR_DISCUSSION", "DESIGNING", "PLANNING", "DONE", "CLOSED"]) {
+  for (const stage of ["READY_FOR_DISCUSSION", "WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL"]) {
+    h.run(`snapshot.requests[0].stage = ${JSON.stringify(stage)}`);
+    assert.equal(h.run('canCloseRequirement(snapshot.requests[0])'), true);
+  }
+  for (const stage of ["DESIGNING", "PLANNING", "DONE", "CLOSED"]) {
     h.run(`snapshot.requests[0].stage = ${JSON.stringify(stage)}`);
     assert.equal(h.run('canCloseRequirement(snapshot.requests[0])'), false);
   }

@@ -23,6 +23,7 @@ async function checkNavigation(data, mode) {
       const parsed = new URL(url, "http://127.0.0.1");
       let body;
       if (parsed.pathname === "/api/v1/team") body = data.after;
+      else if (parsed.pathname === "/api/v1/team-summary") body = data.after_summary;
       else if (parsed.pathname === "/api/v1/console") body = data.manifest;
       else if (parsed.pathname === "/api/v1/operation-summaries")
         body = parsed.searchParams.has("delivery_id") ? data.delivery_page : data.project_page;

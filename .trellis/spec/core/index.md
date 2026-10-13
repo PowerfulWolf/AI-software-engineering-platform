@@ -119,7 +119,8 @@
   owned process-stop facts, complete mutation receipts, one-use admission and claimed restart.
 
 - [`requirement-deletion.md`](requirement-deletion.md): exact product deletion, permanent tombstones,
-  idle execution checks, fresh identities and retained immutable engineering history.
+  idle execution checks, native/independent verifier fences, complete resource preservation/release,
+  fresh identities and retained immutable engineering history.
 
 - [`incremental-polling.md`](incremental-polling.md): scoped read-side updates, retained DOM and drafts,
   source-signature invalidation for exact approvals and Project boundaries.

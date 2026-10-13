@@ -198,3 +198,10 @@ Existing data: no SQL/journal/Task/Operation/approval/queue/budget mutation or m
 client asset during controlled platform maintenance and reload the page; keep the existing
 inspection marker and demand pause. Rollback restores the prior asset and reloads it, preserving
 all durable facts. This defect does not prove the cause of every historical production read failure.
+
+## Quiet successful detail read (2026-10-13)
+
+`teamDetailReadNotice()`在完整当前正文成功时返回null；两个render调用只在notice非空时append。
+不显示“完整正文与历史已读取…”成功提示或空间占位。loading/error/retained stale正文仍显示原分类。
+正文核验与Product exact ID/digest审批门保持。Node与Chrome team-summary-reading回归覆盖成功notice0，
+原错误/旧正文提示与审批disabled负向仍必须通过。无需持久化迁移。

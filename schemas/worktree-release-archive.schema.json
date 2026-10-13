@@ -1,0 +1,208 @@
+{
+  "$defs": {
+    "ArchivedEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "directory",
+            "symlink"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "mode": {
+          "maximum": 4095,
+          "minimum": 0,
+          "title": "Mode",
+          "type": "integer"
+        },
+        "byte_count": {
+          "minimum": 0,
+          "title": "Byte Count",
+          "type": "integer"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "link_target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Link Target"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "mode",
+        "byte_count"
+      ],
+      "title": "ArchivedEntry",
+      "type": "object"
+    },
+    "ArchivedIndexObject": {
+      "additionalProperties": false,
+      "properties": {
+        "object_id": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Object Id",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "byte_count": {
+          "maximum": 33554432,
+          "minimum": 0,
+          "title": "Byte Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "object_id",
+        "sha256",
+        "byte_count"
+      ],
+      "title": "ArchivedIndexObject",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "owner_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Owner Sha256",
+      "type": "string"
+    },
+    "repository_root": {
+      "title": "Repository Root",
+      "type": "string"
+    },
+    "worktree_path": {
+      "title": "Worktree Path",
+      "type": "string"
+    },
+    "task_id": {
+      "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "role": {
+      "enum": [
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "Role",
+      "type": "string"
+    },
+    "attempt": {
+      "maximum": 400,
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "head_revision": {
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+      "title": "Head Revision",
+      "type": "string"
+    },
+    "branch": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Branch"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/ArchivedEntry"
+      },
+      "maxItems": 100000,
+      "title": "Entries",
+      "type": "array"
+    },
+    "index_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Index Sha256",
+      "type": "string"
+    },
+    "index_objects": {
+      "items": {
+        "$ref": "#/$defs/ArchivedIndexObject"
+      },
+      "maxItems": 100000,
+      "title": "Index Objects",
+      "type": "array"
+    },
+    "archive_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Archive Sha256",
+      "type": "string"
+    },
+    "retained_ref": {
+      "pattern": "^refs/ase/retained/[a-f0-9]{64}/[a-f0-9]{64}$",
+      "title": "Retained Ref",
+      "type": "string"
+    },
+    "record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Record Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "owner_sha256",
+    "repository_root",
+    "worktree_path",
+    "task_id",
+    "role",
+    "attempt",
+    "head_revision",
+    "branch",
+    "entries",
+    "index_sha256",
+    "index_objects",
+    "archive_sha256",
+    "retained_ref",
+    "record_sha256"
+  ],
+  "title": "WorktreeReleaseArchive",
+  "type": "object",
+  "$id": "https://ai-software-engineer.local/schemas/worktree-release-archive.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

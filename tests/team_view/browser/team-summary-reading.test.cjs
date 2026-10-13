@@ -131,7 +131,7 @@ test("opening complete body while this page reads summary waits and succeeds wit
   release();await refreshing;await h.page.waitForFunction(()=>teamDetailRead?.status === "ready");
   assert.equal(h.calls.filter(call=>call.kind === "detail").length,1);
   assert.equal(await h.page.locator(".execution-history-entry").count(),14);
-  assert.match(await h.page.locator(".detail-body-read-status").innerText(),/完整正文与历史已读取/);
+  assert.equal(await h.page.locator(".detail-body-read-status").count(),0);
 });
 
 test("automatic summary polling waits for this page's selected body and independent operations still read",async t=>{

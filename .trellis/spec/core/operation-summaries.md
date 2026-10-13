@@ -127,3 +127,15 @@ Wrong: reuse a complete READY/approved Operation on mtime equality and send it b
 authority. Correct: rehash every historical byte and path, reuse only the immutable bounded summary when
 its full byte inventory is identical, then independently GET and revalidate complete current facts before
 any execution/approval.
+
+## Deleted Requirement visibility (2026-10-13)
+
+`ProductionRequirementOperationVisibility.read() -> RequirementOperationVisibility`重验所有Team/Project
+manifest、retirement和完整父历史；排除retired父、所有历史child及plan确定性派生native identities。
+`FileConsoleOperationStore(..., visibility=reader)`在完整Operation链校验后过滤list_current及summary。
+CREATE通过原OperationSummary的result identity归属。active/count/items/pages必须来自同一集合；
+inventory SHA同时绑定整个visibility集合，retirement变化使cursor409/ETag变化。全Team/Project过滤一致。
+get/claim/admission仍读原完整journal，不把隐藏当取消权限；隐藏记录损坏依然503。
+Good：删除后父和子操作不在日常历史/计数。Base：直接GET仍供完整audit。Bad：只在JS隐藏/只过滤items
+却保留total_count，或用快照缺失推断删除。tests/web_console/test_retired_operation_visibility.py覆盖
+正式retirement、CREATE、active/count/page/cursor/ETag、完整GET和隐藏损坏。无需修改存量journal。

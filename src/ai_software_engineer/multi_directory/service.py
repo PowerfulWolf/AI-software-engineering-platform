@@ -372,10 +372,23 @@ class JointDeliveryService:
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
             self._expected(checkpoint, command.expected_checkpoint_sha256)
-            if checkpoint.stage is JointStage.BLOCKED:
+            draft = checkpoint.stage in {
+                JointStage.READY_FOR_DISCUSSION,
+                JointStage.PRODUCT_DISCOVERY,
+                JointStage.WAITING_PRODUCT_REPLY,
+                JointStage.WAITING_PRODUCT_APPROVAL,
+            }
+            close_guard: object = self.deletion_guard
+            if checkpoint.stage is JointStage.BLOCKED or draft:
+                guard = close_guard
+                if isinstance(guard, RequirementWaitingCloseGuard):
+                    with guard.protect_waiting_close(checkpoint):
+                        return self._close_checkpoint(checkpoint)
+                if checkpoint.children:
+                    raise ValueError("未配置工程执行停止校验, 不能关闭已有工程执行的需求。")
                 return self._close_checkpoint(checkpoint)
             if checkpoint.stage is JointStage.DELIVERING:
-                guard: object = self.deletion_guard
+                guard = close_guard
                 if not isinstance(guard, RequirementWaitingCloseGuard):
                     raise ValueError("未配置工程执行停止校验, 不能关闭正在交付的需求。")
                 with guard.protect_waiting_close(checkpoint):
@@ -1606,7 +1619,7 @@ class JointDeliveryService:
 
     @staticmethod
     def _require_deletable(checkpoint: JointCheckpoint) -> None:
-        if checkpoint.stage in {JointStage.BLOCKED, JointStage.CLOSED}:
+        if checkpoint.stage in {JointStage.BLOCKED, JointStage.CLOSED, JointStage.DONE}:
             return
         if (
             checkpoint.stage
