@@ -357,9 +357,10 @@ def test_completion_publication_before_pending_removal_replays_public_delete(
     assert not service.journal.directory(checkpoint.delivery_id).exists()
 
 
+@pytest.mark.parametrize("sequence", [1, 2])
 @pytest.mark.parametrize("already_deleted", [False, True])
 def test_legacy_preparing_delete_requires_existing_exact_revocation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, already_deleted: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, already_deleted: bool, sequence: int
 ) -> None:
     from ai_software_engineer.multi_directory.models import JointStage
     from tests.manager.test_joint_contracts import checkpoint as fixture_checkpoint
@@ -387,14 +388,25 @@ def test_legacy_preparing_delete_requires_existing_exact_revocation(
         }
     )
     service.journal.append(preparing, expected=None)
+    if sequence == 2:
+        previous = preparing
+        preparing = preparing.seal(
+            {
+                **preparing.to_wire(),
+                "sequence": 2,
+                "previous_checkpoint_sha256": preparing.checkpoint_sha256,
+            }
+        )
+        service.journal.append(preparing, expected=previous.checkpoint_sha256)
     command = DeleteRequirement(
         delivery_id=preparing.delivery_id, expected_checkpoint_sha256=preparing.checkpoint_sha256
     )
     if already_deleted:
         service.retirements.retire(preparing, reason="deleted", retired_at=command.submitted_at)
-        service.delete_requirement(command)
-        assert not service.journal.directory(preparing.delivery_id).exists()
-    else:
-        with pytest.raises(ValueError, match="before ProductSpec approval"):
+        if sequence == 1:
             service.delete_requirement(command)
-        assert service.journal.current(preparing.delivery_id) == preparing
+            assert not service.journal.directory(preparing.delivery_id).exists()
+            return
+    with pytest.raises(ValueError, match="before ProductSpec approval"):
+        service.delete_requirement(command)
+    assert service.journal.current(preparing.delivery_id) == preparing

@@ -131,6 +131,6 @@ still refuses deletion. Historical continuation aliases are not foreign resource
 
 
 Legacy PREPARING snapshots already revoked by an exact deleted retirement may be physically
-purged when checkpoint digest matches and no approved requirement/design/plan/child/integration
+purged only at initial sequence=1 with no predecessor, when checkpoint digest matches and no approved requirement/design/plan/child/integration
 exists. Fresh PREPARING remains ineligible; the execution/Operation/resource guard still applies.
 This compatibility rule never appends a new approval or revives the retired identity.

@@ -407,6 +407,8 @@ class JointDeliveryService:
                 retirement is not None
                 and retirement.checkpoint_sha256 == checkpoint.checkpoint_sha256
                 and checkpoint.stage is JointStage.PREPARING
+                and checkpoint.sequence == 1
+                and checkpoint.previous_checkpoint_sha256 is None
                 and checkpoint.requirement is None
                 and checkpoint.approval is None
                 and checkpoint.design is None
