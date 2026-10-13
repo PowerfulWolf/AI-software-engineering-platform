@@ -11,4 +11,4 @@
 - 存量旧 K1 已正式删除且 30 工作区已释放；不重放清理。新 K1 不批准、不继续，自动化 PAUSED。
 
 ## 允许路径与验证
-src/ai_software_engineer/{git,multi_directory,web_console,team_view}/、无依赖 safe_files.py 与兼容重导出的 team_workspace.py、tests/ 对应增量、schemas/ 新释放契约、.trellis/spec/core 与 docs/user。运行 Ruff、strict changed-file mypy、生命周期/摘要/删除测试、Node/Chrome 增量。回滚保持 CLOSE receipt 兼容读取与退休审计；新 release receipts/archives 不删除。
+src/ai_software_engineer/{git,multi_directory,web_console,team_view}/、无依赖 safe_files.py、兼容重导出的 team_workspace.py 与 context/store.py 的底层安全文件依赖、tests/ 对应增量、schemas/ 新释放契约、.trellis/spec/core 与 docs/user。运行 Ruff、strict changed-file mypy、生命周期/摘要/删除测试、Node/Chrome 增量。回滚保持 CLOSE receipt 兼容读取与退休审计；新 release receipts/archives 不删除。

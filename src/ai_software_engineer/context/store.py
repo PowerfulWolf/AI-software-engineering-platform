@@ -24,7 +24,7 @@ from ai_software_engineer.read_record_scope import (
     current_recovery_record_reads,
     decode_verified_record,
 )
-from ai_software_engineer.team_workspace import _reject_symlinks
+from ai_software_engineer.safe_files import _reject_symlinks
 
 _CONTEXT_ID_ADAPTER: Final[TypeAdapter[ContextId]] = TypeAdapter(ContextId)
 

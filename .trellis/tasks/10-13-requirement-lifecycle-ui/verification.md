@@ -30,3 +30,29 @@ Standards审查：独立只读Agent未发现未解决标准问题；独立资源
 资源保全支持普通受管Git工作区；nested Git/submodule、split-index、特殊文件、超过100000条/2GiB或单stage blob32MiB的工作区拒绝并保留现场，不能force-remove。活跃进程/许可或未释放独立验证须先停止。共享数据库、源码、候选branch/commit、artifact与审计保留；私密保全不提供产品归档功能。
 
 回滚仅在空闲受控维护窗口，通过服务脚本回到兼容CLOSE receipt的已审查版本1b6f204。保留retirement、resource-archives、refs/ase/retained及所有历史；不重开已取消需求。可用新修复分支重新部署，不能解压覆盖主checkout。
+
+
+## 冷启动维护入口补修
+
+上线只读验收的独立 Python 入口复现 TeamWorkspace→Context store→TeamWorkspace 的冷导入循环。
+Context store 改为直接导入现有无依赖 safe_files._reject_symlinks，安全校验函数和行为不变。
+新增六组 fresh process 双向导入，子进程固定当前 worktree 的 src 并核验 module.__file__，
+防止 editable 安装指向其他 checkout 导致假红或假绿。Ruff check/format、strict mypy通过；
+`pytest -q tests/context/test_cold_imports.py tests/context/test_store.py tests/git/test_resource_release.py`：
+25 passed。独立Spec复核无问题；Standards发现的测试隔离缺口已修，使用主仓Python且去掉
+PYTHONPATH独立重验6 passed，最终无剩余发现。无持久化迁移或数据修复。
+
+## 主干与上线只读验收
+
+旧成果1b6f204与本次08c461a已fast-forward合入main并push origin/main。
+受控服务脚本从主checkout替换原worktree运行服务，normal / delivery_ready=true。
+完整4页86条日常操作与已校验retirement集合一致，160条退休需求Operation被排除；
+11个退休父/子身份不进入日常操作，active为空。旧CLOSE/DELETE完整审计GET仍SUCCEEDED。
+实际app.js SHA与主checkout一致；真实浏览器中默认列表没有操作记录，K1详情完整历史2条、
+关闭/删除入口可见，成功读取提示已移除。全程只读，没有触发需求审批/继续/关闭/删除。
+
+K1仍在WAITING_PRODUCT_APPROVAL，checkpoint保持bc40402d7b49e71bbfa0cac97044b2eed123484199c15606344a29023fa750cb；
+k1-ase自动化PAUSED。本轮一次性ase-k1-cancel-root-20261013容器已stop并由--rm移除，
+临时test.env与container.json已清理；共享ase-mysql持续healthy。
+冷导入补修将在同一主干部署流程纳入；最终执行版本和验收receipt写入外置operator-maintenance进度，
+暂停标志始终保留。

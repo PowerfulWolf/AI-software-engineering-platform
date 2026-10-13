@@ -281,3 +281,17 @@ repository = next(item for project in projects for item in project.repositories)
 project = team.project_registry().open(project_id)
 repository = project.repository_registry().register(absolute_code_root)
 ```
+
+
+### Cold import dependency boundary
+
+`safe_files._reject_symlinks(Path) -> None` 和
+`safe_files._read_regular(Path, limit: int) -> bytes` 是无领域依赖的安全文件 seam。
+TeamWorkspace 为旧调用者显式重导出它们，但 Context/Git 等底层 store 必须直接导入
+`safe_files`，不能依赖 TeamWorkspace 的部分初始化。否则独立维护入口首次导入
+`team_workspace -> context.__init__ -> context.store -> team_workspace` 时会失败；
+已启动 Console 或混合 pytest 的预加载顺序会隐藏该问题。
+
+原有拒绝 symlink、普通文件检查、字节上限与错误语义保持一致，不修改持久化事实。
+`tests/context/test_cold_imports.py` 以全新 Python 进程验证 Team/Context、Team/Git release、
+Team/Console Host 双向导入顺序；修复后必须同时运行 Context store 的安全路径回归。
