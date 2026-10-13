@@ -190,7 +190,7 @@ def collect_git_resources(
             )
             for name in names:
                 if name in {"main", "master", "develop"} or any(
-                    other.id != task.id
+                    other.id not in task_roots
                     and other.repository == task.repository
                     and other.branch_name == name
                     for other in tasks

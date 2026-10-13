@@ -123,3 +123,8 @@ Unknown additional files or foreign scope refuse deletion before mutation. Persi
 plans use the same indent=2 byte budget at preparation and publication as pending replay.
 
 Completion publication followed by pending-plan removal interruption must replay via `finish_completed(completion)`: exact owner/checkpoint/plan digest equality before unlink; disagreement refuses and no deleted identity is revived.
+
+
+A branch shared by multiple stopped Task identities inside the same complete deletion scope
+can be selected only with exact verified removal provenance. A holder outside the scope
+still refuses deletion. Historical continuation aliases are not foreign resource owners.

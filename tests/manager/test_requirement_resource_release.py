@@ -420,3 +420,54 @@ def test_legacy_default_branch_without_removal_proof_refuses_complete_deletion(
     assert ref.branch is not None
     assert git(Path(source.repository), "rev-parse", "refs/heads/" + ref.branch) == revision
     assert service.journal.current(checkpoint.delivery_id) == closed
+
+
+@pytest.mark.mysql
+@pytest.mark.parametrize("same_requirement", [False, True])
+def test_shared_branch_cleanup_checks_foreign_holders_against_full_owned_scope(
+    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, same_requirement: bool
+) -> None:
+    from ai_software_engineer.domain import Task
+    from ai_software_engineer.multi_directory.purge_git import collect_git_resources
+
+    service, checkpoint, repository, _queue, _ = _waiting(tmp_path, monkeypatch)
+    source = next(iter(repository.tasks.values()))
+    revision = _initialize(Path(source.repository))
+    source = Task.model_validate(
+        {
+            **source.to_wire(),
+            "base_ref": revision,
+            "branch_name": "ai/feature/shared-with-own-continuation",
+        }
+    )
+    repository.tasks[source.id] = source
+    root = (
+        Path(service.team.manifest.platform_root)
+        / "worktrees"
+        / checkpoint.children[0].checkpoint.repository_id
+    )
+    manager = GitWorktreeManager(
+        source.repository, root, branch_names={source.id: source.branch_name}
+    )
+    ref = manager.create(
+        WorktreeSpec(task_id=source.id, role=AgentRole.CODER, attempt=1, source_revision=revision)
+    )
+    manager.remove(ref)
+    # No close is necessary for this resource collector contract: persist exact
+    # terminal Task snapshots and prove the real clean-removal marker.
+    original = source.model_copy(update={"status": TaskStatus.BLOCKED})
+    alias = original.model_copy(update={"id": "task_shared_continuation"})
+    repository.tasks = {original.id: original, alias.id: alias}
+    _persist_physical_delete_facts(service, repository, mysql_dsn, tmp_path)
+    owned = {original.id: original.repository}
+    if same_requirement:
+        owned[alias.id] = alias.repository
+        refs, _ = collect_git_resources(service.project, checkpoint, owned, mysql_dsn)
+        assert any(item.ref_name == "refs/heads/" + str(original.branch_name) for item in refs)
+    else:
+        with pytest.raises(ValueError, match="shared"):
+            collect_git_resources(service.project, checkpoint, owned, mysql_dsn)
+    assert (
+        git(Path(source.repository), "rev-parse", "refs/heads/" + str(source.branch_name))
+        == revision
+    )
