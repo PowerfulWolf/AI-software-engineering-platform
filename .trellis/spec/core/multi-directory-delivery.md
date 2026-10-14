@@ -65,6 +65,25 @@ checkpoint digest. Exhausted Design budgets retain the existing recovery gate an
 Rollback uses a controlled stop and the prior Git revision; new feedback checkpoints are compatible
 with the existing wire Schema and require no rewrite.
 
+### CLI end-to-end Host fixture
+
+`tests/e2e/test_joint_delivery.py::test_joint_cli_to_candidates` must inject the isolated
+`TeamHost` at `TeamHost.from_environment(environment=None)`, and scope the lazy
+`manager.entrypoint._requirement_service` cache with `monkeypatch`. Creation uses that factory;
+`request status/discuss` call the real Host Project resolver with `delivery_id` through a fresh
+factory call. This fixture selects its explicit default Project; it does not cover discovery
+without a default Project. Injecting only `cli.requirement_entry` leaves those commands attached
+to a default Host, causing a missing production DSN or unrelated Project lookup before Design
+validation.
+
+The fixture uses only `ASE_TEST_MYSQL_DSN`, real Project resolution, exact checkpoint approval,
+real Git candidates and independent serial Coder/QA/Reviewer delivery. Never fix it by exporting
+a production DSN, mocking Project lookup or skipping approval. Assert CLI status reads back the
+created checkpoint, then discussion reaches Product approval. Both success and deliberate
+integration-failure cases must run serially with the per-test Host/cache restored; the other
+joint e2e cases verify released capacity and parent-crash recovery. This is a test-only correction
+with no production data migration or runtime change; rollback reverts the fixture change.
+
 ### Contract
 
 - Source/document inspection cannot stand in for required unit, integration, security or other

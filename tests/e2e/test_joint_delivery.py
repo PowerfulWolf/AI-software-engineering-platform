@@ -250,7 +250,15 @@ def test_joint_cli_to_candidates(
         delivery_route_adapters=_ScriptedDeliveryFactory(),
     )
     service = host.requirement_entry()
-    monkeypatch.setattr("ai_software_engineer.cli.requirement_entry", lambda: service)
+
+    def isolated_host(
+        cls: type[TeamHost], environment: Mapping[str, str] | None = None
+    ) -> TeamHost:
+        del cls, environment
+        return host
+
+    monkeypatch.setattr(TeamHost, "from_environment", classmethod(isolated_host))
+    monkeypatch.setattr("ai_software_engineer.manager.entrypoint._requirement_service", None)
     cli = CliRunner()
     created = cli.invoke(
         app, ["request", "create", *map(str, projects), "--name", "Joint greeting"]
@@ -259,6 +267,9 @@ def test_joint_cli_to_candidates(
     initial = JointCheckpoint.model_validate(json.loads(created.output)["checkpoint"])
     assert initial.stage is JointStage.READY_FOR_DISCUSSION
     assert not models.calls
+    status = cli.invoke(app, ["request", "status", initial.delivery_id])
+    assert status.exit_code == 0, status.output
+    assert JointCheckpoint.model_validate(json.loads(status.output)["checkpoint"]) == initial
     discussed = cli.invoke(
         app,
         [
