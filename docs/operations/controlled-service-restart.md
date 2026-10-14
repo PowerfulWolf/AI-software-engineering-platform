@@ -8,13 +8,19 @@ uv sync
 ./scripts/ase-console-service.sh status
 ```
 
-重启会暂停新操作和写入，等已接纳的操作完整收尾。它会核验真实模型/工具执行已经结束、Operation 最终记录
-已保存、写请求与索引线程已经完成、属于服务的进程组和输出管道已经结束，再保存本次实例的安全收尾结果。
-脚本同时核对实例、请求和 PID，等旧服务实际退出后才启动新服务。不会通过重启重放不确定的模型调用。
+重启会立即暂停新操作、后续角色、模型回合和重试入口，给当前本机 Agent 默认 30 秒收尾窗口。
+当前角色若完整返回，仍按原产物、QA/Review 和候选版本门禁接纳；下一角色留在队列。
+窗口到期后，实际拥有执行会话的 runner 受控停止本机 Agent 和已观测到的同会话进程，保存
+`service_pause` 停止证明及 `SERVICE_PAUSED` 执行结果。未完成的源码和 worktree 保留，原 Task
+保持交付 checkpoint，Lease 通过原队列等待事务释放。暂停不会制造 verdict、完成状态或预算退款。
 
-已领取的 Operation 可以继续它已经获准的后续阶段，各角色仍须正常领取新的真实 claim。未领取的
-QUEUED Operation 保留在队列，留给下一次有效启动。此处关闭的是新 Operation 的入口，不能截断正在执行的
-Operation，然后把线程消失当作已交付。
+无法取消的同步 HTTP 调用会等真实返回，然后阻止下一轮模型或工具调用。平台不会遗弃后台线程来冒充
+停止。重启还要核验 Operation 最终记录、写请求、索引线程、真实会话和输出管道均已结束并完成封存；
+任何事实缺失仍会拒绝。脚本核对实例、请求和 PID，等旧服务实际退出才启动替代服务。
+
+原需求保留。干净角色边界可从原需求继续；中途暂停的 Coder 草稿通过精确的“更新执行基线”工程计划
+核验并批准接续。旧冻结策略不会自动增加 `service_pause` 续跑权限；恢复使用普通剩余工作额度，不需要
+重新批准未改变的产品范围。未领取的 QUEUED Operation 保留给下一次有效启动。
 
 默认最多等待 300 秒；可临时设置 0.01–3600 秒的等待上限：
 
@@ -56,12 +62,13 @@ ASE_SHUTDOWN_TIMEOUT_SECONDS=900 ./scripts/ase-console-service.sh restart
 4. 启动新版本，确认状态显示“服务正在运行，可以接收新操作”。之后的日常停止、重启、应用配置都使用
    上面的受控命令。需求是否能继续，仍由它自己的事实和批准决定。
 
-平台本次改造不执行这些生产动作，也不替旧 Run 补写停止记录。异常崩溃、操作系统强杀和服务外独立启动的
+维护流程不替旧 Run 补写停止记录。异常崩溃、操作系统强杀和服务外独立启动的
 ASE CLI 仍需各自的恢复流程；本流程不能保证任意脱离拥有进程组的外部程序已结束，不确定就拒绝替换。
 
 ## 回滚
 
-如需回滚代码，先让新版本完成受控 `stop`，再切回之前的提交、同步依赖并启动。不要在活动执行期间直接
+如需回滚暂停行为，先让新版本完成受控 `stop`，再回退行为实现并保留 `SERVICE_PAUSED`、
+`service_pause` 和新增停止记录的兼容读取能力。已产生新记录后，不能直接启动不识别这些值的旧版本。不要在活动执行期间直接
 换代码或强杀新服务。本改造没有数据库迁移，不改写历史 Task、Run、审批或 verdict。
 
 
@@ -82,6 +89,11 @@ ASE_CONFIG=/absolute/path/config.json .venv/bin/python scripts/ase-console-maint
 沿用同一`ASE_SERVICE_STATE_DIR`。prepare要求原Host已经真实挂起；没有自动SIGCONT或任意
 进程选择。execute前审阅exact计划，显式confirm只批准这次故障Host退休。实际执行只处理
 计划绑定的Host和固定supervisor，不停止历史开发工具。
+
+如果曾完成过维护并恢复普通模式，新退役计划会精确引用上一轮 marker、完成/接纳记录和完整
+completion 文件清单。执行期间的 pending marker 阻止启动；上一轮记录按原字节归档到
+`console-fault-retirements/<新planSHA>/previous-maintenance/`。新轮仍需重新完成查看模式核验、
+维护完成和普通启动接纳，不能复用旧授权。中途失败使用同一个 planSHA 重试，不删除或恢复旧控制文件。
 
 若rename/chmod/实际终止后的日志hash/receipt/marker封存失败，完整现场保留在state目录的
 `console-fault-retirements/<planSHA>/`；使用同一个execute命令重试即可完成尚缺阶段。

@@ -87,7 +87,7 @@ class PausedFixture:
         )
 
 
-@pytest.fixture(params=(False, True), ids=("uninvoked", "reserved_successor"))
+@pytest.fixture(params=("uninvoked", "reserved_successor", "same_base_service_pause"))
 def paused(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[PausedFixture]:
     dsn = os.environ["ASE_TEST_MYSQL_DSN"]
     fixture = setup(tmp_path)
@@ -109,11 +109,14 @@ def paused(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[PausedFix
             )
         task = repository.get(task.id)
         revision = repository.current_revision(task.id)
-        invoked = bool(request.param)
+        invoked = request.param != "uninvoked"
+        same_base = request.param == "same_base_service_pause"
         reservation = BaselineExecutionReservation(
             current_attempt=1,
             next_execution_attempt=2 if invoked else 1,
-            retry_cause="local_execution_limit" if invoked else "uninvoked",
+            retry_cause="service_pause"
+            if same_base
+            else ("local_execution_limit" if invoked else "uninvoked"),
             original_run_id="run_baseline_prior" if invoked else None,
             current_invocation_start_sha256="7" * 64 if invoked else None,
             current_invocation_outcome_sha256="8" * 64 if invoked else None,
@@ -125,6 +128,11 @@ def paused(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[PausedFix
                 "task_revision": revision,
                 "checkpoint_sequence": revision,
                 "continuation": reservation,
+                "target_native_rules_sha256": (
+                    fixture.collector.facts.source_native_rules_sha256
+                    if same_base
+                    else fixture.collector.facts.target_native_rules_sha256
+                ),
                 "scope": fixture.collector.facts.scope.model_copy(
                     update={"repository_id": "repository_baseline_pause"}
                 ),
@@ -160,7 +168,7 @@ def paused(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[PausedFix
             ),
             step,
         )
-        plan = fixture.service.propose(fixture.target)
+        plan = fixture.service.propose(task.base_ref if same_base else fixture.target)
         authority = BaselineOperatorAuthorization.for_plan(
             plan,
             principal=LocalOperatorPrincipal.trusted_local(),
@@ -242,6 +250,41 @@ def test_exact_continue_is_atomic_and_replay_preserves_counters(paused: PausedFi
     )
     assert stored is not None and stored.ready_work_item == ready
     assert paused.queue.pending_baseline_release(paused.binding, authority)
+
+
+def test_paused_baseline_claim_uses_fresh_execution_and_preserves_history(
+    paused: PausedFixture,
+) -> None:
+    task = paused.repository.get(paused.binding.task_id)
+    history = paused.repository.list_events(task.id)
+    assert paused.queue.release_baseline_pause(paused.binding, paused.authorization())
+    tick = dispatcher(paused.queue, "worker_baseline_fresh").tick(
+        now=paused.now + timedelta(seconds=6), work_item_id=paused.work_item_id
+    )
+    assert tick.claim is not None and tick.lease_owner_token is not None
+    step = paused.queue.step(paused.work_item_id)
+    reservation = paused.plan.facts.continuation
+    assert reservation is not None
+    assert step.boundary.attempt == reservation.next_execution_attempt
+    assert step.boundary.source_revision == paused.binding.execution_source_revision
+    if reservation.retry_cause == "service_pause":
+        assert paused.binding.execution_base_ref == paused.binding.prior_execution_base_ref
+        assert paused.binding.service_pause_outcome_sha256 == (
+            reservation.current_invocation_outcome_sha256
+        )
+        assert task.attempts == 2 and task.work_attempt == 2
+        assert task.retry_failures is None
+    assert paused.repository.list_events(task.id) == history
+    assert consume_baseline(paused.queue, paused.plan, paused.binding).id == paused.work_item_id
+    assert paused.repository.get(task.id) == task
+    paused.queue.wait(
+        paused.work_item_id,
+        lease_id=tick.claim.lease.id,
+        owner_token=tick.lease_owner_token,
+        status=WorkItemStatus.WAITING_DEPENDENCY,
+        reason="isolated test finishes after exact fresh claim",
+        now=paused.now + timedelta(seconds=7),
+    )
 
 
 def test_pending_release_never_restarts_a_claimed_or_later_waiting_execution(

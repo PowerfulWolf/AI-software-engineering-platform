@@ -1128,3 +1128,13 @@ Retired diagnostic logs have independent retention: removal/content changes neve
 normal-mode authority. The retirement executor still seals their full historical digest. Local
 `purge-archived-log --confirm-delete-archived-log` publishes exact purge intent and absent receipt
 without modifying the current log, marker, lifecycle or Requirement facts.
+
+### Controlled service pause contract
+
+A restart request closes new role/model/command admission and gives the current native call a
+bounded completion window. `SERVICE_PAUSED` is a nontransient typed result. A real process stop
+requires an `OwnedSessionStopProof`; a call denied after a durable invocation start records an
+explicit `PausedInvocationProof(admission_closed=true)` with no process stop. Evidence is sealed
+before the owned-process registry is released. Coder recovery requires a newly approved exact
+execution baseline; QA and Review recovery requires the matching original pause proof and a fresh
+independent role execution. The old continuation allowance is never widened automatically.

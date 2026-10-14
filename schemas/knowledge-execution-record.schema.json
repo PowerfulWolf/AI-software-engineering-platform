@@ -49,6 +49,28 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "service_pause"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "session_proof": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "session_proof"
+            ]
+          }
         }
       ],
       "description": "Legacy leader/group stop, optionally with a new explicit owned-SID proof.",
@@ -71,7 +93,8 @@
           "enum": [
             "completed",
             "failed",
-            "local_execution_limit"
+            "local_execution_limit",
+            "service_pause"
           ],
           "title": "Kind",
           "type": "string"
@@ -390,7 +413,8 @@
         "failure_kind": {
           "enum": [
             "input_preparation_failed",
-            "process_spawn_failed"
+            "process_spawn_failed",
+            "service_pause_admission_closed"
           ],
           "title": "Failure Kind",
           "type": "string"

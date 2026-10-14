@@ -1,5 +1,23 @@
 # Maintenance completion
 
+## Multiple maintenance epochs
+
+Fixed marker/completion/admission anchors apply to one epoch. The trusted local retirement executor
+may transition to a new epoch only with a `FaultRetirementPlan.previous_maintenance` that binds the
+previous fully completed and normally admitted chain. It archives the complete fixed control bytes
+and moves the inventory-checked completion directory into that retirement's `previous-maintenance/`.
+The pending marker rejects startup; no normal writer may reuse old admission outside replacement lock.
+The normal composition holds that lock through all writer construction and rereads mode while locked;
+inspection-only composition never promotes to a normal writer if mode changes during construction.
+
+Each epoch's completion plans/receipts remain append-only in that epoch's own directory. A new epoch
+starts with no active completion/admission anchors and requires separate fresh `_observe` inventory,
+exact READY/absent successor and explicit normal confirmation. `_verified_marker` recursively validates
+all archived prior chains; damaged/orphan histories refuse startup. Old prepared/completed plans cannot
+be submitted as new approval. A partial transition uses only the same exact retirement SHA to resume;
+never erase pending or manually copy old anchors back. See [faulted-service-maintenance.md](faulted-service-maintenance.md)
+for signatures, phase matrix and regression tests.
+
 ## Scope and signatures
 Local trusted engineering channel, independent of Requirement/Run recovery and verdicts.
 `prepare_maintenance_completion(environment) -> MaintenanceCompletionPlan`

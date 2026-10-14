@@ -48,6 +48,5 @@
     "manifest_sha256": {
       "$ref": "https://ai-software-engineer.local/schemas/evidence.schema.json#/$defs/sha256"
     }
-  },
-  "$defs": {}
+  }
 }

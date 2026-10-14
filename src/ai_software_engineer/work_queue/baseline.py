@@ -78,6 +78,13 @@ class BaselineQueueConsumption(DomainModel):
             or self.binding.execution_source_revision != self.plan.prepared_source_revision
             or self.binding.execution_base_ref != self.plan.target_base_ref
             or self.binding.prior_source_revision != self.plan.dirty_capture.source_revision
+            or self.binding.service_pause_outcome_sha256
+            != (
+                self.plan.facts.continuation.current_invocation_outcome_sha256
+                if self.plan.facts.continuation is not None
+                and self.plan.facts.continuation.retry_cause == "service_pause"
+                else None
+            )
             or self.binding.purpose != self.plan.purpose
         ):
             raise ValueError("baseline queue record changed the sealed operation")

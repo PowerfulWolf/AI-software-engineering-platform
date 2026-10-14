@@ -996,6 +996,10 @@ class RetryingOrchestrator(SerialOrchestrator):
             )
 
     def _knowledge_failure(self, task: Task, error: StructuredModelError) -> int | BlockedResult:
+        if error.code is AgentErrorCode.SERVICE_PAUSED:
+            from ai_software_engineer.service_pause import ServicePauseRequested
+
+            raise ServicePauseRequested() from error
         current = self._repository.get(task.id)
         role = {
             TaskStatus.IMPLEMENTING: AgentRole.CODER,

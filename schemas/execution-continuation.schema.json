@@ -11,7 +11,8 @@
         "INVALID_OUTPUT",
         "PROVIDER_ERROR",
         "POLICY_VIOLATION",
-        "WORK_INTERRUPTED"
+        "WORK_INTERRUPTED",
+        "SERVICE_PAUSED"
       ],
       "title": "AgentErrorCode",
       "type": "string"
@@ -892,7 +893,8 @@
         "cause": {
           "enum": [
             "local_execution_limit",
-            "provider_transient"
+            "provider_transient",
+            "service_pause"
           ],
           "title": "Cause",
           "type": "string"
@@ -1083,7 +1085,8 @@
                   "PROVIDER_UNAVAILABLE",
                   "QUOTA_EXHAUSTED",
                   "RATE_LIMITED",
-                  "TIMEOUT"
+                  "TIMEOUT",
+                  "SERVICE_PAUSED"
                 ]
               }
             }
@@ -1132,6 +1135,56 @@
                 }
               }
             ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "cause"
+            ],
+            "properties": {
+              "cause": {
+                "const": "service_pause"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_error_code"
+            ],
+            "properties": {
+              "original_error_code": {
+                "const": "SERVICE_PAUSED"
+              },
+              "process_stop": {
+                "properties": {
+                  "kind": {
+                    "const": "service_pause"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "cause": {
+                "const": "provider_transient"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "original_error_code": {
+                "enum": [
+                  "PROVIDER_UNAVAILABLE",
+                  "QUOTA_EXHAUSTED",
+                  "RATE_LIMITED",
+                  "TIMEOUT"
+                ]
+              }
+            }
           }
         }
       ]
@@ -1216,6 +1269,28 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "service_pause"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "session_proof": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "session_proof"
+            ]
+          }
         }
       ],
       "description": "Legacy leader/group stop, optionally with a new explicit owned-SID proof.",
@@ -1238,7 +1313,8 @@
           "enum": [
             "completed",
             "failed",
-            "local_execution_limit"
+            "local_execution_limit",
+            "service_pause"
           ],
           "title": "Kind",
           "type": "string"
@@ -1284,123 +1360,6 @@
       ],
       "title": "NetworkAccess",
       "type": "string"
-    },
-    "PlanExecutionWindow": {
-      "additionalProperties": false,
-      "properties": {
-        "kind": {
-          "const": "serial_coder_window_v1",
-          "default": "serial_coder_window_v1",
-          "title": "Kind",
-          "type": "string"
-        },
-        "hard_seconds": {
-          "maximum": 3600,
-          "minimum": 2,
-          "title": "Hard Seconds",
-          "type": "integer"
-        },
-        "finalization_reserve_seconds": {
-          "maximum": 300,
-          "minimum": 1,
-          "title": "Finalization Reserve Seconds",
-          "type": "integer"
-        },
-        "reserve_rework_attempts": {
-          "default": 1,
-          "maximum": 1,
-          "minimum": 0,
-          "title": "Reserve Rework Attempts",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "hard_seconds",
-        "finalization_reserve_seconds"
-      ],
-      "title": "PlanExecutionWindow",
-      "type": "object"
-    },
-    "SynchronousToolLoopStop": {
-      "additionalProperties": false,
-      "description": "Trusted observation after a synchronous Responses route and its tools returned.\n\nThis is not a native process-group observation. The provider generates data;\nonly the bounded local registry runs tools, sequentially and synchronously.\nAn interrupted Host cannot create this receipt, nor can request/model text.",
-      "properties": {
-        "origin": {
-          "const": "synchronous_responses_tool_loop",
-          "default": "synchronous_responses_tool_loop",
-          "title": "Origin",
-          "type": "string"
-        },
-        "task_id": {
-          "minLength": 1,
-          "title": "Task Id",
-          "type": "string"
-        },
-        "run_id": {
-          "minLength": 1,
-          "title": "Run Id",
-          "type": "string"
-        },
-        "request_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Request Sha256",
-          "type": "string"
-        },
-        "completed_operation_ids": {
-          "items": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "title": "Completed Operation Ids",
-          "type": "array",
-          "uniqueItems": true
-        },
-        "kind": {
-          "default": "failed",
-          "enum": [
-            "failed",
-            "local_execution_limit"
-          ],
-          "title": "Kind",
-          "type": "string"
-        },
-        "stopped_at": {
-          "format": "date-time",
-          "title": "Stopped At",
-          "type": "string"
-        },
-        "stop_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Stop Sha256",
-          "type": "string"
-        }
-      },
-      "required": [
-        "task_id",
-        "run_id",
-        "request_sha256",
-        "completed_operation_ids",
-        "stopped_at",
-        "stop_sha256"
-      ],
-      "title": "SynchronousToolLoopStop",
-      "type": "object"
-    },
-    "WorkspaceMutationInventory": {
-      "properties": {
-        "files": {
-          "items": {
-            "$ref": "#/$defs/MutationFile"
-          },
-          "title": "Files",
-          "type": "array"
-        }
-      },
-      "required": [
-        "files"
-      ],
-      "title": "WorkspaceMutationInventory",
-      "type": "object"
     },
     "OwnedProcessIdentity": {
       "additionalProperties": false,
@@ -1500,6 +1459,124 @@
         "proof_sha256"
       ],
       "title": "OwnedSessionStopProof",
+      "type": "object"
+    },
+    "PlanExecutionWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "serial_coder_window_v1",
+          "default": "serial_coder_window_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "hard_seconds": {
+          "maximum": 3600,
+          "minimum": 2,
+          "title": "Hard Seconds",
+          "type": "integer"
+        },
+        "finalization_reserve_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Finalization Reserve Seconds",
+          "type": "integer"
+        },
+        "reserve_rework_attempts": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Reserve Rework Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hard_seconds",
+        "finalization_reserve_seconds"
+      ],
+      "title": "PlanExecutionWindow",
+      "type": "object"
+    },
+    "SynchronousToolLoopStop": {
+      "additionalProperties": false,
+      "description": "Trusted observation after a synchronous Responses route and its tools returned.\n\nThis is not a native process-group observation. The provider generates data;\nonly the bounded local registry runs tools, sequentially and synchronously.\nAn interrupted Host cannot create this receipt, nor can request/model text.",
+      "properties": {
+        "origin": {
+          "const": "synchronous_responses_tool_loop",
+          "default": "synchronous_responses_tool_loop",
+          "title": "Origin",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "completed_operation_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Completed Operation Ids",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "kind": {
+          "default": "failed",
+          "enum": [
+            "failed",
+            "local_execution_limit",
+            "service_pause"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "stopped_at": {
+          "format": "date-time",
+          "title": "Stopped At",
+          "type": "string"
+        },
+        "stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stop Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "run_id",
+        "request_sha256",
+        "completed_operation_ids",
+        "stopped_at",
+        "stop_sha256"
+      ],
+      "title": "SynchronousToolLoopStop",
+      "type": "object"
+    },
+    "WorkspaceMutationInventory": {
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/$defs/MutationFile"
+          },
+          "title": "Files",
+          "type": "array"
+        }
+      },
+      "required": [
+        "files"
+      ],
+      "title": "WorkspaceMutationInventory",
       "type": "object"
     }
   },

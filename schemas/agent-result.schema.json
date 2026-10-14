@@ -11,7 +11,8 @@
         "INVALID_OUTPUT",
         "PROVIDER_ERROR",
         "POLICY_VIOLATION",
-        "WORK_INTERRUPTED"
+        "WORK_INTERRUPTED",
+        "SERVICE_PAUSED"
       ],
       "title": "AgentErrorCode",
       "type": "string"
@@ -48,7 +49,29 @@
             ],
             "properties": {
               "code": {
-                "const": "WORK_INTERRUPTED"
+                "enum": [
+                  "WORK_INTERRUPTED",
+                  "SERVICE_PAUSED"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "transient": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "code"
+            ],
+            "properties": {
+              "code": {
+                "const": "SERVICE_PAUSED"
               }
             }
           },
@@ -1951,7 +1974,10 @@
             ],
             "properties": {
               "code": {
-                "const": "WORK_INTERRUPTED"
+                "enum": [
+                  "WORK_INTERRUPTED",
+                  "SERVICE_PAUSED"
+                ]
               }
             }
           }

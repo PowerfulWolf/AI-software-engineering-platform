@@ -37,6 +37,7 @@ from ai_software_engineer.owned_sessions import (
 from ai_software_engineer.project_workspace import ProjectManifest
 from ai_software_engineer.team_workspace import TeamManifest
 
+from .maintenance_epoch_models import PreviousMaintenanceEpoch
 from .maintenance_names import COMPLETION_RECEIPT_NAME, NORMAL_ADMISSION_NAME
 from .service_lifecycle import (
     ServiceInstance,
@@ -142,6 +143,9 @@ class FaultRetirementPlan(_Record):
     log_byte_count: Annotated[StrictInt, Field(ge=0)]
     scope: CatalogScope
     supervisor: SupervisorIdentity | None = None
+    previous_maintenance: PreviousMaintenanceEpoch | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     successor_mode: Literal["inspection"] = "inspection"
     historical_execution_outcome: Literal["UNKNOWN"] = "UNKNOWN"
 
@@ -297,7 +301,7 @@ def _load[RecordT: _Record](root: Path, name: str, model: type[RecordT]) -> Reco
 
 
 @contextmanager
-def replacement_lock(root: Path) -> Iterator[None]:
+def replacement_lock(root: Path) -> Iterator[int]:
     """Same nonblocking lock as normal service start/stop/configuration apply."""
     with _directory(root) as directory:
         descriptor = os.open(
@@ -316,7 +320,7 @@ def replacement_lock(root: Path) -> Iterator[None]:
             ):
                 raise FaultRetirementError(_ERROR)
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            yield
+            yield descriptor
         finally:
             os.close(descriptor)
 
@@ -651,6 +655,11 @@ def prepare_fault_retirement(environment: Mapping[str, str]) -> FaultRetirementP
     with replacement_lock(root):
         if inspection_required(environment):
             raise FaultRetirementError(_ERROR)
+        from .maintenance_epoch import collect_previous_epoch, save_previous_controls
+
+        previous = collect_previous_epoch(root)
+        if previous is not None:
+            _verified_marker(root, reserved_epochs=1)
         values = _original_bytes(root)
         bodies = {ref.name: body for ref, body in values}
         instance = ServiceInstance.model_validate_json(bodies["console-service-instance.json"])
@@ -685,6 +694,7 @@ def prepare_fault_retirement(environment: Mapping[str, str]) -> FaultRetirementP
             log_byte_count=log.st_size,
             scope=_catalog(environment),
             supervisor=_collect_supervisor(root),
+            previous_maintenance=previous,
             recorded_at=datetime.now(UTC),
         )
         _require_host_executable(root, plan)
@@ -698,6 +708,7 @@ def prepare_fault_retirement(environment: Mapping[str, str]) -> FaultRetirementP
                 _read(root, "ase-console-supervisor.pid", bound=8192, private=False),
             )
         _require_originals(root, archive, plan)
+        save_previous_controls(root, archive, previous)
         _save(archive, "plan.json", plan)
         return plan
 
@@ -820,7 +831,11 @@ def _finalize(
         _save(archive, "receipt.json", receipt)
     _require_originals(root, archive, plan)
     _kernel(plan, absent=True)
-    if (root / MARKER_NAME).exists():
+    if plan.previous_maintenance is not None:
+        from .maintenance_epoch import finalize_epoch
+
+        finalize_epoch(root, archive, plan, receipt)
+    elif (root / MARKER_NAME).exists():
         marker = _load(root, MARKER_NAME, InspectionMarker)
         if (
             marker.plan_sha256 != plan.record_sha256
@@ -828,11 +843,20 @@ def _finalize(
         ):
             raise FaultRetirementError(_ERROR)
     else:
-        marker = InspectionMarker.create(
-            plan_sha256=plan.record_sha256,
-            receipt_sha256=receipt.record_sha256,
-            recorded_at=datetime.now(UTC),
-        )
+        if (archive / "marker.json").exists():
+            marker = _load(archive, "marker.json", InspectionMarker)
+            if (
+                marker.plan_sha256 != plan.record_sha256
+                or marker.receipt_sha256 != receipt.record_sha256
+            ):
+                raise FaultRetirementError(_ERROR)
+        else:
+            marker = InspectionMarker.create(
+                plan_sha256=plan.record_sha256,
+                receipt_sha256=receipt.record_sha256,
+                recorded_at=datetime.now(UTC),
+            )
+            _save(archive, "marker.json", marker)
         _save(root, MARKER_NAME, marker)
     return receipt
 
@@ -852,6 +876,10 @@ def execute_fault_retirement(
         _require_originals(root, archive, plan)
         if _catalog(environment).config_sha256 != plan.scope.config_sha256:
             raise FaultRetirementError(_ERROR)
+        if plan.previous_maintenance is not None:
+            from .maintenance_epoch import begin_epoch
+
+            begin_epoch(root, archive, plan)
         if (archive / "termination-intent.json").exists():
             intent = _load(archive, "termination-intent.json", TerminationIntent)
             if (
@@ -922,8 +950,16 @@ def execute_fault_retirement(
         raise FaultRetirementError(_ERROR)
 
 
-def _verified_marker(root: Path) -> tuple[FaultRetirementPlan, FaultRetirementReceipt]:
-    marker = _load(root, MARKER_NAME, InspectionMarker)
+def _verified_marker(
+    root: Path,
+    *,
+    marker: InspectionMarker | None = None,
+    visited: tuple[str, ...] = (),
+    reserved_epochs: int = 0,
+) -> tuple[FaultRetirementPlan, FaultRetirementReceipt]:
+    marker = marker or _load(root, MARKER_NAME, InspectionMarker)
+    if marker.plan_sha256 in visited or len(visited) + reserved_epochs >= 128:
+        raise FaultRetirementError(_ERROR)
     archive = _archive_root(root, marker.plan_sha256)
     plan = _load(archive, "plan.json", FaultRetirementPlan)
     receipt = _load(archive, "receipt.json", FaultRetirementReceipt)
@@ -954,6 +990,16 @@ def _verified_marker(root: Path) -> tuple[FaultRetirementPlan, FaultRetirementRe
         body = _read(archive, ref.name, bound=8192)
         if len(body) != ref.byte_count or _sha(body) != ref.sha256:
             raise FaultRetirementError(_ERROR)
+    if plan.previous_maintenance is not None:
+        from .maintenance_epoch import verify_previous_epoch
+
+        prior = verify_previous_epoch(archive, plan.previous_maintenance)
+        _verified_marker(
+            root,
+            marker=prior,
+            visited=(*visited, marker.plan_sha256),
+            reserved_epochs=reserved_epochs,
+        )
     # Logs are diagnostic retention, not startup or delivery authority. Their full
     # digest was sealed at retirement; a separate explicit audit can read them.
     return plan, receipt

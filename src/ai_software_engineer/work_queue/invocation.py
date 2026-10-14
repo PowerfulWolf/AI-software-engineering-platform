@@ -3,10 +3,11 @@
 from datetime import UTC, datetime
 from typing import Literal, Self
 
-from pydantic import AwareDatetime, model_validator
+from pydantic import AwareDatetime, Field, model_validator
 
 from ai_software_engineer.agents.continuation import ContinuationExecutionUncertain
-from ai_software_engineer.agents.models import AgentRequest, AgentResult
+from ai_software_engineer.agents.execution import PausedInvocationProof
+from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentResult
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import StageSha256
 from ai_software_engineer.knowledge.models import digest
@@ -34,6 +35,9 @@ class DeliveryInvocationOutcome(DomainModel):
     start: DeliveryInvocationStart
     result: AgentResult
     outcome_sha256: StageSha256
+    service_pause: PausedInvocationProof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_binding(self) -> Self:
@@ -55,6 +59,14 @@ class DeliveryInvocationOutcome(DomainModel):
             request.context_manifest_id,
         ):
             raise ValueError("invocation outcome belongs to another exact request")
+        if self.service_pause is not None:
+            self.service_pause.validate_integrity()
+            if (
+                self.service_pause.request != request
+                or result.error is None
+                or result.error.code is not AgentErrorCode.SERVICE_PAUSED
+            ):
+                raise ValueError("pause proof belongs to another exact invocation or outcome")
         return self
 
     def validate_integrity(self) -> None:
@@ -141,7 +153,13 @@ class DurableInvocationControl:
         if start.request != request:
             raise QueueConflict("invocation completion changed its request")
         result.validate_current_output()
-        outcome = DeliveryInvocationOutcome(start=start, result=result, outcome_sha256="0" * 64)
+        from ai_software_engineer.service_pause import current_service_pause
+
+        scope = current_service_pause()
+        pause = scope.control.invocation_stop(request) if scope is not None else None
+        outcome = DeliveryInvocationOutcome(
+            start=start, result=result, service_pause=pause, outcome_sha256="0" * 64
+        )
         outcome = outcome.model_copy(
             update={
                 "outcome_sha256": digest(

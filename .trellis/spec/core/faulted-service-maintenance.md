@@ -1,5 +1,46 @@
 # Faulted Host retirement into inspection only
 
+## Repeated maintenance epochs
+
+`FaultRetirementPlan.previous_maintenance: PreviousMaintenanceEpoch | None` binds a completed and
+normally admitted predecessor. None is omitted from serialization to preserve old plan bytes/digests.
+The exact 3 fixed control filenames, complete byte SHA/count, terminal completion/admission digests,
+and sorted bounded completion file inventory are collected internally. No caller supplies paths/PIDs.
+An incomplete/unadmitted/foreign epoch refuses prepare. Prepare preserves all active records and
+publishes immutable copies in `<new-plan archive>/previous-maintenance/`.
+
+`maintenance_epoch.begin_epoch(root, archive, plan)` revalidates exact predecessor and frozen Host,
+then seals `MaintenanceEpochTransition` in the plan archive and atomically compares/replaces the
+active marker with this typed pending record before any signal or anchor mutation. Pending fails
+all startup authority parsers. In the same replacement lock, only exact archived copies permit
+removal of the previous completed/admitted fixed anchors; the full private completion directory is
+inventory-checked and renamed into `previous-maintenance/`. Each phase fsyncs its directories.
+The completion directory move keeps old plans/receipts in their own epoch, preventing old receipts
+from being reinterpreted as new anchors. The ordinary completion executor retains its existing rules.
+
+`finalize_epoch` first seals the new immutable `marker.json` in its archive, then exact-CAS replaces
+pending with the new inspection pointer. A pointer is mutable only through this typed local action;
+previous and new marker bytes stay immutable in their archives. No marker-free publication window
+is permitted. `_verified_marker` recursively verifies predecessor controls, complete linear
+completion chain and exact admission, plus the old retirement chain. The reader allows 128 epochs;
+cycles or a 129th node refuse. Prepare and execute reserve one new node and reject capacity before
+active pending publication, anchor cleanup or signals.
+The new epoch needs an independent completion and normal admission; old authorization never applies.
+Normal Host composition holds replacement lock through writer construction, including reused admission.
+
+| Input/failure | Required behavior |
+| --- | --- |
+| Prior exact admitted epoch and current frozen REFUSED Host | new inspection epoch, all old bytes preserved |
+| Pending publication/anchor removal/directory move/final pointer interruption | same plan resumes exact phase; writers refused until finalization |
+| Prior live or archived control/plan drift, symlink, incomplete or unadmitted predecessor | no signal or normal authority |
+| Old completion plan replay after rollover | refuse; new completion/admission retained |
+| Concurrent normal writer construction/replacement | same lock prevents crossing, including old admission fast path |
+
+Tests: `test_second_maintenance_epoch_preserves_history_and_retries_every_phase`,
+`test_previous_epoch_drift_never_grants_new_authority`,
+`test_normal_writer_cannot_construct_during_maintenance_replacement`,
+`test_next_epoch_depth_is_refused_before_prepare_or_any_signal`.
+
 ## Scope and signatures
 
 This is an independent local engineering action, never ordinary READY, delivery approval, old Run

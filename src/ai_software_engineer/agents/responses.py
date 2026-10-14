@@ -251,6 +251,8 @@ class ResponsesAgentAdapter:
         self._prepared_inputs.pop(request.run_id, None)
 
     def run(self, request: AgentRequest) -> AgentResult:
+        from ai_software_engineer.service_pause import ServicePauseRequested
+
         prior = self._requests.get(request.run_id)
         if prior is not None:
             if prior != request:
@@ -297,6 +299,18 @@ class ResponsesAgentAdapter:
             )
             initial_inventory = capture_mutation_inventory(self._workspace_root)
             result = self._execute(request, started, initial_head, initial_inventory, window)
+        except ServicePauseRequested:
+            result = self._failure_result(
+                request,
+                window,
+                initial_head,
+                initial_inventory,
+                started,
+                AgentErrorCode.SERVICE_PAUSED,
+                ServicePauseRequested.safe_summary,
+                transient=False,
+                cause="service_pause",
+            )
         except ContinuationExecutionUncertain:
             raise
         except WorkspaceAdmissionRejected:
@@ -449,6 +463,21 @@ class ResponsesAgentAdapter:
         cause: ContinuationCause,
         timed_out: bool = False,
     ) -> AgentResult:
+        from ai_software_engineer.service_pause import ServicePauseRequested
+
+        if cause == "service_pause":
+            from ai_software_engineer.service_pause import record_invocation_pause
+
+            record_invocation_pause(
+                SynchronousToolLoopStop.create(
+                    task_id=request.task_id,
+                    run_id=request.run_id,
+                    request_sha256=digest(request.to_wire()),
+                    completed_operation_ids=tuple(window.completed_operations),
+                    kind="service_pause",
+                    stopped_at=datetime.now(UTC),
+                )
+            )
         control = self._interruption_control
         if control is not None and cause == "local_execution_limit" and window.output_present:
             raise ContinuationExecutionUncertain(
@@ -468,7 +497,11 @@ class ResponsesAgentAdapter:
                 run_id=request.run_id,
                 request_sha256=digest(request.to_wire()),
                 completed_operation_ids=tuple(window.completed_operations),
-                kind="local_execution_limit" if cause == "local_execution_limit" else "failed",
+                kind="service_pause"
+                if cause == "service_pause"
+                else "local_execution_limit"
+                if cause == "local_execution_limit"
+                else "failed",
                 stopped_at=datetime.now(UTC),
             )
             try:
@@ -502,6 +535,13 @@ class ResponsesAgentAdapter:
                     initial_inventory=initial_inventory,
                 )
             if observation is not InterruptionObservation.UNCHANGED:
+                if cause == "service_pause":
+                    return _failed(
+                        request,
+                        AgentErrorCode.SERVICE_PAUSED,
+                        ServicePauseRequested.safe_summary,
+                        duration_ms=_elapsed_ms(started),
+                    )
                 return _failed(
                     request,
                     AgentErrorCode.WORK_INTERRUPTED,
@@ -533,6 +573,8 @@ class ResponsesAgentAdapter:
         initial_inventory: WorkspaceMutationInventory,
         window: _ExecutionWindow,
     ) -> AgentResult:
+        from ai_software_engineer.service_pause import check_service_pause
+
         registry = PolicyBoundToolRegistry(
             self._workspace_root,
             self._agent,
@@ -559,6 +601,7 @@ class ResponsesAgentAdapter:
             window.before = self._interruption_control.started(request, self._workspace_root)
         window.remaining()
         for turn in range(1, self._max_turns + 1):
+            check_service_pause()
             if self._execution_guard is not None:
                 self._execution_guard.check()
             body = (
@@ -633,6 +676,7 @@ class ResponsesAgentAdapter:
                 response_items = _conversation_output(payload)
                 outputs: list[WirePayload] = []
                 for call_id, name, arguments in calls:
+                    check_service_pause()
                     tool_calls += 1
                     if tool_calls > self._max_tool_calls:
                         raise _LocalExecutionLimit("Responses tool-call budget exceeded")

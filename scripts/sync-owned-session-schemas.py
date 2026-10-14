@@ -9,7 +9,9 @@ SCHEMAS = Path(__file__).resolve().parents[1] / "schemas"
 EXPECTED_EMBEDDINGS = frozenset(
     {
         "completed-coder-output-unavailable.schema.json",
+        "console-deletion-cleanup.schema.json",
         "console-operation.schema.json",
+        "engineering-wait-resolution.schema.json",
         "execution-baseline-plan.schema.json",
         "execution-baseline-queue-consumption.schema.json",
         "execution-capture.schema.json",
@@ -17,6 +19,8 @@ EXPECTED_EMBEDDINGS = frozenset(
         "knowledge-execution-record.schema.json",
         "knowledge-invocation-outcome.schema.json",
         "rejected-coder-output-checkpoint.schema.json",
+        "service-pause-stop.schema.json",
+        "stopped-failure-budget-settlement.schema.json",
         "stopped-provider-failure.schema.json",
         "structured-execution-observation.schema.json",
     }

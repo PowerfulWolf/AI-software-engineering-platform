@@ -37,7 +37,10 @@ def _result_schema() -> dict[str, object]:
     failure = schema["$defs"]["AgentFailure"]
     failure["allOf"] = [
         {
-            "if": {"required": ["code"], "properties": {"code": {"const": "WORK_INTERRUPTED"}}},
+            "if": {
+                "required": ["code"],
+                "properties": {"code": {"enum": ["WORK_INTERRUPTED", "SERVICE_PAUSED"]}},
+            },
             "then": {"properties": {"transient": {"const": False}}},
         }
     ]
@@ -77,7 +80,7 @@ def _result_schema() -> dict[str, object]:
                     "error": {
                         "type": "object",
                         "required": ["code"],
-                        "properties": {"code": {"const": "WORK_INTERRUPTED"}},
+                        "properties": {"code": {"enum": ["WORK_INTERRUPTED", "SERVICE_PAUSED"]}},
                     }
                 },
             },
@@ -85,6 +88,19 @@ def _result_schema() -> dict[str, object]:
         },
     ]
     return schema
+
+
+def _pause_cause_guard() -> dict[str, object]:
+    return {
+        "if": {"required": ["cause"], "properties": {"cause": {"const": "service_pause"}}},
+        "then": {
+            "required": ["original_error_code"],
+            "properties": {
+                "original_error_code": {"const": "SERVICE_PAUSED"},
+                "process_stop": {"properties": {"kind": {"const": "service_pause"}}},
+            },
+        },
+    }
 
 
 def main() -> None:
@@ -157,7 +173,11 @@ def main() -> None:
                     "process_stop": {"properties": {"kind": {"const": "local_execution_limit"}}},
                 }
             },
-            "else": {"properties": {"original_error_code": {"enum": sorted(TRANSIENT_CODES)}}},
+            "else": {
+                "properties": {
+                    "original_error_code": {"enum": [*sorted(TRANSIENT_CODES), "SERVICE_PAUSED"]}
+                }
+            },
         },
         {
             "if": {
@@ -185,6 +205,13 @@ def main() -> None:
             },
         },
     ]
+    receipt_node["allOf"].append(_pause_cause_guard())
+    receipt_node["allOf"].append(
+        {
+            "if": {"properties": {"cause": {"const": "provider_transient"}}},
+            "then": {"properties": {"original_error_code": {"enum": sorted(TRANSIENT_CODES)}}},
+        }
+    )
     continuation_schema["$defs"]["SynchronousToolLoopStop"]["properties"][
         "completed_operation_ids"
     ]["uniqueItems"] = True
@@ -264,6 +291,7 @@ def main() -> None:
             },
         },
     ]
+    capture_schema["$defs"]["ExecutionCaptureStop"]["allOf"].append(_pause_cause_guard())
     _write("execution-capture.schema.json", capture_schema)
 
 

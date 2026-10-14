@@ -282,3 +282,48 @@ def test_drift_after_plan_refuses_without_discarding_new_draft(tmp_path: Path) -
     assert capture_mutation_inventory(f.worktree.path) == changed
     assert _git(f.worktree.path, "rev-parse", "HEAD") == f.worktree.head_revision
     assert f.service.store.bindings_for_task(f.worktree.task_id) == ()
+
+
+def test_exact_service_pause_can_preserve_draft_and_resume_without_new_git_baseline(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.manager.baseline_models import BaselineExecutionReservation
+
+    fixture = setup(tmp_path)
+    original = fixture.collector.facts
+    before = capture_mutation_inventory(fixture.worktree.path)
+    original_head = _git(fixture.worktree.path, "rev-parse", "HEAD")
+    facts = original.model_copy(
+        update={
+            "target_native_rules_sha256": original.source_native_rules_sha256,
+            "continuation": BaselineExecutionReservation(
+                current_attempt=1,
+                next_execution_attempt=2,
+                retry_cause="service_pause",
+                original_run_id="run_pause_baseline",
+                current_invocation_start_sha256="1" * 64,
+                current_invocation_outcome_sha256="2" * 64,
+            ),
+        }
+    )
+    facts = facts.model_copy(
+        update={"facts_sha256": digest(facts.model_dump(mode="json", exclude={"facts_sha256"}))}
+    )
+    fixture.collector.facts = facts
+    plan = fixture.service.propose(facts.task.base_ref)
+    assert plan.target_base_ref == facts.task.base_ref
+    authorization = authorize(plan)
+    binding = fixture.service.execute(plan.plan_sha256, authority=authorization)
+    assert binding.execution_base_ref == binding.prior_execution_base_ref
+    assert binding.service_pause_outcome_sha256 == "2" * 64
+    assert binding.execution_source_revision == original_head
+    assert capture_mutation_inventory(fixture.worktree.path) == before
+    assert fixture.service.execute(plan.plan_sha256, authority=authorization) == binding
+    with pytest.raises(ValueError):
+        ExecutionBaselineBinding.model_validate(
+            {
+                key: value
+                for key, value in binding.to_wire().items()
+                if key != "service_pause_outcome_sha256"
+            }
+        )

@@ -619,6 +619,8 @@ class OpenAICompatibleAgentAdapter:
 
     def run(self, request: AgentRequest) -> AgentResult:
         """Execute one request, returning only typed success or failure evidence."""
+        from ai_software_engineer.service_pause import ServicePauseRequested, check_service_pause
+
         prior_request = self._requests.get(request.run_id)
         if prior_request is not None:
             if prior_request != request:
@@ -629,11 +631,13 @@ class OpenAICompatibleAgentAdapter:
 
         started = time.monotonic()
         try:
+            check_service_pause()
             prompt = self._prompt_builder.build(request)
             body = _encode_request(self._model, prompt)
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
             if self._api_key:
                 headers["Authorization"] = f"Bearer {self._api_key}"
+            check_service_pause()
             response = self._transport.post(
                 self._endpoint,
                 headers,
@@ -641,6 +645,18 @@ class OpenAICompatibleAgentAdapter:
                 float(request.timeout_seconds),
             )
             result = self._decode_response(request, response, _elapsed_ms(started))
+        except ServicePauseRequested:
+            from ai_software_engineer.service_pause import record_invocation_pause
+
+            record_invocation_pause(None)
+            result = _failure(
+                request,
+                AgentRunStatus.FAILED,
+                AgentErrorCode.SERVICE_PAUSED,
+                ServicePauseRequested.safe_summary,
+                transient=False,
+                duration_ms=_elapsed_ms(started),
+            )
         except TimeoutError:
             result = _failure(
                 request,

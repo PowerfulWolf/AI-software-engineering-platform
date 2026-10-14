@@ -14,6 +14,7 @@ from ai_software_engineer.agents.codex_cli import (
     SubprocessCodexCommandRunner,
 )
 from ai_software_engineer.agents.execution import current_execution_guard
+from ai_software_engineer.agents.models import AgentErrorCode
 from ai_software_engineer.agents.structured_observation import (
     StructuredNativeNotStartedReceipt,
     StructuredNativeStopReceipt,
@@ -105,9 +106,23 @@ def run_structured_command(
                 failed_at=datetime.now(UTC),
             )
             record_structured_native_not_started(receipt)
+        if error.failure_kind == "service_pause_admission_closed":
+            from ai_software_engineer.agents.structured import StructuredModelError
+
+            raise StructuredModelError(
+                AgentErrorCode.SERVICE_PAUSED, "服务暂停已拒绝新进程, 未启动执行。", transient=False
+            ) from error
         raise OSError("owned Codex process was not started") from error
     except CodexCliError as error:
         raise OSError("owned Codex process could not start") from error
+    if result.process_stop is not None and result.process_stop.kind == "service_pause":
+        from ai_software_engineer.agents.structured import StructuredModelError
+
+        raise StructuredModelError(
+            AgentErrorCode.SERVICE_PAUSED,
+            "服务重启已受控暂停结构化执行, 真实停止记录已保存。",
+            transient=False,
+        )
     if result.timed_out:
         raise subprocess.TimeoutExpired(argv, timeout, output=result.stdout, stderr=result.stderr)
     if check and result.returncode != 0:

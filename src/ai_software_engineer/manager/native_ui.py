@@ -331,15 +331,18 @@ def run_native_ui(
     evidence_bytes = 0
     launch_argv = (str(binary), capability.scenario.mock_argument)
     # GUI process output is discarded, never a model instruction/evidence injection channel.
-    process = subprocess.Popen(
-        ["/usr/bin/sandbox-exec", "-p", profile, *launch_argv],
-        cwd=scratch,
-        env=environment,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    from ai_software_engineer.service_pause import pause_admission
+
+    with pause_admission():
+        process = subprocess.Popen(
+            ["/usr/bin/sandbox-exec", "-p", profile, *launch_argv],
+            cwd=scratch,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
     observation = observe_owned_process(process, kind="tool")
     try:
         # Let AppKit register its window/AX server before the first attachment attempt.

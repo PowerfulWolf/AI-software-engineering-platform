@@ -429,6 +429,13 @@ class SerialOrchestrator:
                 else None
             ),
         )
+        from ai_software_engineer.service_pause import (
+            ServicePauseRequested,
+            pause_invocation,
+            record_invocation_pause,
+            service_pause_requested,
+        )
+
         if self._invocation_control is not None and role is not AgentRole.ORCHESTRATOR:
             request = self._invocation_control.prepare(request)
         if request.run_id in seen_run_ids:
@@ -442,7 +449,27 @@ class SerialOrchestrator:
             )
         except AgentOutputContractError as error:
             raise AgentRunFailed(error.result) from error
-        result = replayed or self._agent_adapter.run(request)
+        with pause_invocation(request):
+            if replayed is not None:
+                result = replayed
+            elif service_pause_requested():
+                record_invocation_pause(None)
+                result = AgentResult(
+                    run_id=request.run_id,
+                    task_id=request.task_id,
+                    role=request.role,
+                    attempt=request.attempt,
+                    source_revision=request.source_revision,
+                    context_manifest_id=request.context_manifest_id,
+                    status=AgentRunStatus.FAILED,
+                    error=AgentFailure(
+                        code=AgentErrorCode.SERVICE_PAUSED,
+                        message=ServicePauseRequested.safe_summary,
+                        transient=False,
+                    ),
+                )
+            else:
+                result = self._agent_adapter.run(request)
         self._guard_write()
         self._validate_result_identity(request, result)
         try:
@@ -455,6 +482,12 @@ class SerialOrchestrator:
             and role is not AgentRole.ORCHESTRATOR
         ):
             self._invocation_control.completed(request, result)
+        if result.error is not None and result.error.code is AgentErrorCode.SERVICE_PAUSED:
+            raise ServicePauseRequested(
+                evidence_ids=("invocation-outcome://" + request.run_id,)
+                if self._invocation_control is not None
+                else (),
+            )
         if result.status is not AgentRunStatus.SUCCEEDED or result.artifact is None:
             raise AgentRunFailed(result)
         if request.work_slice is not None:

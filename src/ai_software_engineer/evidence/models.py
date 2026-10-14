@@ -39,6 +39,7 @@ class CommandOutcome(StrEnum):
     TIMED_OUT = "TIMED_OUT"
     REJECTED = "REJECTED"
     FAILED_TO_START = "FAILED_TO_START"
+    SERVICE_PAUSED = "SERVICE_PAUSED"
 
 
 class TestOutcome(StrEnum):

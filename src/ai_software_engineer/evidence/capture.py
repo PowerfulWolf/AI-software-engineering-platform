@@ -34,6 +34,7 @@ from ai_software_engineer.execution import (
     CommandExecutionError,
     CommandExecutor,
     CommandResult,
+    CommandServicePaused,
     CommandTimedOut,
 )
 from ai_software_engineer.git import CommandPolicyViolation
@@ -113,8 +114,31 @@ class RunEvidenceSession:
             finalization.confirm_saved()
             return existing
         captured_at = self._captured_at()
+        from ai_software_engineer.service_pause import ServicePauseRequested
+
         try:
             result = executor.run(arguments, timeout_seconds=timeout_seconds)
+        except (CommandServicePaused, ServicePauseRequested) as error:
+            payload, redactions = self._failed_command_payload(
+                CommandOutcome.SERVICE_PAUSED,
+                safe_arguments,
+                error.duration_ms if isinstance(error, CommandServicePaused) else 0,
+                "SERVICE_PAUSED",
+                str(error),
+                argument_redactions,
+            )
+            self._store.put(
+                self._command_record(
+                    evidence_id,
+                    operation_id,
+                    description,
+                    captured_at,
+                    payload,
+                    redactions,
+                )
+            )
+            finalization.confirm_saved()
+            raise
         except CommandTimedOut as error:
             payload, redactions = self._failed_command_payload(
                 CommandOutcome.TIMED_OUT,

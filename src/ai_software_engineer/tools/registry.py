@@ -13,6 +13,7 @@ from ai_software_engineer.execution import (
     CommandExecutionError,
     CommandExecutor,
     CommandResult,
+    CommandServicePaused,
     CommandTimedOut,
     SubprocessCommandExecutor,
 )
@@ -212,6 +213,10 @@ class PolicyBoundToolRegistry:
             )
         except WorkspacePolicyError as error:
             return self._rejected(request, "COMMAND_DENIED", str(error))
+        except CommandServicePaused as error:
+            from ai_software_engineer.service_pause import ServicePauseRequested
+
+            raise ServicePauseRequested() from error
         except CommandTimedOut as error:
             return self._rejected(request, "COMMAND_TIMED_OUT", str(error))
         except CommandExecutionError as error:

@@ -950,6 +950,26 @@ class JointDeliveryService:
             return JointDeliveryResult(checkpoint=saved)
 
     def _advance(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
+        from ai_software_engineer.service_pause import ServicePauseRequested
+
+        try:
+            return self._advance_active(checkpoint)
+        except ServicePauseRequested:
+            self._save(
+                self._current(checkpoint.delivery_id),
+                next_action=ServicePauseRequested.safe_summary,
+            )
+            raise
+        except StructuredModelError as error:
+            if error.code is not AgentErrorCode.SERVICE_PAUSED:
+                raise
+            self._save(
+                self._current(checkpoint.delivery_id),
+                next_action=ServicePauseRequested.safe_summary,
+            )
+            raise ServicePauseRequested() from error
+
+    def _advance_active(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
         if self.coordinator is None:
             return self._advance_once(checkpoint)
         # Each retry returns through the original stage/work/approval gates, never a new engine.
@@ -958,13 +978,25 @@ class JointDeliveryService:
             try:
                 result = self._advance_once(checkpoint)
             except (StructuredModelError, ContextBudgetExceeded) as failure:
+                if (
+                    isinstance(failure, StructuredModelError)
+                    and failure.code is AgentErrorCode.SERVICE_PAUSED
+                ):
+                    from ai_software_engineer.service_pause import ServicePauseRequested
+
+                    raise ServicePauseRequested() from failure
                 error = failure
                 result = self._current(checkpoint.delivery_id)
             if error is None and result.stage is not JointStage.BLOCKED:
                 return result
             try:
                 advice = self.coordinator.diagnose(result, error)
-            except (ManagerExecutionRejected, StructuredModelError):
+            except (ManagerExecutionRejected, StructuredModelError) as manager_error:
+                if (
+                    isinstance(manager_error, StructuredModelError)
+                    and manager_error.code is AgentErrorCode.SERVICE_PAUSED
+                ):
+                    raise
                 self._save(
                     result,
                     next_action=(
@@ -1633,6 +1665,9 @@ class JointDeliveryService:
             raise
 
     def _attempt(self, checkpoint: JointCheckpoint, name: str, limit: int = 3) -> JointCheckpoint:
+        from ai_software_engineer.service_pause import check_service_pause
+
+        check_service_pause()
         attempts = dict(checkpoint.attempts)
         if attempts.get(name, 0) >= limit:
             raise ValueError(f"joint {name} attempt budget exhausted; inspect checkpoint evidence")

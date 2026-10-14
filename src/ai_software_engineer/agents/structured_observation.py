@@ -146,7 +146,9 @@ class StructuredNativeNotStartedReceipt(DomainModel):
     kind: Literal["structured_native_not_started"] = "structured_native_not_started"
     schema_version: Literal["v0.1"] = "v0.1"
     admission: StructuredExecutionAdmission
-    failure_kind: Literal["input_preparation_failed", "process_spawn_failed"]
+    failure_kind: Literal[
+        "input_preparation_failed", "process_spawn_failed", "service_pause_admission_closed"
+    ]
     failed_at: AwareDatetime
     receipt_sha256: StageSha256
 

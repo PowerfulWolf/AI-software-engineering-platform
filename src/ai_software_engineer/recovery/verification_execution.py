@@ -28,6 +28,7 @@ from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.visual_evidence import PromptImage
 from ai_software_engineer.execution import (
     CommandExecutionError,
+    CommandServicePaused,
     CommandTimedOut,
     SubprocessCommandExecutor,
 )
@@ -52,6 +53,7 @@ from ai_software_engineer.recovery.verification_records import (
     native_ui_failure_code,
 )
 from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.service_pause import ServicePauseRequested
 
 
 class VerificationEvidence(DomainModel):
@@ -203,6 +205,9 @@ class BoundSwiftVerificationEvidence:
                         )
                         try:
                             result = executor.run(argv)
+                        except (CommandServicePaused, ServicePauseRequested):
+                            failure_code = "SERVICE_PAUSED"
+                            break
                         except CommandTimedOut:
                             failure_code = "COMMAND_TIMEOUT"
                             break
@@ -232,6 +237,8 @@ class BoundSwiftVerificationEvidence:
                                 execution_guard,
                             )
                             failure_code = native_ui_failure_code(ui_results)
+                        except (CommandServicePaused, ServicePauseRequested):
+                            failure_code = "SERVICE_PAUSED"
                         except NativeUiSessionUnavailable as error:
                             failure_code = (
                                 "NATIVE_UI_SESSION_LOCKED"
@@ -264,6 +271,8 @@ class BoundSwiftVerificationEvidence:
                         )
                     )
                     finalization.confirm_saved()
+                    if failure_code == "SERVICE_PAUSED":
+                        raise ServicePauseRequested()
         if receipt.effective_failure_code is not None:
             raise VerificationExecutionBlocked(
                 receipt.record_sha256, receipt.effective_failure_code

@@ -16,6 +16,7 @@ from ai_software_engineer.recovery.preparation_progress import (
     observe_recovery_preparation,
     preparation_scope,
 )
+from ai_software_engineer.service_pause import ServicePauseControl, ServicePauseRequested
 
 from .models import ConsoleCommandResult, ConsoleIntent, ConsoleOperation
 from .preparation_store import InMemoryPreparationProgressStore, PreparationProgressStore
@@ -52,6 +53,7 @@ class ProjectConsole:
         poll_seconds: float = 0.25,
         operation_scope: Callable[[str], AbstractContextManager[None]] | None = None,
         preparation_store: PreparationProgressStore | None = None,
+        pause_control: ServicePauseControl | None = None,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError("console poll interval must be positive")
@@ -61,6 +63,7 @@ class ProjectConsole:
         self._poll_seconds = poll_seconds
         self._operation_scope = operation_scope or (lambda _: nullcontext())
         self._preparation_store = preparation_store or InMemoryPreparationProgressStore()
+        self.pause_control = pause_control or ServicePauseControl()
         self._wake = Event()
         self._stop = Event()
         self._lifecycle = Lock()
@@ -128,7 +131,10 @@ class ProjectConsole:
         try:
             # Keep process ownership attached through both execution and durable
             # operation finalization. Scope exit itself is not process-stop proof.
-            with self._operation_scope(running.operation_id):
+            with (
+                self.pause_control.operation_scope(running.operation_id),
+                self._operation_scope(running.operation_id),
+            ):
                 completed = self._execute_operation(running)
             persisted = True
             return completed
@@ -152,6 +158,14 @@ class ProjectConsole:
                 ),
             ):
                 result = self._executor.execute(running.intent)
+        except ServicePauseRequested as error:
+            return self._store.fail(
+                running.operation_id,
+                expected=running.operation_sha256,
+                error_code="SERVICE_PAUSED",
+                error_summary=error.safe_summary,
+                at=self._clock(),
+            )
         except ConsoleCommandRejected as error:
             return self._store.fail(
                 running.operation_id,
@@ -217,6 +231,7 @@ class ProjectConsole:
     def begin_shutdown(self) -> ShutdownResult:
         with self._condition:
             self._draining = True
+            self.pause_control.request()
             self._stop.set()
             self._wake.set()
             return self._result_locked()
@@ -268,6 +283,7 @@ class ProjectConsole:
                 self._refuse_locked("解除安全停止记录未能可靠保存, 服务保持只读。")
                 return self._result_locked()
             self._draining = False
+            self.pause_control.cancel()
             self._ready = False
             self._timed_out = False
             self._stop.clear()

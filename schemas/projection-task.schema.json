@@ -120,6 +120,5 @@
         "$ref": "projection-timeline.schema.json"
       }
     }
-  },
-  "$defs": {}
+  }
 }

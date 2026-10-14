@@ -319,3 +319,39 @@ def test_tampered_route_evidence_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(ModelRouteAttemptCorruption):
         store.list_for_run(request.run_id)
+
+
+def test_pause_after_returned_route_records_completed_loop_not_invocation_no_start(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.agents.execution import SynchronousToolLoopStop
+    from ai_software_engineer.service_pause import ServicePauseControl, pause_invocation
+
+    request = _coder_request()
+    control = ServicePauseControl(grace_seconds=0)
+
+    class PauseAfterReturn(_ResultAdapter):
+        def run(self, request: AgentRequest) -> AgentResult:
+            result = super().run(request)
+            control.request()
+            return result
+
+    primary = PauseAfterReturn(_failed(request, AgentErrorCode.RATE_LIMITED, transient=True))
+    secondary = _ResultAdapter(_success(request))
+    store = FileModelRouteAttemptStore(tmp_path / "routes")
+    adapter = FallbackAgentAdapter(
+        (
+            ProviderAgentRoute("primary", "model-one", primary),
+            ProviderAgentRoute("secondary", "model-two", secondary),
+        ),
+        attempt_store=store,
+    )
+    with control.operation_scope("operation_route_pause"), pause_invocation(request):
+        result = adapter.run(request)
+    assert result.error is not None and result.error.code is AgentErrorCode.SERVICE_PAUSED
+    assert primary.requests == [request] and not secondary.requests
+    proof = control.invocation_stop(request)
+    assert proof is not None and not proof.admission_closed
+    assert isinstance(proof.process_stop, SynchronousToolLoopStop)
+    assert proof.process_stop.completed_operation_ids == ("model-route.1",)
+    assert len(store.list_for_run(request.run_id)) == 2

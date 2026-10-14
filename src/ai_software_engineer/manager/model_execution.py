@@ -218,6 +218,14 @@ class ManagerModelExecutor:
             + self.retry_policy.max_transient_failures
             + self.time_policy.max_capacity_timeouts
         ):
+            from ai_software_engineer.service_pause import service_pause_requested
+
+            if service_pause_requested():
+                raise StructuredModelError(
+                    AgentErrorCode.SERVICE_PAUSED,
+                    "服务重启已暂停 Manager 新调用。",
+                    transient=False,
+                )
             # A route chain may consume one window per fallback route. The lease spans the
             # configured route-count ceiling; this is ownership, not a model time allowance.
             with self.authority.claim(

@@ -9,6 +9,5 @@
     {
       "$ref": "implementation-report.schema.json"
     }
-  ],
-  "$defs": {}
+  ]
 }

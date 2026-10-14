@@ -201,7 +201,8 @@
             "ENGINEERING_AUTHORIZATION",
             "SOURCE_PREPARATION_DRIFT",
             "EXECUTION_BASELINE_PAUSED",
-            "KNOWLEDGE_PREPARATION_LIMIT"
+            "KNOWLEDGE_PREPARATION_LIMIT",
+            "SERVICE_PAUSED"
           ],
           "title": "Classification",
           "type": "string"

@@ -25,7 +25,8 @@
         "INVALID_OUTPUT",
         "PROVIDER_ERROR",
         "POLICY_VIOLATION",
-        "WORK_INTERRUPTED"
+        "WORK_INTERRUPTED",
+        "SERVICE_PAUSED"
       ],
       "title": "AgentErrorCode",
       "type": "string"

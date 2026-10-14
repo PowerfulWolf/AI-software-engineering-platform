@@ -18,6 +18,7 @@ from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstrai
 from ai_software_engineer.agents.model_input import ModelInputPreparation
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
+    AgentFailure,
     AgentRequest,
     AgentResult,
     AgentRunStatus,
@@ -328,7 +329,61 @@ class FallbackAgentAdapter:
         result: AgentResult | None = attempts[-1].result if attempts else None
         for index, route in enumerate(self._routes[len(attempts) :], start=len(attempts) + 1):
             started_at = self._clock()
-            result = route.adapter.run(request)
+            from ai_software_engineer.service_pause import (
+                ServicePauseRequested,
+                service_pause_requested,
+            )
+
+            admission_closed = service_pause_requested()
+            result = (
+                AgentResult(
+                    run_id=request.run_id,
+                    task_id=request.task_id,
+                    role=request.role,
+                    attempt=request.attempt,
+                    source_revision=request.source_revision,
+                    context_manifest_id=request.context_manifest_id,
+                    status=AgentRunStatus.FAILED,
+                    error=AgentFailure(
+                        code=AgentErrorCode.SERVICE_PAUSED,
+                        message=ServicePauseRequested.safe_summary,
+                        transient=False,
+                    ),
+                )
+                if admission_closed
+                else route.adapter.run(request)
+            )
+            if (
+                admission_closed
+                and result.error is not None
+                and result.error.code is AgentErrorCode.SERVICE_PAUSED
+            ):
+                from ai_software_engineer.service_pause import (
+                    current_service_pause,
+                    record_invocation_pause,
+                )
+
+                scope = current_service_pause()
+                if scope is not None and scope.control.invocation_stop(request) is None:
+                    if index == 1:
+                        record_invocation_pause(None)
+                    else:
+                        from ai_software_engineer.agents.execution import SynchronousToolLoopStop
+
+                        # Every earlier route returned and was sealed before this
+                        # denial. Only the next route is unstarted, not the Run.
+                        record_invocation_pause(
+                            SynchronousToolLoopStop.create(
+                                task_id=request.task_id,
+                                run_id=request.run_id,
+                                request_sha256=_digest_request(request),
+                                completed_operation_ids=tuple(
+                                    f"model-route.{prior_index}" for prior_index in range(1, index)
+                                ),
+                                kind="service_pause",
+                                stopped_at=self._clock(),
+                            )
+                        )
             completed_at = self._clock()
             fallback = index < len(self._routes) and _allows_fallback(result)
             self._attempt_store.append(

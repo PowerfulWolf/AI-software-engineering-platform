@@ -1,0 +1,302 @@
+{
+  "$defs": {
+    "NativeProcessStop": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "completed"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "returncode": {
+                "const": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "failed"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "returncode": {
+                "not": {
+                  "const": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "service_pause"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "session_proof": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "session_proof"
+            ]
+          }
+        }
+      ],
+      "description": "Legacy leader/group stop, optionally with a new explicit owned-SID proof.",
+      "properties": {
+        "process_id": {
+          "exclusiveMinimum": 0,
+          "title": "Process Id",
+          "type": "integer"
+        },
+        "group_id": {
+          "exclusiveMinimum": 0,
+          "title": "Group Id",
+          "type": "integer"
+        },
+        "returncode": {
+          "title": "Returncode",
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "completed",
+            "failed",
+            "local_execution_limit",
+            "service_pause"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "stopped_at": {
+          "format": "date-time",
+          "title": "Stopped At",
+          "type": "string"
+        },
+        "stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stop Sha256",
+          "type": "string"
+        },
+        "session_proof": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OwnedSessionStopProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "process_id",
+        "group_id",
+        "returncode",
+        "kind",
+        "stopped_at",
+        "stop_sha256"
+      ],
+      "title": "NativeProcessStop",
+      "type": "object"
+    },
+    "OwnedProcessIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "process_id": {
+          "exclusiveMinimum": 0,
+          "title": "Process Id",
+          "type": "integer"
+        },
+        "group_id": {
+          "exclusiveMinimum": 0,
+          "title": "Group Id",
+          "type": "integer"
+        },
+        "session_id": {
+          "exclusiveMinimum": 0,
+          "title": "Session Id",
+          "type": "integer"
+        },
+        "birth_identity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Birth Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "process_id",
+        "group_id",
+        "session_id",
+        "birth_identity"
+      ],
+      "title": "OwnedProcessIdentity",
+      "type": "object"
+    },
+    "OwnedSessionStopProof": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "proof_scope": {
+          "const": "owned_session_empty",
+          "default": "owned_session_empty",
+          "title": "Proof Scope",
+          "type": "string"
+        },
+        "boot_identity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Boot Identity",
+          "type": "string"
+        },
+        "leader": {
+          "$ref": "#/$defs/OwnedProcessIdentity"
+        },
+        "observed_processes": {
+          "items": {
+            "$ref": "#/$defs/OwnedProcessIdentity"
+          },
+          "maxItems": 16384,
+          "title": "Observed Processes",
+          "type": "array"
+        },
+        "observation_count": {
+          "maximum": 1000000,
+          "minimum": 2,
+          "title": "Observation Count",
+          "type": "integer"
+        },
+        "observations_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Observations Sha256",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "boot_identity",
+        "leader",
+        "observed_processes",
+        "observation_count",
+        "observations_sha256",
+        "observed_at",
+        "proof_sha256"
+      ],
+      "title": "OwnedSessionStopProof",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "service_pause_stop",
+      "default": "service_pause_stop",
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "operation_id": {
+      "minLength": 1,
+      "title": "Operation Id",
+      "type": "string"
+    },
+    "request_id": {
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "instance_id": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Instance Id"
+    },
+    "requested_at": {
+      "format": "date-time",
+      "title": "Requested At",
+      "type": "string"
+    },
+    "process_stop": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/NativeProcessStop"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "service_pause"
+            }
+          }
+        }
+      ]
+    },
+    "receipt_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Receipt Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "operation_id",
+    "request_id",
+    "requested_at",
+    "process_stop",
+    "receipt_sha256"
+  ],
+  "title": "PausedProcessReceipt",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/service-pause-stop.schema.json"
+}

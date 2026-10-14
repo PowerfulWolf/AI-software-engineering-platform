@@ -40,6 +40,14 @@ class CommandExecutionUncertain(RuntimeError):
     """
 
 
+class CommandServicePaused(RuntimeError):
+    """Actual owned stop has completed; the caller must seal command evidence."""
+
+    def __init__(self, arguments: tuple[str, ...], duration_ms: int) -> None:
+        super().__init__("service pause stopped the owned command")
+        self.arguments, self.duration_ms = arguments, duration_ms
+
+
 class CommandTimedOut(CommandExecutionError):
     """Raised after the command process group is terminated at its timeout."""
 
@@ -152,23 +160,33 @@ class SubprocessCommandExecutor:
             if timeout_seconds is None
             else _validate_timeout(timeout_seconds)
         )
+        from ai_software_engineer.service_pause import (
+            check_service_pause,
+            current_service_pause,
+            pause_admission,
+        )
+
+        check_service_pause()
+        pause_scope = current_service_pause()
+        pause_finished = False
         started = time.monotonic()
         process: subprocess.Popen[bytes] | None = None
         ownership: OwnedProcessObservation | None = None
         collectors: tuple[_OutputCollector, _OutputCollector] | None = None
         drain_threads: tuple[threading.Thread, threading.Thread] | None = None
         try:
-            process = subprocess.Popen(
-                authorized,
-                cwd=self._workspace_root,
-                env=self._build_environment(),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=False,
-                start_new_session=True,
-                pass_fds=self._execution_guard.inherited_fds if self._execution_guard else (),
-            )
+            with pause_admission():
+                process = subprocess.Popen(
+                    authorized,
+                    cwd=self._workspace_root,
+                    env=self._build_environment(),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    shell=False,
+                    start_new_session=True,
+                    pass_fds=self._execution_guard.inherited_fds if self._execution_guard else (),
+                )
             ownership = observe_owned_process(process, kind="tool")
             if process.stdout is None or process.stderr is None:
                 raise CommandExecutionError("command output pipes were not created")
@@ -190,17 +208,47 @@ class SubprocessCommandExecutor:
             )
             for thread in drain_threads:
                 thread.start()
-            if self._execution_guard is None:
+            if self._execution_guard is None and pause_scope is None:
                 process.wait(timeout=timeout)
             else:
                 while True:
-                    self._execution_guard.check()
+                    if self._execution_guard is not None:
+                        self._execution_guard.check()
+                    pause_request = pause_scope.control.due_request() if pause_scope else None
+                    if pause_scope is not None and pause_request is not None:
+                        _finish_owned_command(
+                            process, drain_threads, collectors, ownership, terminate=True
+                        )
+                        pause_finished = True
+                        assert ownership is not None
+                        from datetime import UTC, datetime
+
+                        from ai_software_engineer.agents.execution import NativeProcessStop
+
+                        try:
+                            session_proof = ownership.stop_session()
+                            stop = NativeProcessStop.create(
+                                process_id=process.pid,
+                                group_id=process.pid,
+                                returncode=process.returncode,
+                                kind="service_pause",
+                                stopped_at=datetime.now(UTC),
+                                session_proof=session_proof,
+                            )
+                            pause_scope.control.record_stop(pause_scope, stop, pause_request)
+                        except Exception as error:
+                            ownership.uncertain()
+                            raise CommandExecutionUncertain(
+                                "服务暂停的命令停止事实未封存"
+                            ) from error
+                        raise CommandServicePaused(authorized, _duration_ms(started))
                     remaining = timeout - (time.monotonic() - started)
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(authorized, timeout)
                     try:
                         process.wait(timeout=min(0.2, remaining))
-                        self._execution_guard.check()
+                        if self._execution_guard is not None:
+                            self._execution_guard.check()
                         break
                     except subprocess.TimeoutExpired:
                         continue
@@ -214,7 +262,7 @@ class SubprocessCommandExecutor:
                 _finish_owned_command(process, drain_threads, collectors, ownership, terminate=True)
             raise CommandExecutionError("command could not start") from error
         except BaseException:
-            if process is not None:
+            if process is not None and not pause_finished:
                 _finish_owned_command(process, drain_threads, collectors, ownership, terminate=True)
             raise
 

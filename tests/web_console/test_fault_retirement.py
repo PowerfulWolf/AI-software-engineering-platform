@@ -27,6 +27,7 @@ from ai_software_engineer.web_console.fault_retirement import (
 )
 from ai_software_engineer.web_console.service_lifecycle import (
     ServiceInstance,
+    ServiceLifecycleError,
     ServiceLifecycleStore,
     ServiceShutdownRequest,
     ServiceShutdownResult,
@@ -39,10 +40,11 @@ def _host(
     tmp_path: Path, *, supervisor: bool = False
 ) -> Iterator[tuple[dict[str, str], subprocess.Popen[bytes]]]:
     root = tmp_path / "state"
-    root.mkdir(mode=0o700)
+    root.mkdir(mode=0o700, exist_ok=True)
     entry = tmp_path / "checkout" / ".venv" / "bin" / "ase-console"
-    entry.parent.mkdir(parents=True)
-    (entry.parent / "python").symlink_to(sys.executable)
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    if not (entry.parent / "python").exists():
+        (entry.parent / "python").symlink_to(sys.executable)
     entry.write_text("import sys\nprint('ready', flush=True)\nsys.stdin.buffer.read()\n")
     entry.chmod(0o600)
     config = tmp_path / "config.json"
@@ -403,6 +405,7 @@ def test_fault_retirement_schema_parity(name: str, model: type[module._Record]) 
         (Path(__file__).parents[2] / "schemas" / (name + ".schema.json")).read_text()
     )
     assert schema.pop("$schema") == "https://json-schema.org/draft/2020-12/schema"
+    assert schema.pop("$id").endswith(f"/{name}.schema.json")
     assert schema == model.model_json_schema()
 
 
@@ -517,7 +520,7 @@ def test_archived_log_purge_preserves_control_and_current_log_and_retries(
         (root / "ase-console.log").write_bytes(b"live service log")
         if absent:
             (archive / "ase-console.log").unlink()
-        with pytest.raises(module.ServiceLifecycleError, match="确认"):
+        with pytest.raises(ServiceLifecycleError, match="确认"):
             retention.purge_archived_log(env, confirm_delete_archived_log=False)
         receipt = retention.purge_archived_log(env, confirm_delete_archived_log=True)
         assert retention.purge_archived_log(env, confirm_delete_archived_log=True) == receipt
@@ -525,7 +528,7 @@ def test_archived_log_purge_preserves_control_and_current_log_and_retries(
         assert (root / "ase-console.log").read_bytes() == b"live service log"
         assert (root / module.MARKER_NAME).read_bytes() == marker
         assert {name: (archive / name).read_bytes() for name in before} == before
-        intent = retention._load(archive, retention._INTENT, retention.ArchivedLogPurgeIntent)
+        intent = module._load(archive, retention._INTENT, retention.ArchivedLogPurgeIntent)
         assert intent.initial_observation == ("ALREADY_ABSENT" if absent else "PRESENT")
         assert intent.log_byte_count == plan.log_byte_count
         assert inspection_required(env)
@@ -542,7 +545,7 @@ def test_archived_log_purge_after_unlink_retries_original_intent(
         archive = (
             Path(env["ASE_SERVICE_STATE_DIR"]) / "console-fault-retirements" / plan.record_sha256
         )
-        real_save = retention._save
+        real_save = module._save
 
         def fail_receipt(root: Path, name: str, record: module._Record) -> None:
             if name == retention._RECEIPT:
@@ -550,7 +553,7 @@ def test_archived_log_purge_after_unlink_retries_original_intent(
             real_save(root, name, record)
 
         monkeypatch.setattr(retention, "_save", fail_receipt)
-        with pytest.raises(module.ServiceLifecycleError):
+        with pytest.raises(ServiceLifecycleError):
             retention.purge_archived_log(env, confirm_delete_archived_log=True)
         original_intent = (archive / retention._INTENT).read_bytes()
         assert not (archive / "ase-console.log").exists()
@@ -587,7 +590,7 @@ def test_archived_log_purge_refuses_unsafe_targets_or_retention_records(
             (archive / (retention._INTENT if fault == "intent" else retention._RECEIPT)).chmod(
                 0o600
             )
-        with pytest.raises((module.ServiceLifecycleError, ValueError)):
+        with pytest.raises((ServiceLifecycleError, ValueError)):
             retention.purge_archived_log(env, confirm_delete_archived_log=True)
         assert log.exists()
         assert (root / "ase-console.log").read_bytes() == b"live current log"
@@ -606,6 +609,7 @@ def test_archived_log_purge_schema_parity(name: str, model: str) -> None:
 
     schema = getattr(retention, model).model_json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    schema["$id"] = f"https://ai-software-engineer.local/schemas/{name}.schema.json"
     assert (
         json.loads((Path(__file__).parents[2] / "schemas" / f"{name}.schema.json").read_text())
         == schema
@@ -623,7 +627,7 @@ def test_archived_log_live_writer_refuses_purge_without_intent(tmp_path: Path) -
         )
         with (
             (archive / "ase-console.log").open("ab"),
-            pytest.raises(module.ServiceLifecycleError),
+            pytest.raises(ServiceLifecycleError),
         ):
             retention.purge_archived_log(env, confirm_delete_archived_log=True)
         assert not (archive / retention._INTENT).exists()

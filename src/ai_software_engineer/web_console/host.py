@@ -18,8 +18,10 @@ from fastapi import FastAPI
 
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.config import ProductionConfig, ProductionConfigError
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.owned_processes import HostOwnedProcessRegistry
+from ai_software_engineer.service_pause import PausedProcessReceipt, ServicePauseControl
 from ai_software_engineer.store import StoreError
 from ai_software_engineer.team_view.models import ProjectView, TeamSnapshot
 from ai_software_engineer.team_view.reader import ProductionTeamReader
@@ -154,6 +156,23 @@ def production_console_app(
 ) -> FastAPI:
     variables = dict(environment if environment is not None else os.environ)
     mode = _console_mode(variables)
+    if mode == "inspection":
+        return _production_console_app(variables, port=port, mode=mode)
+    root = ServiceLifecycleStore.from_environment({"HOME": str(Path.home()), **variables}).root
+    root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    from .maintenance_lock import maintenance_start_lock
+
+    with maintenance_start_lock(root, variables) as descriptor:
+        return _production_console_app(
+            {**variables, "ASE_REPLACEMENT_LOCK_FD": str(descriptor)},
+            port=port,
+            mode=_console_mode(variables),
+        )
+
+
+def _production_console_app(
+    variables: dict[str, str], *, port: int | None, mode: Literal["normal", "inspection"]
+) -> FastAPI:
     config, config_path = _load_console_config(variables)
     selected_port = config.console_port if port is None else port
     _validate_port(selected_port)
@@ -208,10 +227,19 @@ def production_console_app(
             team_id=config.team_id,
             visibility=ProductionRequirementOperationVisibility(host.team_workspace),
         )
+        pause_records = KnowledgeRecordStore(
+            host.team_workspace.directory("work-items") / "console-service-pauses"
+        )
+
+        def persist_pause(receipt: PausedProcessReceipt) -> None:
+            pause_records.put("native-stops", receipt.receipt_sha256, receipt)
+
+        pause_control = ServicePauseControl(persist_stop=persist_pause)
         console = ProjectConsole(
             store=store,
             executor=ManagerConsoleAdapter(host),
             operation_scope=owned_processes.operation_scope,
+            pause_control=pause_control,
             preparation_store=open_preparation_progress_store(
                 host.team_workspace.directory("work-items") / "console-preparation-progress"
             ),
@@ -433,6 +461,7 @@ class ControlledConsoleServer(uvicorn.Server):
                 self._coordinator.begin_shutdown()
                 self._coordinator.record_failure()
             return
+        self._coordinator.request_execution_pause(request)
         result = self._coordinator.begin_shutdown()
         if result.state is ShutdownState.REFUSED:
             try:

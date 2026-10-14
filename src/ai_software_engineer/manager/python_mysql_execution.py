@@ -20,6 +20,7 @@ from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.execution import (
     CommandExecutionError,
     CommandResult,
+    CommandServicePaused,
     CommandTimedOut,
     SubprocessCommandExecutor,
 )
@@ -41,6 +42,7 @@ from ai_software_engineer.recovery.python_mysql_records import (
 from ai_software_engineer.recovery.store import RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_records import VerificationExecutionRecord
 from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.service_pause import ServicePauseRequested
 
 
 class PythonMysqlExecutionIdentity(DomainModel):
@@ -219,6 +221,8 @@ def execute_python_mysql_verification(
                     }
                 ),
             )
+        except (CommandServicePaused, ServicePauseRequested):
+            failure = "SERVICE_PAUSED"
         except CommandTimedOut:
             failure = "COMMAND_TIMEOUT"
         except (CommandExecutionError, MysqlResourceUnavailable, OSError, ValueError):
@@ -252,4 +256,6 @@ def execute_python_mysql_verification(
             )
         )
         finalization.confirm_saved()
+        if failure == "SERVICE_PAUSED":
+            raise ServicePauseRequested()
         return receipt

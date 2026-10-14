@@ -26,6 +26,7 @@ from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationIntent,
     VerifierPreparationObservation,
 )
+from ai_software_engineer.service_pause import ServicePauseRequested, service_pause_requested
 from ai_software_engineer.work_queue.invocation import DurableInvocationControl
 from ai_software_engineer.work_queue.models import QueueClaim
 from ai_software_engineer.work_queue.ports import QueueConflict
@@ -63,7 +64,7 @@ class PreflightInvocationControl:
         self.context_reader = context_reader
 
     def prepare(self, request: AgentRequest) -> AgentRequest:
-        if self.delegate.has_started(request):
+        if service_pause_requested() or self.delegate.has_started(request):
             return self.delegate.prepare(request)
         if request.role is AgentRole.CODER:
             self.guard.check()
@@ -113,6 +114,12 @@ class PreflightInvocationControl:
                 self.guard.check()
                 self.prepare_input(request)
                 self.guard.check()
+            return self.delegate.prepare(request)
+        except ServicePauseRequested:
+            # Preparation stopped before provider admission. Persist an exact
+            # invocation identity; the runner seals its confirmed no-start outcome.
+            if self.discard_prepared_input is not None:
+                self.discard_prepared_input(request)
             return self.delegate.prepare(request)
         except FinalModelInputCapacityExceeded as error:
             if self.discard_prepared_input is not None:
@@ -258,6 +265,7 @@ class PreflightInvocationControl:
             )
             with self.guard.write_scope():
                 self.records.put("verifier-preparation-intents", key, intent)
+        paused = False
         failure: NativeVerificationWaitReason | None = None
         if intent.lease_id != claim.lease.id or intent.request != request:
             # A crash may precede the model start and the final preparation marker.
@@ -269,6 +277,9 @@ class PreflightInvocationControl:
                 self.prepare_verifier(request)
             except NativeVerificationWaiting as error:
                 failure = error.reason
+            except ServicePauseRequested:
+                paused = True
+                failure = NativeVerificationWaitReason.SERVICE_PAUSED
         self.guard.check()
         observation = self.observe_verifier(request, intent.lease_id)
         if observation.native_execution_state == "UNCERTAIN":
@@ -302,9 +313,12 @@ class PreflightInvocationControl:
                 "EXECUTION_UNCERTAIN",
                 "ENGINEERING_AUTHORIZATION",
                 "ENVIRONMENT_UNAVAILABLE",
+                "SERVICE_PAUSED",
             ] = (
                 "EXECUTION_UNCERTAIN"
                 if observation.native_execution_state == "UNCERTAIN"
+                else "SERVICE_PAUSED"
+                if paused
                 else "ENGINEERING_AUTHORIZATION"
                 if failure
                 in {
@@ -337,6 +351,7 @@ class PreflightInvocationControl:
 
 def _preparation_reason(reason: NativeVerificationWaitReason) -> str:
     labels = {
+        NativeVerificationWaitReason.SERVICE_PAUSED: "服务重启暂停了验证准备。实际完成记录已保存。",
         NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE: "注册验证能力的当前工具或环境不可用。",
         NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT: "计划验证入口没有对应的注册执行能力。",
         NativeVerificationWaitReason.UNSUPPORTED_SWIFT_FILTER: (

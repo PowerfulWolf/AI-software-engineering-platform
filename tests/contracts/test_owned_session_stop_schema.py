@@ -103,7 +103,9 @@ def test_all_known_embeddings_and_fresh_repair_regeneration_keep_exact_stop_grap
     ]
     assert {path.name for path in paths} == {
         "completed-coder-output-unavailable.schema.json",
+        "console-deletion-cleanup.schema.json",
         "console-operation.schema.json",
+        "engineering-wait-resolution.schema.json",
         "execution-baseline-plan.schema.json",
         "execution-baseline-queue-consumption.schema.json",
         "execution-capture.schema.json",
@@ -111,6 +113,8 @@ def test_all_known_embeddings_and_fresh_repair_regeneration_keep_exact_stop_grap
         "knowledge-execution-record.schema.json",
         "knowledge-invocation-outcome.schema.json",
         "rejected-coder-output-checkpoint.schema.json",
+        "service-pause-stop.schema.json",
+        "stopped-failure-budget-settlement.schema.json",
         "stopped-provider-failure.schema.json",
         "structured-execution-observation.schema.json",
     }

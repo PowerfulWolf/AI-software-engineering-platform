@@ -11,7 +11,8 @@
         "INVALID_OUTPUT",
         "PROVIDER_ERROR",
         "POLICY_VIOLATION",
-        "WORK_INTERRUPTED"
+        "WORK_INTERRUPTED",
+        "SERVICE_PAUSED"
       ],
       "title": "AgentErrorCode",
       "type": "string"
@@ -521,7 +522,8 @@
             "ENGINEERING_AUTHORIZATION",
             "SOURCE_PREPARATION_DRIFT",
             "EXECUTION_BASELINE_PAUSED",
-            "KNOWLEDGE_PREPARATION_LIMIT"
+            "KNOWLEDGE_PREPARATION_LIMIT",
+            "SERVICE_PAUSED"
           ],
           "title": "Classification",
           "type": "string"
@@ -736,7 +738,8 @@
             {
               "enum": [
                 "local_execution_limit",
-                "provider_transient"
+                "provider_transient",
+                "service_pause"
               ],
               "type": "string"
             },
@@ -832,6 +835,35 @@
                 "properties": {
                   "kind": {
                     "const": "failed"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "cause"
+            ],
+            "properties": {
+              "cause": {
+                "const": "service_pause"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_error_code"
+            ],
+            "properties": {
+              "original_error_code": {
+                "const": "SERVICE_PAUSED"
+              },
+              "process_stop": {
+                "properties": {
+                  "kind": {
+                    "const": "service_pause"
                   }
                 }
               }
@@ -1026,6 +1058,28 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "service_pause"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "session_proof": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "session_proof"
+            ]
+          }
         }
       ],
       "description": "Legacy leader/group stop, optionally with a new explicit owned-SID proof.",
@@ -1048,7 +1102,8 @@
           "enum": [
             "completed",
             "failed",
-            "local_execution_limit"
+            "local_execution_limit",
+            "service_pause"
           ],
           "title": "Kind",
           "type": "string"
@@ -1094,6 +1149,106 @@
       ],
       "title": "NetworkAccess",
       "type": "string"
+    },
+    "OwnedProcessIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "process_id": {
+          "exclusiveMinimum": 0,
+          "title": "Process Id",
+          "type": "integer"
+        },
+        "group_id": {
+          "exclusiveMinimum": 0,
+          "title": "Group Id",
+          "type": "integer"
+        },
+        "session_id": {
+          "exclusiveMinimum": 0,
+          "title": "Session Id",
+          "type": "integer"
+        },
+        "birth_identity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Birth Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "process_id",
+        "group_id",
+        "session_id",
+        "birth_identity"
+      ],
+      "title": "OwnedProcessIdentity",
+      "type": "object"
+    },
+    "OwnedSessionStopProof": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "proof_scope": {
+          "const": "owned_session_empty",
+          "default": "owned_session_empty",
+          "title": "Proof Scope",
+          "type": "string"
+        },
+        "boot_identity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Boot Identity",
+          "type": "string"
+        },
+        "leader": {
+          "$ref": "#/$defs/OwnedProcessIdentity"
+        },
+        "observed_processes": {
+          "items": {
+            "$ref": "#/$defs/OwnedProcessIdentity"
+          },
+          "maxItems": 16384,
+          "title": "Observed Processes",
+          "type": "array"
+        },
+        "observation_count": {
+          "maximum": 1000000,
+          "minimum": 2,
+          "title": "Observation Count",
+          "type": "integer"
+        },
+        "observations_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Observations Sha256",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "boot_identity",
+        "leader",
+        "observed_processes",
+        "observation_count",
+        "observations_sha256",
+        "observed_at",
+        "proof_sha256"
+      ],
+      "title": "OwnedSessionStopProof",
+      "type": "object"
     },
     "PlanExecutionWindow": {
       "additionalProperties": false,
@@ -1525,106 +1680,6 @@
         "files"
       ],
       "title": "WorkspaceMutationInventory",
-      "type": "object"
-    },
-    "OwnedProcessIdentity": {
-      "additionalProperties": false,
-      "properties": {
-        "process_id": {
-          "exclusiveMinimum": 0,
-          "title": "Process Id",
-          "type": "integer"
-        },
-        "group_id": {
-          "exclusiveMinimum": 0,
-          "title": "Group Id",
-          "type": "integer"
-        },
-        "session_id": {
-          "exclusiveMinimum": 0,
-          "title": "Session Id",
-          "type": "integer"
-        },
-        "birth_identity": {
-          "maxLength": 128,
-          "minLength": 1,
-          "title": "Birth Identity",
-          "type": "string"
-        }
-      },
-      "required": [
-        "process_id",
-        "group_id",
-        "session_id",
-        "birth_identity"
-      ],
-      "title": "OwnedProcessIdentity",
-      "type": "object"
-    },
-    "OwnedSessionStopProof": {
-      "additionalProperties": false,
-      "properties": {
-        "schema_version": {
-          "const": "v1",
-          "default": "v1",
-          "title": "Schema Version",
-          "type": "string"
-        },
-        "proof_scope": {
-          "const": "owned_session_empty",
-          "default": "owned_session_empty",
-          "title": "Proof Scope",
-          "type": "string"
-        },
-        "boot_identity": {
-          "maxLength": 128,
-          "minLength": 1,
-          "title": "Boot Identity",
-          "type": "string"
-        },
-        "leader": {
-          "$ref": "#/$defs/OwnedProcessIdentity"
-        },
-        "observed_processes": {
-          "items": {
-            "$ref": "#/$defs/OwnedProcessIdentity"
-          },
-          "maxItems": 16384,
-          "title": "Observed Processes",
-          "type": "array"
-        },
-        "observation_count": {
-          "maximum": 1000000,
-          "minimum": 2,
-          "title": "Observation Count",
-          "type": "integer"
-        },
-        "observations_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Observations Sha256",
-          "type": "string"
-        },
-        "observed_at": {
-          "format": "date-time",
-          "title": "Observed At",
-          "type": "string"
-        },
-        "proof_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Proof Sha256",
-          "type": "string"
-        }
-      },
-      "required": [
-        "boot_identity",
-        "leader",
-        "observed_processes",
-        "observation_count",
-        "observations_sha256",
-        "observed_at",
-        "proof_sha256"
-      ],
-      "title": "OwnedSessionStopProof",
       "type": "object"
     }
   },

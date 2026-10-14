@@ -466,3 +466,43 @@ def test_crash_before_model_start_keeps_original_intent_across_new_claim_and_run
     if state == "FINISHED":
         assert marker.observation.native_failure_code is None
         assert "原验证准备已结束" in failure.events[0].reason
+
+
+def test_service_pause_during_verifier_preparation_seals_exact_wait_before_model(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.service_pause import ServicePauseRequested
+
+    fixture = _fixture(tmp_path)
+
+    def pause(request: AgentRequest) -> Never:
+        raise ServicePauseRequested()
+
+    gate, delegate, failure, records = _gate(fixture, tmp_path, prepare=pause)
+    with pytest.raises(_Wait):
+        gate.prepare(fixture.request)
+    marker = _marker(records)
+    assert marker.result == "WAIT"
+    assert marker.request == fixture.request
+    assert marker.failure_reason is NativeVerificationWaitReason.SERVICE_PAUSED
+    assert marker.observation.native_execution_state == "NOT_STARTED"
+    assert delegate.calls == 0
+    assert failure.events[0].classification == "SERVICE_PAUSED"
+    assert failure.events[0].artifact_ids == ("verifier-preparation://" + marker.checkpoint_sha256,)
+
+
+def test_service_pause_in_final_input_seals_no_start_identity(tmp_path: Path) -> None:
+    from ai_software_engineer.service_pause import ServicePauseRequested
+
+    fixture = _fixture(tmp_path)
+    gate, delegate, failure, _ = _gate(fixture, tmp_path, prepare=lambda request: None)
+    discarded: list[AgentRequest] = []
+
+    def pause(request: AgentRequest) -> Never:
+        raise ServicePauseRequested()
+
+    gate.prepare_input = pause
+    gate.discard_prepared_input = discarded.append
+    assert gate.prepare(fixture.request) == fixture.request
+    assert delegate.calls == 1 and discarded == [fixture.request]
+    assert not failure.events

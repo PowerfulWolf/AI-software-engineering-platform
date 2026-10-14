@@ -39,6 +39,16 @@ class NativeProcessStop(DomainModel):
                     "if": {"required": ["kind"], "properties": {"kind": {"const": "failed"}}},
                     "then": {"properties": {"returncode": {"not": {"const": 0}}}},
                 },
+                {
+                    "if": {
+                        "required": ["kind"],
+                        "properties": {"kind": {"const": "service_pause"}},
+                    },
+                    "then": {
+                        "required": ["session_proof"],
+                        "properties": {"session_proof": {"type": "object"}},
+                    },
+                },
             ]
         }
     )
@@ -46,7 +56,7 @@ class NativeProcessStop(DomainModel):
     process_id: Annotated[StrictInt, Field(gt=0)]
     group_id: Annotated[StrictInt, Field(gt=0)]
     returncode: StrictInt
-    kind: Literal["completed", "failed", "local_execution_limit"]
+    kind: Literal["completed", "failed", "local_execution_limit", "service_pause"]
     stopped_at: AwareDatetime
     stop_sha256: StageSha256
     session_proof: OwnedSessionStopProof | None = Field(
@@ -63,6 +73,8 @@ class NativeProcessStop(DomainModel):
     def validate_owned_session(self) -> Self:
         if self.group_id != self.process_id:
             raise ValueError("native stop requires the runner-owned process session")
+        if self.kind == "service_pause" and self.session_proof is None:
+            raise ValueError("service pause requires a complete actual owned-session proof")
         if (self.kind == "completed" and self.returncode != 0) or (
             self.kind == "failed" and self.returncode == 0
         ):
@@ -104,7 +116,7 @@ class SynchronousToolLoopStop(DomainModel):
     run_id: NonEmptyStr
     request_sha256: StageSha256
     completed_operation_ids: tuple[NonEmptyStr, ...]
-    kind: Literal["failed", "local_execution_limit"] = "failed"
+    kind: Literal["failed", "local_execution_limit", "service_pause"] = "failed"
     stopped_at: AwareDatetime
     stop_sha256: StageSha256
 
@@ -177,3 +189,67 @@ def bind_execution_guard(guard: ExecutionGuard) -> Iterator[None]:
         guard.check()
     finally:
         _structured_guard.reset(token)
+
+
+class PausedInvocationProof(DomainModel):
+    """Trusted stopped/no-start execution bound to one exact admitted request."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "required": ["admission_closed"],
+                        "properties": {"admission_closed": {"const": True}},
+                    },
+                    "then": {"properties": {"process_stop": {"type": "null"}}},
+                    "else": {
+                        "required": ["process_stop"],
+                        "properties": {
+                            "process_stop": {
+                                "type": "object",
+                                "properties": {"kind": {"const": "service_pause"}},
+                            }
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
+    request: AgentRequest
+    process_stop: NativeProcessStop | SynchronousToolLoopStop | None = None
+    admission_closed: bool = False
+    proof_sha256: StageSha256
+
+    @model_validator(mode="after")
+    def validate_stop(self) -> Self:
+        if self.admission_closed == (self.process_stop is not None):
+            raise ValueError("pause requires exactly one real stop or confirmed no-start")
+        if self.process_stop is not None:
+            self.process_stop.validate_integrity()
+            if self.process_stop.kind != "service_pause":
+                raise ValueError("paused invocation requires the exact service pause cause")
+            if isinstance(self.process_stop, SynchronousToolLoopStop):
+                self.process_stop.require_request(self.request)
+        return self
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        value = cls.model_validate({**values, "proof_sha256": "0" * 64})
+        return value.model_copy(update={"proof_sha256": value.recompute_sha256()})
+
+    def recompute_sha256(self) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                self.model_dump(mode="json", exclude={"proof_sha256"}),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+        if self.proof_sha256 != self.recompute_sha256():
+            raise ValueError("paused invocation proof digest mismatch")

@@ -167,7 +167,11 @@ def test_production_inspection_never_constructs_writer_or_reconciles_history(
     )
     monkeypatch.setattr(InspectionConsole, "start", forbidden)
     app = host.production_console_app(
-        {"ASE_CONFIG": str(config_path), "ASE_CONSOLE_MODE": "normal"}
+        {
+            "ASE_CONFIG": str(config_path),
+            "ASE_CONSOLE_MODE": "normal",
+            "ASE_SERVICE_STATE_DIR": str(tmp_path / "service-state"),
+        }
     )
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         assert client.get("/api/v1/console").json()["mode"] == "inspection"
@@ -184,13 +188,17 @@ def test_production_inspection_never_constructs_writer_or_reconciles_history(
     assert _bytes(tmp_path) == before
 
 
-def test_damaged_marker_cannot_fall_back_to_normal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_damaged_marker_cannot_fall_back_to_normal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def damaged(env: object) -> bool:
         raise ValueError("维护记录损坏")
 
     monkeypatch.setattr(host, "_inspection_required", damaged)
     with pytest.raises(ValueError, match="维护记录损坏"):
-        host.production_console_app({"ASE_CONSOLE_MODE": "normal"})
+        host.production_console_app(
+            {"ASE_CONSOLE_MODE": "normal", "ASE_SERVICE_STATE_DIR": str(tmp_path / "state")}
+        )
 
 
 def test_maintenance_completion_guide_is_readonly_and_contains_exact_quoted_commands(

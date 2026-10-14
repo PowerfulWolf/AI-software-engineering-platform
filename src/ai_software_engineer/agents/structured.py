@@ -201,6 +201,12 @@ class FallbackStructuredModelClient:
         last: StructuredModelError | None = None
         invocation_id = uuid4().hex
         for index, (route_index, route) in enumerate(candidates):
+            from ai_software_engineer.service_pause import service_pause_requested
+
+            if service_pause_requested():
+                raise StructuredModelError(
+                    AgentErrorCode.SERVICE_PAUSED, "服务重启已暂停新模型调用。", transient=False
+                )
             started_at, started = datetime.now(UTC), time.monotonic()
             identity = (
                 StructuredCallIdentity(
@@ -350,6 +356,7 @@ class CodexCliStructuredModelClient:
     ) -> StructuredModelResult:
         from ai_software_engineer.agents.codex_policy import no_command_arguments
 
+        _check_service_pause()
         started = time.monotonic()
         prompt = _prompt(instructions, input_payload)
         with tempfile.TemporaryDirectory(prefix="ase-structured-") as temporary:
@@ -489,6 +496,7 @@ class ResponsesStructuredModelClient:
         timeout_seconds: int,
         input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
+        _check_service_pause()
         started = time.monotonic()
         user_content: JsonValue
         if input_images:
@@ -533,6 +541,7 @@ class ResponsesStructuredModelClient:
             },
         }
         request_bytes = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
+        _check_service_pause()
         admission = admit_structured_execution(
             execution_kind="http",
             transport_request_sha256=observation_digest(
@@ -630,6 +639,15 @@ def _record_http_round_trip(
         raise
     except Exception as error:
         raise StructuredObservationRejected("结构化请求回执不一致; 暂停后续执行") from error
+
+
+def _check_service_pause() -> None:
+    from ai_software_engineer.service_pause import service_pause_requested
+
+    if service_pause_requested():
+        raise StructuredModelError(
+            AgentErrorCode.SERVICE_PAUSED, "服务重启已暂停新模型调用。", transient=False
+        )
 
 
 def _allows_fallback(error: StructuredModelError) -> bool:

@@ -243,3 +243,67 @@ def test_completed_baseline_replay_uses_frozen_intent_after_queue_consumption(
     monkeypatch.setattr(f.collector, "collect", no_old_facts)
     assert f.service.execute(plan.plan_sha256, authority=authority) == binding
     assert f.service.store.bindings_for_task(binding.task_id) == (binding,)
+
+
+@pytest.mark.parametrize("returned_route", [False, True])
+def test_service_pause_no_start_baseline_uses_new_work_without_provider_refund(
+    tmp_path: Path,
+    returned_route: bool,
+) -> None:
+    from ai_software_engineer.agents.execution import (
+        PausedInvocationProof,
+        SynchronousToolLoopStop,
+    )
+
+    collector, task, item, _ = reservation_fixture(tmp_path, work_limit=3)
+    records = KnowledgeRecordStore(tmp_path / "invocations")
+    start = records.get("invocation-starts", item.id, DeliveryInvocationStart)
+    result = AgentResult(
+        run_id=start.request.run_id,
+        task_id=start.request.task_id,
+        role=start.request.role,
+        attempt=start.request.attempt,
+        source_revision=start.request.source_revision,
+        context_manifest_id=start.request.context_manifest_id,
+        status=AgentRunStatus.FAILED,
+        error=AgentFailure(
+            code=AgentErrorCode.SERVICE_PAUSED,
+            message="服务重启已暂停执行。",
+            transient=False,
+        ),
+    )
+    outcome = DeliveryInvocationOutcome(
+        start=start,
+        result=result,
+        service_pause=PausedInvocationProof.create(
+            request=start.request,
+            admission_closed=not returned_route,
+            process_stop=SynchronousToolLoopStop.create(
+                task_id=start.request.task_id,
+                run_id=start.request.run_id,
+                request_sha256=digest(start.request.to_wire()),
+                completed_operation_ids=("model-route.1",),
+                kind="service_pause",
+                stopped_at=NOW,
+            )
+            if returned_route
+            else None,
+        ),
+        outcome_sha256="0" * 64,
+    )
+    outcome = outcome.model_copy(
+        update={
+            "outcome_sha256": digest(outcome.model_dump(mode="json", exclude={"outcome_sha256"}))
+        }
+    )
+    records.put("invocation-outcomes", item.id, outcome)
+    reservation = collector._reservation(task, item, ())
+    assert reservation.retry_cause == "service_pause"
+    assert reservation.next_execution_attempt == task.attempts + 1
+    assert reservation.retry_failure is None
+    assert reservation.current_invocation_outcome_sha256 == outcome.outcome_sha256
+    assert not reservation.reservation_already_applied
+
+    exhausted = task.model_copy(update={"attempts": task.max_attempts})
+    with pytest.raises(ValueError, match="额度"):
+        collector._reservation(exhausted, item, ())

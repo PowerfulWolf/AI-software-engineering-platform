@@ -53,8 +53,10 @@ processes. Task/Run state, model outcome, lease finish and process liveness are 
 `thread.join(timeout)` plus daemon abandonment is not stop proof. Uvicorn signals must coordinate before
 `should_exit`, not raise from lifespan after shutdown has already begun.
 
-This contract drains an already claimed complete Operation, including subsequent authorized roles with
-fresh claims. It does not force-cancel synchronous providers, create shutdown verdicts, refund budgets,
+The host-owned execution pause in [service-pause.md](service-pause.md) supersedes full-Operation
+drain: after shutdown admission closes, the current call has a fixed completion window, and subsequent
+roles, model rounds and retries do not start. Actual owned native sessions stop after that window.
+It does not claim synchronous HTTP cancellation, create shutdown verdicts, refund budgets,
 change continuation cause/kind or fabricate original `ExecutionCaptureStop` records.
 
 ## Signatures and ordering

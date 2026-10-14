@@ -17,6 +17,7 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 from pymysql.cursors import DictCursor
 
+from ai_software_engineer.agents.execution import SynchronousToolLoopStop
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, RouteAttemptOutcome
 from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
@@ -1074,16 +1075,36 @@ class ProductionBaselineFactCollector:
                 if invocation_root.is_dir()
                 else ()
             )
+            coder_starts = tuple(
+                start
+                for start in starts
+                if start.request.task_id == facts.task.id and start.request.role is AgentRole.CODER
+            )
+            confirmed_no_start = bool(coder_starts) and all(
+                (
+                    outcome := KnowledgeRecordStore(invocation_root, read_only=True).find(
+                        "invocation-outcomes", start.work_item_id, DeliveryInvocationOutcome
+                    )
+                )
+                is not None
+                and outcome.start == start
+                and outcome.service_pause is not None
+                and outcome.service_pause.admission_closed
+                for start in coder_starts
+            )
             if (
                 facts.continuation is None
-                or facts.continuation.retry_cause != "uninvoked"
+                or facts.continuation.retry_cause not in {"uninvoked", "service_pause"}
+                or (facts.continuation.retry_cause == "service_pause" and not confirmed_no_start)
                 or implementation is not None
                 or progress is not None
                 or source.baseline is not None
                 or source.source_revision != facts.task.base_ref
                 or self._receipts(facts.task)
                 or any(
-                    start.request.task_id == facts.task.id and start.request.role is AgentRole.CODER
+                    start.request.task_id == facts.task.id
+                    and start.request.role is AgentRole.CODER
+                    and not confirmed_no_start
                     for start in starts
                 )
             ):
@@ -1570,6 +1591,27 @@ class ProductionBaselineFactCollector:
         if receipt is not None:
             cause = receipt.cause
             error_code = receipt.original_error_code.value
+        elif (
+            outcome is not None
+            and outcome.service_pause is not None
+            and (
+                outcome.service_pause.admission_closed
+                or (
+                    isinstance(outcome.service_pause.process_stop, SynchronousToolLoopStop)
+                    and bool(outcome.service_pause.process_stop.completed_operation_ids)
+                    and all(
+                        operation.startswith("model-route.")
+                        for operation in outcome.service_pause.process_stop.completed_operation_ids
+                    )
+                )
+            )
+            and outcome.start == start
+            and outcome.result.error is not None
+            and outcome.result.error.code is AgentErrorCode.SERVICE_PAUSED
+        ):
+            outcome.validate_integrity()
+            cause = "service_pause"
+            error_code = AgentErrorCode.SERVICE_PAUSED.value
         elif (
             outcome is not None
             and outcome.result.error is not None

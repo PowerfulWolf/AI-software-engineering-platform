@@ -60,6 +60,7 @@ class DeliveryFailureFacts(DomainModel):
         "SOURCE_PREPARATION_DRIFT",
         "EXECUTION_BASELINE_PAUSED",
         "KNOWLEDGE_PREPARATION_LIMIT",
+        "SERVICE_PAUSED",
     ]
     source_revision: NonEmptyStr
     task_intent_sha256: DispositionSha256
@@ -165,7 +166,12 @@ def decide_delivery_disposition(facts: DeliveryFailureFacts) -> DeliveryDisposit
     ] = "verified_prerequisites"
     reason = "当前工程前提尚未满足, 交付已暂停, 工作现场和执行历史保留。"
     next_action = "工程授权者需核验所列前提, 记录处理结果; 事实满足后平台继续原交付。"
-    if reason_code == "EXECUTION_BASELINE_PAUSED":
+    if reason_code == "SERVICE_PAUSED":
+        action = DeliveryNextAction.INVESTIGATE_EXECUTION
+        condition = "verified_execution_resolution"
+        reason = "服务重启已受控暂停本次执行。原交付阶段、审批和工作现场保留。"
+        next_action = "工程团队核验真实停止和完整现场后, 按原授权继续; 未完成产物不视为交付结果。"
+    elif reason_code == "EXECUTION_BASELINE_PAUSED":
         action, condition = (
             DeliveryNextAction.RESUME_EXECUTION_BASELINE,
             "explicit_baseline_continuation",

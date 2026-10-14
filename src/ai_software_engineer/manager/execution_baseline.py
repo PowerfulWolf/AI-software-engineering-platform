@@ -212,7 +212,13 @@ class ExecutionBaselineService:
                 )
             conflicted = False
             preview: BaselineGitPreview | None
-            if purpose in {
+            same_paused_base = (
+                purpose is BaselinePurpose.SOURCE_REBIND
+                and target_base_ref == expected_base
+                and facts.continuation is not None
+                and facts.continuation.retry_cause == "service_pause"
+            )
+            if same_paused_base or purpose in {
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
                 BaselinePurpose.CONTEXT_CAPACITY_RESUME,
@@ -450,7 +456,7 @@ class ExecutionBaselineService:
                 authority_sha,
             ):
                 raise ValueError("baseline operation start changed; preserve all existing state")
-            if plan.purpose in {
+            if plan.preserves_paused_baseline or plan.purpose in {
                 BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
@@ -577,6 +583,12 @@ class ExecutionBaselineService:
                 context_capacity_receipt_sha256=(
                     current.context_capacity_receipt_sha256
                     if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                    else None
+                ),
+                service_pause_outcome_sha256=(
+                    current.continuation.current_invocation_outcome_sha256
+                    if current.continuation is not None
+                    and current.continuation.retry_cause == "service_pause"
                     else None
                 ),
                 source_artifact_ids=current.source_artifact_ids,

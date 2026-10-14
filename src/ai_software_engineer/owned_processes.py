@@ -14,17 +14,20 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from ai_software_engineer.owned_sessions import (
     OwnedSessionController,
     OwnedSessionStopProof,
     OwnedSessionUnknown,
 )
+
+if TYPE_CHECKING:
+    from ai_software_engineer.service_pause import ServicePauseScope
 
 OwnedProcessKind = Literal["native", "structured", "tool"]
 OwnedProcessState = Literal["running", "finalizing", "uncertain"]
@@ -48,9 +51,15 @@ class OwnedProcessSnapshot:
 class OwnedOperationContext:
     registry: HostOwnedProcessRegistry
     operation_id: str
+    pause_scope: ServicePauseScope | None = None
 
-    def activate(self) -> AbstractContextManager[None]:
-        return self.registry.operation_scope(self.operation_id)
+    @contextmanager
+    def activate(self) -> Iterator[None]:
+        with (
+            self.pause_scope.activate() if self.pause_scope is not None else nullcontext(),
+            self.registry.operation_scope(self.operation_id),
+        ):
+            yield
 
 
 _operation_context: ContextVar[OwnedOperationContext | None] = ContextVar(
@@ -160,7 +169,11 @@ class HostOwnedProcessRegistry:
     def operation_scope(self, operation_id: str) -> Iterator[None]:
         if not operation_id or len(operation_id) > 256:
             raise ValueError("owned execution requires an exact operation identity")
-        token = _operation_context.set(OwnedOperationContext(self, operation_id))
+        from ai_software_engineer.service_pause import current_service_pause
+
+        token = _operation_context.set(
+            OwnedOperationContext(self, operation_id, current_service_pause())
+        )
         try:
             yield
         finally:
@@ -424,25 +437,63 @@ def run_owned_subprocess(
     """Trusted native UI build/driver seam with an isolated and tracked session."""
     if not capture_output or not text:
         raise ValueError("owned verification commands require captured text output")
+    from datetime import UTC, datetime
+
+    from ai_software_engineer.agents.execution import NativeProcessStop
+    from ai_software_engineer.execution import CommandServicePaused
+    from ai_software_engineer.service_pause import current_service_pause, pause_admission
+
+    pause_scope = current_service_pause()
+    started = time.monotonic()
     with tempfile.TemporaryFile(mode="w+b") as stdin:
         stdin.write((input or "").encode("utf-8"))
         stdin.seek(0)
-        process = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            env=dict(env),
-            stdin=stdin,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-            start_new_session=True,
-        )
+        with pause_admission():
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=dict(env),
+                stdin=stdin,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                errors="replace",
+                start_new_session=True,
+            )
         observation = observe_owned_process(process, kind="tool")
     drained = False
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
-        drained = True
+        while True:
+            pause_request = pause_scope.control.due_request() if pause_scope else None
+            if pause_scope is not None and pause_request is not None and process.poll() is None:
+                try:
+                    proof = observation.stop_session()
+                    stdout, stderr = process.communicate(timeout=1)
+                    drained = True
+                    stop = NativeProcessStop.create(
+                        process_id=process.pid,
+                        group_id=process.pid,
+                        returncode=process.returncode,
+                        kind="service_pause",
+                        stopped_at=datetime.now(UTC),
+                        session_proof=proof,
+                    )
+                    pause_scope.control.record_stop(pause_scope, stop, pause_request)
+                except Exception as error:
+                    observation.uncertain()
+                    raise OwnedProcessesUncertain("验证命令暂停停止事实未封存") from error
+                raise CommandServicePaused(
+                    tuple(argv), max(0, int((time.monotonic() - started) * 1000))
+                )
+            remaining = timeout - (time.monotonic() - started)
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            try:
+                stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                drained = True
+                break
+            except subprocess.TimeoutExpired:
+                continue
         if check and process.returncode:
             raise subprocess.CalledProcessError(process.returncode, argv, stdout, stderr)
         return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)

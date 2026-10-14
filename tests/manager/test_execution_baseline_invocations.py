@@ -268,12 +268,26 @@ def test_every_repeated_preflight_claim_uses_its_historical_overlay_and_stop(
     assert proof.start_sha256 is None
 
 
-@pytest.mark.parametrize("started", [False, True])
+@pytest.mark.parametrize(
+    "mode", ["uninvoked", "started", "pause_no_start", "pause_unknown", "pause_returned"]
+)
 def test_missing_checkout_can_only_be_the_initial_uninvoked_preflight_checkout(
     tmp_path: Path,
-    started: bool,
+    mode: str,
 ) -> None:
-    collector, task, _, receipt = reservation_fixture(tmp_path)
+    from ai_software_engineer.agents.execution import PausedInvocationProof, SynchronousToolLoopStop
+    from ai_software_engineer.agents.models import (
+        AgentErrorCode,
+        AgentFailure,
+        AgentResult,
+        AgentRunStatus,
+    )
+    from ai_software_engineer.work_queue.invocation import (
+        DeliveryInvocationOutcome,
+        DeliveryInvocationStart,
+    )
+
+    collector, task, item, receipt = reservation_fixture(tmp_path)
     task = task.model_copy(
         update={
             "id": receipt.request.task_id,
@@ -281,8 +295,50 @@ def test_missing_checkout_can_only_be_the_initial_uninvoked_preflight_checkout(
             "branch_name": "ai/feature/original-preflight",
         }
     )
-    if not started:
+    if mode == "uninvoked":
         collector.state = tmp_path / "pristine-state"
+    if mode in {"pause_no_start", "pause_returned"}:
+        records = KnowledgeRecordStore(tmp_path / "invocations")
+        start = records.get("invocation-starts", item.id, DeliveryInvocationStart)
+        request = start.request
+        outcome = DeliveryInvocationOutcome(
+            start=start,
+            result=AgentResult(
+                run_id=request.run_id,
+                task_id=request.task_id,
+                role=request.role,
+                attempt=request.attempt,
+                source_revision=request.source_revision,
+                context_manifest_id=request.context_manifest_id,
+                status=AgentRunStatus.FAILED,
+                error=AgentFailure(
+                    code=AgentErrorCode.SERVICE_PAUSED, message="paused", transient=False
+                ),
+            ),
+            service_pause=PausedInvocationProof.create(
+                request=request,
+                admission_closed=mode == "pause_no_start",
+                process_stop=SynchronousToolLoopStop.create(
+                    task_id=request.task_id,
+                    run_id=request.run_id,
+                    request_sha256=digest(request.to_wire()),
+                    completed_operation_ids=("model-route.1",),
+                    kind="service_pause",
+                    stopped_at=NOW,
+                )
+                if mode == "pause_returned"
+                else None,
+            ),
+            outcome_sha256="0" * 64,
+        )
+        outcome = outcome.model_copy(
+            update={
+                "outcome_sha256": digest(
+                    outcome.model_dump(mode="json", exclude={"outcome_sha256"})
+                )
+            }
+        )
+        records.put("invocation-outcomes", item.id, outcome)
     collector._scope_held = True
     collector.allocation = _allocation(task, "a" * 64)
 
@@ -322,11 +378,14 @@ def test_missing_checkout_can_only_be_the_initial_uninvoked_preflight_checkout(
         task=task,
         continuation=BaselineExecutionReservation(
             current_attempt=1,
-            next_execution_attempt=1,
-            retry_cause="uninvoked",
+            next_execution_attempt=2 if mode.startswith("pause") else 1,
+            retry_cause="service_pause" if mode.startswith("pause") else "uninvoked",
+            original_run_id=receipt.request.run_id if mode.startswith("pause") else None,
+            current_invocation_start_sha256="a" * 64 if mode.startswith("pause") else None,
+            current_invocation_outcome_sha256="b" * 64 if mode.startswith("pause") else None,
         ),
     )
-    if started:
+    if mode not in {"uninvoked", "pause_no_start"}:
         with pytest.raises(ValueError, match="已开始执行的 Coder 工作区缺失"):
             collector.source_worktree(facts)
         assert not created

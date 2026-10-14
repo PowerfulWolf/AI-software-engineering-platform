@@ -790,7 +790,14 @@ def test_console_host_missing_config_starts_with_visible_defaults(
     home = tmp_path / "home"
     config_path = tmp_path / "config" / "missing.json"
     monkeypatch.setattr("ai_software_engineer.config.production.Path.home", lambda: home)
-    app = production_console_app({"ASE_CONFIG": str(config_path), "PATH": "/missing"}, port=8765)
+    app = production_console_app(
+        {
+            "ASE_CONFIG": str(config_path),
+            "PATH": "/missing",
+            "ASE_SERVICE_STATE_DIR": str(tmp_path / "service-state"),
+        },
+        port=8765,
+    )
 
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         settings = client.get("/api/v1/admin/settings")
@@ -840,7 +847,13 @@ def test_console_host_rejects_existing_invalid_config(tmp_path: Path) -> None:
     config_path.write_text("{", encoding="utf-8")
 
     with pytest.raises(ProductionConfigError, match="cannot load production configuration"):
-        production_console_app({"ASE_CONFIG": str(config_path)}, port=8765)
+        production_console_app(
+            {
+                "ASE_CONFIG": str(config_path),
+                "ASE_SERVICE_STATE_DIR": str(tmp_path / "service-state"),
+            },
+            port=8765,
+        )
 
 
 def test_administration_endpoints_create_project_import_document_and_save_settings(

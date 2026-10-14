@@ -1073,3 +1073,123 @@ def test_context_capacity_failure_waits_and_releases_real_claim_without_role_lau
         assert queue.get(item.id) == item
         assert runtime.task_repository.get(item.task_id) == current
         assert runtime.task_repository.list_events(item.task_id) == events
+
+
+@pytest.mark.parametrize("paused_role", [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER])
+def test_claimed_role_pause_before_provider_saves_no_start_and_verifier_resumes(
+    mysql_dsn: str, tmp_path: Path, paused_role: AgentRole
+) -> None:
+    from ai_software_engineer.domain.delivery_resolution import (
+        DeliveryResolution,
+        DeliveryResolutionKind,
+        InspectDeliveryWait,
+        ResolveDeliveryWait,
+    )
+    from ai_software_engineer.git import GitWorktreeManager
+    from ai_software_engineer.manager.delivery_wait import DeliveryWaitService
+    from ai_software_engineer.service_pause import ServicePauseControl
+    from ai_software_engineer.work_queue.invocation import (
+        DeliveryInvocationOutcome,
+        DurableInvocationControl,
+    )
+
+    queue = MySqlRoleQueue(mysql_dsn)
+    adapter = ObservedAdapter(queue)
+    pause = ServicePauseControl(grace_seconds=0)
+    records = KnowledgeRecordStore(tmp_path / "state/invocations")
+
+    with runtime_fixture(tmp_path, mysql_dsn, queue, adapter) as (runtime, supervisor):
+
+        class PauseAfterPrepare(DurableInvocationControl):
+            def prepare(self, request: AgentRequest) -> AgentRequest:
+                prepared = super().prepare(request)
+                if request.role is paused_role:
+                    pause.request()
+                return prepared
+
+        runtime._invocation_control = PauseAfterPrepare(records, supervisor.guard)
+        with pause.operation_scope("operation_claim_pause"), pytest.raises(DeliveryWaiting):
+            run_supervisor(runtime, supervisor)
+        (waiting,) = tuple(
+            item
+            for item in queue.items_for_task("task_domain_001")
+            if item.status is not WorkItemStatus.CLOSED
+        )
+        assert waiting.role is paused_role
+        assert waiting.wait_disposition is not None
+        assert waiting.wait_disposition.facts.classification == "SERVICE_PAUSED"
+        outcome = records.get("invocation-outcomes", waiting.id, DeliveryInvocationOutcome)
+        outcome.validate_integrity()
+        assert outcome.service_pause is not None and outcome.service_pause.admission_closed
+        assert outcome.service_pause.process_stop is None
+        assert waiting.wait_disposition.facts.evidence_ids == (
+            "invocation-outcome://" + outcome.start.request.run_id,
+        )
+        assert paused_role not in tuple(role for role, _ in adapter.invocation_claims)
+        assert not queue.list_active_leases(now=datetime.now(UTC))
+        before = runtime.task_repository.get(waiting.task_id)
+
+        def consume(resolution: DeliveryResolution) -> None:
+            queue.resolve_wait(resolution)
+
+        entry = DeliveryWaitService(
+            repository=runtime.task_repository,
+            queue=queue,
+            scope=EngineeringScope(
+                team_id="team_worker",
+                project_id="project_worker",
+                repository_id=REPOSITORY_ID,
+                repository_root=before.repository,
+            ),
+            sidecar_state=tmp_path / "state",
+            git=GitWorktreeManager(before.repository, tmp_path / "worktrees"),
+            principal=LocalOperatorPrincipal.trusted_local(),
+            consume=consume,
+        )
+        command = InspectDeliveryWait(
+            work_item_id=waiting.id,
+            expected_disposition_sha256=waiting.wait_disposition.disposition_sha256,
+            expected_task_intent_sha256=waiting.wait_disposition.facts.task_intent_sha256,
+            expected_source_revision=waiting.wait_disposition.facts.source_revision,
+            expected_checkpoint_sequence=waiting.checkpoint_sequence,
+        )
+        proof = entry.inspect(command)
+        if paused_role is AgentRole.CODER:
+            assert not proof.permitted_resolutions
+            assert runtime.task_repository.get(waiting.task_id) == before
+            return
+        assert proof.permitted_resolutions == (DeliveryResolutionKind.RETRY_FROM_CHECKPOINT,)
+        assert proof.verifier_pause == outcome.service_pause
+        decision = entry.resolve(
+            ResolveDeliveryWait.model_validate(
+                {
+                    **command.to_wire(),
+                    "proof_sha256": proof.proof_sha256,
+                    "resolution_kind": "RETRY_FROM_CHECKPOINT",
+                    "submitted_at": datetime.now(UTC),
+                }
+            )
+        )
+        assert decision.retry_cause == "service_pause" and decision.retry_failure is None
+        queue.resolve_wait(decision)  # Same exact decision replays without another debit.
+        current = runtime.task_repository.get(waiting.task_id)
+        assert current.attempts == before.attempts + 1
+        assert current.retry_failures == before.retry_failures
+        assert queue.get(waiting.id).status is WorkItemStatus.CLOSED
+        pause.cancel()
+        runtime._invocation_control = DurableInvocationControl(records, supervisor.guard)
+        result = run_supervisor(runtime, supervisor)
+        assert result.task.status is TaskStatus.DONE
+        (old_request,) = tuple(
+            value.start.request
+            for value in records.list("invocation-outcomes", DeliveryInvocationOutcome)
+            if value.service_pause is not None
+        )
+        fresh = tuple(
+            value.start.request
+            for value in records.list("invocation-outcomes", DeliveryInvocationOutcome)
+            if value.start.request.role is paused_role and value.service_pause is None
+        )
+        assert len(fresh) == 1
+        assert fresh[0].run_id != old_request.run_id
+        assert fresh[0].context_manifest_id != old_request.context_manifest_id

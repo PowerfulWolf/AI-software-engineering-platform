@@ -370,6 +370,13 @@ class ConsoleShutdownCoordinator:
         self._state = ShutdownState.RUNNING
         self._lock = Lock()
 
+    def request_execution_pause(self, request: ServiceShutdownRequest) -> None:
+        from ai_software_engineer.service_pause import ServicePauseControl
+
+        control = getattr(self._console, "pause_control", None)
+        if isinstance(control, ServicePauseControl):
+            control.request(request_id=request.request_id, instance_id=request.instance_id)
+
     def begin_shutdown(self) -> ShutdownResult:
         with self._lock:
             self.write_gate.begin_shutdown()

@@ -115,10 +115,13 @@ class CodexProcessNotStarted(CodexCliError):
     """A known owned-runner startup failure happened before Popen succeeded."""
 
     def __init__(
-        self, failure_kind: Literal["input_preparation_failed", "process_spawn_failed"]
+        self,
+        failure_kind: Literal[
+            "input_preparation_failed", "process_spawn_failed", "service_pause_admission_closed"
+        ],
     ) -> None:
         self.failure_kind = failure_kind
-        super().__init__("Codex CLI process was not started")
+        super().__init__("Codex CLI process could not start")
 
 
 _CODER_SLICE_REJECTION_SUMMARIES = {
@@ -276,7 +279,17 @@ class SubprocessCodexCommandRunner:
             if guard is not None:
                 guard.check()
 
+        from ai_software_engineer.service_pause import (
+            ServicePauseRequested,
+            current_service_pause,
+            pause_admission,
+            service_pause_requested,
+        )
+
+        if service_pause_requested():
+            raise CodexProcessNotStarted("service_pause_admission_closed")
         check_owner()
+        pause_scope = current_service_pause()
         started = time.monotonic()
         process: subprocess.Popen[bytes] | None = None
         ownership: OwnedProcessObservation | None = None
@@ -295,17 +308,18 @@ class SubprocessCodexCommandRunner:
                 prompt.seek(0)
                 check_owner()
                 failure_kind = "process_spawn_failed"
-                process = subprocess.Popen(
-                    argv,
-                    cwd=cwd,
-                    env=dict(environment),
-                    stdin=prompt,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    bufsize=0,
-                    start_new_session=True,
-                    pass_fds=guard.inherited_fds if guard is not None else (),
-                )
+                with pause_admission():
+                    process = subprocess.Popen(
+                        argv,
+                        cwd=cwd,
+                        env=dict(environment),
+                        stdin=prompt,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        bufsize=0,
+                        start_new_session=True,
+                        pass_fds=guard.inherited_fds if guard is not None else (),
+                    )
                 # Actual spawn ownership precedes prompt close and a fallible
                 # Host registry call. Registry failure cannot erase its stop.
                 ownership = capture_owned_process(process)
@@ -314,6 +328,8 @@ class SubprocessCodexCommandRunner:
                     kind=self._process_kind,
                     observation=ownership,
                 )
+        except ServicePauseRequested as error:
+            raise CodexProcessNotStarted("service_pause_admission_closed") from error
         except OSError as error:
             if process is None:
                 raise CodexProcessNotStarted(failure_kind) from error
@@ -424,6 +440,23 @@ class SubprocessCodexCommandRunner:
                 check_owner()
                 if ownership is not None:
                     ownership.observe_session()
+                pause_request = (
+                    pause_scope.control.due_request() if pause_scope is not None else None
+                )
+                if pause_scope is not None and pause_request is not None and process.poll() is None:
+                    stdout, stderr = stop()
+                    proof = stopped("service_pause")
+                    if proof is None:
+                        raise CodexExecutionUnconfirmed("服务暂停未取得真实执行停止证明")
+                    try:
+                        pause_scope.control.record_stop(pause_scope, proof, pause_request)
+                    except Exception as error:
+                        if ownership is not None:
+                            ownership.uncertain()
+                        raise CodexExecutionUnconfirmed("服务暂停停止记录未能可靠保存") from error
+                    return publish(
+                        CodexInvocationResult(process.returncode, stdout, stderr, False, proof)
+                    )
                 if time.monotonic() - started >= timeout_seconds:
                     stdout, stderr = stop()
                     proof = stopped("local_execution_limit")
@@ -588,6 +621,22 @@ class CodexCliAgentAdapter:
         started = time.monotonic()
         try:
             result = self._execute(request, started)
+        except CodexProcessNotStarted as error:
+            if error.failure_kind == "service_pause_admission_closed":
+                from ai_software_engineer.service_pause import record_invocation_pause
+
+                record_invocation_pause(None)
+            result = _failure(
+                request,
+                AgentErrorCode.SERVICE_PAUSED
+                if error.failure_kind == "service_pause_admission_closed"
+                else AgentErrorCode.POLICY_VIOLATION,
+                "服务暂停已拒绝新的原生执行, 未启动进程。"
+                if error.failure_kind == "service_pause_admission_closed"
+                else "Codex worktree violated the execution precondition",
+                transient=False,
+                duration_ms=_elapsed_ms(started),
+            )
         except ContinuationExecutionUncertain:
             raise
         except WorkspacePolicyError as error:
@@ -757,13 +806,16 @@ class CodexCliAgentAdapter:
                     if result.process_stop is None:
                         return
                     code, transient = _classify_cli_failure(result)
+                    paused = result.process_stop.kind == "service_pause"
                     recorder.record_native_stop(
                         request,
                         self._workspace_root,
                         process_stop=result.process_stop,
                         output_present=output_path.exists(),
                         cause=(
-                            "local_execution_limit"
+                            "service_pause"
+                            if paused
+                            else "local_execution_limit"
                             if result.timed_out
                             else (
                                 "provider_transient"
@@ -771,7 +823,9 @@ class CodexCliAgentAdapter:
                                 else None
                             )
                         ),
-                        original_error_code=AgentErrorCode.TIMEOUT
+                        original_error_code=AgentErrorCode.SERVICE_PAUSED
+                        if paused
+                        else AgentErrorCode.TIMEOUT
                         if result.timed_out
                         else (code if result.returncode != 0 else None),
                     )
@@ -821,6 +875,27 @@ class CodexCliAgentAdapter:
                 stdin=compiled_prompt,
                 timeout_seconds=float(request.timeout_seconds),
             )
+            if (
+                invocation.process_stop is not None
+                and invocation.process_stop.kind == "service_pause"
+            ):
+                if inventory_before is not None and self._interruption_control is not None:
+                    self._interruption_control.interrupted(
+                        request,
+                        self._workspace_root,
+                        before=inventory_before,
+                        cause="service_pause",
+                        original_error_code=AgentErrorCode.SERVICE_PAUSED,
+                        process_stop=invocation.process_stop,
+                        output_present=output_path.exists(),
+                    )
+                return _failure(
+                    request,
+                    AgentErrorCode.SERVICE_PAUSED,
+                    "服务重启已受控暂停本次执行。真实停止记录和工作现场保留。",
+                    transient=False,
+                    duration_ms=_elapsed_ms(started),
+                )
             if invocation.timed_out:
                 interrupted = self._interrupted_result(
                     request,

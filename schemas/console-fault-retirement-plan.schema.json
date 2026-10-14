@@ -46,6 +46,77 @@
       "title": "CatalogScope",
       "type": "object"
     },
+    "MaintenanceCompletionFile": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "name": {
+          "enum": [
+            "plan.json",
+            "receipt.json"
+          ],
+          "title": "Name",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "byte_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 2097152,
+          "title": "Byte Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "name",
+        "sha256",
+        "byte_count"
+      ],
+      "title": "MaintenanceCompletionFile",
+      "type": "object"
+    },
+    "MaintenanceControlFile": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/MaintenanceControlName"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "byte_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 2097152,
+          "title": "Byte Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "sha256",
+        "byte_count"
+      ],
+      "title": "MaintenanceControlFile",
+      "type": "object"
+    },
+    "MaintenanceControlName": {
+      "enum": [
+        "console-inspection.json",
+        "console-maintenance-completed.json",
+        "console-maintenance-admitted.json"
+      ],
+      "type": "string"
+    },
     "OriginalFile": {
       "additionalProperties": false,
       "properties": {
@@ -111,6 +182,53 @@
         "birth_identity"
       ],
       "title": "OwnedProcessIdentity",
+      "type": "object"
+    },
+    "PreviousMaintenanceEpoch": {
+      "additionalProperties": false,
+      "properties": {
+        "marker_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Marker Sha256",
+          "type": "string"
+        },
+        "completion_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Completion Sha256",
+          "type": "string"
+        },
+        "admission_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Admission Sha256",
+          "type": "string"
+        },
+        "controls": {
+          "items": {
+            "$ref": "#/$defs/MaintenanceControlFile"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Controls",
+          "type": "array"
+        },
+        "completion_files": {
+          "items": {
+            "$ref": "#/$defs/MaintenanceCompletionFile"
+          },
+          "maxItems": 2048,
+          "minItems": 2,
+          "title": "Completion Files",
+          "type": "array"
+        }
+      },
+      "required": [
+        "marker_sha256",
+        "completion_sha256",
+        "admission_sha256",
+        "controls",
+        "completion_files"
+      ],
+      "title": "PreviousMaintenanceEpoch",
       "type": "object"
     },
     "ServiceInstance": {
@@ -446,6 +564,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/SupervisorIdentity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "previous_maintenance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PreviousMaintenanceEpoch"
         },
         {
           "type": "null"

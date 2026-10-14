@@ -110,6 +110,11 @@ class ExecutionCaptureStop(DomainModel):
     @model_validator(mode="after")
     def require_real_cause(self) -> Self:
         self.process_stop.validate_integrity()
+        if self.cause == "service_pause" and (
+            self.process_stop.kind != "service_pause"
+            or self.original_error_code is not AgentErrorCode.SERVICE_PAUSED
+        ):
+            raise ValueError("service pause requires its actual owned stop and explicit cause")
         if self.cause == "local_execution_limit" and (
             self.process_stop.kind != "local_execution_limit"
             or self.original_error_code is not AgentErrorCode.TIMEOUT
@@ -200,6 +205,11 @@ class ExecutionInterruptionReceipt(DomainModel):
         ):
             raise ValueError("interruption receipt inventory body and digest must match")
         self.process_stop.validate_integrity()
+        if self.cause == "service_pause" and (
+            self.process_stop.kind != "service_pause"
+            or self.original_error_code is not AgentErrorCode.SERVICE_PAUSED
+        ):
+            raise ValueError("service pause capture requires the exact stopped execution and cause")
         if isinstance(self.process_stop, SynchronousToolLoopStop):
             if self.schema_version != "v2" or (self.cause == "local_execution_limit") != (
                 self.process_stop.kind == "local_execution_limit"

@@ -255,3 +255,66 @@ def test_controlled_verification_registry_waits_for_actual_receipt_store(
         assert registry.shutdown_failed and len(registry.snapshot()) == 2
     else:
         registry.require_stopped()
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_service_pause_command_evidence_finishes_before_owned_registry_release(
+    tmp_path: Path, started: bool
+) -> None:
+    from threading import Thread
+    from time import sleep
+
+    from ai_software_engineer.evidence.models import CommandOutcome
+    from ai_software_engineer.execution import CommandServicePaused
+    from ai_software_engineer.service_pause import (
+        PausedProcessReceipt,
+        ServicePauseControl,
+        ServicePauseRequested,
+    )
+
+    session = _session(tmp_path)
+    root = tmp_path / "worktree"
+    executor = _executor(root)
+    registry = HostOwnedProcessRegistry()
+    saved: list[PausedProcessReceipt] = []
+    control = ServicePauseControl(grace_seconds=0, persist_stop=saved.append)
+    thread: Thread | None = None
+    if started:
+
+        def request() -> None:
+            for _ in range(500):
+                if (root / "started").exists():
+                    control.request()
+                    return
+                sleep(0.01)
+            raise AssertionError("command never started")
+
+        thread = Thread(target=request)
+        thread.start()
+    else:
+        control.request()
+    with (
+        control.operation_scope("operation_command_pause"),
+        registry.operation_scope("operation_command_pause"),
+        pytest.raises((CommandServicePaused, ServicePauseRequested)),
+    ):
+        session.capture_command(
+            "command.paused",
+            executor,
+            (
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import time; "
+                "Path('started').write_text('yes'); time.sleep(60)",
+            ),
+        )
+    if thread is not None:
+        thread.join(5)
+        assert not thread.is_alive()
+    (evidence,) = session._store.list_for_run(session.identity.run_id)
+    from ai_software_engineer.evidence.models import CommandEvidenceRecord
+
+    assert isinstance(evidence, CommandEvidenceRecord)
+    assert evidence.payload.outcome is CommandOutcome.SERVICE_PAUSED
+    assert len(saved) == int(started)
+    registry.require_stopped()

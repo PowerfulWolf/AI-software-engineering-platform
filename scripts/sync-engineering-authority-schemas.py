@@ -46,6 +46,24 @@ resolution_schema["$id"] = (
 resolution_schema["$defs"]["DeliveryResolution"]["allOf"] = [
     {
         "if": {
+            "required": ["retry_cause"],
+            "properties": {"retry_cause": {"const": "service_pause"}},
+        },
+        "then": {
+            "required": ["verifier_pause"],
+            "properties": {
+                "verifier_pause": {
+                    "type": "object",
+                    "properties": {
+                        "request": {"properties": {"role": {"enum": ["qa", "reviewer"]}}}
+                    },
+                }
+            },
+        },
+        "else": {"properties": {"verifier_pause": {"type": "null"}}},
+    },
+    {
+        "if": {
             "properties": {"authorization_source": {"const": "organization_engineering_policy"}},
             "required": ["authorization_source"],
         },

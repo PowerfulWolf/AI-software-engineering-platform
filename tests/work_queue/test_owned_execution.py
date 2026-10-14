@@ -115,14 +115,15 @@ class Guard:
 def test_owned_runner_refuses_every_result_without_group_stop_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str
 ) -> None:
-    killpg = os.killpg
+    from ai_software_engineer.owned_sessions import OwnedSessionController, OwnedSessionUnknown
 
-    def unavailable(group: int, sig: int) -> None:
-        if sig == 0:
-            raise PermissionError("test cannot observe process group")
-        killpg(group, sig)
+    actual_stop = OwnedSessionController.stop
 
-    monkeypatch.setattr(os, "killpg", unavailable)
+    def unavailable(controller: OwnedSessionController, *, timeout_seconds: float = 1.0) -> object:
+        actual_stop(controller, timeout_seconds=timeout_seconds)
+        raise OwnedSessionUnknown("test cannot verify stopped owned session")
+
+    monkeypatch.setattr(OwnedSessionController, "stop", unavailable)
     with pytest.raises(CodexExecutionUnconfirmed):
         SubprocessCodexCommandRunner(Guard()).run(
             (sys.executable, "-c", code),

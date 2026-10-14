@@ -12,11 +12,11 @@ from .service_lifecycle import ServiceLifecycleError
 
 
 @contextmanager
-def maintenance_start_lock(root: Path, environment: Mapping[str, str]) -> Iterator[None]:
+def maintenance_start_lock(root: Path, environment: Mapping[str, str]) -> Iterator[int]:
     inherited = environment.get("ASE_REPLACEMENT_LOCK_FD")
     if inherited is None:
-        with replacement_lock(root):
-            yield
+        with replacement_lock(root) as descriptor:
+            yield descriptor
         return
     try:
         descriptor = int(inherited)
@@ -33,4 +33,4 @@ def maintenance_start_lock(root: Path, environment: Mapping[str, str]) -> Iterat
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (OSError, ValueError) as error:
         raise ServiceLifecycleError("服务启动缺少可验证的维护控制锁; 未恢复普通模式。") from error
-    yield
+    yield descriptor

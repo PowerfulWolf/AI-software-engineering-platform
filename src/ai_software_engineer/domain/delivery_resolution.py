@@ -9,6 +9,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, StrictBool, StrictInt, model_validator
 
+from ai_software_engineer.agents.execution import PausedInvocationProof
 from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.artifact import ArtifactId
 from ai_software_engineer.domain.continuation import ContinuationCause
@@ -72,6 +73,7 @@ RESULT_REPLAY_REJECTED_CLASSIFICATIONS: frozenset[str] = frozenset(
         "REQUIREMENT_AMBIGUITY",
         "BUDGET_EXHAUSTED",
         "NONTRANSIENT_INFRA",
+        "SERVICE_PAUSED",
     }
 )
 
@@ -309,6 +311,9 @@ class DeliveryWaitInvestigation(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     retry_cause: ContinuationCause | None = None
+    verifier_pause: PausedInvocationProof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     permitted_resolutions: tuple[DeliveryResolutionKind, ...] = ()
     missing: tuple[DeliveryProofMissing, ...] = ()
     next_action: NonEmptyStr
@@ -340,6 +345,18 @@ class DeliveryWaitInvestigation(DomainModel):
             or self.permitted_resolutions
         ):
             raise ValueError("提供方前提失败提示只能绑定原 Coder 失败, 不能授予恢复或执行权限")
+        if self.verifier_pause is not None:
+            self.verifier_pause.validate_integrity()
+            if (
+                self.retry_cause != "service_pause"
+                or facts.role not in {AgentRole.QA, AgentRole.REVIEWER}
+                or (
+                    self.verifier_pause.request.role != facts.role
+                    or self.verifier_pause.request.task_id != self.task_id
+                    or self.verifier_pause.request.source_revision != self.source_revision
+                )
+            ):
+                raise ValueError("verifier pause investigation changed its exact role or source")
         ensure_unique(self.missing, "missing engineering proof")
         ensure_unique(self.permitted_resolutions, "permitted engineering resolutions")
         if self.permitted_resolutions and self.missing:
@@ -496,6 +513,9 @@ class DeliveryResolution(DomainModel):
     original_authority: OriginalInvocationAuthority | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    verifier_pause: PausedInvocationProof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     verification_retry: VerificationRetryEvidence | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -532,6 +552,20 @@ class DeliveryResolution(DomainModel):
                 or admission.admitted_at > self.submitted_at
             ):
                 raise ValueError("policy resolution changed its exact engineering admission")
+        if self.retry_cause == "service_pause":
+            pause = self.verifier_pause
+            if (
+                pause is None
+                or pause.request.role not in {AgentRole.QA, AgentRole.REVIEWER}
+                or (
+                    pause.request.task_id != self.task_id
+                    or pause.request.source_revision != self.expected_source_revision
+                )
+            ):
+                raise ValueError("service pause retry requires exact independent verifier proof")
+            pause.validate_integrity()
+        elif self.verifier_pause is not None:
+            raise ValueError("verifier pause proof cannot authorize other recovery causes")
         retry = self.resolution_kind is DeliveryResolutionKind.RETRY_FROM_CHECKPOINT
         if retry != (self.retry_cause is not None):
             raise ValueError("checkpoint retry requires its sealed exact cause")

@@ -83,6 +83,7 @@
 
 - [`faulted-service-maintenance.md`](faulted-service-maintenance.md): exact faulted Host retirement, full immutable archive, retry and persistent inspection-only successor.
 
+- [`service-pause.md`](service-pause.md): bounded host-owned pause, real session stops, retained drafts and exact recovery.
 - [`controlled-service-restart.md`](controlled-service-restart.md): complete Host admission drain,
   real durable completion, process-stop proof, signal handling and exact private restart handshake.
 

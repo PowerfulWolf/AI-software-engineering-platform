@@ -46,6 +46,11 @@ from ai_software_engineer.orchestration.steps import BoundedRunControl, RoleRunB
 from ai_software_engineer.recovery.preparation_progress import record_execution_claimed
 from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.runtime import RuntimeRunResult, RuntimeSession
+from ai_software_engineer.service_pause import (
+    ServicePauseRequested,
+    pause_admission,
+    service_pause_requested,
+)
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.work_queue.dispatcher import DispatcherLoop, DispatcherTickStatus
 from ai_software_engineer.work_queue.execution_store import (
@@ -414,6 +419,8 @@ class QueuedDeliverySupervisor:
         repository = runtime.task_repository
         if not isinstance(repository, MySqlTaskRepository):
             raise ValueError("production Worker requires MySQL Task mutation fencing")
+        if service_pause_requested():
+            raise DeliveryQueuePending("服务重启已暂停角色领取, 当前阶段和队列保留。")
         admission = self.queue.admission(task_id)
         if admission is None:
             existing = terminal_result()
@@ -441,6 +448,8 @@ class QueuedDeliverySupervisor:
         # A finite Task attempt budget bounds successful role invocations. Lease
         # recovery may wait briefly, but capacity shortage never spins forever.
         for _ in range(max(64, repository.get(task_id).max_attempts * 4 + 8)):
+            if service_pause_requested():
+                raise DeliveryQueuePending("服务重启已暂停后续角色领取, 当前交付阶段和队列保留。")
             pending = tuple(
                 item
                 for item in self.queue.items_for_task(task_id)
@@ -459,7 +468,11 @@ class QueuedDeliverySupervisor:
                 if item.wait_disposition is not None:
                     raise DeliveryWaiting(item.wait_disposition)
                 self._resume_knowledge(item.id, item.wait_reason or "")
-            tick = self.dispatcher(step).tick(now=datetime.now(UTC), work_item_id=item.id)
+            try:
+                with pause_admission():
+                    tick = self.dispatcher(step).tick(now=datetime.now(UTC), work_item_id=item.id)
+            except ServicePauseRequested as error:
+                raise DeliveryQueuePending("服务重启已暂停后续角色领取, 队列保留。") from error
             if tick.status is not DispatcherTickStatus.DISPATCHED:
                 raise DeliveryQueuePending(
                     "Role is queued or its previous execution lease has not expired"
@@ -492,6 +505,15 @@ class QueuedDeliverySupervisor:
                     if isinstance(outcome, RoleRunBoundary):
                         raise QueueCorruption("terminal outcome is still a boundary")
                     return outcome.result if isinstance(outcome, RuntimeRunResult) else outcome
+            except ServicePauseRequested as error:
+                WorkerDeliveryFailureControl(self.guard).wait(
+                    repository.get(task_id),
+                    classification="SERVICE_PAUSED",
+                    reason="本次执行因服务重启受控暂停。停止事实与工作现场保留, 等待工程核验接续。",
+                    source_revision=step.boundary.source_revision,
+                    artifact_ids=error.evidence_ids,
+                )
+                raise
             except ArtifactOrderingError:
                 WorkerDeliveryFailureControl(self.guard).wait(
                     repository.get(task_id),

@@ -1067,6 +1067,29 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                             "new execution requires the exact sealed interruption budget fact"
                         )
                     updated_task = task.with_retry_failure(failure)
+                elif resolution.retry_cause == "service_pause":
+                    pause = resolution.verifier_pause
+                    if (
+                        pause is None
+                        or current.role not in {AgentRole.QA, AgentRole.REVIEWER}
+                        or (
+                            disposition.facts.classification != "SERVICE_PAUSED"
+                            or pause.request.role != current.role
+                            or pause.request.attempt != task.attempts
+                            or pause.request.task_id != task.id
+                            or pause.request.source_revision != resolution.expected_source_revision
+                            or failure is not None
+                            or task.work_budget_exhausted
+                            or task.attempts >= task.max_attempts
+                        )
+                    ):
+                        raise QueueConflict(
+                            "service pause requires an exact verifier stop "
+                            "and frozen work allowance"
+                        )
+                    updated_task = Task.model_validate(
+                        {**task.to_wire(), "attempts": task.attempts + 1}
+                    )
                 elif resolution.retry_cause == "local_execution_limit":
                     if (
                         failure is not None

@@ -222,7 +222,11 @@ class CandidateVerificationInvocation(DomainModel):
 
 
 VerificationExecutionFailure = Literal[
-    "COMMAND_TIMEOUT", "COMMAND_START_FAILED", "NATIVE_UI_UNAVAILABLE", "NATIVE_UI_SESSION_LOCKED"
+    "COMMAND_TIMEOUT",
+    "COMMAND_START_FAILED",
+    "SERVICE_PAUSED",
+    "NATIVE_UI_UNAVAILABLE",
+    "NATIVE_UI_SESSION_LOCKED",
 ]
 
 

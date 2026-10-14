@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Annotated, Final, Self
 
-from pydantic import Field, StrictBool, StrictInt, model_validator
+from pydantic import ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 from ai_software_engineer.context.models import ContextId
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS, AgentPermissions, TimeoutSeconds
@@ -53,6 +53,7 @@ class AgentErrorCode(StrEnum):
     PROVIDER_ERROR = "PROVIDER_ERROR"
     POLICY_VIOLATION = "POLICY_VIOLATION"
     WORK_INTERRUPTED = "WORK_INTERRUPTED"
+    SERVICE_PAUSED = "SERVICE_PAUSED"
 
 
 class FakeBehavior(StrEnum):
@@ -70,14 +71,31 @@ class FakeBehavior(StrEnum):
 class AgentFailure(DomainModel):
     """Typed failure evidence with an explicit retry classification."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "required": ["code"],
+                        "properties": {"code": {"const": "SERVICE_PAUSED"}},
+                    },
+                    "then": {"properties": {"transient": {"const": False}}},
+                }
+            ]
+        }
+    )
+
     code: AgentErrorCode
     message: NonEmptyStr
     transient: StrictBool
 
     @model_validator(mode="after")
     def prevent_inline_dirty_retry(self) -> Self:
-        if self.code is AgentErrorCode.WORK_INTERRUPTED and self.transient:
-            raise ValueError("WORK_INTERRUPTED requires new admission, not inline transient retry")
+        if (
+            self.code in {AgentErrorCode.WORK_INTERRUPTED, AgentErrorCode.SERVICE_PAUSED}
+            and self.transient
+        ):
+            raise ValueError("interrupted work requires new admission, not inline transient retry")
         return self
 
 

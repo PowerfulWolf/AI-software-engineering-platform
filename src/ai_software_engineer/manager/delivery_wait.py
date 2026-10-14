@@ -691,15 +691,25 @@ class DeliveryWaitService:
                         at=command.submitted_at,
                     )
                 retry_failure = None
-                retry_cause = None
+                retry_cause: (
+                    Literal["local_execution_limit", "provider_transient", "service_pause"] | None
+                ) = None
                 if command.resolution_kind is DeliveryResolutionKind.RETRY_FROM_CHECKPOINT:
-                    start, _ = self._invocation(item, step)
+                    start, paused_outcome = self._invocation(item, step)
                     receipt = self._receipt(task, start)
-                    if receipt is None:
-                        raise DeliveryWaitRejected("原停机记录缺失, 不允许继续")
-                    retry_cause = receipt.cause
-                    if receipt.cause == "provider_transient":
-                        retry_failure = self._retry_failure(receipt)
+                    if proof.verifier_pause is not None:
+                        if (
+                            paused_outcome is None
+                            or paused_outcome.service_pause != proof.verifier_pause
+                        ):
+                            raise DeliveryWaitRejected("原验证暂停事实已变化, 不允许继续")
+                        retry_cause = "service_pause"
+                    else:
+                        if receipt is None or receipt.cause == "service_pause":
+                            raise DeliveryWaitRejected("原开发需要精确工程基线计划, 不允许通用续跑")
+                        retry_cause = receipt.cause
+                        if receipt.cause == "provider_transient":
+                            retry_failure = self._retry_failure(receipt)
                 resolution = DeliveryResolution(
                     task_id=task.id,
                     work_item_id=item.id,
@@ -748,6 +758,7 @@ class DeliveryWaitService:
                         is DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION
                         else None
                     ),
+                    verifier_pause=proof.verifier_pause,
                     rejected_output=(
                         proof.rejected_output
                         if command.resolution_kind
@@ -830,6 +841,38 @@ class DeliveryWaitService:
         permitted: tuple[DeliveryResolutionKind, ...] = ()
         start, outcome = self._invocation(item, step)
         receipt = self._receipt(task, start)
+        if (
+            outcome is not None
+            and outcome.service_pause is not None
+            and item.role in {AgentRole.QA, AgentRole.REVIEWER}
+        ):
+            try:
+                assert start is not None
+                self._original_authority(item, start)
+                pause = outcome.service_pause
+                pause.validate_integrity()
+                if (
+                    pause.request != start.request
+                    or pause.request.source_revision != step.boundary.source_revision
+                ):
+                    raise ValueError("verifier pause belongs to another exact input")
+                if pause.process_stop is not None:
+                    NativeCoderContinuation._require_stopped(pause.process_stop, start.request)
+                if task.work_budget_exhausted or task.attempts >= task.max_attempts:
+                    missing.append(DeliveryProofMissing.BUDGET_EXHAUSTED)
+                else:
+                    permitted = (DeliveryResolutionKind.RETRY_FROM_CHECKPOINT,)
+            except (ContinuationRejected, ValueError, QueueError, OSError):
+                missing.append(DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN)
+            return self._proof(
+                item,
+                step,
+                task,
+                start=start,
+                outcome=outcome,
+                missing=tuple(missing),
+                permitted=permitted if not missing else (),
+            )
         rejected_outcome = outcome is not None and (
             item.wait_disposition.facts.classification in RESULT_REPLAY_REJECTED_CLASSIFICATIONS
             or (
@@ -939,7 +982,8 @@ class DeliveryWaitService:
             item.role is AgentRole.CODER
             and start is None
             and outcome is None
-            and item.wait_disposition.facts.classification == "ENVIRONMENT_UNAVAILABLE"
+            and item.wait_disposition.facts.classification
+            in {"ENVIRONMENT_UNAVAILABLE", "SERVICE_PAUSED"}
             and prerequisites is not None
             and self._claimed_uninvoked_preflight(item, task, step)
         )
@@ -985,6 +1029,9 @@ class DeliveryWaitService:
                     permitted = (DeliveryResolutionKind.REVERIFY_CANDIDATE,)
                 except (ArtifactStoreError, ValueError, OSError, QueueError):
                     missing.append(DeliveryProofMissing.VERIFICATION_EVIDENCE_UNAVAILABLE)
+        if receipt is not None and receipt.cause == "service_pause":
+            # Coder drafts require a separately approved exact execution baseline.
+            missing.append(DeliveryProofMissing.CHECKPOINT_UNAVAILABLE)
         if not missing and receipt is not None and (outcome is None or rejected_outcome):
             try:
                 if receipt.cause == "provider_transient":
@@ -1078,7 +1125,8 @@ class DeliveryWaitService:
                 except (ValueError, QueueError, OSError, KnowledgeError):
                     missing.append(DeliveryProofMissing.VERIFIER_PREPARATION_UNAVAILABLE)
             elif (
-                item.wait_disposition.facts.classification == "ENVIRONMENT_UNAVAILABLE"
+                item.wait_disposition.facts.classification
+                in {"ENVIRONMENT_UNAVAILABLE", "SERVICE_PAUSED"}
                 and prerequisites is not None
                 and (prerequisites.status == "READY" or coder_preflight_uninvoked)
                 and self._claimed_uninvoked_preflight(item, task, step)
@@ -1652,7 +1700,12 @@ class DeliveryWaitService:
             verifier_preparation=verifier_preparation,
             knowledge_preparation=knowledge_preparation,
             rejected_output=rejected_output,
-            retry_cause=receipt.cause
+            verifier_pause=outcome.service_pause
+            if outcome and item.role in {AgentRole.QA, AgentRole.REVIEWER}
+            else None,
+            retry_cause="service_pause"
+            if outcome and outcome.service_pause
+            else receipt.cause
             if receipt
             else observed_stop.cause
             if observed_stop
@@ -1660,7 +1713,12 @@ class DeliveryWaitService:
             permitted_resolutions=permitted,
             missing=missing,
             next_action=(
-                "原开发执行已结束, 进度报告的轮次编号不符合本次执行; 完整合法草稿已保留。"
+                "原开发因服务重启暂停。工作现场保留; 请先审阅并批准精确的更新执行基线计划接续。"
+                if receipt is not None and receipt.cause == "service_pause"
+                else "原独立验收因服务重启暂停, 停止事实已核验。"
+                "可使用剩余工作额度领取新的独立验证。"
+                if outcome is not None and outcome.service_pause is not None and permitted
+                else "原开发执行已结束, 进度报告的轮次编号不符合本次执行; 完整合法草稿已保留。"
                 "可使用一次原授权工作额度, 由新的开发执行继续原需求并重新生成正确报告。"
                 if permitted == (DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,)
                 else "已核验原验证准备和完整输入, 本次角色模型未启动。平台可保留同一候选和"

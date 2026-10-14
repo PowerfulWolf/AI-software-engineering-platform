@@ -172,6 +172,8 @@ class NativeCoderContinuation:
         if len(predecessors) != 1:
             raise ContinuationRejected("replacement has ambiguous interruption predecessors")
         receipt = predecessors[0]
+        if receipt.cause == "service_pause":
+            raise ContinuationRejected("服务暂停草稿必须先通过精确工程基线计划接续")
         task, claim = self._current(request)
         policy = task.interruption_continuation_policy
         assert policy is not None
@@ -406,7 +408,7 @@ class NativeCoderContinuation:
                     worktree, request.permissions, denied_paths=self._denied(task)
                 )
                 persisted_capture = CapturedChanges.from_capture(capture)
-            if not capture.changed_paths:
+            if not capture.changed_paths and cause != "service_pause":
                 # No source-code draft exists. Authorized disposable cache writes
                 # remain an unchanged delivery fact and use ordinary clean retry.
                 return InterruptionObservation.UNCHANGED
@@ -520,6 +522,8 @@ class NativeCoderContinuation:
         if len(receipts) != 1:
             raise ContinuationRejected("original WorkItem has ambiguous interruption facts")
         receipt = receipts[0]
+        if receipt.cause == "service_pause":
+            raise ContinuationRejected("服务暂停现场需要原有精确工程恢复授权, 不能自动扩大冻结策略")
         current = repository.get(task.id)
         self._require_receipt_current(receipt, current)
         _, claimed = self._current(receipt.request, allow_reserved=True)
@@ -578,6 +582,8 @@ class NativeCoderContinuation:
                 ) from error
             return None
         if receipt is None or self._receipt_resolved_by_baseline(receipt):
+            return None
+        if receipt.cause == "service_pause":
             return None
         try:
             current = repository.get(task.id)

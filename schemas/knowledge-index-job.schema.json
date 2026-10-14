@@ -170,6 +170,5 @@
     "job_sha256"
   ],
   "title": "KnowledgeIndexJob",
-  "type": "object",
-  "$defs": {}
+  "type": "object"
 }

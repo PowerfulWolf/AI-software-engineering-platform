@@ -361,10 +361,6 @@ def admit_completed_maintenance(environment: Mapping[str, str]) -> None:
         if _exists(root, RECEIPT_NAME) or _exists(root, ADMISSION_NAME):
             raise MaintenanceCompletionError(_ERROR)
         return
-    _verified_marker(root)
-    existing = verified_completion(root)
-    if existing is not None and _exists(root, ADMISSION_NAME):
-        return
     # The service launcher already owns this lock. Host launch inherits its FD.
     # Direct host composition takes the same lock itself.
     from .maintenance_lock import maintenance_start_lock

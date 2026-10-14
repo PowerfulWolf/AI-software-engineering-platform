@@ -80,6 +80,5 @@
       "type": "string",
       "format": "date-time"
     }
-  },
-  "$defs": {}
+  }
 }

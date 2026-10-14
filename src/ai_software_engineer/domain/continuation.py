@@ -18,7 +18,7 @@ from ai_software_engineer.domain.model import DomainModel
 if TYPE_CHECKING:
     from ai_software_engineer.domain.task import Task
 
-ContinuationCause = Literal["local_execution_limit", "provider_transient"]
+ContinuationCause = Literal["local_execution_limit", "provider_transient", "service_pause"]
 ContinuationChange = Literal["text_added", "text_modified", "text_deleted", "regular_mode_changed"]
 
 

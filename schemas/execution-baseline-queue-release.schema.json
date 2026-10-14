@@ -256,7 +256,8 @@
             "ENGINEERING_AUTHORIZATION",
             "SOURCE_PREPARATION_DRIFT",
             "EXECUTION_BASELINE_PAUSED",
-            "KNOWLEDGE_PREPARATION_LIMIT"
+            "KNOWLEDGE_PREPARATION_LIMIT",
+            "SERVICE_PAUSED"
           ],
           "title": "Classification",
           "type": "string"
@@ -630,6 +631,19 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Binding Sha256",
           "type": "string"
+        },
+        "service_pause_outcome_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Pause Outcome Sha256"
         }
       },
       "required": [

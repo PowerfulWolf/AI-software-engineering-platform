@@ -53,7 +53,8 @@
         "INVALID_OUTPUT",
         "PROVIDER_ERROR",
         "POLICY_VIOLATION",
-        "WORK_INTERRUPTED"
+        "WORK_INTERRUPTED",
+        "SERVICE_PAUSED"
       ],
       "title": "AgentErrorCode",
       "type": "string"
@@ -81,7 +82,28 @@
         "transient"
       ],
       "title": "AgentFailure",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "code"
+            ],
+            "properties": {
+              "code": {
+                "const": "SERVICE_PAUSED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "transient": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
     },
     "AgentPermissions": {
       "additionalProperties": false,
@@ -744,7 +766,262 @@
         "facts_sha256"
       ],
       "title": "BaselineExecutionFacts",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "enum": [
+                      "completed_output_unavailable",
+                      "completed_output_rejected"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "completed_output"
+            ],
+            "properties": {
+              "completed_output": {
+                "type": "object"
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "completed_output": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "context_capacity_receipt_sha256"
+            ],
+            "properties": {
+              "context_capacity_receipt_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause",
+                  "reservation_already_applied"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "uninvoked"
+                  },
+                  "reservation_already_applied": {
+                    "const": true
+                  }
+                }
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "completed_output": {
+                "type": "null"
+              },
+              "stopped_provider_failure": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "completed_output"
+            ],
+            "properties": {
+              "completed_output": {
+                "type": "object",
+                "required": [
+                  "outcome"
+                ],
+                "properties": {
+                  "outcome": {
+                    "required": [
+                      "result"
+                    ],
+                    "properties": {
+                      "result": {
+                        "required": [
+                          "error"
+                        ],
+                        "properties": {
+                          "error": {
+                            "required": [
+                              "code"
+                            ],
+                            "properties": {
+                              "code": {
+                                "const": "WORK_INTERRUPTED"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "completed_output_unavailable"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "completed_output"
+            ],
+            "properties": {
+              "completed_output": {
+                "type": "object",
+                "required": [
+                  "outcome"
+                ],
+                "properties": {
+                  "outcome": {
+                    "required": [
+                      "result"
+                    ],
+                    "properties": {
+                      "result": {
+                        "required": [
+                          "error"
+                        ],
+                        "properties": {
+                          "error": {
+                            "required": [
+                              "code"
+                            ],
+                            "properties": {
+                              "code": {
+                                "const": "INVALID_OUTPUT"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "completed_output_rejected"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "provider_prerequisite_repaired"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "stopped_provider_failure"
+            ],
+            "properties": {
+              "stopped_provider_failure": {
+                "type": "object"
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "completed_output": {
+                "type": "null"
+              },
+              "implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "stopped_provider_failure": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "BaselineExecutionReservation": {
       "additionalProperties": false,
@@ -767,6 +1044,7 @@
             "uninvoked",
             "local_execution_limit",
             "provider_transient",
+            "service_pause",
             "legacy_execution_abandoned",
             "completed_output_unavailable",
             "completed_output_rejected",
@@ -889,7 +1167,163 @@
         "retry_cause"
       ],
       "title": "BaselineExecutionReservation",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "retry_cause"
+            ],
+            "properties": {
+              "retry_cause": {
+                "const": "legacy_execution_abandoned"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "current_invocation_start_sha256",
+              "containment_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "current_invocation_start_sha256": {
+                "type": "string"
+              },
+              "containment_sha256": {
+                "type": "string"
+              },
+              "current_invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
+              "reservation_already_applied": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "retry_cause"
+            ],
+            "properties": {
+              "retry_cause": {
+                "enum": [
+                  "completed_output_unavailable",
+                  "completed_output_rejected"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "current_invocation_start_sha256",
+              "current_invocation_outcome_sha256",
+              "completed_output_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "current_invocation_start_sha256": {
+                "type": "string"
+              },
+              "current_invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "completed_output_sha256": {
+                "type": "string"
+              },
+              "containment_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
+              "reservation_already_applied": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "completed_output_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "retry_cause"
+            ],
+            "properties": {
+              "retry_cause": {
+                "const": "provider_prerequisite_repaired"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "current_invocation_start_sha256",
+              "current_invocation_outcome_sha256",
+              "stopped_provider_failure_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "current_invocation_start_sha256": {
+                "type": "string"
+              },
+              "current_invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "string"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "containment_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
+              "reservation_already_applied": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "BaselineInputMode": {
       "enum": [
@@ -1469,7 +1903,78 @@
         "proof_sha256"
       ],
       "title": "CompletedCoderOutputUnavailableProof",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "properties": {
+            "outcome": {
+              "properties": {
+                "start": {
+                  "properties": {
+                    "request": {
+                      "properties": {
+                        "role": {
+                          "const": "coder"
+                        }
+                      }
+                    }
+                  }
+                },
+                "result": {
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "FAILED"
+                    },
+                    "artifact": {
+                      "type": "null"
+                    },
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "WORK_INTERRUPTED",
+                            "INVALID_OUTPUT"
+                          ]
+                        },
+                        "transient": {
+                          "const": false
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "capture_stop": {
+              "properties": {
+                "output_present": {
+                  "const": true
+                },
+                "cause": {
+                  "type": "null"
+                },
+                "original_error_code": {
+                  "type": "null"
+                },
+                "process_stop": {
+                  "properties": {
+                    "kind": {
+                      "const": "completed"
+                    },
+                    "returncode": {
+                      "const": 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "ConsoleApprovalRequest": {
       "additionalProperties": false,
@@ -1688,7 +2193,100 @@
         "next_action"
       ],
       "title": "ConsoleCommandResult",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "legacy_rescue_preparation"
+            ],
+            "properties": {
+              "legacy_rescue_preparation": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "delivery_id",
+              "checkpoint_sha256"
+            ],
+            "properties": {
+              "delivery_id": {
+                "type": "string"
+              },
+              "checkpoint_sha256": {
+                "type": "string"
+              },
+              "execution_baseline_binding": {
+                "type": "null"
+              },
+              "approval": {
+                "type": "null"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "legacy_rescue_preparation": {
+                      "properties": {
+                        "status": {
+                          "const": "READY"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "execution_baseline_plan"
+                  ],
+                  "properties": {
+                    "execution_baseline_plan": {
+                      "type": "object",
+                      "required": [
+                        "purpose"
+                      ],
+                      "properties": {
+                        "purpose": {
+                          "const": "legacy_workspace_rescue"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "legacy_rescue_preparation": {
+                      "properties": {
+                        "status": {
+                          "const": "WAITING"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "execution_baseline_plan": {
+                      "type": "null"
+                    },
+                    "execution_baseline_binding": {
+                      "type": "null"
+                    },
+                    "approval": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
     },
     "ConsoleOperation": {
       "additionalProperties": false,
@@ -2289,7 +2887,8 @@
             "ENGINEERING_AUTHORIZATION",
             "SOURCE_PREPARATION_DRIFT",
             "EXECUTION_BASELINE_PAUSED",
-            "KNOWLEDGE_PREPARATION_LIMIT"
+            "KNOWLEDGE_PREPARATION_LIMIT",
+            "SERVICE_PAUSED"
           ],
           "title": "Classification",
           "type": "string"
@@ -2372,6 +2971,17 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Outcome Sha256",
           "type": "string"
+        },
+        "service_pause": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PausedInvocationProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -2592,7 +3202,8 @@
             {
               "enum": [
                 "local_execution_limit",
-                "provider_transient"
+                "provider_transient",
+                "service_pause"
               ],
               "type": "string"
             },
@@ -2657,6 +3268,17 @@
             }
           ],
           "default": null
+        },
+        "verifier_pause": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PausedInvocationProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -2675,7 +3297,50 @@
         "resolution_sha256"
       ],
       "title": "DeliveryResolution",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "retry_cause"
+            ],
+            "properties": {
+              "retry_cause": {
+                "const": "service_pause"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "verifier_pause"
+            ],
+            "properties": {
+              "verifier_pause": {
+                "type": "object",
+                "properties": {
+                  "request": {
+                    "properties": {
+                      "role": {
+                        "enum": [
+                          "qa",
+                          "reviewer"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "verifier_pause": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "DeliveryResolutionKind": {
       "enum": [
@@ -3180,7 +3845,8 @@
             {
               "enum": [
                 "local_execution_limit",
-                "provider_transient"
+                "provider_transient",
+                "service_pause"
               ],
               "type": "string"
             },
@@ -3221,6 +3887,17 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Proof Sha256",
           "type": "string"
+        },
+        "verifier_pause": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PausedInvocationProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -3239,7 +3916,373 @@
         "proof_sha256"
       ],
       "title": "DeliveryWaitInvestigation",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "missing"
+            ],
+            "properties": {
+              "missing": {
+                "minItems": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "permitted_resolutions": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "classification": {
+                        "enum": [
+                          "BUDGET_EXHAUSTED",
+                          "INVALID_OUTPUT",
+                          "NONTRANSIENT_INFRA",
+                          "PLATFORM_BUG",
+                          "POLICY_VIOLATION",
+                          "REQUIREMENT_AMBIGUITY"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "permitted_resolutions": {
+                "not": {
+                  "contains": {
+                    "const": "REPLAY_RECORDED_RESULT"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "permitted_resolutions"
+            ],
+            "properties": {
+              "permitted_resolutions": {
+                "contains": {
+                  "const": "RETRY_KNOWLEDGE_PREPARATION"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "knowledge_preparation"
+            ],
+            "properties": {
+              "knowledge_preparation": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "knowledge_preparation"
+            ],
+            "properties": {
+              "knowledge_preparation": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "invocation_start_sha256": {
+                "type": "null"
+              },
+              "invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "maxItems": 1,
+                "items": {
+                  "const": "RETRY_KNOWLEDGE_PREPARATION"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "classification": {
+                        "const": "KNOWLEDGE_PREPARATION_LIMIT"
+                      },
+                      "evidence_ids": {
+                        "minItems": 1,
+                        "maxItems": 1,
+                        "items": {
+                          "pattern": "^knowledge-preparation://[a-f0-9]{64}$"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "permitted_resolutions"
+            ],
+            "properties": {
+              "permitted_resolutions": {
+                "contains": {
+                  "const": "RETRY_REJECTED_CODER_OUTPUT"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "rejected_output"
+            ],
+            "properties": {
+              "rejected_output": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "rejected_output"
+            ],
+            "properties": {
+              "rejected_output": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "invocation_start_sha256",
+              "invocation_outcome_sha256",
+              "process_stop_sha256",
+              "workspace_inventory_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "invocation_start_sha256": {
+                "type": "string"
+              },
+              "invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "process_stop_sha256": {
+                "type": "string"
+              },
+              "workspace_inventory_sha256": {
+                "type": "string"
+              },
+              "retry_cause": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "maxItems": 1,
+                "items": {
+                  "const": "RETRY_REJECTED_CODER_OUTPUT"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "role": {
+                        "const": "coder"
+                      },
+                      "classification": {
+                        "enum": [
+                          "PLATFORM_BUG",
+                          "INVALID_OUTPUT"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "verifier_preparation"
+            ],
+            "properties": {
+              "verifier_preparation": {
+                "type": "object",
+                "required": [
+                  "context_capacity_receipt_sha256"
+                ],
+                "properties": {
+                  "context_capacity_receipt_sha256": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "invocation_start_sha256": {
+                "type": "null"
+              },
+              "invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "process_stop_sha256": {
+                "type": "null"
+              },
+              "retry_cause": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "maxItems": 1,
+                "items": {
+                  "const": "RESUME_UNINVOKED"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "role": {
+                        "enum": [
+                          "qa",
+                          "reviewer"
+                        ]
+                      },
+                      "classification": {
+                        "const": "CONTEXT_CAPACITY"
+                      },
+                      "evidence_ids": {
+                        "minItems": 1,
+                        "maxItems": 1,
+                        "items": {
+                          "pattern": "^context-capacity://[a-f0-9]{64}$"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "provider_failure_code"
+            ],
+            "properties": {
+              "provider_failure_code": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "invocation_start_sha256",
+              "invocation_outcome_sha256",
+              "original_run_id"
+            ],
+            "properties": {
+              "invocation_start_sha256": {
+                "type": "string"
+              },
+              "invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "original_run_id": {
+                "type": "string"
+              },
+              "permitted_resolutions": {
+                "maxItems": 0
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "role": {
+                        "const": "coder"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "EngineeringAdmission": {
       "additionalProperties": false,
@@ -3753,7 +4796,53 @@
         "expected_checkpoint_sha256"
       ],
       "title": "ExecuteExecutionBaselineIntent",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "confirm_legacy_containment",
+              "confirm_local_execution_stopped"
+            ],
+            "properties": {
+              "confirm_legacy_containment": {
+                "const": true
+              },
+              "confirm_local_execution_stopped": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "confirm_provider_prerequisites_repaired"
+            ],
+            "properties": {
+              "confirm_provider_prerequisites_repaired": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation_mode"
+            ],
+            "properties": {
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "confirm_legacy_containment": {
+                "type": "null"
+              },
+              "confirm_local_execution_stopped": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "ExecutionBaselineBinding": {
       "additionalProperties": false,
@@ -4009,6 +5098,19 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Binding Sha256",
           "type": "string"
+        },
+        "service_pause_outcome_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Pause Outcome Sha256"
         }
       },
       "required": [
@@ -4037,7 +5139,250 @@
         "binding_sha256"
       ],
       "title": "ExecutionBaselineBinding",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "legacy_workspace_rescue"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "legacy_containment_sha256"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "legacy_containment_sha256": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "completed_output_rescue"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "completed_output_sha256": {
+                "type": "string"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "completed_output_sha256",
+              "continuation_mode"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "completed_output_sha256"
+            ],
+            "properties": {
+              "completed_output_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation_mode"
+            ],
+            "properties": {
+              "purpose": {
+                "enum": [
+                  "source_rebind",
+                  "completed_output_rescue"
+                ]
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "stopped_provider_retry"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "stopped_provider_failure_sha256",
+              "continuation_mode"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "stopped_provider_failure_sha256"
+            ],
+            "properties": {
+              "stopped_provider_failure_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation_mode"
+            ],
+            "properties": {
+              "purpose": {
+                "enum": [
+                  "source_rebind",
+                  "stopped_provider_retry"
+                ]
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "context_capacity_resume"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "context_capacity_receipt_sha256",
+              "continuation_mode"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "string"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              },
+              "superseded_progress_artifact_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "context_capacity_receipt_sha256"
+            ],
+            "properties": {
+              "context_capacity_receipt_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "context_capacity_resume"
+              }
+            }
+          }
+        }
+      ]
     },
     "ExecutionBaselinePlan": {
       "additionalProperties": false,
@@ -4128,7 +5473,188 @@
         "plan_sha256"
       ],
       "title": "ExecutionBaselinePlan",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "legacy_workspace_rescue"
+              }
+            }
+          },
+          "then": {
+            "required": [],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "conflicted": {
+                "const": false
+              },
+              "facts": {
+                "required": [
+                  "legacy_containment"
+                ],
+                "properties": {
+                  "legacy_containment": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "completed_output_rescue"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "conflicted": {
+                "const": false
+              },
+              "facts": {
+                "required": [
+                  "completed_output"
+                ],
+                "properties": {
+                  "completed_output": {
+                    "type": "object"
+                  },
+                  "legacy_containment": {
+                    "type": "null"
+                  },
+                  "native_rule_change": {
+                    "type": "null"
+                  },
+                  "implementation_artifact_id": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "stopped_provider_retry"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "conflicted": {
+                "const": false
+              },
+              "facts": {
+                "required": [
+                  "stopped_provider_failure"
+                ],
+                "properties": {
+                  "stopped_provider_failure": {
+                    "type": "object"
+                  },
+                  "legacy_containment": {
+                    "type": "null"
+                  },
+                  "completed_output": {
+                    "type": "null"
+                  },
+                  "native_rule_change": {
+                    "type": "null"
+                  },
+                  "implementation_artifact_id": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "context_capacity_resume"
+              }
+            }
+          },
+          "then": {
+            "required": [],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "conflicted": {
+                "const": false
+              },
+              "facts": {
+                "required": [
+                  "context_capacity_receipt_sha256",
+                  "continuation"
+                ],
+                "properties": {
+                  "context_capacity_receipt_sha256": {
+                    "type": "string"
+                  },
+                  "legacy_containment": {
+                    "type": "null"
+                  },
+                  "completed_output": {
+                    "type": "null"
+                  },
+                  "stopped_provider_failure": {
+                    "type": "null"
+                  },
+                  "native_rule_change": {
+                    "type": "null"
+                  },
+                  "continuation": {
+                    "type": "object",
+                    "required": [
+                      "retry_cause",
+                      "reservation_already_applied"
+                    ],
+                    "properties": {
+                      "retry_cause": {
+                        "const": "uninvoked"
+                      },
+                      "reservation_already_applied": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "ExecutionCaptureStart": {
       "additionalProperties": false,
@@ -5168,7 +6694,43 @@
         "containment_sha256"
       ],
       "title": "LegacyExecutionContainment",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "const": "operator_confirmed_local_stop"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "local_execution_survey"
+            ],
+            "properties": {
+              "local_execution_survey": {
+                "type": "object",
+                "properties": {
+                  "blockers": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "local_execution_survey": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "LegacyLocalExecutionBlocker": {
       "enum": [
@@ -5550,6 +7112,28 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "service_pause"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "session_proof": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "session_proof"
+            ]
+          }
         }
       ],
       "description": "Legacy leader/group stop, optionally with a new explicit owned-SID proof.",
@@ -5572,7 +7156,8 @@
           "enum": [
             "completed",
             "failed",
-            "local_execution_limit"
+            "local_execution_limit",
+            "service_pause"
           ],
           "title": "Kind",
           "type": "string"
@@ -6805,7 +8390,45 @@
         "expected_checkpoint_sha256"
       ],
       "title": "ProposeExecutionBaselineIntent",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "enum": [
+                  "completed_output_rescue",
+                  "stopped_provider_retry",
+                  "context_capacity_resume"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target_base_ref": {
+                "type": "null"
+              },
+              "input_mode": {
+                "const": "preserve_draft"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "target_base_ref"
+            ],
+            "properties": {
+              "target_base_ref": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
     },
     "ProviderRouteKind": {
       "enum": [
@@ -8132,7 +9755,80 @@
         "proof_sha256"
       ],
       "title": "StoppedProviderFailureProof",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "properties": {
+            "outcome": {
+              "properties": {
+                "start": {
+                  "properties": {
+                    "request": {
+                      "properties": {
+                        "role": {
+                          "const": "coder"
+                        }
+                      }
+                    }
+                  }
+                },
+                "result": {
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "FAILED"
+                    },
+                    "artifact": {
+                      "type": "null"
+                    },
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "AUTHENTICATION_ERROR"
+                        },
+                        "transient": {
+                          "const": false
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "capture_stop": {
+              "properties": {
+                "output_present": {
+                  "const": false
+                },
+                "cause": {
+                  "type": "null"
+                },
+                "original_error_code": {
+                  "enum": [
+                    null,
+                    "AUTHENTICATION_ERROR"
+                  ]
+                },
+                "process_stop": {
+                  "properties": {
+                    "kind": {
+                      "const": "failed"
+                    },
+                    "returncode": {
+                      "not": {
+                        "const": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "Task": {
       "additionalProperties": false,
@@ -8750,6 +10446,147 @@
         "files"
       ],
       "title": "WorkspaceMutationInventory",
+      "type": "object"
+    },
+    "PausedInvocationProof": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "process_stop": {
+                "properties": {
+                  "kind": {
+                    "const": "service_pause"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "process_stop"
+            ]
+          },
+          "if": {
+            "properties": {
+              "admission_closed": {
+                "const": true
+              }
+            },
+            "required": [
+              "admission_closed"
+            ]
+          },
+          "then": {
+            "properties": {
+              "process_stop": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Trusted stopped/no-start execution bound to one exact admitted request.",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/AgentRequest"
+        },
+        "process_stop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeProcessStop"
+            },
+            {
+              "$ref": "#/$defs/SynchronousToolLoopStop"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Process Stop"
+        },
+        "admission_closed": {
+          "default": false,
+          "title": "Admission Closed",
+          "type": "boolean"
+        },
+        "proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request",
+        "proof_sha256"
+      ],
+      "title": "PausedInvocationProof",
+      "type": "object"
+    },
+    "SynchronousToolLoopStop": {
+      "additionalProperties": false,
+      "description": "Trusted observation after a synchronous Responses route and its tools returned.\n\nThis is not a native process-group observation. The provider generates data;\nonly the bounded local registry runs tools, sequentially and synchronously.\nAn interrupted Host cannot create this receipt, nor can request/model text.",
+      "properties": {
+        "origin": {
+          "const": "synchronous_responses_tool_loop",
+          "default": "synchronous_responses_tool_loop",
+          "title": "Origin",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "completed_operation_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Completed Operation Ids",
+          "type": "array"
+        },
+        "kind": {
+          "default": "failed",
+          "enum": [
+            "failed",
+            "local_execution_limit",
+            "service_pause"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "stopped_at": {
+          "format": "date-time",
+          "title": "Stopped At",
+          "type": "string"
+        },
+        "stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stop Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "run_id",
+        "request_sha256",
+        "completed_operation_ids",
+        "stopped_at",
+        "stop_sha256"
+      ],
+      "title": "SynchronousToolLoopStop",
       "type": "object"
     }
   },

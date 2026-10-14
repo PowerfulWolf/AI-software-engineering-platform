@@ -39,6 +39,5 @@
         "$ref": "projection-lease.schema.json"
       }
     }
-  },
-  "$defs": {}
+  }
 }

@@ -51,6 +51,7 @@ class BaselineExecutionReservation(DomainModel):
         "uninvoked",
         "local_execution_limit",
         "provider_transient",
+        "service_pause",
         "legacy_execution_abandoned",
         "completed_output_unavailable",
         "completed_output_rejected",
@@ -458,8 +459,22 @@ class ExecutionBaselinePlan(DomainModel):
                 or reservation.next_execution_attempt != task.attempts
             ):
                 raise ValueError("容量恢复需要精确未调用记录和原预留, 不能更换代码、规范或进度")
-        elif self.target_base_ref == expected_base or self.facts.legacy_containment is not None:
-            raise ValueError("代码基线更新必须选择不同的执行基线, 不能混入旧执行隔离证据")
+        elif self.facts.legacy_containment is not None:
+            raise ValueError("代码基线更新不能混入旧执行隔离证据")
+        elif self.target_base_ref == expected_base:
+            reservation = self.facts.continuation
+            if (
+                reservation is None
+                or reservation.retry_cause != "service_pause"
+                or reservation.current_invocation_outcome_sha256 is None
+                or self.facts.native_rule_change is not None
+                or self.facts.source_native_rules_sha256 != self.facts.target_native_rules_sha256
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.prepared_source_revision != self.dirty_capture.source_revision
+                or self.prepared_dirty_patch != self.dirty_capture.patch
+                or self.conflicted
+            ):
+                raise ValueError("同基线继续必须绑定精确服务暂停结果, 保留原规范和完整工作现场")
         if self.input_mode is BaselineInputMode.CODER_REAPPLY and (
             self.prepared_source_revision != self.target_base_ref
             or self.prepared_dirty_patch
@@ -467,6 +482,20 @@ class ExecutionBaselinePlan(DomainModel):
         ):
             raise ValueError("Coder reapply requires a clean exact target and a new plan")
         return self
+
+    @property
+    def preserves_paused_baseline(self) -> bool:
+        expected = (
+            self.previous_binding.execution_base_ref
+            if self.previous_binding
+            else self.facts.task.base_ref
+        )
+        return (
+            self.purpose is BaselinePurpose.SOURCE_REBIND
+            and self.target_base_ref == expected
+            and self.facts.continuation is not None
+            and self.facts.continuation.retry_cause == "service_pause"
+        )
 
     def validate_integrity(self) -> None:
         type(self).model_validate(self.to_wire())

@@ -83,6 +83,9 @@ class ExecutionBaselineBinding(DomainModel):
     context_capacity_receipt_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    service_pause_outcome_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     scope: EngineeringScope
     task_id: TaskId
     task_intent_sha256: Sha256
@@ -184,9 +187,16 @@ class ExecutionBaselineBinding(DomainModel):
                 raise ValueError("容量恢复必须精确批准后暂停, 保留原代码、完整进度和工作额度")
         elif (
             self.execution_base_ref == self.prior_execution_base_ref
-            or self.legacy_containment_sha256 is not None
-        ):
+            and self.service_pause_outcome_sha256 is None
+        ) or self.legacy_containment_sha256 is not None:
             raise ValueError("代码基线更新必须选择不同的执行基线, 不能混入旧执行隔离证据")
+        if self.service_pause_outcome_sha256 is not None and (
+            self.purpose is not BaselinePurpose.SOURCE_REBIND
+            or self.legacy_containment_sha256 is not None
+            or self.completed_output_sha256 is not None
+            or self.stopped_provider_failure_sha256 is not None
+        ):
+            raise ValueError("service pause recovery must bind its independent exact outcome")
         if self.purpose is not BaselinePurpose.CONTEXT_CAPACITY_RESUME and (
             self.context_capacity_receipt_sha256 is not None
         ):
