@@ -274,3 +274,74 @@ def test_corrupt_event_or_consumption_cannot_supply_a_phase_source(
     cursor = CorruptCursor(saved, baseline_sha=saved.record.binding.binding_sha256)
     with pytest.raises((ValueError, QueueCorruption)):
         _source(tmp_path, saved, baseline_sha=saved.record.binding.binding_sha256, cursor=cursor)
+
+
+@pytest.mark.parametrize("epoch", ["original", "rebound"])
+@pytest.mark.parametrize("malformed", [None, "null", "unknown", "item", "lease"])
+def test_modern_claim_snapshot_and_legacy_source_share_strict_read_contract(
+    tmp_path: Path,
+    saved: Saved,
+    epoch: str,
+    malformed: str | None,
+) -> None:
+    from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
+
+    sample = fixture(tmp_path)
+
+    class ModernCursor(Cursor):
+        def execute(self, query: str, values: object = None) -> None:
+            super().execute(query, values)
+            if "event_type='CLAIMED'" not in query:
+                return
+            row = self.rows[0]
+            payload = json.loads(str(row["payload_json"]))
+            item = QueuedWorkItem.model_validate(payload["work_item"])
+            assignment = sample.claim.assignment.model_copy(
+                update={
+                    "task_id": item.task_id,
+                    "repository_id": item.repository_id,
+                    "role": item.role,
+                    "attempt": item.attempt,
+                    "lease_id": saved.lease.id,
+                    "assigned_at": saved.lease.acquired_at,
+                }
+            )
+            snapshot = QueueClaim.model_validate(
+                {
+                    **sample.claim.to_wire(),
+                    "work_item": item.to_wire(),
+                    "assignment": assignment.to_wire(),
+                    "lease": saved.lease.to_wire(),
+                    "claimed_at": saved.lease.acquired_at,
+                }
+            )
+            detail: dict[str, object] = {"queue_claim": snapshot.to_wire()}
+            if malformed == "null":
+                detail = {"queue_claim": None}
+            elif malformed == "unknown":
+                detail["unexpected"] = True
+            elif malformed == "item":
+                changed = snapshot.work_item.model_copy(update={"dispatch_sequence": 8})
+                detail["queue_claim"] = snapshot.model_copy(update={"work_item": changed}).to_wire()
+            elif malformed == "lease":
+                changed_lease = snapshot.lease.model_copy(
+                    update={"acquired_at": saved.lease.acquired_at + timedelta(seconds=1)}
+                )
+                detail["queue_claim"] = snapshot.model_copy(
+                    update={"lease": changed_lease}
+                ).to_wire()
+            payload["detail"] = detail
+            row["payload_json"] = json.dumps(payload)
+
+    binding = saved.record.binding
+    selected = None if epoch == "original" else binding.binding_sha256
+    cursor = ModernCursor(saved, baseline_sha=selected)
+    if malformed:
+        with pytest.raises(ValueError):
+            _source(tmp_path, saved, baseline_sha=selected, cursor=cursor)
+    else:
+        assert _source(tmp_path, saved, baseline_sha=selected, cursor=cursor) == (
+            binding.prior_source_revision
+            if epoch == "original"
+            else binding.execution_source_revision
+        )

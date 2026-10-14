@@ -1511,3 +1511,26 @@ on the original Requirement to expose its current decision/saved version. Server
 require loading the repaired service while idle; ordinary polling then retains reading state.
 Revert these frontend changes and refresh to roll back; all audit facts, exact plan authority,
 saved progress and independent QA/Review remain intact.
+
+
+## 2026-10-14 完整 CLAIMED 快照读兼容
+
+`team_view/knowledge_preparation.py::read_claim_source(cursor, *, scope, item, lease,
+allocation_sha256) -> str | None` 只读 SQL。`work_queue/mysql.py` 的新 CLAIMED 事件
+封存 `payload.detail.queue_claim: QueueClaim`，历史事件只有 `detail={}`。
+`_ClaimedPayload.detail: _ClaimedDetail` 必须同时接纳这两种真实形态；不能用
+`dict(max_length=0)` 拒绝所有现代事件，导致 RUNNING 需求使整个 Team GET 返回 503。
+
+| detail/当前事实 | 结果 |
+| --- | --- |
+| 历史空对象 | 原 WorkItem/lease/event/source 校验保持 |
+| 完整 typed queue_claim | 验证 work_item 与 payload 精确相等，lease/assignment/agent/task/acquired_at、claimed_at/updated_at 绑定真实当前领取；允许当前 heartbeat 延长 expiry |
+| 显式 null、未知字段、Task/dispatch/lease/acquired_at 漂移 | fail closed，不投影为执行中 |
+| 新 CLAIMED 在 baseline rebound 之后 | 使用同一 pure baseline overlay 得出该 claim 的实际 source，而非 Task.base_ref |
+
+`test_knowledge_phase_source` 正反向测试必须使用生产 writer 的完整 QueueClaim，不只模拟
+空 detail；与原 legacy、unknown epoch、digest/顺序漂移测试共同运行。
+
+存量数据处置：不改 CLAIMED JSON、SQL、Lease、Task 或审批。恢复 parser 即可读取已经
+存在的现代快照。等待受控执行安全收尾后重启 reader；期间运行的 Task 继续使用原冻结基线，
+不因只读展示修复而改写源码。回滚会重新触发活动需求 503，所有事实仍保留。

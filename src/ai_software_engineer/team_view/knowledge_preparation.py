@@ -9,7 +9,7 @@ from pymysql.cursors import DictCursor
 
 from ai_software_engineer.domain.artifact import Sha256
 from ai_software_engineer.domain.enums import TeamRole, WorkItemStatus
-from ai_software_engineer.domain.model import DomainModel, JsonValue
+from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.workforce import RoleAssignment, TaskLease
 from ai_software_engineer.knowledge.invocation import (
     KnowledgeExecutionRecord,
@@ -26,7 +26,7 @@ from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationOutcome,
     DeliveryInvocationStart,
 )
-from ai_software_engineer.work_queue.models import QueuedWorkItem
+from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
 
 ExecutionPhase = Literal["KNOWLEDGE_PREPARATION", "ROLE_EXECUTION", "FINALIZING"]
 
@@ -42,9 +42,13 @@ class _QueueReadEvent(DomainModel):
     occurred_at: AwareDatetime
 
 
+class _ClaimedDetail(DomainModel):
+    queue_claim: QueueClaim | None = None
+
+
 class _ClaimedPayload(DomainModel):
     work_item: QueuedWorkItem
-    detail: dict[str, JsonValue] = Field(max_length=0)
+    detail: _ClaimedDetail
 
 
 class _ReboundDetail(DomainModel):
@@ -166,6 +170,21 @@ def read_claim_source(
         raise ValueError("role phase source requires one exact claim event")
     claim = _QueueReadEvent.model_validate(claimed[0])
     claim_payload = _ClaimedPayload.model_validate_json(claim.payload_json)
+    snapshot = claim_payload.detail.queue_claim
+    if snapshot is None:
+        if claim_payload.detail.model_fields_set:
+            raise ValueError("role phase claim snapshot cannot be null")
+    elif (
+        snapshot.work_item != claim_payload.work_item
+        or snapshot.lease.id != lease.id
+        or snapshot.lease.assignment_id != lease.assignment_id
+        or snapshot.lease.agent_id != lease.agent_id
+        or snapshot.lease.task_id != lease.task_id
+        or snapshot.lease.acquired_at != lease.acquired_at
+        or snapshot.claimed_at != lease.acquired_at
+        or snapshot.work_item.updated_at != lease.acquired_at
+    ):
+        raise ValueError("role phase claim snapshot identity mismatch")
     if (
         claim.event_type != "CLAIMED"
         or claim.work_item_id != item.id
