@@ -41,6 +41,7 @@ from ai_software_engineer.manager.delivery import CheckpointDigest
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.manager.native_ui import NativeUiScenario
 from ai_software_engineer.manager.python_verification import PytestSelection
+from ai_software_engineer.manager.python_verification_runner import MAX_PYTEST_SELECTIONS
 from ai_software_engineer.multi_directory.attachments import RequirementAttachmentId
 from ai_software_engineer.project_workspace import ProjectName
 from ai_software_engineer.recovery.models import RecoveryScopeRequest
@@ -179,7 +180,7 @@ class ContinueDeliveryIntent(DomainModel):
     prerequisite_repair: PrerequisiteRepairRequest | None = None
     native_ui_scenario: NativeUiScenario | None = None
     python_mysql_tests: tuple[PytestSelection, ...] | None = Field(
-        default=None, min_length=1, max_length=32
+        default=None, min_length=1, max_length=MAX_PYTEST_SELECTIONS
     )
     approved_repair_sha256: CheckpointDigest | None = None
 

@@ -906,3 +906,27 @@ def test_interrupted_native_preparation_cannot_become_a_ready_cached_receipt(
         )
     assert failure.value.reason is NativeVerificationWaitReason.EXECUTION_UNCERTAIN
     assert not fixture.registry._prepared and not resources and not executions
+
+
+@pytest.mark.parametrize("count", [33, 64, 65])
+def test_legacy_exact_pytest_uses_registered_bound_without_mutating_plan(count: int) -> None:
+    check = PlannedVerificationRequirement(
+        id="legacy_python",
+        role=AgentRole.QA,
+        criterion_ids=("ac_models_01",),
+        argv=(
+            "python",
+            "-m",
+            "pytest",
+            "-q",
+            *(f"tests/test_selected.py::test_case_{index}" for index in range(count)),
+        ),
+    )
+    original = check.to_wire()
+    if count > 64:
+        with pytest.raises(NativeVerificationWaiting):
+            exact_python_selections((check,))
+    else:
+        assert len(exact_python_selections((check,))) == count
+    assert check.to_wire() == original
+    assert check.controlled_capability_kind is None

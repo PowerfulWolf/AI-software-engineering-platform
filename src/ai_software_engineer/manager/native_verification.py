@@ -58,6 +58,7 @@ from ai_software_engineer.manager.python_verification_discovery import (
     discover_python_mysql_capability,
     discover_python_mysql_host_prerequisites,
 )
+from ai_software_engineer.manager.python_verification_runner import MAX_PYTEST_SELECTIONS
 from ai_software_engineer.manager.verification_process import bounded_verification_command
 from ai_software_engineer.recovery.store import RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_execution import VerificationEvidence
@@ -182,7 +183,11 @@ def exact_python_selections(
                 else NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT
             )
             raise NativeVerificationWaiting(reason)
-        if requirement.controlled_capability_kind != _PYTHON_CAPABILITY:
+        # Older immutable Plans predate the explicit capability field.  A
+        # precise Python pytest argv is enough to derive the same registered
+        # capability for compatibility; new Plans are rejected earlier by the
+        # Planning feasibility gate unless they declare it explicitly.
+        if requirement.controlled_capability_kind not in {None, _PYTHON_CAPABILITY}:
             raise NativeVerificationWaiting(NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT)
         if normalized[:3] in (
             ("python", "-m", "pytest"),
@@ -204,7 +209,7 @@ def exact_python_selections(
                     NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT
                 ) from None
             nodes.setdefault(selection.node_id, set()).update(selection.criterion_ids)
-    if len(nodes) > 32:
+    if len(nodes) > MAX_PYTEST_SELECTIONS:
         raise NativeVerificationWaiting(NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT)
     return tuple(
         PytestSelection(node_id=node, criterion_ids=tuple(sorted(criteria)))

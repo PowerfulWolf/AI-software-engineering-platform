@@ -99,7 +99,7 @@ def _assert_refused_capacity_proposals(
     marker_path.unlink()
     try:
         KnowledgeRecordStore(root).put("context-capacity-receipts", changed.receipt_sha256, changed)
-        refuse(ValueError, "真实 claim")
+        refuse(ValueError, "真实 ?(claim|领取记录)")
     finally:
         replacement.unlink(missing_ok=True)
         marker_path.write_bytes(original_marker_bytes)

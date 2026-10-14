@@ -36,6 +36,7 @@ for name, model in (
 ):
     schema = model.model_json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    schema["$id"] = f"https://ai-software-engineer.local/schemas/{name}.schema.json"
     (root / (name + ".schema.json")).write_text(
         json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
     )

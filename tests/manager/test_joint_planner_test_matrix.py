@@ -345,3 +345,64 @@ def test_schema_invalid_output_does_not_enter_matrix_correction_loop(
     final = service.status(seed.delivery_id).checkpoint
     assert final.attempts == {"plan": 1} and final.planning_feedback is None
     assert len(backend.inputs) == 1
+
+
+@pytest.mark.parametrize("limit", [1, 3])
+def test_infeasible_verification_is_corrected_within_frozen_planner_budget(
+    tmp_path: Path, limit: int
+) -> None:
+    from ai_software_engineer.multi_directory.planning import PlanVerificationFeasibilityError
+
+    service, backend, seed, valid = setup_matrix(tmp_path, limit=limit)
+    unit = valid.units[0]
+    graph = unit.plan.work_graph
+    assert graph is not None
+    package = graph.packages[0]
+    invalid_test = package.tests[0].model_copy(
+        update={
+            "verification_argv": ("node", "--test", "tests/unknown.cjs"),
+        }
+    )
+    invalid = valid.model_copy(
+        update={
+            "units": (
+                unit.model_copy(
+                    update={
+                        "plan": unit.plan.model_copy(
+                            update={
+                                "work_graph": graph.model_copy(
+                                    update={
+                                        "packages": (
+                                            package.model_copy(
+                                                update={
+                                                    "tests": (invalid_test, *package.tests[1:]),
+                                                }
+                                            ),
+                                            *graph.packages[1:],
+                                        ),
+                                    }
+                                )
+                            }
+                        ),
+                    }
+                ),
+                *valid.units[1:],
+            )
+        }
+    )
+    backend.responses = (invalid, valid)
+    if limit == 1:
+        with pytest.raises(PlanVerificationFeasibilityError):
+            service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+    else:
+        with pytest.raises(DeliveryReached):
+            service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+    current = service.status(seed.delivery_id).checkpoint
+    assert current.attempts == {"plan": min(limit, 2)}
+    assert current.approval == seed.approval and current.design == seed.design
+    feedback = current.planning_feedback
+    assert feedback is not None
+    assert feedback.reason_codes == ("UNSUPPORTED_TEST_COMMAND",)
+    assert "Unit 1, package 1, test 1" in feedback.required_changes[0]
+    if limit > 1:
+        assert backend.inputs[1]["planning_feedback"] == feedback.to_wire()

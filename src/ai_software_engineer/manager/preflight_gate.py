@@ -98,14 +98,12 @@ class PreflightInvocationControl:
                         claim.work_item.id + ":" + receipt.receipt_sha256,
                         checkpoint,
                     )
-                if receipt.status != "READY":
-                    self.failure_control.wait(
-                        task,
-                        classification="ENVIRONMENT_UNAVAILABLE",
-                        reason=_preflight_wait_summary(receipt),
-                        source_revision=request.source_revision,
-                        artifact_ids=("delivery-preflight://" + receipt.receipt_sha256,),
-                    )
+                # Verification prerequisites belong to the QA/Reviewer role.
+                # A legacy Plan may contain a verification entry that the
+                # current host cannot execute, but that must not prevent the
+                # Coder from producing the candidate needed to re-evaluate it.
+                # The role-specific preparation gate below remains mandatory
+                # before QA/Reviewer model input is started.
         elif (
             request.role in (AgentRole.QA, AgentRole.REVIEWER) and self.prepare_verifier is not None
         ):
@@ -356,27 +354,3 @@ def _preparation_reason(reason: NativeVerificationWaitReason) -> str:
         NativeVerificationWaitReason.COMMAND_START_FAILED: "受控验证命令或隔离资源未能正常启动。",
     }
     return labels[reason]
-
-
-def _preflight_wait_summary(receipt: DeliveryPreflightReceipt) -> str:
-    labels = {
-        "VERIFICATION_ENTRYPOINTS_REQUIRED": "执行计划尚未提供可执行的验收入口。",
-        "VERIFICATION_INSPECTION_AUTHORIZATION_REQUIRED": "源码检查路径超出当前角色权限。",
-        "VERIFICATION_INSPECTION_FILE_MISSING": "源码检查目标缺失且未列入本轮新增文件计划。",
-        "CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED": "所需验证能力尚未注册或当前环境不可用。",
-        "VERIFICATION_COMMAND_AUTHORIZATION_REQUIRED": "验证命令尚未满足增量范围和执行权限要求。",
-        "VERIFICATION_SELECTED_FILE_MISSING": "所选测试文件缺失且未列入本轮新增文件计划。",
-        "VERIFICATION_EXECUTABLE_UNAVAILABLE": "验证命令所需工具当前不可用。",
-    }
-    explanations = dict.fromkeys(
-        _preparation_reason(item.native_wait_reason)
-        if item.native_wait_reason is not None
-        else labels.get(item.reason_code, "验证前提核验尚未通过。")
-        for item in receipt.observations
-        if item.status != "READY"
-    )
-    return (
-        "实施前验证前提尚未满足。"
-        + "".join(explanations)
-        + "工程负责人需处理所列前提。平台保留原交付检查点并等待重新核验。"
-    )

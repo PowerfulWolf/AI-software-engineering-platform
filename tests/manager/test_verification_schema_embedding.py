@@ -48,3 +48,24 @@ def test_embedded_plan_accepts_native_verification(name: str, inspection: bool) 
     validator.validate(value)
     with pytest.raises(ValidationError, match="Additional properties"):
         validator.validate({**value, "unapproved_execution": True})
+
+
+@pytest.mark.parametrize(
+    "name,definition,field",
+    [
+        ("candidate-verification", "PythonMysqlSandboxCapability", "selections"),
+        ("console-operation", "ContinueDeliveryIntent", "python_mysql_tests"),
+        ("console-deletion-cleanup", "ContinueDeliveryIntent", "python_mysql_tests"),
+    ],
+)
+def test_published_python_node_limit_matches_the_standalone_runner(
+    name: str, definition: str, field: str
+) -> None:
+    from ai_software_engineer.manager.python_verification_runner import MAX_PYTEST_SELECTIONS
+
+    path = Path(__file__).parents[2] / "schemas" / f"{name}.schema.json"
+    root = json.loads(path.read_text())
+    properties = root["$defs"][definition]["properties"][field]
+    if "anyOf" in properties:
+        properties = next(item for item in properties["anyOf"] if item.get("type") == "array")
+    assert properties["maxItems"] == MAX_PYTEST_SELECTIONS == 64

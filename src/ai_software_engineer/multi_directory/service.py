@@ -89,11 +89,13 @@ from ai_software_engineer.multi_directory.models import (
     digest,
 )
 from ai_software_engineer.multi_directory.planning import (
+    PlanVerificationFeasibilityError,
     compile_joint_plan,
     fast_joint_plan,
     joint_planning_decision,
     planner_test_requirements,
     rejection_feedback,
+    validate_plan_verification_entries,
 )
 from ai_software_engineer.multi_directory.retirement import (
     RequirementRetiredError,
@@ -1301,6 +1303,11 @@ class JointDeliveryService:
             assert checkpoint.product_spec is not None and checkpoint.design is not None
             try:
                 plan.validate_for(checkpoint.scope, checkpoint.product_spec, checkpoint.design)
+                # Fail before the immutable plan is accepted when a verification
+                # command cannot be mapped to a registered executor.  Delivery
+                # preflight repeats the current-source and host checks; this
+                # stage only validates the deterministic command/capability shape.
+                validate_plan_verification_entries(plan)
                 self.backend.validate_plan(checkpoint, plan)
                 plan = compile_joint_plan(checkpoint, plan)
                 plan.validate_for(checkpoint.scope, checkpoint.product_spec, checkpoint.design)
@@ -1313,12 +1320,15 @@ class JointDeliveryService:
                         test_matrix_issues=exc.issues
                         if isinstance(exc, PlanTestMatrixError)
                         else None,
+                        verification_issues=exc.issues
+                        if isinstance(exc, PlanVerificationFeasibilityError)
+                        else None,
                     ),
                     next_action=f"Rejected plan {digest(plan)}: {exc}. Correct the plan on resume.",
                 )
                 self._stage_workflow(checkpoint).require("break-loop", checkpoint)
                 if (
-                    isinstance(exc, PlanTestMatrixError)
+                    isinstance(exc, (PlanTestMatrixError, PlanVerificationFeasibilityError))
                     and decision.mode is PlanningMode.COMPLEX
                     and checkpoint.attempts.get("plan", 0)
                     < self.execution_retry_policy.planner.max_attempts

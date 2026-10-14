@@ -935,11 +935,24 @@ class DeliveryWaitService:
         prerequisites = (
             self.prerequisite_collector(task, step) if self.prerequisite_collector else None
         )
-        if item.wait_disposition.facts.classification in {
-            "ENVIRONMENT_UNAVAILABLE",
-            "ENGINEERING_AUTHORIZATION",
-            "SOURCE_PREPARATION_DRIFT",
-        } and (prerequisites is None or prerequisites.status != "READY"):
+        coder_preflight_uninvoked = (
+            item.role is AgentRole.CODER
+            and start is None
+            and outcome is None
+            and item.wait_disposition.facts.classification == "ENVIRONMENT_UNAVAILABLE"
+            and prerequisites is not None
+            and self._claimed_uninvoked_preflight(item, task, step)
+        )
+        if (
+            item.wait_disposition.facts.classification
+            in {
+                "ENVIRONMENT_UNAVAILABLE",
+                "ENGINEERING_AUTHORIZATION",
+                "SOURCE_PREPARATION_DRIFT",
+            }
+            and not coder_preflight_uninvoked
+            and (prerequisites is None or prerequisites.status != "READY")
+        ):
             missing.append(DeliveryProofMissing.PREREQUISITES_UNVERIFIED)
         if prerequisites is not None:
             prerequisites.validate_integrity()
@@ -1067,7 +1080,7 @@ class DeliveryWaitService:
             elif (
                 item.wait_disposition.facts.classification == "ENVIRONMENT_UNAVAILABLE"
                 and prerequisites is not None
-                and prerequisites.status == "READY"
+                and (prerequisites.status == "READY" or coder_preflight_uninvoked)
                 and self._claimed_uninvoked_preflight(item, task, step)
             ):
                 permitted = (DeliveryResolutionKind.RESUME_UNINVOKED,)

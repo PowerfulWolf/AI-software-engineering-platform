@@ -79,6 +79,7 @@ from ai_software_engineer.manager.python_verification import (
 from ai_software_engineer.manager.python_verification_discovery import (
     discover_python_mysql_capability,
 )
+from ai_software_engineer.manager.python_verification_runner import MAX_PYTEST_SELECTIONS
 from ai_software_engineer.manager.team_roster import production_team_roster
 from ai_software_engineer.manager.verification_coordination import (
     ManagerVerificationAdvice,
@@ -727,7 +728,7 @@ def _automatic_python_mysql_tests(
             if _PYTEST_NODE_IN_TEXT.fullmatch(test):
                 criteria_by_node.setdefault(test, set()).add(implementation_mapping.criterion_id)
     covered = set().union(*criteria_by_node.values()) if criteria_by_node else set()
-    if covered != expected or len(criteria_by_node) > 32:
+    if covered != expected or len(criteria_by_node) > MAX_PYTEST_SELECTIONS:
         return None
     return tuple(
         PytestSelection(node_id=node_id, criterion_ids=tuple(sorted(criteria)))

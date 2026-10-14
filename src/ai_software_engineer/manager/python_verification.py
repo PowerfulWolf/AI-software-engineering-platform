@@ -16,7 +16,10 @@ from pydantic import Field, StringConstraints, field_validator, model_validator
 from ai_software_engineer.domain.artifact import Sha256
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import AcceptanceCriterionId
-from ai_software_engineer.manager.python_verification_runner import PYTEST_NODE_PATTERN
+from ai_software_engineer.manager.python_verification_runner import (
+    MAX_PYTEST_SELECTIONS,
+    PYTEST_NODE_PATTERN,
+)
 from ai_software_engineer.redaction import redact_text
 
 PytestNodeId = Annotated[
@@ -98,7 +101,7 @@ class PythonMysqlSandboxCapability(PythonMysqlRuntimeFacts):
     """The same host facts bound to exact approved candidate test selectors."""
 
     kind: Literal["codex_sandbox_pytest_mysql_v1"] = "codex_sandbox_pytest_mysql_v1"
-    selections: tuple[PytestSelection, ...] = Field(min_length=1, max_length=32)
+    selections: tuple[PytestSelection, ...] = Field(min_length=1, max_length=MAX_PYTEST_SELECTIONS)
     denied_relative_paths: tuple[str, ...] = Field(default=(), max_length=4096)
     max_cases: Literal[256] = 256
     resource_timeout_seconds: Literal[1200] = 1200

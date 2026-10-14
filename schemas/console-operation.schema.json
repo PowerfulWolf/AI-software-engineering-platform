@@ -1833,7 +1833,7 @@
               "items": {
                 "$ref": "#/$defs/PytestSelection"
               },
-              "maxItems": 32,
+              "maxItems": 64,
               "minItems": 1,
               "type": "array"
             },

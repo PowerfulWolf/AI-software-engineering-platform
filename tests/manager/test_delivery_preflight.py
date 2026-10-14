@@ -843,3 +843,38 @@ def test_responses_explicit_controlled_capability_requires_the_registered_discov
         else "CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED"
     )
     assert not sentinel.exists()
+
+
+@pytest.mark.parametrize("inspection", [False, True])
+def test_planned_existing_file_needs_only_verifier_read_permission(
+    tmp_path: Path, inspection: bool
+) -> None:
+    task, definitions, environment, sentinel = _prepare(tmp_path)
+    coder = definitions[AgentRole.CODER]
+    definitions[AgentRole.CODER] = coder.model_copy(
+        update={"permissions": coder.permissions.model_copy(update={"write_paths": ("src/**",)})}
+    )
+    check = _inspection() if inspection else _requirement()
+    existing = check.model_copy(update={"planned_new_files": ("tests/test_present.py",)})
+    assert _inspect(task, definitions, environment, requirement=existing).status == "READY"
+    if inspection:
+        assert existing.inspection is not None
+        missing = existing.model_copy(
+            update={
+                "inspection": existing.inspection.model_copy(
+                    update={"paths": ("tests/test_new.py",)}
+                ),
+                "planned_new_files": ("tests/test_new.py",),
+            }
+        )
+    else:
+        missing = existing.model_copy(
+            update={
+                "argv": ("pytest", "tests/test_new.py", "-q"),
+                "planned_new_files": ("tests/test_new.py",),
+            }
+        )
+    assert (
+        _inspect(task, definitions, environment, requirement=missing).status == "WAIT_ENGINEERING"
+    )
+    assert not sentinel.exists()

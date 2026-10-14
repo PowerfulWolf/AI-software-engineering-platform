@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -22,6 +23,9 @@ from ai_software_engineer.manager.production_agents import (
     PhaseDraft,
     TechnicalDesignDraft,
 )
+from ai_software_engineer.manager.python_verification import PytestSelection
+from ai_software_engineer.manager.python_verification_runner import MAX_PYTEST_SELECTIONS
+from ai_software_engineer.multi_directory.integration_commands import is_test_command
 from ai_software_engineer.multi_directory.models import (
     ComplexPlanRequired,
     JointCheckpoint,
@@ -218,7 +222,35 @@ def rejection_feedback(
     reason: str,
     *,
     test_matrix_issues: tuple[PlanTestMatrixIssue, ...] | None = None,
+    verification_issues: tuple[PlanVerificationIssue, ...] | None = None,
 ) -> JointPlanFeedback:
+    if verification_issues:
+        corrections = {
+            "UNSUPPORTED_TEST_COMMAND": (
+                "Use a supported, bounded test runner or request engineering support; "
+                "do not remove approved coverage."
+            ),
+            "CONTROLLED_CAPABILITY_REQUIRED": (
+                "Declare codex_sandbox_pytest_mysql_v1 for exact Python pytest nodes."
+            ),
+            "PYTEST_SELECTOR_REQUIRED": (
+                "Use exact tests/*.py::test_function or class-method nodes; "
+                "only -q and --disable-warnings flags are supported."
+            ),
+            "PYTEST_SELECTION_LIMIT_EXCEEDED": (
+                f"Keep each repository Task within {MAX_PYTEST_SELECTIONS} unique Python nodes; "
+                "preserve approved acceptance coverage."
+            ),
+        }
+        return JointPlanFeedback(
+            previous_plan=plan,
+            reason_codes=tuple(dict.fromkeys(issue.reason_code for issue in verification_issues)),
+            required_changes=tuple(
+                f"Unit {issue.unit_index}, package {issue.package_index}, test {issue.test_index}: "
+                + corrections[issue.reason_code]
+                for issue in verification_issues
+            ),
+        )
     return JointPlanFeedback(
         previous_plan=plan,
         reason_codes=("PLAN_TEST_MATRIX_MISSING_LEVELS",) if test_matrix_issues else (reason,),
@@ -232,3 +264,132 @@ def rejection_feedback(
         if test_matrix_issues
         else ("Correct the recorded rejection; preserve exact approved acceptance and interfaces",),
     )
+
+
+class PlanVerificationIssue(DomainModel):
+    """A safe, deterministic planning-time verification feasibility finding."""
+
+    unit_index: int = Field(ge=1)
+    package_index: int = Field(ge=1)
+    test_index: int = Field(ge=1)
+    reason_code: Literal[
+        "UNSUPPORTED_TEST_COMMAND",
+        "CONTROLLED_CAPABILITY_REQUIRED",
+        "PYTEST_SELECTOR_REQUIRED",
+        "PYTEST_SELECTION_LIMIT_EXCEEDED",
+    ]
+
+
+class PlanVerificationFeasibilityError(ValueError):
+    """Reject a plan before a delivery Task can reach Coder preflight."""
+
+    def __init__(self, issues: tuple[PlanVerificationIssue, ...]) -> None:
+        if not issues:
+            raise ValueError("verification feasibility rejection requires an issue")
+        self.issues = issues
+        super().__init__(
+            "; ".join(
+                f"verification {issue.reason_code} at unit {issue.unit_index}, "
+                f"package {issue.package_index}, test {issue.test_index}"
+                for issue in issues
+            )
+        )
+
+
+_PYTHON_PYTEST_PREFIXES = {
+    ("pytest",),
+    ("python", "-m", "pytest"),
+    ("python3", "-m", "pytest"),
+    ("uv", "run", "pytest"),
+}
+_PYTHON_CAPABILITY = "codex_sandbox_pytest_mysql_v1"
+
+
+def validate_plan_verification_entries(
+    plan: JointExecutionPlan,
+    *,
+    max_pytest_selections: int = MAX_PYTEST_SELECTIONS,
+) -> None:
+    """Validate executable verification shape while the Planner still has budget.
+
+    Delivery preflight repeats the checks against the real source tree and current
+    executor discovery.  This earlier check prevents a malformed command or an
+    unregistered controlled capability from becoming a Coder ``WAITING_DEPENDENCY``
+    after the immutable Plan has already been accepted.
+    """
+    if max_pytest_selections < 1:
+        raise ValueError("max_pytest_selections must be positive")
+    issues: list[PlanVerificationIssue] = []
+    for unit_index, unit in enumerate(plan.units, 1):
+        selectors: set[str] = set()
+        graph = unit.plan.work_graph
+        if graph is None:
+            continue
+        for package_index, package in enumerate(graph.packages, 1):
+            for test_index, test in enumerate(package.tests, 1):
+                argv = test.verification_argv
+                if argv is None:
+                    continue
+                if not is_test_command(argv):
+                    issues.append(
+                        PlanVerificationIssue(
+                            unit_index=unit_index,
+                            package_index=package_index,
+                            test_index=test_index,
+                            reason_code="UNSUPPORTED_TEST_COMMAND",
+                        )
+                    )
+                    continue
+                normalized = (Path(argv[0]).name, *argv[1:])
+                prefix = next(
+                    (
+                        candidate
+                        for candidate in _PYTHON_PYTEST_PREFIXES
+                        if normalized[: len(candidate)] == candidate
+                    ),
+                    None,
+                )
+                if prefix is None:
+                    # Other language runners remain ordinary/integration checks;
+                    # they do not participate in the Python capability bound.
+                    continue
+                if test.controlled_capability_kind != _PYTHON_CAPABILITY:
+                    issues.append(
+                        PlanVerificationIssue(
+                            unit_index=unit_index,
+                            package_index=package_index,
+                            test_index=test_index,
+                            reason_code="CONTROLLED_CAPABILITY_REQUIRED",
+                        )
+                    )
+                selected = tuple(
+                    token
+                    for token in normalized[len(prefix) :]
+                    if token not in {"-q", "--disable-warnings"}
+                )
+                try:
+                    if not selected:
+                        raise ValueError("no exact selectors")
+                    for token in selected:
+                        PytestSelection(node_id=token, criterion_ids=test.acceptance_criterion_ids)
+                except ValueError:
+                    issues.append(
+                        PlanVerificationIssue(
+                            unit_index=unit_index,
+                            package_index=package_index,
+                            test_index=test_index,
+                            reason_code="PYTEST_SELECTOR_REQUIRED",
+                        )
+                    )
+                selectors.update(selected)
+        if len(selectors) > max_pytest_selections:
+            issues.append(
+                PlanVerificationIssue(
+                    unit_index=unit_index,
+                    package_index=1,
+                    test_index=1,
+                    reason_code="PYTEST_SELECTION_LIMIT_EXCEEDED",
+                )
+            )
+    if issues:
+        raise PlanVerificationFeasibilityError(tuple(issues))

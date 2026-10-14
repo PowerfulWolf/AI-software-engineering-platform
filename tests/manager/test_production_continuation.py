@@ -517,6 +517,7 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
             / original.task.id,
             task_id=original.task.id,
         )
+        assert original.source.failed_run_id is not None
         original_start = original_continuation.capture_start(original.source.failed_run_id)
         original_stop = original_continuation.capture_stop(original.source.failed_run_id)
         assert original_stop.capture_start_sha256 == original_start.start_sha256

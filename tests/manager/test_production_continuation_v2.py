@@ -627,7 +627,7 @@ def test_public_native_entry_preserves_multiple_rounds_progress_and_verdicts(
 
 
 @pytest.mark.mysql
-def test_public_native_preflight_waits_before_coder_when_executor_is_not_registered(
+def test_public_native_preflight_allows_coder_but_waits_before_qa_without_executor(
     tmp_path: Path,
     mysql_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -684,16 +684,41 @@ def test_public_native_preflight_waits_before_coder_when_executor_is_not_registe
             return StructuredModelResult(payload=payload, duration_ms=result.duration_ms)
         return result
 
-    class UninvokedCodex(CodexCliAgentAdapter):
-        def run(self, request: AgentRequest) -> AgentResult:
+    class Runner:
+        def __init__(self, adapter: CodexCliAgentAdapter, request: AgentRequest) -> None:
+            self.adapter, self.request = adapter, request
+
+        def run(
+            self,
+            argv: tuple[str, ...],
+            *,
+            cwd: Path,
+            environment: Mapping[str, str],
+            stdin: str,
+            timeout_seconds: float,
+        ) -> CodexInvocationResult:
+            request = self.request
+            assert request.role is AgentRole.CODER
+            guard = cast(WorkerExecutionGuard, self.adapter._execution_guard)
+            guard.check()
             calls.append(request)
-            raise AssertionError("preflight must stop before any delivery model invocation")
+            (cwd / "hello.txt").write_text(DESIRED)
+            artifact = _coder_draft(self.adapter, request)
+            output = Path(argv[argv.index("--output-last-message") + 1])
+            output.write_text(artifact.model_dump_json())
+            return CodexInvocationResult(returncode=0, stdout="", stderr="")
+
+    class ObservedCoder(CodexCliAgentAdapter):
+        def run(self, request: AgentRequest) -> AgentResult:
+            assert request.role is AgentRole.CODER
+            self._runner = Runner(self, request)
+            return super().run(request)
 
     monkeypatch.setattr(_ScriptedStructuredClient, "complete", planned_test)
     monkeypatch.setattr(
         production_backend, "ConfiguredStructuredClientFactory", lambda *_: _ScriptedClientFactory()
     )
-    monkeypatch.setattr(production_delivery, "CodexCliAgentAdapter", UninvokedCodex)
+    monkeypatch.setattr(production_delivery, "CodexCliAgentAdapter", ObservedCoder)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
         default_project_id="project_test",
@@ -733,16 +758,16 @@ def test_public_native_preflight_waits_before_coder_when_executor_is_not_registe
             approval_reference="exact-preflight-product-approval",
         )
     )
-    assert not calls
+    assert len(calls) == 1 and calls[0].role is AgentRole.CODER
     checkpoint = approved.checkpoint
     assert checkpoint.stage is DeliveryStage.DELIVERING
-    assert checkpoint.task_id is not None and checkpoint.task_status is TaskStatus.IMPLEMENTING
+    assert checkpoint.task_id is not None and checkpoint.task_status is TaskStatus.QA
     (waiting,) = tuple(
         item
         for item in host.work_queue.items_for_task(checkpoint.task_id)
         if item.status is WorkItemStatus.WAITING_DEPENDENCY
     )
-    assert waiting.role is AgentRole.CODER and waiting.wait_disposition is not None
+    assert waiting.role is AgentRole.QA and waiting.wait_disposition is not None
     assert waiting.wait_disposition.responsibility is DeliveryResponsibility.ENGINEERING
     assert waiting.wait_disposition.resume_condition == "verified_prerequisites"
     assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
@@ -757,7 +782,7 @@ def test_public_native_preflight_waits_before_coder_when_executor_is_not_registe
         item.reason_code == "CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED"
         for item in receipt.observations
     )
-    assert claim_checkpoint.work_item_id == waiting.id
+    assert claim_checkpoint.work_item_id != waiting.id
     assert claim_checkpoint.receipt_sha256 == receipt.receipt_sha256
     assert _git_output("rev-parse", "HEAD", cwd=repository) == source
     assert (repository / "hello.txt").read_text() == "hello\n"

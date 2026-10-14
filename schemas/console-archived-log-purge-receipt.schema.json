@@ -48,5 +48,6 @@
   ],
   "title": "ArchivedLogPurgeReceipt",
   "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema"
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/console-archived-log-purge-receipt.schema.json"
 }

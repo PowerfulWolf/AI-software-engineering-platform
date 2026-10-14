@@ -235,10 +235,11 @@ def test_teardown_failure_keeps_call_pass_separate_from_error(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize("skip", [False, True])
-def test_all_32_selectors_keep_counts_with_bounded_error_samples(
-    tmp_path: Path, skip: bool
+@pytest.mark.parametrize("count", [33, 64])
+def test_all_selectors_keep_counts_with_bounded_error_samples(
+    tmp_path: Path, skip: bool, count: int
 ) -> None:
-    names = [f"test_selected_{index}_" + "long_identity_" * 10 for index in range(32)]
+    names = [f"test_selected_{index}_" + "long_identity_" * 10 for index in range(count)]
     action = (
         "pytest.skip(os.environ['ASE_TEST_MYSQL_DSN'])"
         if skip
@@ -256,9 +257,9 @@ def test_all_32_selectors_keep_counts_with_bounded_error_samples(
     assert "a" * 12 not in result.stdout + result.stderr
     summary = _summary(result)
     assert summary["counts"] == [
-        [index, 1, 0, int(not skip), int(skip), 0, 0] for index in range(32)
+        [index, 1, 0, int(not skip), int(skip), 0, 0] for index in range(count)
     ]
-    assert summary["omitted_errors"] == (0 if skip else 16)
+    assert summary["omitted_errors"] == (0 if skip else count - 16)
 
 
 @pytest.fixture(params=[None, "/private/tmp"], ids=["user-tmp", "public-tmp"])
@@ -397,3 +398,13 @@ def test_real_sandbox_denies_source_secret_other_sockets_and_tcp(
         other.close()
         tcp.close()
         public_temporary.cleanup()
+
+
+def test_runner_rejects_65_nodes_before_importing_candidate(tmp_path: Path) -> None:
+    result = run_fixture(
+        tmp_path,
+        "raise RuntimeError('candidate imported')",
+        [f"tests/test_selected.py::test_case_{index}" for index in range(65)],
+    )
+    assert result.returncode == 4
+    assert "candidate imported" not in result.stdout + result.stderr

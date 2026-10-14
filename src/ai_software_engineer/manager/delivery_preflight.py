@@ -242,12 +242,20 @@ def inspect_delivery_prerequisites(
             try:
                 for path in (*inspection.paths, *requirement.planned_new_files):
                     policy.authorize_read(path)
+                # ``planned_new_files`` describes the candidate files that the
+                # Coder may create.  Planning happens before the Coder has a
+                # worktree, so an older plan can legitimately contain a file
+                # that is already tracked at the pinned source.  Treat that
+                # file as a read target; requiring a Coder write grant for an
+                # existing file made preflight reject otherwise executable
+                # plans after a replan or source refresh.
                 for path in requirement.planned_new_files:
-                    WorkspacePolicy(
-                        root,
-                        definitions[AgentRole.CODER].permissions,
-                        denied_paths=task.constraints.denied_paths if task.constraints else (),
-                    ).authorize_write(path)
+                    if path not in regular_files:
+                        WorkspacePolicy(
+                            root,
+                            definitions[AgentRole.CODER].permissions,
+                            denied_paths=task.constraints.denied_paths if task.constraints else (),
+                        ).authorize_write(path)
             except WorkspacePolicyError:
                 observations.append(
                     DeliveryPreflightObservation(
@@ -354,11 +362,12 @@ def inspect_delivery_prerequisites(
                     policy.authorize_read(token.split("::", 1)[0])
             for path in requirement.planned_new_files:
                 policy.authorize_read(path)
-                WorkspacePolicy(
-                    root,
-                    definitions[AgentRole.CODER].permissions,
-                    denied_paths=task.constraints.denied_paths if task.constraints else (),
-                ).authorize_write(path)
+                if path not in regular_files:
+                    WorkspacePolicy(
+                        root,
+                        definitions[AgentRole.CODER].permissions,
+                        denied_paths=task.constraints.denied_paths if task.constraints else (),
+                    ).authorize_write(path)
         except WorkspacePolicyError:
             observations.append(
                 DeliveryPreflightObservation(

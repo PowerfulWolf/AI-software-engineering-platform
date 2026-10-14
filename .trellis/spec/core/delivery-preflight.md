@@ -61,7 +61,7 @@ Designer acceptance mapping 和 PlanTestItem 的结构化验证信息被机械�
 | 明确增量普通 Responses argv，当前实际 PATH 的工具可执行，角色命令/路径允许 | READY |
 | 任一 route 的显式 controlled capability | 必须有同 kind、role、source、requirement IDs 的注册 discovery |
 | Codex 测试只有宿主 pytest 二进制，没有注册 executor | WAIT_ENGINEERING |
-| 全量目录、裸 pytest、inline interpreter、越权入口/路径或未注册能力 | WAIT_ENGINEERING，Coder 零调用 |
+| 全量目录、裸 pytest、inline interpreter、越权入口/路径或未注册能力 | 新 Plan 拒绝；旧 Plan 封存等待，QA/Review 零调用 |
 | 测试将在本轮创建 | discovery 不提前要求文件存在；最终候选 verifier 仍要求精确 tracked 文件 |
 | native UI 只有 driver hash、session 在线，没有精确场景或 AX 执行前提 | 工程等待，不能冒充可执行 UI 验收 |
 | Swift filter 不被现有固定 runner 执行 | typed UNSUPPORTED_SWIFT_FILTER 等待，不能执行全量来冒充过滤 |
@@ -87,7 +87,7 @@ hash 只保留在技术证据中，不能把英文内部枚举直接展示给产
 
 ## 原角色内的受控 Python 验证
 
-- exact pytest function/class-method nodes，最多 32 个；支持 `pytest`、`python[3] -m pytest`、
+- exact pytest function/class-method nodes，最多 64 个；支持 `pytest`、`python[3] -m pytest`、
   `uv run pytest` 和表现 flag `-q`/`--disable-warnings`。目录、file-only、`-k`、其他 module、
   任意 interpreter、未支持 capability 必须等待。
 - 原 `NativeRoleVerificationPlan` 绑定 Team/Project/Repository/Requirement、Task intent、Run、
@@ -156,6 +156,19 @@ lease、receipt 或 invocation journal。已经出现 start 无 outcome 的历�
 ordinary Responses 无注册命令时继续使用原严格受限 tool registry，并保存真实 tools evidence。
 
 只有完整准备成功才缓存 ready；Native STARTED 无 final 永远是 EXECUTION_UNCERTAIN。
+
+### Planner 可执行性与角色边界
+
+新 Plan 在接纳前必须通过 `validate_plan_verification_entries()`，对每个命令确认测试入口、
+精确 selector 和注册 capability；不能把未注册的 `node --test` 或缺少 Python/MySQL
+capability 的 pytest 推迟到 Coder 领取后才暴露。旧 Plan 仍由 preflight 按原 bytes 兼容读取；
+对于 Coder 领取，QA/Reviewer 的验证环境等待只封存 receipt/checkpoint，不阻止 Coder 产出候选。
+QA/Reviewer 领取时仍必须通过同一 receipt 和真实 controlled preparation，缺失能力保持
+`WAIT_ENGINEERING`，不能把 Coder 开始误报为 QA/Review 可执行。
+
+`planned_new_files` 是候选可能新增的文件清单。若文件已存在于精确 `source_revision` 的
+tracked tree，preflight 只要求角色读取权限，不要求 Coder 对该路径拥有新增写权限；仅对 source
+中不存在的文件执行 Coder write-path 校验。
 “模型未调用”不能证明“受控测试未执行”。纯 prerequisite 未满足、已结束的受控命令与执行未知须
 生成各自的 claimed preparation 事实；具体恢复 collector 遵循工程等待契约。
 新 claim/Run/Context 不能重用旧 claim 的 binding；新的真正执行在原候选和原角色预算内封存新记录，
@@ -250,7 +263,7 @@ production facts reader/accepted artifacts/Context/同候选验收。MySQL 使�
 
 无需改生产 SQL、重算旧 hash 或恢复 terminal Task。旧请求保持历史窗口/授权；新能力不得追溯添加。
 非终态工程等待通过可信 investigation/精确 resolution 恢复，保留旧 claim、候选与执行记录。
-两个已删除 K1 保持删除，暂停业务交付时不得为了验证新建生产需求或调用业务模型。
+已物理删除的需求保持删除。继续交付现有需求必须有用户明确授权，不能以验证平台为由新建生产需求。
 
 回滚平台提交保留所有 sidecar records。已启动资源有固定 deadline；未启动过期 owned INTENT
 只在显式受控执行/工程 cleanup 重新核验精确身份后清理。当前 native Run 的 reconciliation
@@ -310,3 +323,64 @@ prerequisites, state, queue, artifacts) -> VerifierPreparationEvidence` 只读�
 缺真实事实者保持等待，不补造历史。Coder 使用基线 PAUSE→RESUME 专门路径；旧终态容量任务
 使用独立兼容恢复，不能由此将终态重置。回滚执行逻辑必须保留已发布的新字段只读兼容，
 不得删除已保存 proof 或重写已消费决定。
+
+
+## 2026-10-14 Coder 前提等待兼容与节点上限
+
+生产入口与签名：
+
+```python
+multi_directory.planning.validate_plan_verification_entries(
+    plan: JointExecutionPlan, *, max_pytest_selections: int = MAX_PYTEST_SELECTIONS
+) -> None
+multi_directory.planning.rejection_feedback(
+    plan: JointExecutionPlan, reason: str, *,
+    test_matrix_issues: tuple[PlanTestMatrixIssue, ...] | None = None,
+    verification_issues: tuple[PlanVerificationIssue, ...] | None = None,
+) -> JointPlanFeedback
+manager.native_verification.exact_python_selections(
+    requirements: tuple[PlannedVerificationRequirement, ...]
+) -> tuple[PytestSelection, ...]
+```
+
+`MAX_PYTEST_SELECTIONS=64` 定义在独立 `python_verification_runner.py`；runner 使用
+`-I -S -B` 启动，不能导入平台包或依赖平台环境。Pydantic、Console intent、recovery、原生
+discovery、JSON Schema 和 runner 共同使用同一上限。仍限制 256 cases、32KB 私有配置和
+3000-byte summary。增加 selector 上限不扩大网络、路径、命令或角色权限。
+
+Planner 检查在接受新 Plan 前执行。`PlanVerificationFeasibilityError.issues` 使用从 1 开始的
+`unit_index/package_index/test_index` 和固定 reason_code；不要回显模型生成 ID、argv 或 secret。
+`JointPlanFeedback.reason_codes/required_changes` 给出可行动修正。COMPLEX Planner 只在原
+冻结 `planner.max_attempts` 内继续；SIMPLE 或额度耗尽保留反馈并拒绝，无 Task 创建或退款。
+selector 按仓库 unit 去重和计数，校验复用 `PytestSelection` 的精确 node 契约。
+
+| 输入/事实 | 输出与断言 |
+| --- | --- |
+| 新 Plan 每仓库 33/64 个精确节点，显式 Python capability | 接纳；多仓库不合计为同一个 Task |
+| 新 Plan 第 65 节点、file-only、路径穿越、不支持 flags | 固定 LIMIT/SELECTOR reason，有限 Planner 修正 |
+| 新 Plan `node --test`、pytest 未声明 capability | 固定 UNSUPPORTED/REQUIRED reason；保留批准覆盖 |
+| 旧 immutable Plan 精确 pytest 未声明 capability | 原生路线派生同一已注册能力；保留原 Plan bytes/digest；普通 Responses 仍用原受限 tools |
+| `planned_new_files` 中路径已在精确 source tracked tree | 要求 verifier 可读；不要求 Coder 能重新创建已有文件 |
+| 同路径 source 中不存在 | 要求 Coder 可写；deny paths 和 verifier 读权限依旧检查 |
+| Coder 纯 preflight WAIT，模型尚未开始 | 封存 receipt/checkpoint 后允许实施；QA/Review 仍经真实准备门 |
+| 旧 Coder ENVIRONMENT_UNAVAILABLE，有完整原 marker/claim、无 start/outcome | 独立重检并封存前提；允许精确 RESUME_UNINVOKED，即使 verifier 前提仍 WAIT |
+| marker 缺失/Task 摘要漂移、模型有 start/outcome、QA/Review 前提 WAIT | 不适用 Coder 兼容；保留原工程调查/验证门 |
+
+必须测试：`test_delivery_preflight` 同一 planned 路径已有/缺失与 Coder read-only；
+`test_native_verification` 旧 33/64/65 节点及普通 Responses 不变；
+`test_python_verification_runner` 真实独立解释器 33/64 节点有界错误汇总，65 节点零源码导入；
+`test_delivery_wait` 精确未启动 claim 在新前提 READY/WAIT 两种状态保持 attempt 并精确消费；
+`test_joint_planner_test_matrix` 1/3 次额度拒绝/修正且产品批准与 Design 不变；
+`test_verification_schema_embedding` 三个公开 Schema 的 limit 与 runner 一致。
+
+存量数据处置：不改 SQL、旧 Plan、旧 receipt 或 Task.base_ref。更新源码使用 Console
+`propose_execution_baseline`（expected Task intent/revision/work item/source/checkpoint 与完整
+目标 Git SHA），核对 plan facts/冲突/native rule change 后执行精确 digest；必要时先 PAUSE，
+再 `resume_execution_baseline`。授权由平台封存，原 branch/worktree、批准、失败历史保留。
+K1 使用执行时再次确认的最新 main SHA。旧 preflight 的原地恢复只消费有完整未启动证明的
+`RESUME_UNINVOKED`；不能复活终态或补造 QA/Review。
+
+回滚：停止新派发，等受控执行收尾，回退平台提交并受控重启；保留新 baseline/claim/receipt
+只读兼容。新 baselines 不通过回退代码撤销；重新绑定源码必须提出新的精确计划并授权。
+`generate-fault-retirement-schemas.py` 必须输出 canonical `$id`，避免全 Schema registry
+在测试收集阶段因缺 ID 失败；这项元数据修复不改变历史 artifact payload/digest。

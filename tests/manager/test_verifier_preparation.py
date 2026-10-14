@@ -169,21 +169,11 @@ def test_historical_model_start_skips_final_input_preparation_and_native_tests(
     assert records.list("verifier-preparations", VerifierPreparationCheckpoint) == ()
 
 
-@pytest.mark.parametrize(
-    ("reason", "expected"),
-    [
-        (NativeVerificationWaitReason.UNSUPPORTED_SWIFT_FILTER, "不能执行指定的 Swift 测试过滤"),
-        (NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT, "验证入口没有对应的注册执行能力"),
-        (NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE, "当前工具或环境不可用"),
-        (NativeVerificationWaitReason.NATIVE_UI_PREREQUISITE, "原生界面验证前提尚未满足"),
-    ],
-)
-def test_coder_preflight_retains_specific_chinese_reason_before_any_model_start(
+def test_coder_preflight_records_verifier_wait_without_blocking_coder(
     tmp_path: Path,
-    reason: NativeVerificationWaitReason,
-    expected: str,
 ) -> None:
     fixture = _fixture(tmp_path)
+    reason = NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT
     task = fixture.task.model_copy(update={"status": TaskStatus.IMPLEMENTING})
     request = fixture.request.model_copy(
         update={
@@ -226,15 +216,9 @@ def test_coder_preflight_retains_specific_chinese_reason_before_any_model_start(
         }
     )
     gate, delegate, failure, records = _gate(fixture, tmp_path, inspect=lambda *_: receipt)
-    with pytest.raises(_Wait):
-        gate.prepare(request)
-    assert delegate.calls == 0
-    event = failure.events[0]
-    assert event.classification == "ENVIRONMENT_UNAVAILABLE"
-    assert expected in event.reason
-    assert reason.value not in event.reason
-    assert "CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED" not in event.reason
-    assert "delivery-preflight://" + receipt.receipt_sha256 in event.artifact_ids
+    assert gate.prepare(request) == request
+    assert delegate.calls == 1
+    assert failure.events == []
     (persisted,) = records.list("preflight-receipts", DeliveryPreflightReceipt)
     persisted.validate_integrity()
     assert persisted.observations[0].native_wait_reason is reason

@@ -1310,7 +1310,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     "scenario",
     ["baseline_updates", "changed_checkout", "missing_preparation", "corrupt_preparation"],
 )
-def test_public_repeated_preflight_waits_keep_exact_historical_sources_without_model_calls(
+def test_legacy_repeated_preflight_waits_keep_exact_historical_sources_without_model_calls(
     tmp_path: Path,
     mysql_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -1364,6 +1364,51 @@ def test_public_repeated_preflight_waits_keep_exact_historical_sources_without_m
         def run(self, request: AgentRequest) -> AgentResult:
             invoked.append(request)
             raise AssertionError("preflight must stop before every delivery model call")
+
+    # Reproduce only the old release's pre-model stop to exercise durable historical
+    # claims. The live gate now lets Coder continue and gates QA independently.
+    from ai_software_engineer.manager.delivery_preflight import (
+        DeliveryPreflightCheckpoint,
+        DeliveryPreflightReceipt,
+    )
+    from ai_software_engineer.manager.preflight_gate import PreflightInvocationControl
+
+    live_prepare = PreflightInvocationControl.prepare
+
+    def legacy_prepare(self: PreflightInvocationControl, request: AgentRequest) -> AgentRequest:
+        previous = self.prepare_input
+
+        def stop_after_sealing(current: AgentRequest) -> None:
+            assert self.guard.lease is not None
+            marker = next(
+                marker
+                for marker in self.records.list(
+                    "preflight-checkpoints",
+                    DeliveryPreflightCheckpoint,
+                )
+                if marker.lease_id == self.guard.lease.claim.lease.id
+            )
+            receipt = self.records.get(
+                "preflight-receipts",
+                marker.receipt_sha256,
+                DeliveryPreflightReceipt,
+            )
+            assert receipt.status == "WAIT_ENGINEERING"
+            self.failure_control.wait(
+                self.task_reader(),
+                classification="ENVIRONMENT_UNAVAILABLE",
+                reason="Legacy release preflight stop",
+                source_revision=current.source_revision,
+                artifact_ids=("delivery-preflight://" + receipt.receipt_sha256,),
+            )
+
+        self.prepare_input = stop_after_sealing
+        try:
+            return live_prepare(self, request)
+        finally:
+            self.prepare_input = previous
+
+    monkeypatch.setattr(PreflightInvocationControl, "prepare", legacy_prepare)
 
     monkeypatch.setattr(_ScriptedStructuredClient, "complete", unavailable_verification)
     monkeypatch.setattr(
@@ -1424,7 +1469,7 @@ def test_public_repeated_preflight_waits_keep_exact_historical_sources_without_m
     sidecar = host.projects()[0].root / "repositories" / checkpoint.repository_id
     if scenario != "baseline_updates":
         from ai_software_engineer.domain.delivery_resolution import (
-            DeliveryProofMissing,
+            DeliveryResolutionKind,
             InspectDeliveryWait,
         )
         from ai_software_engineer.manager.delivery_preflight import DeliveryPreflightReceipt
@@ -1475,8 +1520,8 @@ def test_public_repeated_preflight_waits_keep_exact_historical_sources_without_m
             )
             investigation.validate_integrity()
             assert investigation.source_revision == approved_source
-            assert DeliveryProofMissing.PREREQUISITES_UNVERIFIED in investigation.missing
-            assert not investigation.permitted_resolutions
+            assert not investigation.missing
+            assert investigation.permitted_resolutions == (DeliveryResolutionKind.RESUME_UNINVOKED,)
             assert investigation.prerequisite_facts_sha256 is not None
             assert investigation.prerequisite_receipt_sha256 is not None
             records = KnowledgeRecordStore(sidecar / "state" / "delivery-waits", read_only=True)
@@ -1550,7 +1595,7 @@ def test_public_repeated_preflight_waits_keep_exact_historical_sources_without_m
         )
         (original_proof,) = proof.invocations
         assert original_proof.proof_kind == "claimed_preflight"
-        assert len(original_proof.preflight_checkpoint_sha256s) == ordinal
+        assert len(original_proof.preflight_checkpoint_sha256s) == 1 + 2 * (ordinal - 1)
         assert not plan.dirty_capture.patch and not plan.complete_capture.patch
         if ordinal == 3:
             break  # The third proposal proves both completed upgrades and all three old claims.
@@ -1567,7 +1612,7 @@ def test_public_repeated_preflight_waits_keep_exact_historical_sources_without_m
         sources.append(binding.execution_source_revision)
         current = host.work_queue.get(original_item.id)
         assert current.status is WorkItemStatus.WAITING_DEPENDENCY
-        assert current.dispatch_sequence == ordinal
+        assert current.dispatch_sequence == 2 * ordinal
         assert (
             host.work_queue.step(current.id).boundary.source_revision
             == binding.execution_source_revision
@@ -1575,8 +1620,8 @@ def test_public_repeated_preflight_waits_keep_exact_historical_sources_without_m
         assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
         assert not invoked
     claims = host.work_queue.claims_for_work_item(original_item.id)
-    assert len(claims) == 3
-    assert len({claim.lease.id for claim in claims}) == 3
+    assert len(claims) == 5
+    assert len({claim.lease.id for claim in claims}) == 5
     assert {
         host.work_queue.step_for_claim(claim).boundary.source_revision for claim in claims
     } == set(sources)

@@ -22,6 +22,10 @@ if TYPE_CHECKING:
     import pytest
     from pymysql.connections import Connection
 
+# This standalone, hash-bound file owns the limit; platform code imports it here.
+# The isolated interpreter must not import the platform before trusted dependencies.
+MAX_PYTEST_SELECTIONS = 64
+
 PYTEST_NODE_PATTERN = (
     r"^tests/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*test_[A-Za-z0-9_.-]+\.py"
     r"::[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?"
@@ -79,7 +83,7 @@ class _ConnectionConfig:
             or not isinstance(value["password"], str)
             or re.fullmatch(r"[a-f0-9]{48}", value["password"]) is None
             or not isinstance(nodes, list)
-            or not 1 <= len(nodes) <= 32
+            or not 1 <= len(nodes) <= MAX_PYTEST_SELECTIONS
             or any(
                 not isinstance(node, str)
                 or len(node) > 512

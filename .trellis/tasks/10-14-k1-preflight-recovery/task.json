@@ -1,0 +1,15 @@
+{
+  "name": "k1-preflight-recovery",
+  "title": "K1 验证前提修复和最新 main 恢复",
+  "status": "in_progress",
+  "created_at": "2026-10-14",
+  "base_commit": "a81ace0f4f938dfd2c9db13bb65f6585c3b939db",
+  "prd": "prd.md",
+  "verification_commands": [
+    "ruff check changed files",
+    "mypy changed files",
+    "pytest focused final",
+    "pytest contracts",
+    "Codex macOS runner boundary"
+  ]
+}

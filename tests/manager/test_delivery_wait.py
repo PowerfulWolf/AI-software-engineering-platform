@@ -1475,9 +1475,11 @@ def test_product_actor_cannot_submit_stop_claims_or_engineering_decisions(
         )
 
 
+@pytest.mark.parametrize("verifier_ready", [True, False])
 def test_claimed_uninvoked_preflight_resumes_after_real_facts_refresh_without_clock_drift(
     native: Fixture,
     tmp_path: Path,
+    verifier_ready: bool,
 ) -> None:
     queue = WaitQueue(native)
     task = native.repository.get(native.task.id)
@@ -1557,7 +1559,7 @@ def test_claimed_uninvoked_preflight_resumes_after_real_facts_refresh_without_cl
     records.put("preflight-checkpoints", queue.item.id + ":" + old.receipt_sha256, marker)
     entry = service(native, queue, tmp_path)
     entry.prerequisite_collector = lambda current, step: collect(
-        Path(current.repository, "src/app.py").is_file()
+        verifier_ready and Path(current.repository, "src/app.py").is_file()
     )
     proof = entry.inspect(queue.command())
     assert proof.permitted_resolutions == (DeliveryResolutionKind.RESUME_UNINVOKED,)
