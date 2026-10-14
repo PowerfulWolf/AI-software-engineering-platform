@@ -22,6 +22,7 @@
 允许路径：src/ai_software_engineer/{service_pause.py,agents/**,web_console/**,work_queue/**,
 orchestration/**,domain/**,knowledge/**,manager/**,multi_directory/**,team_view/**,evidence/**,tools/**,recovery/**,execution.py,owned_processes.py}，schemas/**，
 tests/**，scripts/*schema*.py，docs/{architecture/contracts.md,operations/controlled-service-restart.md}，
+scripts/ase-console-service.sh，
 .trellis/spec/core/** 和本 Task 目录。仅修改有调用链依据的文件；不引入数据库迁移或新的角色权限。
 
 验证：独立 owned-process fixture + Console 生命周期、队列/恢复、Schema contracts、Ruff、strict mypy。

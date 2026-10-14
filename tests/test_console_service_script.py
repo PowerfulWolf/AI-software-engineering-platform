@@ -57,6 +57,14 @@ def _launcher(tmp_path: Path, *, executable: bool = True) -> tuple[Path, dict[st
             "    raise SystemExit(0)\n"
             "signal.signal(signal.SIGTERM, lambda *_: raise_exit())\n"
             "store = ServiceLifecycleStore.from_environment(os.environ)\n"
+            "if os.environ.get('ASE_REPLACEMENT_LOCK_FD'):\n"
+            "    from ai_software_engineer.web_console.maintenance_lock import (\n"
+            "        maintenance_start_lock, release_inherited_startup_lock)\n"
+            "    with maintenance_start_lock(store.root, os.environ): pass\n"
+            "    release_inherited_startup_lock(store.root, os.environ)\n"
+            "    os.environ.pop('ASE_REPLACEMENT_LOCK_FD')\n"
+            "elif os.environ.get('ASE_TEST_ASSERT_START_LOCK'):\n"
+            "    raise SystemExit('missing verified startup lock')\n"
             "instance = ServiceInstance.new(pid=os.getpid(), at=datetime.now(UTC))\n"
             "store.publish_instance(instance)\n"
             "handled = None\n"
@@ -155,6 +163,18 @@ def test_service_launcher_starts_reports_and_stops_isolated_process(tmp_path: Pa
         assert stopped.returncode == 0, stopped.stderr
         assert "ase-console stopped" in stopped.stdout
         assert _run(launcher, environment, "status").returncode == 1
+    finally:
+        _run(launcher, environment, "stop")
+
+
+def test_service_child_receives_then_releases_verified_startup_lock(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    environment["ASE_TEST_ASSERT_START_LOCK"] = "1"
+    try:
+        started = _run(launcher, environment, "start")
+        assert started.returncode == 0, started.stdout + started.stderr
+        stopped = _run(launcher, environment, "stop")
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
     finally:
         _run(launcher, environment, "stop")
 

@@ -132,7 +132,11 @@ Start additionally requires a fresh RUNNING instance with this child PID and a d
 the predecessor, not only an executable alive check. CLI start/stop/restart/resume and supervisor
 configuration-apply replacement share one nonblocking
 flock across entire replacement. A competing action is refused, not interleaved. The fixed `locked`
-script entry validates its inherited descriptor/inode. New detached children must not inherit it.
+script entry validates its inherited descriptor/inode. The detached Console alone borrows that
+descriptor through `pass_fds` until Host construction finishes; it validates and closes the borrowed
+FD without `LOCK_UN`, then removes `ASE_REPLACEMENT_LOCK_FD` from its environment. The parent
+launcher retains the lock through startup acknowledgement. Supervisor/caffeinate inherit neither
+the descriptor nor its environment selector; embedded factories retain caller-owned descriptors.
 Secrets remain loaded only in the launch-child subshell; lifecycle helpers never load `runtime.env`.
 Supervisor stays available after REFUSED and is stopped only after verified child exit for direct stop.
 

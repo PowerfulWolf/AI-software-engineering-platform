@@ -44,6 +44,8 @@ ASE_SHUTDOWN_TIMEOUT_SECONDS=900 ./scripts/ase-console-service.sh restart
 旧实例没有记录具体环节时仍显示原摘要，不能根据新的测试结果为旧记录补写原因。
 
 设置页“应用配置”使用同一受控流程。它与命令行重启共用一把进程锁，不能同时启动两个替代服务。
+启动器只让 Console 构造期间继承该锁；Host 构造完成后释放借入描述符，父启动器仍持锁到启动确认。
+编号存在而描述符缺失会拒绝启动；监督器不会继承锁，避免后续 stop/restart 被永久占用。
 前台运行 `uv run ase-console` 时，第一次 Ctrl+C 或 TERM 也进入受控收尾；重复信号不会强制绕过收尾。
 
 ## 首次从没有握手的旧版本升级

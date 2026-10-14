@@ -34,3 +34,11 @@ def maintenance_start_lock(root: Path, environment: Mapping[str, str]) -> Iterat
     except (OSError, ValueError) as error:
         raise ServiceLifecycleError("服务启动缺少可验证的维护控制锁; 未恢复普通模式。") from error
     yield descriptor
+
+
+def release_inherited_startup_lock(root: Path, environment: Mapping[str, str]) -> None:
+    """The Console process closes only its validated borrowed descriptor after composition."""
+    if environment.get("ASE_REPLACEMENT_LOCK_FD") is None:
+        return
+    with maintenance_start_lock(root, environment) as descriptor:
+        os.close(descriptor)

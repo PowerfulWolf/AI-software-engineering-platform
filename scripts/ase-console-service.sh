@@ -162,10 +162,22 @@ launch_detached() {
   # terminate that whole group after a successful start. Create a new session
   # for each daemon and return the PID of the executable (nohup uses exec).
   python3 - "$LOG_FILE" "$@" <<'PY'
+import os
 import subprocess
 import sys
 
 try:
+    environment = dict(os.environ)
+    descriptor_value = environment.pop("ASE_REPLACEMENT_LOCK_FD", None)
+    inherit_lock = environment.pop("ASE_INHERIT_REPLACEMENT_LOCK", None) == "1"
+    descriptors = ()
+    if inherit_lock:
+        if descriptor_value is None:
+            raise ValueError("missing startup lock")
+        descriptor = int(descriptor_value)
+        os.fstat(descriptor)
+        descriptors = (descriptor,)
+        environment["ASE_REPLACEMENT_LOCK_FD"] = str(descriptor)
     with open(sys.argv[1], "ab") as output:
         child = subprocess.Popen(
             ["nohup", *sys.argv[2:]],
@@ -173,8 +185,10 @@ try:
             stdout=output,
             stderr=output,
             start_new_session=True,
+            pass_fds=descriptors,
+            env=environment,
         )
-except OSError:
+except (OSError, ValueError):
     print("error: could not launch detached service process", file=sys.stderr)
     raise SystemExit(1) from None
 print(child.pid)
@@ -198,7 +212,7 @@ launch_child() {
       lifecycle admit-start || exit 1
     fi
     : >>"$LOG_FILE"
-    child_pid=$(launch_detached "$SERVICE_EXECUTABLE") || exit 1
+    child_pid=$(ASE_INHERIT_REPLACEMENT_LOCK=1 launch_detached "$SERVICE_EXECUTABLE") || exit 1
     # Local Workers cannot renew their leases while macOS is idle-asleep.
     # Bind the assertion to the actual child; do not change system power settings.
     if [ -x /usr/bin/caffeinate ]; then

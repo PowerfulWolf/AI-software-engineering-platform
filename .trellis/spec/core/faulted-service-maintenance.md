@@ -28,6 +28,16 @@ active pending publication, anchor cleanup or signals.
 The new epoch needs an independent completion and normal admission; old authorization never applies.
 Normal Host composition holds replacement lock through writer construction, including reused admission.
 
+The service launcher's `launch_detached` forwards the proven FD with `Popen(pass_fds=(fd,))` only for
+the Console launch. An environment FD number alone is no ownership proof: Popen otherwise closes it.
+Supervisor/caffeinate launches receive neither this FD nor its environment selector. Console `main`
+calls `release_inherited_startup_lock` after construction, validating root/inode/uid/mode/lock before
+closing its borrowed FD; the parent launcher still holds the same lock until startup acknowledgement.
+The selector is removed from both the process and TeamHost runtime environments. Keeping it open
+would indefinitely block stop/restart. A direct embedded factory retains caller-owned descriptors.
+`test_service_child_receives_then_releases_verified_startup_lock` reproduces the original EBADF and
+proves actual child admission and subsequent stop can both acquire the correct lock.
+
 | Input/failure | Required behavior |
 | --- | --- |
 | Prior exact admitted epoch and current frozen REFUSED Host | new inspection epoch, all old bytes preserved |

@@ -218,6 +218,7 @@ def _production_console_app(
 
     # Outside setup fallback: invalid maintenance authority must never compose writers.
     admit_completed_maintenance({"HOME": str(Path.home()), **variables})
+    variables.pop("ASE_REPLACEMENT_LOCK_FD", None)
     try:
         # Avoid TeamHost's writer boundary when first-run delivery prerequisites are absent.
         config.require_mysql_dsn(variables)
@@ -283,6 +284,10 @@ def main() -> None:
         _validate_port(port)
         app = production_console_app(port=port)
         lifecycle = ServiceLifecycleStore.from_environment(os.environ)
+        from .maintenance_lock import release_inherited_startup_lock
+
+        release_inherited_startup_lock(lifecycle.root, os.environ)
+        os.environ.pop("ASE_REPLACEMENT_LOCK_FD", None)
     except ServiceLifecycleError:
         raise SystemExit("error: 服务生命周期记录不可用, 保留原服务并检查本机服务目录。") from None
     except (OSError, ProductionConfigError, QueueError, StoreError, ValueError) as error:
