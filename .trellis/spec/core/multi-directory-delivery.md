@@ -17,6 +17,54 @@ proof to `JointDeliveryService.resume(ResumeProjectDelivery)`. Console/Manager r
 checkpoint gate; the service takes the Requirement journal lock and verifies proof/current hashes
 again before publishing a successor. It does not introduce Product or technical approval.
 
+### Design mapping validation and correction
+
+`JointTechnicalDesign.validate_for(scope, product)` raises the typed
+`DesignMappingUniquenessError` when a model-produced unit repeats a requirement mapping,
+acceptance mapping, or implementation-step key. Its diagnostic includes only the fixed mapping
+field and 1-based unit index, never the model-authored duplicate ID.
+`JointDeliveryService._advance_stages` treats this
+as a correctable Designer output: it stores the complete rejected design in `design_feedback`,
+adds its digest and safe reason to `next_action`, and consumes the ordinary finite Design attempt
+budget before requesting a complete correction. It must not surface the safe validation reason as a
+terminal `COMMAND_REJECTED` operation while a Design attempt remains.
+
+The error is limited to duplicate IDs inside a model output. ProductSpec digest mismatch, a
+foreign directory/interface reference, stale scope, or other lineage/authority violations remain
+hard failures and are not reclassified as model feedback. Check approved coverage and all
+scope/component/interface references before raising a correctable mapping error; a draft with
+both a duplicate and a hard violation must not enter `design_feedback`. This also prevents
+unapproved acceptance IDs from poisoning durable verification-correction requirements.
+
+| Input | Required result |
+|---|---|
+| Unit repeats `requirement_id` (for example `req_013`) | typed mapping error, durable feedback, bounded Designer correction |
+| Unit repeats acceptance ID or implementation-step key | same correction path; no Planner handoff |
+| Corrected design is valid | feedback cleared, Design accepted, normal Planning continues |
+| Design budget exhausted | remain `DESIGNING` without accepted design/plan; budget rejection retains all feedback/history |
+| Product digest or foreign scope mismatch | fail closed without automatic correction |
+
+The regression seam is `tests/manager/test_joint_designer_feedback.py::test_duplicate_requirement_mapping_is_corrected_before_planning`;
+it covers all three fields and untrusted duplicate identifiers, asserting two Designer calls,
+complete rejected-design feedback for approved IDs, hard rejection of unapproved IDs, fixed safe
+diagnostic and rejected digest, preserved Product
+approval, unchanged finite attempt accounting and no Planner handoff for the rejected draft.
+`test_duplicate_mapping_never_masks_hard_scope_or_lineage_failure` combines each duplicate
+field with Product digest drift, foreign requirement, unknown component and foreign interface
+producer/consumer, asserting one Designer call and no poisoned feedback or Planner handoff.
+
+Root cause: the domain uniqueness validator rejected malformed model output correctly, but an
+untyped `ValueError` escaped the Design correction boundary and became a Console
+`COMMAND_REJECTED`. Keep correctable model-output errors typed and explicitly routed; never
+catch every `ValueError` at that boundary because authority/lineage violations must fail closed.
+
+Existing data: old failed Operations and Requirement checkpoint bytes/hashes remain immutable.
+No database migration, attempt refund or Product reapproval is needed. After loading the fix via
+controlled service restart, use a new public `CONTINUE_DELIVERY` Operation bound to the latest
+checkpoint digest. Exhausted Design budgets retain the existing recovery gate and approvals.
+Rollback uses a controlled stop and the prior Git revision; new feedback checkpoints are compatible
+with the existing wire Schema and require no rewrite.
+
 ### Contract
 
 - Source/document inspection cannot stand in for required unit, integration, security or other

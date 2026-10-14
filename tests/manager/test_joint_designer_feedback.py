@@ -9,6 +9,7 @@ from ai_software_engineer.agents import StructuredModelResult
 from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.multi_directory.models import (
+    DesignMappingUniquenessError,
     JointCheckpoint,
     JointStage,
     JointTechnicalDesign,
@@ -105,6 +106,166 @@ def test_duplicate_consumers_are_corrected_before_planning(tmp_path: Path) -> No
     assert accepted.attempts == {"design": 2, "plan": 1}
     assert accepted.design != invalid
     assert not accepted.children
+
+
+@pytest.mark.parametrize(
+    ("field", "label", "identifier"),
+    [
+        ("requirement_mappings", "requirement mappings", "requirement_id"),
+        ("acceptance_mappings", "acceptance mappings", "acceptance_criterion_id"),
+        ("implementation_steps", "implementation steps", "key"),
+    ],
+)
+@pytest.mark.parametrize("untrusted_id", [False, True])
+def test_duplicate_requirement_mapping_is_corrected_before_planning(
+    tmp_path: Path, field: str, label: str, identifier: str, untrusted_id: bool
+) -> None:
+    service, backend, seed, _invalid = setup_design(tmp_path)
+    valid = backend.designs[1]
+    assert isinstance(valid, JointTechnicalDesign)
+    unit = valid.units[0]
+    mappings = getattr(unit.design, field)
+    if untrusted_id:
+        repeated = mappings[-1].model_copy(update={identifier: "private_model_text"})
+        mappings = (*mappings[:-1], repeated)
+    invalid = valid.model_copy(
+        update={
+            "units": (
+                unit.model_copy(
+                    update={
+                        "design": unit.design.model_copy(update={field: (*mappings, mappings[-1])})
+                    }
+                ),
+                *valid.units[1:],
+            )
+        }
+    )
+    backend.designs = [invalid, valid]
+
+    if untrusted_id and field != "implementation_steps":
+        with pytest.raises(ValueError, match="coverage differs") as failure:
+            service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+        assert not isinstance(failure.value, DesignMappingUniquenessError)
+        assert "private_model_text" not in str(failure.value)
+        rejected = service.status(seed.delivery_id).checkpoint
+        assert rejected.design_feedback is None and rejected.design is None
+        assert rejected.plan is None and not rejected.children
+        assert rejected.approval == seed.approval and rejected.attempts == {"design": 1}
+        assert len(backend.design_inputs) == 1
+        return
+
+    with pytest.raises(DeliveryReached):
+        service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+
+    assert len(backend.design_inputs) == 2
+    feedback = str(backend.design_inputs[1]["next_action"])
+    assert label + " must be unique" in feedback
+    assert "unit index: 1" in feedback
+    assert "private_model_text" not in feedback
+    assert digest(invalid) in feedback
+    assert backend.design_inputs[1]["design_feedback"] == invalid.to_wire()
+    accepted = service.status(seed.delivery_id).checkpoint
+    assert accepted.stage is JointStage.DELIVERING
+    assert accepted.design == valid and accepted.design_feedback is None
+    assert accepted.approval == seed.approval
+    assert accepted.attempts == {"design": 2, "plan": 1}
+    assert not accepted.children
+
+
+@pytest.mark.parametrize(
+    "field", ["requirement_mappings", "acceptance_mappings", "implementation_steps"]
+)
+@pytest.mark.parametrize(
+    "hard_violation",
+    [
+        "product_digest",
+        "foreign_requirement",
+        "unknown_component",
+        "foreign_producer",
+        "foreign_consumer",
+    ],
+)
+def test_duplicate_mapping_never_masks_hard_scope_or_lineage_failure(
+    tmp_path: Path, field: str, hard_violation: str
+) -> None:
+    service, backend, seed, _invalid = setup_design(tmp_path)
+    valid = backend.designs[1]
+    assert isinstance(valid, JointTechnicalDesign)
+    unit = valid.units[0]
+    mappings = getattr(unit.design, field)
+    invalid = valid.model_copy(
+        update={
+            "units": (
+                unit.model_copy(
+                    update={
+                        "design": unit.design.model_copy(update={field: (*mappings, mappings[-1])})
+                    }
+                ),
+                *valid.units[1:],
+            )
+        }
+    )
+    if hard_violation == "product_digest":
+        invalid = invalid.model_copy(update={"product_spec_sha256": "f" * 64})
+    elif hard_violation == "foreign_requirement":
+        invalid_unit = invalid.units[0]
+        invalid = invalid.model_copy(
+            update={
+                "units": (
+                    invalid_unit.model_copy(
+                        update={"requirement_ids": (*invalid_unit.requirement_ids, "req_999")}
+                    ),
+                    *invalid.units[1:],
+                )
+            }
+        )
+    elif hard_violation == "unknown_component":
+        invalid_unit = invalid.units[0]
+        mapping = invalid_unit.design.requirement_mappings[0].model_copy(
+            update={"component_keys": ("unknown_component",)}
+        )
+        invalid = invalid.model_copy(
+            update={
+                "units": (
+                    invalid_unit.model_copy(
+                        update={
+                            "design": invalid_unit.design.model_copy(
+                                update={
+                                    "requirement_mappings": (
+                                        mapping,
+                                        *invalid_unit.design.requirement_mappings[1:],
+                                    )
+                                }
+                            )
+                        }
+                    ),
+                    *invalid.units[1:],
+                )
+            }
+        )
+    else:
+        interface = invalid.interfaces[0]
+        update = (
+            {"producer": "unit_ffffffffffffffff"}
+            if hard_violation == "foreign_producer"
+            else {"consumers": ("unit_ffffffffffffffff",)}
+        )
+        invalid = invalid.model_copy(
+            update={"interfaces": (interface.model_copy(update=update), *invalid.interfaces[1:])}
+        )
+    backend.designs = [invalid, valid]
+
+    with pytest.raises(ValueError) as failure:
+        service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+
+    assert not isinstance(failure.value, DesignMappingUniquenessError)
+    assert len(backend.design_inputs) == 1
+    rejected = service.status(seed.delivery_id).checkpoint
+    assert rejected.stage is JointStage.DESIGNING
+    assert rejected.design is None and rejected.design_feedback is None
+    assert rejected.plan is None and not rejected.children
+    assert rejected.attempts == {"design": 1}
+    assert rejected.approval == seed.approval
 
 
 def test_designer_budget_is_durable_and_never_dispatches_invalid_output(tmp_path: Path) -> None:

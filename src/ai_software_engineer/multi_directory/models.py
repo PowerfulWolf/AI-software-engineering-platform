@@ -151,6 +151,20 @@ class DesignWritePathsError(ValueError):
         )
 
 
+class DesignMappingUniquenessError(ValueError):
+    """Locate duplicate mapping IDs without echoing model-authored text."""
+
+    def __init__(
+        self,
+        *,
+        field: Literal["requirement mappings", "acceptance mappings", "implementation steps"],
+        unit_index: int,
+    ) -> None:
+        super().__init__(
+            f"{field} must be unique; unit index: {unit_index}. Return each ID exactly once"
+        )
+
+
 class DesignReadinessError(ValueError):
     """Designer must explicitly close technical blockers before Planning."""
 
@@ -189,14 +203,6 @@ class JointTechnicalDesign(DomainModel):
         covered: set[str] = set()
         for unit_index, item in enumerate(self.units, 1):
             ensure_unique(item.requirement_ids, "unit requirement IDs")
-            ensure_unique(
-                (m.requirement_id for m in item.design.requirement_mappings), "requirement mappings"
-            )
-            ensure_unique(
-                (m.acceptance_criterion_id for m in item.design.acceptance_mappings),
-                "acceptance mappings",
-            )
-            ensure_unique((s.key for s in item.design.implementation_steps), "implementation steps")
             if not set(item.requirement_ids) <= set(expected):
                 raise ValueError("design introduces an unapproved requirement")
             covered.update(item.requirement_ids)
@@ -235,6 +241,35 @@ class JointTechnicalDesign(DomainModel):
                 raise ValueError("interface references a directory outside this request")
             if len(set(interface.consumers)) != len(interface.consumers):
                 raise DesignInterfaceConsumersError(interface_index=index)
+        # Preserve hard coverage/scope/reference failures before a rejected draft can
+        # enter correction history and become a source of verification obligations.
+        for unit_index, item in enumerate(self.units, 1):
+            try:
+                ensure_unique(
+                    (m.requirement_id for m in item.design.requirement_mappings),
+                    "requirement mappings",
+                )
+            except ValueError as error:
+                raise DesignMappingUniquenessError(
+                    field="requirement mappings", unit_index=unit_index
+                ) from error
+            try:
+                ensure_unique(
+                    (m.acceptance_criterion_id for m in item.design.acceptance_mappings),
+                    "acceptance mappings",
+                )
+            except ValueError as error:
+                raise DesignMappingUniquenessError(
+                    field="acceptance mappings", unit_index=unit_index
+                ) from error
+            try:
+                ensure_unique(
+                    (s.key for s in item.design.implementation_steps), "implementation steps"
+                )
+            except ValueError as error:
+                raise DesignMappingUniquenessError(
+                    field="implementation steps", unit_index=unit_index
+                ) from error
         if self.blocking_issues:
             self.require_ready()
 

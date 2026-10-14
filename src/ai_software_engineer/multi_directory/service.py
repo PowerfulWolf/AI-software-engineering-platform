@@ -70,6 +70,7 @@ from ai_software_engineer.multi_directory.models import (
     Candidate,
     ChildDelivery,
     DesignInterfaceConsumersError,
+    DesignMappingUniquenessError,
     DesignReadinessError,
     DesignWritePathsError,
     DialogueMessage,
@@ -1212,6 +1213,7 @@ class JointDeliveryService:
                 )
             except (
                 DesignInterfaceConsumersError,
+                DesignMappingUniquenessError,
                 DesignWritePathsError,
                 DesignReadinessError,
                 JointDesignVerificationRejected,
