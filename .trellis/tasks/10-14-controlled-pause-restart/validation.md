@@ -53,6 +53,36 @@ then completed an ordinary controlled stop. Maintenance completion plan
 ordinary admission is durably saved. The launcher fix requires retrying startup, without resetting
 maintenance controls or repeating retirement.
 
+## Online acceptance (2026-10-14)
+
+Implementation `d6236e8` and startup-lock fix `2781f32` were fast-forwarded into main and pushed.
+The registered K1 clone was clean and fast-forwarded to the same main code revision.
+Ordinary startup succeeded with PID 5175. A real idle `scripts/ase-console-service.sh restart`
+then sealed matching READY for instance `console_instance_7bbef1ff1b04a9eba4181bb75c29cf40`,
+waited for its actual exit and started PID 14455 with distinct instance
+`console_instance_68a6677e3a7a5dc87a859278f3874e53`. Kernel signal-zero inspection confirmed
+the predecessor absent. Successor is RUNNING and `/api/v1/console` reports normal mode and
+`delivery_ready=true`. Evidence: `/private/tmp/ase-{before,after}-ordinary-restart-20261014.json`.
+
+Sequential ordinary-mode GET checks all returned HTTP 200: console 0.009s, selected Project
+summary 1.580s, complete team facts 1.796s, operation summaries 0.070s. The browser loaded the
+team members, then after actual restart and reload connected again and displayed the demand list.
+These timings are one local acceptance sample, not a general latency guarantee.
+
+Original K1 remains the same Requirement and Task; no SQL, verdict, approved product scope or old
+execution history was rewritten. Public exact-checkpoint investigation
+`operation_bf06b6a4e534067f9f0de3ba678f9c56` succeeded with missing OUTCOME_UNKNOWN,
+STOP_UNRECORDED and CHECKPOINT_UNAVAILABLE, no permitted resolutions. Public same-base preserved-draft
+legacy preparation `operation_d22d6db0e1c7fdbc5e0dbbfefb344034` was safely rejected: existing original
+capture/start records make the no-original-ledger legacy route ineligible. No stop confirmation was
+invented and no successor Coder was launched. K1's old execution needs its own original-record
+recovery evidence; the new pause proof cannot backfill it. The current service is available while
+that historical engineering wait and its draft remain preserved.
+
+The exact disposable MySQL regression container
+`50fa8fe43503acdbfe26f43a952b089adc952fc274a869fffe2cba2d4c05e279` was removed after all tests.
+Production MySQL and original K1 worktrees were retained.
+
 ## Rollback / limits
 
 No automatic timeout/provider retry/refund/verdict; outstanding synchronous HTTP waits for real return.
