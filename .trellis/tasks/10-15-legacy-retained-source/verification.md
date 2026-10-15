@@ -45,7 +45,8 @@ No SQL was edited; no old outcome, stop record, checkpoint, or verdict was fabri
 failed proposal and UNKNOWN invocation remain in history. The successful proposal is preparation,
 not execution approval; no successor K1 Coder run was launched by this maintenance step.
 
-Production recovery is waiting for the missing factual declaration required by
+At this initial acceptance snapshot, before the user's confirmation, production recovery was
+waiting for the missing factual declaration required by
 `.trellis/spec/core/legacy-execution-rescue.md`: the original invocation remained on this
 computer/account without remote execution or migration, and it and all derived tools have ended
 and cannot write the original workspace again. The user's existing delegated approval authority
@@ -66,3 +67,55 @@ Once that declaration is available, use only the public operations flow:
 
 Do not repeat general product approval, recreate the Requirement, refund the unknown work,
 infer a historical stop, or release the paused input through an ordinary Continue operation.
+
+## Production recovery after the user's exact confirmation (2026-10-15)
+
+The user answered `能确认上述全部事实` to confirmation card
+`call_fa0e4709fda64a689b0b02396a71e9df`. The reference preserves the full same-computer/account,
+no migration/remote execution, all-derived-tools-ended declaration and the user's existing
+delegated engineering approval. Public rescue operation
+`operation_4d931c49a62a5a146a9d7d0dbc880a41` succeeded:
+
+- Rescue binding: `e2e03a656fe88bb0b25e75b2fc45904442199399426b6af52965de9c80f5d47a`.
+- Exact authority: `b4d9a2c43a39cab23bdb25438d0beddbf2fa2c61fcc613c4422910806e958ec8`.
+- A distinct Coder WorkItem was reserved once at attempt 4 and kept paused.
+
+The registered repository's clean `main` was fast-forwarded to
+`a837fa9c04ca89ac977ef534e519a27a31c80798`. A nonconflicted public `preserve_draft`
+source-rebind plan retained all 15 draft paths. Independent read-only inspection verified all
+101 old and 102 target immutable native rule bodies and the exact nine maintenance-rule changes;
+frozen Task intent, permissions and denied paths are unchanged. Public operation
+`operation_2b5d6e1d2ad982b80a277a10d7829a2d` successfully applied it while remaining paused:
+
+- Rebind plan: `0364cad2107ecf48cb88a49353f1ad59b067457467568051a01f264a5487c62a`.
+- Approved native-rule change: `59faa52219881c94362af0cd6dd388a2b69b61ead9d9600d14b0f056118c0062`.
+- Accepted epoch: `73f08a09204f94ca9224c59b836287bf8fb39488f5190a0c4a61102b5f8c84aa`.
+- Latest binding: `1382cbaa7662e0cea0dff1501286aba26fee516965f7559a3a67b6f6af388acf`.
+
+The first explicit continuation (`operation_a01ecdd47c3c547fcc653ad3abadc236`) safely refused
+`LEGACY_LOCAL_EXECUTION_ACTIVE` and retained the pause. A read-only trusted survey identified
+only `CODEX_WRAPPER_ACTIVE`; after normally resetting the idle Node tool session created during
+this maintenance, the same trusted survey returned no blockers. No discovered process was killed,
+no scanner exemption was added and no old fact was changed. A new Operation idempotency key
+reused the identical continuation intent and authority
+`e6476b91834ac975a902bcefeff8985924c39b029f2e3a31e1cae121ee4f5175`.
+
+Retry operation `operation_cfd569aa5713c1cbe745f03d515222c4` entered the ordinary runtime.
+Fresh public summary confirms the original Task remains `IMPLEMENTING`, revision 5, and
+`work_e2e03a656fe88bb0b25e75b2fc45904442199399426b6af52965de9c80f5d47a` is `RUNNING`,
+attempt 4, assigned to `agent_team_coder`, with `LEASE_VALID` and
+`execution_phase=KNOWLEDGE_PREPARATION`. No additional baseline binding or recovery reservation
+was created by retrying the exact release.
+
+The runtime also sealed
+`evalevt_legacy_e2e03a656fe88bb0b25e75b2fc459044`, a `HumanActionEvent(SUPPLY_EVIDENCE)`
+referencing the exact rescue authority. Independent typed inspection verified that the old Run's
+invocation outcome, capture-stop and interruption receipt still do not exist: the original
+UNKNOWN history is preserved. Maintenance recovery is complete; K1 business delivery still
+requires its actual native Coder output and independent QA/Review. The knowledge-preparation
+claim is not a claim that K1 is DONE or that the main Coder invocation has already started.
+
+A later public summary confirmed the same attempt-4 WorkItem progressed to
+`execution_phase=ROLE_EXECUTION`, `execution.reason_code=ROLE_RUNNING`, while its Lease remained
+valid. This is actual Coder execution after successful recovery; candidate and independent
+QA/Review outcomes still need to be observed before reporting K1 business delivery complete.

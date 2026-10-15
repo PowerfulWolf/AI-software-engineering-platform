@@ -247,3 +247,20 @@ execution-baseline.md 的 accepted artifact order 与 repeated baseline 验证�
   工作区核验及旧 Worker 锁；不要宣称旧重复 stop/capture/inventory 的调用数量都未减少。
 
 实际 modern 窗口、旧 wrapper 兼容和组合增量的范围见 `../core/recovery-facts-window.md`。
+
+### 本机包装进程拒绝与精确继续重试（2026-10-15）
+
+- `LEGACY_LOCAL_EXECUTION_ACTIVE` 先读可信 survey 的具体 blocker。只有
+  `CODEX_WRAPPER_ACTIVE` 时，不能宣称旧 Coder 或原工作区仍被占用；未知包装进程遵守
+  当前账户的保守边界，即使它来自维护者自己的其他工具会话。
+- 只通过工具原入口正常结束本次维护自己创建且已空闲的会话，再重新完整调查。不得按 PID
+  批量 kill、关闭用户的其他工作、跳过扫描，或给任意控制后代增加来源豁免。
+- 明确继续的授权可能已在 fresh release 校验失败前封存。先核对原 Task、最新 binding、
+  work item、source、disposition 和权限均未变化，再用相同 intent/reference 与新的 Operation
+  幂等键重试；不得重复预留额度、重复审批、伪造旧停止或把 failed Operation 改成成功。
+- 区分 `READY/真实 claim/KNOWLEDGE_PREPARATION/invocation-start`。有有效知识准备租约
+  不表示主 Coder 已开始，更不表示 candidate、QA/Review 或业务交付已完成。
+
+真实前后 survey、授权与公开恢复记录见
+`../../tasks/10-15-legacy-retained-source/verification.md`；执行契约仍以
+`../core/legacy-execution-rescue.md` 和 `../core/execution-baseline.md` 为准。

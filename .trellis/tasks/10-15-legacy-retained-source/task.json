@@ -1,8 +1,9 @@
 {
   "id": "legacy-retained-source-20261015",
   "title": "Preserve authorized ignored source across legacy rescue delivery",
-  "status": "verified",
+  "status": "completed",
   "baseline": "caa8227",
   "owner": "codex",
-  "verification": "verification.md"
+  "verification": "verification.md",
+  "production_recovery": "Original K1 Task resumed on main a837fa9; Coder attempt 4 entered ROLE_EXECUTION with a valid lease. Business QA/Review remain pending."
 }
