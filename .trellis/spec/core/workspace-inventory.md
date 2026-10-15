@@ -16,6 +16,10 @@ Runtime callers omit `known_oversized_file`. They retain the 16,000,000-byte per
 256,000,000-byte total bound and 20,000-file bound. Two complete stable no-follow passes bind
 path/kind/SHA/mode/size. Never skip ignored content, follow links, or infer authorization from
 an inventory's success. Protected rules and VCS remain outside cache-write exceptions.
+Legacy rescue may additionally capture an ignored regular file when its exact path passes the
+frozen read/write policy; explicit execution-cache paths remain outside mutation bodies and are
+validated only by the complete inventory. An ignored path that is not policy-authorized remains
+uncaptured and blocks rescue without changing or deleting the file.
 
 Trusted external maintenance can supply one exact `MutationFile` already known by full SHA,
 canonical relative path, regular-file kind, mode and size. Size must exceed the default and
@@ -60,3 +64,24 @@ Incremental tests: `test_exact_oversized_inventory.py`, existing mutation invent
 and `test_cache_quarantine_maintenance.py` with real rename/hash and failed completion replay.
 Rollback restores the code capability during an idle reload. Returning a preserved archive
 requires another explicit idle maintenance verification; never delete or overwrite either side.
+
+### Exact retained source and Git ignore rules
+
+`GitWorktreeManager.capture_mutations` accepts `retained_source_paths=()` independently of initial
+legacy-only `include_ignored` discovery. Capture verification derives that exact scope from its
+immutable mutation list. Both modes retain regular-file/body bounds and frozen policy checks;
+execution caches remain excluded. Downstream inventory, preview trees, accepted progress,
+interruption receipts and candidate commits must agree on every present retained source path.
+`StoredCoderExecutionInputResolver.retained_source_paths` derives this set from validated rescue
+lineage; `GitCandidateCommitSkill` force-adds only its actual ignored untracked intersection with
+literal pathspecs. See [legacy execution rescue](legacy-execution-rescue.md) for signatures,
+validation matrix and end-to-end assertions. A legal retained file omitted from a new capture is a
+platform capture failure, not authorization to classify it as cache or silently drop its bytes.
+
+Automatic `GitWorktreeManager.remove` checks ignored untracked files before writing a removal
+marker. Any noncache file raises `DirtyWorktree` and preserves the checkout; Git's ordinary clean
+status cannot prove an ignored-only draft is saved. Explicit execution caches remain removable;
+explicit archive-and-release uses its own existing contract. `verify_base_paths(worktree,
+permissions, paths, denied_paths=(), base_revision=None)` permits an inherited tracked edit to
+vanish from a final mutation capture only after current no-follow text bytes and mode equal its
+immutable regular base blob. A retained addition has no such base and cannot use this exception.

@@ -12,6 +12,8 @@ from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.artifact import CommitSha
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
+from ai_software_engineer.git.mutation import is_execution_cache_path
+from ai_software_engineer.git.mutation_capture import MutationTextBody, read_mutation_body
 from ai_software_engineer.git.policy import WorkspacePolicy, WorkspacePolicyError
 
 
@@ -73,11 +75,25 @@ class GitCandidateCommitSkill:
         workspace_root: str | Path,
         *,
         environment: Mapping[str, str] | None = None,
+        retained_source_paths: tuple[str, ...] = (),
     ) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
             raise CandidateCommitError("candidate workspace must be an existing real directory")
         self._root = root
+        if tuple(sorted(set(retained_source_paths))) != retained_source_paths or any(
+            not path
+            or path.startswith("/")
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            or "\\" in path
+            or any(character in path for character in "*?[]")
+            or any(ord(character) < 32 for character in path)
+            for path in retained_source_paths
+        ):
+            raise CandidateCommitRejected(
+                "retained source paths must be exact sorted relative paths"
+            )
+        self._retained_source_paths = frozenset(retained_source_paths)
         source = environment if environment is not None else os.environ
         self._environment = {
             "PATH": source.get("PATH", os.defpath),
@@ -105,18 +121,43 @@ class GitCandidateCommitSkill:
         except WorkspacePolicyError as error:
             raise CandidateCommitRejected(str(error)) from error
 
-        self._git(
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-            "add",
-            "--all",
-            "--",
-            *observed,
-        )
+        retained_ignored = self._retained_ignored_paths()
+        retained_bodies = {path: self._retained_body(path) for path in retained_ignored}
+
+        ordinary = tuple(path for path in observed if path not in retained_bodies)
+        if ordinary:
+            self._git(
+                "--literal-pathspecs",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "core.fsmonitor=false",
+                "add",
+                "--all",
+                "--",
+                *ordinary,
+            )
+        if retained_ignored:
+            self._git(
+                "--literal-pathspecs",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "core.fsmonitor=false",
+                "add",
+                "--force",
+                "--",
+                *retained_ignored,
+            )
         if self.changed_paths() != observed:
             raise CandidateCommitRejected("candidate worktree changed during finalization")
+        for path, before in retained_bodies.items():
+            try:
+                policy.authorize_write(path)
+            except WorkspacePolicyError as error:
+                raise CandidateCommitRejected(str(error)) from error
+            if self._retained_body(path) != before:
+                raise CandidateCommitRejected("retained source changed during finalization")
         self._git(
             "-c",
             "core.hooksPath=/dev/null",
@@ -162,7 +203,7 @@ class GitCandidateCommitSkill:
         )
 
     def changed_paths(self) -> tuple[str, ...]:
-        """Return tracked and untracked nonignored paths relative to the worktree."""
+        """Observe ordinary changes plus exact trusted retained ignored source files."""
         tracked = self._git_nul(
             "diff",
             "--no-ext-diff",
@@ -174,7 +215,30 @@ class GitCandidateCommitSkill:
             "--",
         )
         untracked = self._git_nul("ls-files", "--others", "--exclude-standard", "-z")
-        return tuple(sorted(set((*tracked, *untracked))))
+        retained = self._retained_ignored_paths()
+        for path in retained:
+            self._retained_body(path)
+        return tuple(sorted(set((*tracked, *untracked, *retained))))
+
+    def _retained_ignored_paths(self) -> tuple[str, ...]:
+        if not self._retained_source_paths:
+            return ()
+        ignored = self._git_nul("ls-files", "--others", "--ignored", "--exclude-standard", "-z")
+        return tuple(
+            sorted(
+                path
+                for path in ignored
+                if path in self._retained_source_paths and not is_execution_cache_path(path)
+            )
+        )
+
+    def _retained_body(self, path: str) -> MutationTextBody:
+        try:
+            return read_mutation_body(self._root, path)
+        except (OSError, UnicodeError, ValueError) as error:
+            raise CandidateCommitRejected(
+                "retained source must be safe bounded regular text"
+            ) from error
 
     def _git(self, *arguments: str) -> str:
         try:

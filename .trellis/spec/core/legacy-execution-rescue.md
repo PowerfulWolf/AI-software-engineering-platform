@@ -133,6 +133,7 @@ a real claim and the original permissions; independent QA/Review and same-candid
 | Rescue authorization without exact same-device attestation | Reject before queue/source effects |
 | Platform policy admission or changed source/input mode | Reject; explicit engineering decision required |
 | Dirty/protected/ignored/staged drift or incomplete body | Preserve full现场; no reset/clear |
+| Policy-authorized ignored regular source file | Include it in the immutable mutation capture; execution caches remain outside the capture |
 | Valid complete snapshot + OS observation + exact decision | Append binding, reserve next work, same Task |
 | Crash/repeated approval | Exact record replay, no duplicate budget or WorkItem |
 
@@ -448,3 +449,61 @@ native adapter 消费同一消息，不另建常量或更改 wire/Schema。
 存量数据处置：只影响之后构造的 prompt，不迁移、改写或补造旧 Context/Task/Operation/
 审批/执行事实。既有受拒源码仍需精确授权并带人工审计的维护，重新完整核验后从原公开恢复
 入口继续；此 guidance 不授权修改现有工作区或自动继续。回滚本次 prompt helper 与文档即可。
+
+## Retained ignored source across delivery (2026-10-15)
+
+### Scope and signatures
+
+Repository ignore patterns may accidentally hide lawful source (`artifacts/` also matches
+`src/.../artifacts/`). The platform repository now anchors generated root output at `/artifacts/`;
+frozen old checkouts retain their original bytes. Never edit their ignore rules or index as a
+recovery shortcut.
+
+- `GitWorktreeManager.capture_mutations(..., include_ignored=False,
+  retained_source_paths: tuple[str, ...] = ())`: only initial legacy discovery uses
+  `include_ignored=True`, and only for frozen-policy-authorized noncache regular text.
+- `verify_mutations(capture, permissions, denied_paths=...)` reopens exactly
+  `capture.changed_paths`; it does not enable broad ignored discovery.
+- `StoredCoderExecutionInputResolver.retained_source_paths(task, workspace_root, permissions)`
+  validates the complete binding/authority/start/patch chain, exact original checkout and frozen
+  permissions; returns sorted additions from immutable legacy rescue captures. Ordinary permission
+  globs or Agent reports cannot create this set. No persisted field/hash or Schema change.
+- `retained_source_paths_for_request(state, task, request, root)` also binds the latest baseline
+  digest for idle reconciliation, rejected progress capture and stopped budget settlement.
+- `GitExecutionBaselineAdapter._tree_for_worktree(..., retained_source_paths=())` includes the same
+  exact source in prepared trees and later source rebinding. Preparation still changes no source,
+  branch or index.
+- `ConfiguredDeliveryRouteAdapterFactory(candidate_commit_factory=...)` retains this trusted
+  constructor through every `with_*` wrapper; production binds actual Coder claim, task, worktree
+  and frozen permissions before returning the scoped `GitCandidateCommitSkill`. Native and
+  Responses use the same existing candidate Skill seam.
+- `GitCandidateCommitSkill(..., retained_source_paths=())`: actual ignored untracked intersection
+  only; rereads bounded regular nonsensitive text. `finalize` rechecks exact reported inventory
+  and write policy, stages ordinary paths normally, and force-adds only the exact retained ignored
+  subset using literal pathspecs. QA/Review then open the actual resulting candidate tree.
+- `NativeCoderContinuation(..., retained_source_paths=resolver)` and
+  `reconcile_capture(..., retained_source_paths=resolver)` add trusted lineage before capture.
+  Exact accepted progress/prior receipt paths are inherited. A still-present inherited source
+  needs its body in the new capture; deleting a former untracked addition can legitimately leave
+  no final diff. Continuation admission cannot replace or lose the candidate factory's scope.
+
+### Validation matrix and examples
+
+| Input / event | Result |
+| --- | --- |
+| Ignored source exactly authorized by frozen policy, initial rescue | Seal full body and preview tree; no source/index mutation |
+| Retained ignored source unchanged or edited in next interrupted run | Include full new receipt body; verify and resume under a new claim |
+| Progress/implementation omits retained present file | Reject exact `changed_files` equality; no incomplete candidate |
+| Other ignored file or execution cache | No force-add authority; complete noncache inventory gate still refuses unknown input |
+| Retained file changed into link/binary/secret/oversize | Fail closed and preserve现场 |
+| New source baseline after rescue | Carry exact retained scope through preview/replay; no implicit new path grant |
+| Existing older sealed captures without ignored source | Original bytes/digests and default capture behavior remain readable |
+
+Good: seal a legally written hidden source module once, then carry its exact path through all
+subsequent capture/candidate seams and inspect it in fresh QA/Review checkouts. Base: default Git
+capture still follows repository ignore rules. Bad: add `--force` to all files, trust Agent-reported
+paths, exempt hidden source as cache, or seal only a patch whose preview/candidate tree omits it.
+
+Required regressions: real Git preview blob, native and Responses progress-to-candidate chains,
+fresh QA checkout, omitted/out-of-policy/link/secret/binary/cache negatives, repeated continuation
+and idle reconciliation, public original-Task legacy rescue fixture including ignored source.

@@ -2,7 +2,7 @@
 
 import fcntl
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import timedelta
 from pathlib import Path
 
@@ -14,6 +14,7 @@ from ai_software_engineer.git import GitWorkspaceError, WorkspacePolicyError
 from ai_software_engineer.git.mutation import WorkspaceMutationInventory, capture_mutation_inventory
 from ai_software_engineer.orchestration import capture_reconciliation
 from ai_software_engineer.orchestration.capture_reconciliation import reconcile_capture
+from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.orchestration.continuation_models import (
     ContinuationRejected,
     ExecutionCaptureStart,
@@ -23,7 +24,11 @@ from ai_software_engineer.orchestration.continuation_models import (
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 from tests.git.test_worktree import _git
 from tests.orchestration.test_native_continuation import NOW, Fixture, Guard
-from tests.orchestration.test_native_continuation_v2 import V2Fixture
+from tests.orchestration.test_native_continuation_v2 import (
+    V2Fixture,
+    ignored_source,
+    retained_tracked_edit,
+)
 
 
 @pytest.fixture(params=["v1", "v2"])
@@ -43,12 +48,19 @@ def native(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Fixture]:
 
 
 def observations(
-    native: Fixture, *, changed: bool = True, unknown: bool = False, output: bool = False
+    native: Fixture,
+    *,
+    changed: bool = True,
+    unknown: bool = False,
+    output: bool = False,
+    mutation: Callable[[], None] | None = None,
 ) -> tuple[ExecutionCaptureStart, ExecutionCaptureStop]:
     service = native.service()
     assert service.started(native.request, native.worktree.path) is not None
     if changed:
         (native.worktree.path / "src/app.py").write_text("VALUE = 2\n")
+    if mutation is not None:
+        mutation()
     original_stop = native.stopped()
     stopped = NativeProcessStop.create(
         **original_stop.model_dump(exclude={"stopped_at", "stop_sha256"}),
@@ -74,6 +86,7 @@ def reconcile(
     guard: WorkerExecutionGuard,
     *,
     accepted: bool = False,
+    retained_source_paths: Callable[[AgentRequest, Path], tuple[str, ...]] | None = None,
 ) -> ExecutionInterruptionReceipt:
     def validate_inputs(request: AgentRequest) -> None:
         if request != native.request:
@@ -90,6 +103,7 @@ def reconcile(
         task_lock=guard,
         validate_inputs=validate_inputs,
         has_output=lambda request: accepted,
+        retained_source_paths=retained_source_paths,
         clock=lambda: NOW + timedelta(seconds=2),
     )
 
@@ -124,6 +138,105 @@ def test_durable_start_and_real_stop_complete_a_receipt_with_no_active_original_
     assert native.repository.list_events(native.task.id) == before_events
     assert native.store.admissions_for_task(native.task.id) == ()
     assert _git(native.worktree.path, "rev-parse", "HEAD") == native.request.source_revision
+
+
+@pytest.mark.parametrize("prior_admission", [False, True])
+@pytest.mark.parametrize("modified", [False, True])
+def test_reconciliation_captures_exact_retained_ignored_source(
+    native: Fixture, tmp_path: Path, prior_admission: bool, modified: bool
+) -> None:
+    if not isinstance(native, V2Fixture):
+        pytest.skip("ignored retained source is the v2 full mutation capability")
+    source = ignored_source(native)
+    relative = source.relative_to(native.worktree.path).as_posix()
+
+    def retained(request: AgentRequest, root: Path) -> tuple[str, ...]:
+        assert request == native.request and root == native.worktree.path
+        return (relative,)
+
+    if prior_admission:
+        service = native.service(retained_source_paths=retained)
+        native.interrupt(service, text=None)
+        assert native.reserve(service) == 2
+        native.activate(2)
+        assert native.service().prepare(native.request, native.worktree.path) is not None
+
+    def mutate() -> None:
+        if modified:
+            source.write_text("VALUE = 'reconciled'\n")
+
+    start, stop = observations(native, changed=False, mutation=mutate)
+    guard = WorkerExecutionGuard()
+    with guard.task_scope(tmp_path / "idle-locks", native.task.id):
+        receipt = reconcile(
+            native,
+            start,
+            stop,
+            guard,
+            retained_source_paths=None if prior_admission else retained,
+        )
+    assert receipt.mutation_paths == ((relative,) if modified else ())
+    assert isinstance(receipt.capture, CapturedMutations)
+    assert receipt.capture.to_capture().changed_paths == (relative,)
+    assert ("VALUE = 'reconciled'" if modified else "VALUE = 'retained'") in receipt.capture.patch
+    native.git.verify_mutations(receipt.capture.to_capture(), native.request.permissions)
+    assert _git(native.worktree.path, "rev-parse", "HEAD") == native.request.source_revision
+
+
+@pytest.mark.parametrize("authority", ["receipt", "progress", "baseline"])
+@pytest.mark.parametrize("mutation", ["restore_tracked", "remove_added"])
+def test_reconciliation_preserves_reversed_retained_change_and_remaining_ignored_draft(
+    native: Fixture, tmp_path: Path, authority: str, mutation: str
+) -> None:
+    if not isinstance(native, V2Fixture):
+        pytest.skip("ignored retained source is the v2 full mutation capability")
+    source, resolver = retained_tracked_edit(
+        native, authority=authority, added=mutation == "remove_added"
+    )
+
+    def mutate() -> None:
+        if mutation == "restore_tracked":
+            (native.worktree.path / "src/app.py").write_text("VALUE = 1\n")
+        else:
+            (native.worktree.path / "src/added.py").unlink()
+
+    start, stop = observations(native, changed=False, mutation=mutate)
+    guard = WorkerExecutionGuard()
+    with guard.task_scope(tmp_path / "idle-locks", native.task.id):
+        receipt = reconcile(native, start, stop, guard, retained_source_paths=resolver)
+    relative = source.relative_to(native.worktree.path).as_posix()
+    assert isinstance(receipt.capture, CapturedMutations)
+    assert receipt.mutation_paths == (
+        "src/app.py" if mutation == "restore_tracked" else "src/added.py",
+    )
+    assert receipt.capture.to_capture().changed_paths == (
+        (relative,) if mutation == "restore_tracked" else ("src/app.py", relative)
+    )
+    native.git.verify_mutations(receipt.capture.to_capture(), native.request.permissions)
+    assert "VALUE = 'retained'" in receipt.capture.patch
+
+
+def test_reconciliation_accepts_exact_reversal_to_clean_base(
+    native: Fixture, tmp_path: Path
+) -> None:
+    if not isinstance(native, V2Fixture):
+        pytest.skip("multi-round restoration is the v2 mutation capability")
+    service = native.service()
+    native.interrupt(service)
+    assert native.reserve(service) == 2
+    native.activate(2)
+    assert native.service().prepare(native.request, native.worktree.path) is not None
+
+    def mutate() -> None:
+        (native.worktree.path / "src/app.py").write_text("VALUE = 1\n")
+
+    start, stop = observations(native, changed=False, mutation=mutate)
+    guard = WorkerExecutionGuard()
+    with guard.task_scope(tmp_path / "idle-locks", native.task.id):
+        receipt = reconcile(native, start, stop, guard)
+    assert receipt.mutation_paths == ("src/app.py",)
+    assert receipt.capture.to_capture().changed_paths == ()
+    assert not native.git.inspect(native.worktree).dirty
 
 
 @pytest.mark.parametrize(

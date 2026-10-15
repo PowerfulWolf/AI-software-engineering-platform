@@ -250,10 +250,17 @@ class GitExecutionBaselineAdapter:
         permissions: AgentPermissions,
         denied_paths: tuple[str, ...],
         old: WorktreeRef,
+        *,
+        retained_source_paths: tuple[str, ...] = (),
     ) -> str:
         manager = self.manager
         reference = replace(old, head_revision=source)
-        capture = manager.capture_mutations(reference, permissions, denied_paths=denied_paths)
+        capture = manager.capture_mutations(
+            reference,
+            permissions,
+            denied_paths=denied_paths,
+            retained_source_paths=retained_source_paths,
+        )
         if capture.index_diff_sha256 != _EMPTY:
             raise BaselineGitRejected("unknown staged baseline state must be preserved")
         with tempfile.TemporaryDirectory(prefix="ase-baseline-observe-") as temporary:
@@ -310,7 +317,12 @@ class GitExecutionBaselineAdapter:
             )
         index_tree = manager._run_git(("write-tree",), cwd=root)
         if head == old.head_revision:
-            original = manager.capture_mutations(old, permissions, denied_paths=denied_paths)
+            original = manager.capture_mutations(
+                old,
+                permissions,
+                denied_paths=denied_paths,
+                retained_source_paths=dirty.changed_paths,
+            )
             if original == dirty:
                 if capture_mutation_inventory(root) != original_inventory:
                     raise BaselineGitRejected(
@@ -327,7 +339,12 @@ class GitExecutionBaselineAdapter:
                 raise BaselineGitRejected(
                     "baseline operation found an unknown partially changed draft"
                 )
-            clean = manager.capture_mutations(old, permissions, denied_paths=denied_paths)
+            clean = manager.capture_mutations(
+                old,
+                permissions,
+                denied_paths=denied_paths,
+                retained_source_paths=dirty.changed_paths,
+            )
             if clean.patch or clean.index_diff_sha256 != _EMPTY:
                 raise BaselineGitRejected(
                     "sealed draft reversal did not leave exact original clean source"
@@ -366,14 +383,28 @@ class GitExecutionBaselineAdapter:
                 "baseline operation found unrelated ignored/protected inventory writes"
             )
         current = replace(old, head_revision=source)
-        observed_tree = self._tree_for_worktree(source, root, permissions, denied_paths, old)
+        observed_tree = self._tree_for_worktree(
+            source,
+            root,
+            permissions,
+            denied_paths,
+            old,
+            retained_source_paths=dirty.changed_paths,
+        )
         if observed_tree == new_tree and preview.dirty_patch:
             manager._run_git_bytes(
                 ("apply", "--unidiff-zero", "--whitespace=nowarn", "-"),
                 cwd=root,
                 input=preview.dirty_patch.encode("utf-8"),
             )
-            observed_tree = self._tree_for_worktree(source, root, permissions, denied_paths, old)
+            observed_tree = self._tree_for_worktree(
+                source,
+                root,
+                permissions,
+                denied_paths,
+                old,
+                retained_source_paths=dirty.changed_paths,
+            )
         if observed_tree != preview.dirty_tree:
             raise BaselineGitRejected("baseline output does not match the exact preflighted draft")
         manager.recover(

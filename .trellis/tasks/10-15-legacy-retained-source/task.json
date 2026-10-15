@@ -1,0 +1,8 @@
+{
+  "id": "legacy-retained-source-20261015",
+  "title": "Preserve authorized ignored source across legacy rescue delivery",
+  "status": "verified",
+  "baseline": "caa8227",
+  "owner": "codex",
+  "verification": "verification.md"
+}

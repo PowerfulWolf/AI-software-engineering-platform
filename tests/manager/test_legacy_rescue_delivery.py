@@ -46,6 +46,7 @@ from ai_software_engineer.domain import (
     AgentDefinition,
     AgentRole,
     ArtifactKind,
+    ChangeType,
     CoderProgressArtifact,
     Evidence,
     EvidenceType,
@@ -126,14 +127,21 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _progress, _R
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    ("sealed_final", "crash_before_consumption", "local_stop", "first_checkpoint"),
+    (
+        "sealed_final",
+        "crash_before_consumption",
+        "local_stop",
+        "first_checkpoint",
+        "ignored_source",
+    ),
     [
-        (False, False, False, False),
-        (False, True, False, False),
-        (True, False, False, False),
-        (False, False, True, False),
-        (False, True, True, False),
-        (False, False, True, True),
+        (False, False, False, False, False),
+        (False, True, False, False, False),
+        (True, False, False, False, False),
+        (False, False, True, False, False),
+        (False, True, True, False, False),
+        (False, False, True, True, False),
+        (False, False, True, False, True),
     ],
 )
 def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
@@ -144,13 +152,16 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     crash_before_consumption: bool,
     local_stop: bool,
     first_checkpoint: bool,
+    ignored_source: bool,
 ) -> None:
     pause_rescue = local_stop and not crash_before_consumption and not sealed_final
     repository = tmp_path / "target"
     repository.mkdir()
     (repository / "hello.txt").write_text("hello\n")
+    if ignored_source:
+        (repository / ".gitignore").write_text("artifacts/\n")
     _git("init", "-b", "main", cwd=repository)
-    _git("add", "hello.txt", cwd=repository)
+    _git("add", ".", cwd=repository)
     _git("commit", "-m", "initial", cwd=repository)
     source = _git_output("rev-parse", "HEAD", cwd=repository)
     execution_base = source
@@ -159,6 +170,8 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     expected_binding: str | None = None
     expected_epoch: NativeRuleEpoch | None = None
     first_progress_id: str | None = None
+    retained_path = "src/artifacts/accepted.py"
+    retained_body = "VALUE = 42\n"
     original_complete = _ScriptedStructuredClient.complete
 
     def source_inspection(
@@ -181,6 +194,10 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         if output_schema.get("title") != "TechnicalDesignDraft":
             return result
         payload = dict(result.payload)
+        if ignored_source:
+            components = payload["components"]
+            assert isinstance(components, list)
+            components[0]["affected_paths"].append(retained_path)
         mappings = payload["acceptance_mappings"]
         assert isinstance(mappings, list)
         payload["acceptance_mappings"] = [
@@ -292,8 +309,32 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
                     policy.authorize_write(".trellis/spec/core/forbidden.md")
                 (cwd / "hello.txt").write_text(DESIRED)
                 artifact = _coder_draft(adapter, request)
+                if ignored_source:
+                    assert isinstance(artifact, ImplementationReportArtifact)
+                    assert (cwd / retained_path).read_text() == retained_body
+                    change = artifact.content.changed_files[0].model_copy(
+                        update={
+                            "path": retained_path,
+                            "change": ChangeType.ADDED,
+                            "lines_added": 1,
+                            "lines_deleted": 0,
+                        }
+                    )
+                    artifact = artifact.model_copy(
+                        update={
+                            "content": artifact.content.model_copy(
+                                update={"changed_files": (*artifact.content.changed_files, change)}
+                            )
+                        }
+                    )
             else:
                 assert request.role in (AgentRole.QA, AgentRole.REVIEWER)
+                if ignored_source:
+                    assert (cwd / retained_path).read_text() == retained_body
+                    assert (
+                        _git_output("show", f"{request.source_revision}:{retained_path}", cwd=cwd)
+                        == retained_body.strip()
+                    )
                 with pytest.raises(WorkspacePolicyError):
                     policy.authorize_write("hello.txt")
                 definition = AgentDefinition(
@@ -391,6 +432,11 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
                     stderr=subprocess.DEVNULL,
                 ) as process:
                     assert process.wait(timeout=5) == 0
+                if ignored_source:
+                    retained = cwd / retained_path
+                    retained.parent.mkdir(parents=True)
+                    retained.write_text(retained_body)
+                    assert not _git_output("ls-files", "--others", "--exclude-standard", cwd=cwd)
                 raise ContinuationExecutionUncertain("fixture: old local invocation has no result")
             self._runner = Runner(self, request)
             result = super().run(request)
@@ -696,7 +742,13 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert plan.facts.legacy_containment.method == (
         "operator_confirmed_local_stop" if local_stop else "os_reboot"
     )
-    assert plan.complete_capture.patch.endswith("+unknown retained draft\n")
+    assert "+unknown retained draft\n" in plan.complete_capture.patch
+    if ignored_source:
+        assert retained_path in plan.dirty_capture.to_capture().changed_paths
+        assert (
+            _git_output("show", f"{plan.prepared_dirty_tree}:{retained_path}", cwd=repository)
+            == retained_body.strip()
+        )
     assert {
         path.relative_to(unknown.workspace): path.read_bytes()
         for path in unknown.workspace.rglob("*")
@@ -1096,9 +1148,9 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert len(calls) == calls_before_replay
     assert len(consumptions(host.work_queue, frozen.id)) == len(expected_history)
     assert _git_output("rev-parse", "HEAD", cwd=repository) == execution_base
-    assert (
-        _git_output("diff", "--name-only", execution_base, candidate, cwd=repository) == "hello.txt"
-    )
+    assert set(
+        _git_output("diff", "--name-only", execution_base, candidate, cwd=repository).splitlines()
+    ) == ({"hello.txt", retained_path} if ignored_source else {"hello.txt"})
     assert (repository / "hello.txt").read_text() == "hello\n"
     assert all(
         item.status is WorkItemStatus.CLOSED for item in host.work_queue.items_for_task(frozen.id)

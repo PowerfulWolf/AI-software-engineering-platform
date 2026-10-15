@@ -87,6 +87,9 @@ class BaselineInitialWorkspaceAdmission:
             worktree,
             request.permissions,
             denied_paths=plan.facts.denied_paths,
+            retained_source_paths=self.inputs.retained_source_paths(
+                task, workspace_root=workspace_root, permissions=request.permissions
+            ),
         )
         if source.active_progress is not None:
             checkpoint = source.active_progress

@@ -93,6 +93,7 @@ def reconcile_capture(
     task_lock: ExecutionGuard,
     validate_inputs: Callable[[AgentRequest], None],
     has_output: Callable[[AgentRequest], bool],
+    retained_source_paths: Callable[[AgentRequest, Path], tuple[str, ...]] | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> ExecutionInterruptionReceipt:
     """Only a known stopped, output-absent failure can produce a complete receipt.
@@ -135,15 +136,27 @@ def reconcile_capture(
     noncache = tuple(path for path in mutations if not is_execution_cache_path(path))
     admission = store.admission_for_run(request.run_id) if policy.schema_version == "v2" else None
     if policy.schema_version == "v2":
-        capture = git.capture_mutations(worktree, request.permissions, denied_paths=denied)
-        persisted: CapturedMutations | CapturedChanges = CapturedMutations.from_capture(capture)
-        inherited = set(request.continuation_changed_paths)
-        if admission is not None:
-            inherited.update(
-                store.get_receipt(admission.interrupted_run_id).capture.to_capture().changed_paths
+        retained = NativeCoderContinuation._retained_capture_paths(
+            request,
+            worktree.path,
+            store=store,
+            admission=admission,
+            resolver=retained_source_paths,
+        )
+        capture = (
+            git.capture_mutations(
+                worktree,
+                request.permissions,
+                denied_paths=denied,
+                retained_source_paths=retained,
             )
-        if not set(noncache).issubset(set(capture.changed_paths) | inherited):
-            raise ContinuationRejected("完整现场未覆盖全部非缓存变更")
+            if retained
+            else git.capture_mutations(worktree, request.permissions, denied_paths=denied)
+        )
+        persisted: CapturedMutations | CapturedChanges = CapturedMutations.from_capture(capture)
+        NativeCoderContinuation._verify_capture_coverage(
+            git, capture, request.permissions, noncache, retained, after, denied
+        )
     else:
         legacy_capture = git.capture_changes(worktree, request.permissions, denied_paths=denied)
         persisted = CapturedChanges.from_capture(legacy_capture)

@@ -41,6 +41,7 @@ from ai_software_engineer.domain.native_verification import (
     role_verification_digest,
 )
 from ai_software_engineer.git import DirtyWorktree, GitWorktreeManager
+from ai_software_engineer.git.candidate_commit import CandidateCommitSkill
 from ai_software_engineer.manager.dispatch import (
     DeliveryAllocation,
     VerificationReservation,
@@ -85,6 +86,10 @@ class ConfiguredDeliveryRouteAdapterFactory:
         interruption_control: CoderInterruptionControl | None = None,
         registered_verifier: RegisteredNativePythonVerifier | None = None,
         baseline_verifier: ExecutionBaselineContextVerifier | None = None,
+        candidate_commit_factory: Callable[
+            [RoleWorktreeBinding, AgentDefinition], CandidateCommitSkill
+        ]
+        | None = None,
     ) -> None:
         self._initial_admission = initial_workspace_admission
         self._execution_guard = execution_guard
@@ -92,6 +97,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
         self._interruption_control = interruption_control
         self._registered_verifier = registered_verifier
         self._baseline_verifier = baseline_verifier
+        self._candidate_commit_factory = candidate_commit_factory
 
     def with_execution_guard(self, guard: ExecutionGuard) -> ConfiguredDeliveryRouteAdapterFactory:
         """Bind Worker ownership while preserving explicitly approved recovery admission."""
@@ -102,6 +108,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             interruption_control=self._interruption_control,
             registered_verifier=self._registered_verifier,
             baseline_verifier=self._baseline_verifier,
+            candidate_commit_factory=self._candidate_commit_factory,
         )
 
     def with_initial_workspace_admission(
@@ -116,6 +123,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             interruption_control=self._interruption_control,
             registered_verifier=self._registered_verifier,
             baseline_verifier=self._baseline_verifier,
+            candidate_commit_factory=self._candidate_commit_factory,
         )
 
     def wrap_initial_workspace_admission(
@@ -135,6 +143,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             interruption_control=self._interruption_control,
             registered_verifier=self._registered_verifier,
             baseline_verifier=self._baseline_verifier,
+            candidate_commit_factory=self._candidate_commit_factory,
         )
 
     def with_interruption_control(
@@ -147,6 +156,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             interruption_control=control,
             registered_verifier=self._registered_verifier,
             baseline_verifier=self._baseline_verifier,
+            candidate_commit_factory=self._candidate_commit_factory,
         )
 
     def with_registered_verifier(
@@ -160,6 +170,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             interruption_control=self._interruption_control,
             registered_verifier=registry,
             baseline_verifier=self._baseline_verifier,
+            candidate_commit_factory=self._candidate_commit_factory,
         )
 
     def with_baseline_verifier(
@@ -173,6 +184,22 @@ class ConfiguredDeliveryRouteAdapterFactory:
             interruption_control=self._interruption_control,
             registered_verifier=self._registered_verifier,
             baseline_verifier=verifier,
+            candidate_commit_factory=self._candidate_commit_factory,
+        )
+
+    def with_candidate_commit_factory(
+        self,
+        factory: Callable[[RoleWorktreeBinding, AgentDefinition], CandidateCommitSkill],
+    ) -> ConfiguredDeliveryRouteAdapterFactory:
+        """Bind trusted retained-source facts without adding model-supplied authority."""
+        return ConfiguredDeliveryRouteAdapterFactory(
+            initial_workspace_admission=self._initial_admission,
+            execution_guard=self._execution_guard,
+            verification_evidence=self._verification_evidence,
+            interruption_control=self._interruption_control,
+            registered_verifier=self._registered_verifier,
+            baseline_verifier=self._baseline_verifier,
+            candidate_commit_factory=factory,
         )
 
     def prepare_verifier(
@@ -221,6 +248,11 @@ class ConfiguredDeliveryRouteAdapterFactory:
         from ai_software_engineer.agents.openai_compatible import PromptBuilder
 
         prompt_builder: PromptBuilder = ContextPromptBuilder(context_resolver)
+        candidate_commit = (
+            self._candidate_commit_factory(binding, definition)
+            if self._candidate_commit_factory is not None and definition.role is AgentRole.CODER
+            else None
+        )
         verification_evidence = self._verification_evidence
         if (
             verification_evidence is None
@@ -264,6 +296,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 agent_id=definition.id,
                 agent_version=definition.version,
                 prompt_builder=prompt_builder,
+                candidate_commit_skill=candidate_commit,
                 candidate_source=BoundCandidateSource(
                     context_resolver, baseline_verifier=self._baseline_verifier
                 ),
@@ -296,6 +329,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             reasoning_effort=route.reasoning_effort,
             agent=definition,
             prompt_builder=prompt_builder,
+            candidate_commit_skill=candidate_commit,
             input_budget=BoundModelInputBudget(context_resolver),
             initial_workspace_admission=(
                 self._initial_admission if definition.role is AgentRole.CODER else None

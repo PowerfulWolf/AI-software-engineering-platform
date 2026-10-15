@@ -27,6 +27,7 @@ from ai_software_engineer.git.capture import (
     read_capture_file,
     without_hunk_labels,
 )
+from ai_software_engineer.git.mutation import is_execution_cache_path
 from ai_software_engineer.git.mutation_capture import (
     MAX_MUTATION_BODY_BYTES,
     FileMutationCapture,
@@ -310,6 +311,17 @@ class GitWorktreeManager:
         snapshot = self.inspect(worktree)
         if snapshot.dirty:
             raise DirtyWorktree(snapshot.changed_paths)
+        ignored = _decode_nul_paths(
+            self._run_git_bytes(
+                ("ls-files", "--others", "--ignored", "--exclude-standard", "-z"),
+                cwd=worktree.path,
+            )
+        )
+        unsaved = tuple(sorted(path for path in ignored if not is_execution_cache_path(path)))
+        if unsaved:
+            # Git treats ignored source as clean and would delete it. Only the
+            # explicit archive/release path may discard noncache local files.
+            raise DirtyWorktree(unsaved)
         if (
             worktree.role is AgentRole.CODER
             and self._branch_names.get(worktree.task_id) is not None
@@ -437,6 +449,8 @@ class GitWorktreeManager:
         *,
         denied_paths: tuple[str, ...] = (),
         base_revision: str | None = None,
+        include_ignored: bool = False,
+        retained_source_paths: tuple[str, ...] = (),
     ) -> WorktreeMutationCapture:
         """Observe regular text add/edit/delete/mode changes with exact before/after bodies.
 
@@ -446,10 +460,20 @@ class GitWorktreeManager:
         if worktree.role is not AgentRole.CODER or worktree.detached or worktree.attempt != 1:
             raise WorktreeCaptureRejected("mutation capture requires the original Coder checkout")
         first = self._capture_mutations_once(
-            worktree, permissions, denied_paths, base_revision=base_revision
+            worktree,
+            permissions,
+            denied_paths,
+            base_revision=base_revision,
+            include_ignored=include_ignored,
+            retained_source_paths=retained_source_paths,
         )
         second = self._capture_mutations_once(
-            worktree, permissions, denied_paths, base_revision=base_revision
+            worktree,
+            permissions,
+            denied_paths,
+            base_revision=base_revision,
+            include_ignored=include_ignored,
+            retained_source_paths=retained_source_paths,
         )
         if first != second:
             raise WorktreeCaptureRejected("worktree changed during mutation capture")
@@ -467,9 +491,72 @@ class GitWorktreeManager:
             permissions,
             denied_paths=denied_paths,
             base_revision=capture.base_revision,
+            retained_source_paths=capture.changed_paths,
         )
         if observed != capture:
             raise WorktreeCaptureRejected("preserved mutation bodies no longer match capture")
+
+    def verify_base_paths(
+        self,
+        worktree: WorktreeRef,
+        permissions: AgentPermissions,
+        paths: tuple[str, ...],
+        *,
+        denied_paths: tuple[str, ...] = (),
+        base_revision: str | None = None,
+    ) -> None:
+        """Verify inherited edits restored to exact regular base bytes and mode.
+
+        A restored tracked edit vanishes from the final diff. A still-present
+        retained addition cannot use this exception because it has no base blob.
+        """
+        self._validate_owned_worktree(worktree)
+        self.recover(
+            WorktreeSpec(
+                task_id=worktree.task_id,
+                role=worktree.role,
+                attempt=1,
+                source_revision=worktree.head_revision,
+            )
+        )
+        revision = base_revision or worktree.head_revision
+        if self._resolve_revision(revision) != revision:
+            raise WorktreeCaptureRejected("restored mutation base must be immutable")
+        self._run_git(
+            ("merge-base", "--is-ancestor", revision, worktree.head_revision), cwd=worktree.path
+        )
+        policy = WorkspacePolicy(worktree.path, permissions, denied_paths=denied_paths)
+        for path in paths:
+            policy.authorize_read(path)
+            policy.authorize_write(path)
+            try:
+                records = self._run_git_bytes(
+                    ("--literal-pathspecs", "ls-tree", "-z", revision, "--", path),
+                    cwd=worktree.path,
+                ).split(b"\0")
+                if len(records) != 2 or records[-1] != b"":
+                    raise ValueError("restored path has no exact tracked base")
+                metadata, raw_path = records[0].split(b"\t", 1)
+                mode, kind, oid = metadata.decode("ascii").split(" ")
+                if (
+                    raw_path.decode("utf-8") != path
+                    or kind != "blob"
+                    or mode not in {"100644", "100755"}
+                ):
+                    raise ValueError("restored base must be an exact regular file")
+                size = int(self._run_git(("cat-file", "-s", oid), cwd=worktree.path))
+                if not 0 <= size <= MAX_CAPTURE_BYTES:
+                    raise ValueError("restored base exceeds byte bound")
+                payload = self._run_git_bytes(("cat-file", "blob", oid), cwd=worktree.path)
+                before = MutationTextBody(
+                    payload.decode("utf-8"), 0o755 if mode == "100755" else 0o644, source_path=path
+                )
+                if len(payload) != size or read_mutation_body(worktree.path, path) != before:
+                    raise ValueError("restored base bytes or mode differ")
+            except (OSError, UnicodeError, ValueError) as error:
+                raise WorktreeCaptureRejected(
+                    "inherited edit is not restored to exact base"
+                ) from error
 
     def capture_legacy_changes(
         self,
@@ -808,6 +895,8 @@ class GitWorktreeManager:
         denied_paths: tuple[str, ...],
         *,
         base_revision: str | None = None,
+        include_ignored: bool = False,
+        retained_source_paths: tuple[str, ...] = (),
     ) -> WorktreeMutationCapture:
         self._validate_owned_worktree(worktree)
         self.recover(
@@ -828,9 +917,33 @@ class GitWorktreeManager:
                 ("merge-base", "--is-ancestor", diff_base, worktree.head_revision), cwd=root
             )
         policy = WorkspacePolicy(root, permissions, denied_paths=denied_paths)
-        untracked = _decode_nul_paths(
-            self._run_git_bytes(("ls-files", "--others", "--exclude-standard", "-z"), cwd=root)
+        untracked = set(
+            _decode_nul_paths(
+                self._run_git_bytes(("ls-files", "--others", "--exclude-standard", "-z"), cwd=root)
+            )
         )
+        if include_ignored or retained_source_paths:
+            ignored = _decode_nul_paths(
+                self._run_git_bytes(
+                    ("ls-files", "--others", "--ignored", "--exclude-standard", "-z"),
+                    cwd=root,
+                )
+            )
+            # Cache files remain outside the mutation capture by contract. For
+            # other ignored paths, include only files that the frozen write
+            # policy explicitly permits; the complete inventory gate will then
+            # reject any remaining ignored input without deleting it.
+            for path in ignored:
+                if is_execution_cache_path(path) or (
+                    not include_ignored and path not in retained_source_paths
+                ):
+                    continue
+                try:
+                    policy.authorize_read(path)
+                    policy.authorize_write(path)
+                except PathPolicyViolation:
+                    continue
+                untracked.add(path)
         flags = self._run_git_bytes(("ls-files", "-v", "-z"), cwd=root)
         if any(entry and entry[:1] != b"H" for entry in flags.split(b"\0")):
             raise WorktreeCaptureRejected("nonstandard index flags are not supported")
@@ -847,7 +960,8 @@ class GitWorktreeManager:
             (*arguments, "--raw", "--no-abbrev", "-z", diff_base, "--"), cwd=root
         )
         entries = raw.split(b"\0")[:-1]
-        if len(entries) % 2 or len(entries) // 2 + len(untracked) > MAX_CAPTURE_FILES:
+        untracked_paths = tuple(sorted(untracked))
+        if len(entries) % 2 or len(entries) // 2 + len(untracked_paths) > MAX_CAPTURE_FILES:
             raise WorktreeCaptureRejected("unsupported mutation file inventory")
         mutations: dict[str, FileMutationCapture] = {}
         total_bytes = 0
@@ -899,7 +1013,7 @@ class GitWorktreeManager:
                 raise WorktreeCaptureRejected(
                     "cannot capture bounded regular text mutation bodies"
                 ) from error
-        for path in sorted(untracked):
+        for path in untracked_paths:
             policy.authorize_read(path)
             policy.authorize_write(path)
             try:
@@ -934,7 +1048,7 @@ class GitWorktreeManager:
         patch = without_hunk_labels(
             self._run_git_bytes((*patch_arguments, diff_base, "--"), cwd=root)
         )
-        for path in sorted(untracked):
+        for path in untracked_paths:
             patch += without_hunk_labels(
                 self._run_git_diff_bytes(
                     (*patch_arguments, "--no-index", "--", "/dev/null", path), cwd=root

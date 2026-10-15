@@ -276,10 +276,17 @@ class StoppedBudgetSettlementService:
         inventory = capture_mutation_inventory(worktree.path)
         if inventory != capture.inventory_before:
             raise ContinuationRejected("原失败调用之后完整工作现场已变化, 暂不能额度收尾")
+        from ai_software_engineer.manager.execution_baseline import (
+            retained_source_paths_for_request,
+        )
+
         retained = self.git.capture_mutations(
             worktree,
             start.request.permissions,
             denied_paths=task.constraints.denied_paths if task.constraints else (),
+            retained_source_paths=retained_source_paths_for_request(
+                self.collector.state, task, start.request, worktree.path
+            ),
         )
         from ai_software_engineer.manager.completed_output_checkpoint import (
             require_stopped_execution_workspace,

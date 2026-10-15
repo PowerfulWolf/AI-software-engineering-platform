@@ -1191,6 +1191,7 @@ class ProductionProjectDeliveryBackend:
         )
         interruption_control = None
         active_runtime: RuntimeSession | None = None
+        from ai_software_engineer.agents.models import AgentRequest
         from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
         from ai_software_engineer.manager.execution_baseline import (
             StoredCoderExecutionInputResolver,
@@ -1207,11 +1208,58 @@ class ProductionProjectDeliveryBackend:
                 raise ValueError("delivery runtime is not bound")
             return active_runtime.task_repository.get(dispatch.task_id)
 
+        def retained_source_paths(request: AgentRequest, root: Path) -> tuple[str, ...]:
+            worker_guard.check()
+            task = current_task()
+            source = baseline_inputs.current(task, implementation=None, progress=None)
+            if (
+                request.execution_baseline_sha256
+                != (source.baseline.binding_sha256 if source.baseline is not None else None)
+                or request.task_id != task.id
+                or request.role is not AgentRole.CODER
+            ):
+                raise ValueError("保留源码没有当前需求与执行基线的精确绑定")
+            return baseline_inputs.retained_source_paths(
+                task, workspace_root=root, permissions=request.permissions
+            )
+
         native_registry = None
         if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory):
             selected_adapters = selected_adapters.with_execution_guard(
                 worker_guard
             ).with_baseline_verifier(baseline_inputs)
+            from ai_software_engineer.git.candidate_commit import (
+                CandidateCommitSkill,
+                GitCandidateCommitSkill,
+            )
+            from ai_software_engineer.role_workspace import RoleWorktreeBinding
+
+            def candidate_commit(
+                role_binding: RoleWorktreeBinding, definition: AgentDefinition
+            ) -> CandidateCommitSkill:
+                worker_guard.check()
+                claim = worker_guard.lease.claim if worker_guard.lease is not None else None
+                task = current_task()
+                if (
+                    claim is None
+                    or claim.work_item.task_id != task.id
+                    or claim.work_item.role is not AgentRole.CODER
+                    or definition.role is not AgentRole.CODER
+                    or role_binding.worktree.task_id != task.id
+                ):
+                    raise ValueError("候选源码没有当前真实 Coder claim")
+                paths = baseline_inputs.retained_source_paths(
+                    task,
+                    workspace_root=role_binding.worktree.path,
+                    permissions=definition.permissions,
+                )
+                return GitCandidateCommitSkill(
+                    role_binding.worktree.path,
+                    environment=self._environment,
+                    retained_source_paths=paths,
+                )
+
+            selected_adapters = selected_adapters.with_candidate_commit_factory(candidate_commit)
             if baseline_inputs.store is not None and baseline_inputs.store.bindings_for_task(
                 dispatch.task_id
             ):
@@ -1260,7 +1308,6 @@ class ProductionProjectDeliveryBackend:
                 )
                 selected_adapters = selected_adapters.with_registered_verifier(native_registry)
             if dispatch.task.interruption_continuation_policy is not None:
-                from ai_software_engineer.agents.models import AgentRequest
                 from ai_software_engineer.git import GitWorktreeManager
                 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
                 from ai_software_engineer.orchestration.continuation_models import ContinuationScope
@@ -1502,6 +1549,7 @@ class ProductionProjectDeliveryBackend:
                     current_source_revision=current_source_revision,
                     validate_active_request=validate_active_request,
                     resolved_interruption_receipts=resolved_receipts,
+                    retained_source_paths=retained_source_paths,
                     clock=lambda: datetime.now(UTC),
                 )
                 selected_adapters = selected_adapters.with_interruption_control(

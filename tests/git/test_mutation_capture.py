@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_software_engineer.domain import AgentPermissions, AgentRole
+from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
 from ai_software_engineer.git import (
     GitWorktreeManager,
     PathPolicyViolation,
@@ -49,6 +49,47 @@ def test_source_reference_is_captured_unchanged_through_wire_and_verify(
     assert CapturedMutations.model_validate(stored.to_wire()).to_capture() == captured
     manager.verify_mutations(captured, permissions)
     assert path.read_text() == code and index.read_bytes() == before_index
+
+
+def test_legacy_capture_includes_policy_authorized_ignored_source_without_changing_default(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "--initial-branch=main")
+    git(repo, "config", "user.name", "Fixture")
+    git(repo, "config", "user.email", "fixture@example.invalid")
+    (repo / "src").mkdir()
+    (repo / "src/app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("artifacts/\n", encoding="utf-8")
+    git(repo, "add", "src/app.py", ".gitignore")
+    git(repo, "commit", "-m", "ignore generated artifacts")
+    manager = GitWorktreeManager(repo, tmp_path / "roles")
+    ref = manager.create(
+        WorktreeSpec(
+            task_id="task_capture_ignored",
+            role=AgentRole.CODER,
+            attempt=1,
+            source_revision=git(repo, "rev-parse", "HEAD"),
+        )
+    )
+    permissions = AgentPermissions(
+        read_paths=("src/**",),
+        write_paths=("src/**",),
+        commands=(),
+        network=NetworkAccess.NONE,
+    )
+    ignored = ref.path / "src" / "artifacts" / "accepted.py"
+    ignored.parent.mkdir()
+    ignored.write_text("VALUE = 2\n", encoding="utf-8")
+
+    ordinary = manager.capture_mutations(ref, permissions)
+    assert "src/artifacts/accepted.py" not in ordinary.changed_paths
+
+    legacy = manager.capture_mutations(ref, permissions, include_ignored=True)
+    assert "src/artifacts/accepted.py" in legacy.changed_paths
+    manager.verify_mutations(legacy, permissions)
+    assert ignored.read_text(encoding="utf-8") == "VALUE = 2\n"
 
 
 @pytest.mark.parametrize(
@@ -265,3 +306,35 @@ def test_mutation_complete_patch_tampering_is_rejected(
     corrupted = replace(capture, patch=capture.patch.replace(b"+VALUE = 2", b"+VALUE = 99"))
     with pytest.raises(WorktreeCaptureRejected):
         manager.verify_mutations(corrupted, permissions)
+
+
+def test_automatic_cleanup_preserves_ignored_only_source(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
+) -> None:
+    from ai_software_engineer.git import DirtyWorktree
+
+    manager, ref, _ = workspace
+    common = Path(git(ref.path, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    (common / "info" / "exclude").write_text("artifacts/\n")
+    source = ref.path / "src/artifacts/accepted.py"
+    source.parent.mkdir()
+    source.write_text("VALUE = 42\n")
+    assert not manager.inspect(ref).dirty
+    with pytest.raises(DirtyWorktree):
+        manager.remove(ref)
+    assert source.read_text() == "VALUE = 42\n"
+    assert git(ref.path, "rev-parse", "HEAD") == ref.head_revision
+
+
+def test_automatic_cleanup_allows_explicit_execution_caches(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
+) -> None:
+    manager, ref, _ = workspace
+    common = Path(git(ref.path, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    (common / "info" / "exclude").write_text("__pycache__/\n.pytest_cache/\n.ruff_cache/\n")
+    for name in ("__pycache__/app.pyc", ".pytest_cache/state", ".ruff_cache/state"):
+        path = ref.path / name
+        path.parent.mkdir()
+        path.write_bytes(b"cache\0")
+    manager.remove(ref)
+    assert not ref.path.exists()

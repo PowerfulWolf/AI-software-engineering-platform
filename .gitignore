@@ -17,4 +17,4 @@ __pycache__/
 !.trellis/workspace/.gitkeep
 !.trellis/workspace/README.md
 worktrees/
-artifacts/
+/artifacts/

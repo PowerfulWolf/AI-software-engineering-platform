@@ -93,6 +93,7 @@ class ContinuationGitWorkspace(Protocol):
         *,
         denied_paths: tuple[str, ...] = (),
         base_revision: str | None = None,
+        retained_source_paths: tuple[str, ...] = (),
     ) -> WorktreeMutationCapture: ...
 
     def verify_mutations(
@@ -101,6 +102,16 @@ class ContinuationGitWorkspace(Protocol):
         permissions: AgentPermissions,
         *,
         denied_paths: tuple[str, ...] = (),
+    ) -> None: ...
+
+    def verify_base_paths(
+        self,
+        worktree: WorktreeRef,
+        permissions: AgentPermissions,
+        paths: tuple[str, ...],
+        *,
+        denied_paths: tuple[str, ...] = (),
+        base_revision: str | None = None,
     ) -> None: ...
 
 
@@ -132,6 +143,7 @@ class NativeCoderContinuation:
         current_source_revision: Callable[[], str] | None = None,
         validate_active_request: Callable[[AgentRequest], None] | None = None,
         resolved_interruption_receipts: Callable[[], tuple[str, ...]] | None = None,
+        retained_source_paths: Callable[[AgentRequest, Path], tuple[str, ...]] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._scope, self._store, self._git, self._guard = scope, store, git_workspace, guard
@@ -143,6 +155,7 @@ class NativeCoderContinuation:
             validate_active_request,
         )
         self._resolved_receipts = resolved_interruption_receipts
+        self._retained_source_paths = retained_source_paths
         self._starts: dict[str, _Started] = {}
         self._prepared: set[str] = set()
 
@@ -388,21 +401,35 @@ class NativeCoderContinuation:
             persisted_capture: CapturedChanges | CapturedMutations
             prior_admission = self._store.admission_for_run(request.run_id) if v2 else None
             if v2:
-                capture = self._git.capture_mutations(
-                    worktree, request.permissions, denied_paths=self._denied(task)
+                retained = self._retained_capture_paths(
+                    request,
+                    root,
+                    store=self._store,
+                    admission=prior_admission,
+                    resolver=self._retained_source_paths,
+                )
+                capture = (
+                    self._git.capture_mutations(
+                        worktree,
+                        request.permissions,
+                        denied_paths=self._denied(task),
+                        retained_source_paths=retained,
+                    )
+                    if retained
+                    else self._git.capture_mutations(
+                        worktree, request.permissions, denied_paths=self._denied(task)
+                    )
                 )
                 persisted_capture = CapturedMutations.from_capture(capture)
-                inherited_paths = set(request.continuation_changed_paths)
-                if prior_admission is not None:
-                    inherited_paths.update(
-                        self._store.get_receipt(prior_admission.interrupted_run_id)
-                        .capture.to_capture()
-                        .changed_paths
-                    )
-                if not set(noncache_paths).issubset(set(capture.changed_paths) | inherited_paths):
-                    return self._preserved(
-                        task, "存在未进入完整草稿的非缓存变更。现场已保留。等待工程核验。"
-                    )
+                self._verify_capture_coverage(
+                    self._git,
+                    capture,
+                    request.permissions,
+                    noncache_paths,
+                    retained,
+                    after,
+                    self._denied(task),
+                )
             else:
                 capture = self._git.capture_changes(
                     worktree, request.permissions, denied_paths=self._denied(task)
@@ -833,6 +860,57 @@ class NativeCoderContinuation:
         if current != receipt.inventory_after:
             raise ContinuationRejected("workspace mutation inventory drifted after interruption")
         self._guard.check()
+
+    @staticmethod
+    def _verify_capture_coverage(
+        git: ContinuationGitWorkspace,
+        capture: WorktreeMutationCapture,
+        permissions: AgentPermissions,
+        mutation_paths: tuple[str, ...],
+        retained_paths: tuple[str, ...],
+        after: WorkspaceMutationInventory,
+        denied_paths: tuple[str, ...],
+    ) -> None:
+        missing = set(mutation_paths) - set(capture.changed_paths)
+        if not missing.issubset(retained_paths):
+            raise ContinuationRejected("完整现场未覆盖全部非缓存变更")
+        # An inherited addition can be removed. A still-present inherited file
+        # may disappear from the final patch only after exact base restoration;
+        # ignored untracked source cannot satisfy this tracked-blob check.
+        restored = tuple(sorted(missing & {item.path for item in after.files}))
+        if restored:
+            git.verify_base_paths(
+                capture.worktree,
+                permissions,
+                restored,
+                denied_paths=denied_paths,
+                base_revision=capture.base_revision,
+            )
+
+    @staticmethod
+    def _retained_capture_paths(
+        request: AgentRequest,
+        root: Path,
+        *,
+        store: FileContinuationStore,
+        admission: ContinuationAdmission | None,
+        resolver: Callable[[AgentRequest, Path], tuple[str, ...]] | None,
+    ) -> tuple[str, ...]:
+        """Retain exact input paths after the caller validates the sealed request.
+
+        The composition resolver must validate baseline authority and bodies.
+        These names only select capture; Git still enforces the frozen policy.
+        """
+        paths = set(request.continuation_changed_paths)
+        if admission is not None:
+            if admission.new_request != request:
+                raise ContinuationRejected("retained draft admission changed its exact request")
+            paths.update(
+                store.get_receipt(admission.interrupted_run_id).capture.to_capture().changed_paths
+            )
+        if resolver is not None:
+            paths.update(resolver(request, root))
+        return tuple(sorted(paths))
 
     @staticmethod
     def _denied(task: Task) -> tuple[str, ...]:

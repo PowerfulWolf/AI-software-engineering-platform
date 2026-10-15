@@ -224,6 +224,10 @@ class DeliveryWaitFactCollector:
         if observation is None:
             return
         capture_start, capture_stop = observation
+        from ai_software_engineer.manager.execution_baseline import (
+            retained_source_paths_for_request,
+        )
+
         try:
             reconcile_capture(
                 start=capture_start,
@@ -241,6 +245,9 @@ class DeliveryWaitFactCollector:
                     item.run_id == request.run_id
                     and item.context_manifest_id == request.context_manifest_id
                     for item in self.queue.accepted(task.id)
+                ),
+                retained_source_paths=lambda request, root: retained_source_paths_for_request(
+                    self.state, task, request, root
                 ),
             )
         except (WorktreeCaptureRejected, MutationInventoryRejected) as error:

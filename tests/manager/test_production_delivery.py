@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from ai_software_engineer.agents import AgentRequest, StoredContextResolver
+from ai_software_engineer.agents.workspace_admission import InitialWorkspaceAdmission
 from ai_software_engineer.config import (
     ModelProviderKind,
     ProductionConfig,
@@ -247,6 +248,82 @@ def test_delivery_direct_route_does_not_require_or_forward_proxy_key(
     )
     assert captured[0]["proxy_base_url"] is None
     assert captured[0]["proxy_api_key_env"] is None
+
+
+@pytest.mark.parametrize("kind", [ModelProviderKind.CODEX_CLI, ModelProviderKind.RESPONSES])
+def test_candidate_factory_is_preserved_across_wrappers_and_bound_to_coder_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: ModelProviderKind
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    def make_adapter(**kwargs: object) -> MagicMock:
+        captured.append(kwargs)
+        return MagicMock()
+
+    module = "ai_software_engineer.manager.production_delivery."
+    monkeypatch.setattr(module + "CodexCliAgentAdapter", make_adapter)
+    monkeypatch.setattr(module + "ResponsesAgentAdapter", make_adapter)
+    skill = MagicMock()
+    candidate_factory = MagicMock(return_value=skill)
+    admission, guard, control, verifier, baseline = (MagicMock() for _ in range(5))
+
+    def preserve_admission(current: InitialWorkspaceAdmission | None) -> InitialWorkspaceAdmission:
+        assert current is admission
+        return current
+
+    factory = (
+        ConfiguredDeliveryRouteAdapterFactory()
+        .with_candidate_commit_factory(candidate_factory)
+        .with_initial_workspace_admission(admission)
+        .wrap_initial_workspace_admission(preserve_admission)
+        .with_execution_guard(guard)
+        .with_interruption_control(control)
+        .with_registered_verifier(verifier)
+        .with_baseline_verifier(baseline)
+    )
+    route = ProviderRouteConfig(
+        provider="fixture",
+        model="fixture",
+        kind=kind,
+        endpoint="https://example.invalid/responses"
+        if kind is ModelProviderKind.RESPONSES
+        else None,
+        api_key_env="FIXTURE_KEY" if kind is ModelProviderKind.RESPONSES else None,
+    )
+    definition = MagicMock(id="agent_coder", version="v0.1", role=AgentRole.CODER)
+    binding = MagicMock()
+    binding.worktree.path = tmp_path
+    resolver = cast(StoredContextResolver, MagicMock())
+    config = _config(tmp_path)
+
+    def create_adapter(selected_factory: ConfiguredDeliveryRouteAdapterFactory) -> None:
+        selected_factory.create(
+            route=route,
+            definition=definition,
+            binding=binding,
+            context_resolver=resolver,
+            config=config,
+            environment={"FIXTURE_KEY": "fixture-key"},
+        )
+
+    create_adapter(factory)
+
+    candidate_factory.assert_called_once_with(binding, definition)
+    assert captured[0]["candidate_commit_skill"] is skill
+    assert captured[0]["initial_workspace_admission"] is admission
+    assert captured[0]["execution_guard"] is guard
+    assert captured[0]["interruption_control"] is control
+
+    evidence_factory = factory.with_verification_evidence(MagicMock())
+    with pytest.raises(ProductionConfigError, match="verifier-only"):
+        create_adapter(evidence_factory)
+    assert candidate_factory.call_count == 2
+
+    candidate_factory.reset_mock()
+    definition.role = AgentRole.QA
+    create_adapter(factory)
+    candidate_factory.assert_not_called()
+    assert captured[-1]["candidate_commit_skill"] is None
 
 
 def _adapter(

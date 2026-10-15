@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
+from ai_software_engineer.agents.models import AgentRequest
+from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.artifact import CoderProgressArtifact, ImplementationReportArtifact
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.engineering_authority import (
@@ -184,14 +186,23 @@ class ExecutionBaselineService:
                     raise ValueError("当前没有精确的调用前容量停止记录, 原进度保留")
                 target_base_ref = expected_base
             assert target_base_ref is not None
+            retained_paths = StoredCoderExecutionInputResolver(self.store).retained_source_paths(
+                facts.task, workspace_root=worktree.path, permissions=facts.permissions
+            )
             dirty = self.git.manager.capture_mutations(
-                worktree, facts.permissions, denied_paths=facts.denied_paths
+                worktree,
+                facts.permissions,
+                denied_paths=facts.denied_paths,
+                include_ignored=purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
+                retained_source_paths=retained_paths,
             )
             complete = self.git.manager.capture_mutations(
                 worktree,
                 facts.permissions,
                 denied_paths=facts.denied_paths,
                 base_revision=expected_base,
+                include_ignored=purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
+                retained_source_paths=retained_paths,
             )
             before = capture_mutation_inventory(worktree.path)
             if facts.completed_output is not None:
@@ -231,6 +242,7 @@ class ExecutionBaselineService:
                         facts.permissions,
                         facts.denied_paths,
                         worktree,
+                        retained_source_paths=dirty.changed_paths,
                     ),
                     dirty.patch.decode("utf-8"),
                 )
@@ -254,6 +266,7 @@ class ExecutionBaselineService:
                         facts.permissions,
                         facts.denied_paths,
                         worktree,
+                        retained_source_paths=dirty.changed_paths,
                     ),
                     dirty.patch.decode("utf-8"),
                 )
@@ -704,6 +717,41 @@ class StoredCoderExecutionInputResolver:
             raise ValueError("bound baseline has no immutable patch body store")
         return self.store.required_context(source.baseline)
 
+    def retained_source_paths(
+        self, task: Task, *, workspace_root: Path, permissions: AgentPermissions
+    ) -> tuple[str, ...]:
+        """Read exact retained additions from fully validated immutable rescue lineage.
+
+        Git ignore patterns are not write authority. Only already sealed source
+        additions can receive the retained-file treatment on later invocations;
+        each use still checks the frozen policy and actual current file body.
+        """
+        if self.store is None:
+            return ()
+        history = self.store.bindings_for_task(task.id)
+        if not history:
+            return ()
+        source = self.current(task, implementation=None, progress=None)
+        assert source.baseline is not None
+        if str(workspace_root) != source.baseline.worktree_path:
+            raise ValueError("保留源码不属于原需求的精确工作区")
+        current_plan = self.store.plan(source.baseline.plan_sha256)
+        if permissions != current_plan.facts.permissions:
+            raise ValueError("保留源码不能改变冻结的执行权限")
+        paths: set[str] = set()
+        for binding in history:
+            if binding.purpose is not BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+                continue
+            plan = self.store.plan(binding.plan_sha256)
+            if plan.facts.permissions != permissions:
+                raise ValueError("原救援源码权限与当前冻结权限不一致")
+            paths.update(
+                item.path
+                for item in plan.dirty_capture.mutations
+                if item.before is None and item.after is not None
+            )
+        return tuple(sorted(paths))
+
     def require_current(self, binding: ExecutionBaselineBinding, task: Task) -> None:
         """Reopen all authority/epoch/patch evidence before trusting a v2 projection."""
         binding.require_task(task)
@@ -722,3 +770,21 @@ class StoredCoderExecutionInputResolver:
         if (epoch.scope, epoch.task_id) != (source.baseline.scope, source.baseline.task_id):
             raise ValueError("执行规范版本不属于当前任务和工作空间")
         return epoch
+
+
+def retained_source_paths_for_request(
+    state: Path, task: Task, request: AgentRequest, root: Path
+) -> tuple[str, ...]:
+    """Reopen trusted retained lineage during idle reconciliation without writing stores."""
+    directory = state / "execution-baselines" / task.id
+    resolver = StoredCoderExecutionInputResolver(
+        FileExecutionBaselineStore(directory, read_only=True) if directory.is_dir() else None
+    )
+    source = resolver.current(task, implementation=None, progress=None)
+    if request.task_id != task.id or request.execution_baseline_sha256 != (
+        source.baseline.binding_sha256 if source.baseline is not None else None
+    ):
+        raise ValueError("保留源码与当前需求的执行基线绑定不一致")
+    return resolver.retained_source_paths(
+        task, workspace_root=root, permissions=request.permissions
+    )

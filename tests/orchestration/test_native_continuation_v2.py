@@ -3,7 +3,7 @@
 import fcntl
 import hashlib
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -232,7 +232,11 @@ class V2Fixture(Fixture):
         ):
             raise ContinuationRejected("changed current sealed feedback/progress bindings")
 
-    def service(self) -> NativeCoderContinuation:
+    def service(
+        self,
+        *,
+        retained_source_paths: Callable[[AgentRequest, Path], tuple[str, ...]] | None = None,
+    ) -> NativeCoderContinuation:
         return NativeCoderContinuation(
             scope=self.scope,
             store=self.store,
@@ -254,6 +258,7 @@ class V2Fixture(Fixture):
                 self.repository.list_events(self.task.id)[-1].source_revision
             ),
             validate_active_request=self._validate_request,
+            retained_source_paths=retained_source_paths,
             clock=lambda: NOW,
         )
 
@@ -293,7 +298,7 @@ class V2Fixture(Fixture):
         self.repository = SqliteTaskRepository(self.database)
         self.store = FileContinuationStore(self.store_root, task_id=self.task.id)
 
-    def progress(self) -> str:
+    def progress(self, *, extra_paths: tuple[str, ...] = ()) -> str:
         (self.worktree.path / "src/app.py").write_text("VALUE = 2\n")
         template = make_coder_progress_artifact()
         template = template.model_copy(
@@ -306,6 +311,15 @@ class V2Fixture(Fixture):
                                 change=ChangeType.MODIFIED,
                                 lines_added=1,
                                 lines_deleted=1,
+                            ),
+                            *(
+                                ChangedFile(
+                                    path=path,
+                                    change=ChangeType.ADDED,
+                                    lines_added=1,
+                                    lines_deleted=0,
+                                )
+                                for path in extra_paths
                             ),
                         ),
                         "tests_run": (),
@@ -484,6 +498,211 @@ def test_two_interruptions_keep_branch_draft_and_distinct_immutable_lineage(
     assert f.repository.get(f.task.id).transient_failures(AgentRole.CODER) == 1
     assert not (f.store_root / "receipt.json").exists()
     assert not (f.store_root / "admission.json").exists()
+
+
+def ignored_source(fixture: V2Fixture, *, path: str = "src/artifacts/accepted.py") -> Path:
+    """Use a real repository exclusion without moving the frozen source HEAD."""
+    root = fixture.worktree.path
+    exclude = Path(_git(root, "rev-parse", "--git-path", "info/exclude"))
+    exclude.write_text(exclude.read_text() + "\nartifacts/\n")
+    source = root / path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("VALUE = 'retained'\n")
+    assert _git(root, "check-ignore", path) == path
+    return source
+
+
+def retained_tracked_edit(
+    fixture: V2Fixture, *, authority: str, added: bool = False
+) -> tuple[Path, Callable[[AgentRequest, Path], tuple[str, ...]] | None]:
+    """Keep one ignored draft while another inherited change is reversed."""
+    source = ignored_source(fixture)
+    relative = source.relative_to(fixture.worktree.path).as_posix()
+    extra = (relative, "src/added.py") if added else (relative,)
+    if added:
+        (fixture.worktree.path / "src/added.py").write_text("VALUE = 'added'\n")
+
+    def retained(request: AgentRequest, root: Path) -> tuple[str, ...]:
+        assert request == fixture.request and root == fixture.worktree.path
+        return ("src/app.py", *extra)
+
+    if authority == "receipt":
+        service = fixture.service(retained_source_paths=retained)
+        fixture.interrupt(service)
+        assert fixture.reserve(service) == 2
+        fixture.activate(2)
+        assert fixture.service().prepare(fixture.request, fixture.worktree.path) is not None
+        return source, None
+    if authority == "progress":
+        fixture.progress(extra_paths=extra)
+        return source, None
+    assert authority == "baseline"
+    (fixture.worktree.path / "src/app.py").write_text("VALUE = 2\n")
+    return source, retained
+
+
+@pytest.mark.parametrize("authority", ["receipt", "progress", "baseline"])
+@pytest.mark.parametrize("mutation", ["restore_tracked", "remove_added"])
+def test_reversed_retained_change_keeps_complete_remaining_ignored_draft(
+    v2_fixture: V2Fixture, authority: str, mutation: str
+) -> None:
+    f = v2_fixture
+    source, resolver = retained_tracked_edit(
+        f, authority=authority, added=mutation == "remove_added"
+    )
+    service = f.service(retained_source_paths=resolver)
+    before = service.started(f.request, f.worktree.path)
+    assert before is not None
+    if mutation == "restore_tracked":
+        (f.worktree.path / "src/app.py").write_text("VALUE = 1\n")
+    else:
+        (f.worktree.path / "src/added.py").unlink()
+    assert (
+        service.interrupted(
+            f.request,
+            f.worktree.path,
+            before=before,
+            cause="local_execution_limit",
+            original_error_code=AgentErrorCode.TIMEOUT,
+            process_stop=f.stopped(),
+            output_present=False,
+        )
+        is InterruptionObservation.CAPTURED
+    )
+    receipt = f.store.get_receipt(f.request.run_id)
+    assert isinstance(receipt.capture, CapturedMutations)
+    relative = source.relative_to(f.worktree.path).as_posix()
+    assert receipt.mutation_paths == (
+        "src/app.py" if mutation == "restore_tracked" else "src/added.py",
+    )
+    assert receipt.capture.to_capture().changed_paths == (
+        (relative,) if mutation == "restore_tracked" else ("src/app.py", relative)
+    )
+    f.git.verify_mutations(receipt.capture.to_capture(), f.request.permissions)
+    assert "VALUE = 'retained'" in receipt.capture.patch
+
+
+def test_reverting_last_inherited_tracked_edit_returns_existing_clean_observation(
+    v2_fixture: V2Fixture,
+) -> None:
+    f = v2_fixture
+    service = f.service()
+    first = f.interrupt(service)
+    assert f.reserve(service) == 2
+    f.activate(2)
+    service = f.service()
+    assert service.prepare(f.request, f.worktree.path) is not None
+    before = service.started(f.request, f.worktree.path)
+    assert before is not None
+    (f.worktree.path / "src/app.py").write_text("VALUE = 1\n")
+    assert (
+        service.interrupted(
+            f.request,
+            f.worktree.path,
+            before=before,
+            cause="local_execution_limit",
+            original_error_code=AgentErrorCode.TIMEOUT,
+            process_stop=f.stopped(),
+            output_present=False,
+        )
+        is InterruptionObservation.UNCHANGED
+    )
+    assert f.store.receipts_for_task(f.task.id) == (first,)
+    assert not f.git.inspect(f.worktree).dirty
+
+
+@pytest.mark.parametrize("modified", [False, True])
+def test_exact_retained_ignored_source_survives_receipt_admission_and_restart(
+    v2_fixture: V2Fixture, modified: bool
+) -> None:
+    f = v2_fixture
+    source = ignored_source(f)
+    relative = source.relative_to(f.worktree.path).as_posix()
+
+    def retained(request: AgentRequest, root: Path) -> tuple[str, ...]:
+        assert request == f.request and root == f.worktree.path
+        return (relative,)
+
+    service = f.service(retained_source_paths=retained)
+    first = f.interrupt(service, text=None)
+    assert first.mutation_paths == ()
+    assert first.capture.to_capture().changed_paths == (relative,)
+    assert "VALUE = 'retained'" in first.capture.patch
+    assert f.reserve(service) == 2
+    f.activate(2)
+    # The exact prior receipt/admission now owns the inherited file, so this
+    # round does not depend on the original baseline resolver callback.
+    service = f.service()
+    assert service.prepare(f.request, f.worktree.path) is not None
+    before = service.started(f.request, f.worktree.path)
+    assert before is not None
+    if modified:
+        source.write_text("VALUE = 'continued'\n")
+    assert (
+        service.interrupted(
+            f.request,
+            f.worktree.path,
+            before=before,
+            cause="local_execution_limit",
+            original_error_code=AgentErrorCode.TIMEOUT,
+            process_stop=f.stopped(),
+            output_present=False,
+        )
+        is InterruptionObservation.CAPTURED
+    )
+    second = f.store.get_receipt(f.request.run_id)
+    assert second.mutation_paths == ((relative,) if modified else ())
+    assert second.capture.to_capture().changed_paths == (relative,)
+    assert ("VALUE = 'continued'" if modified else "VALUE = 'retained'") in second.capture.patch
+    f.restart()
+    _reclaim(f)
+    assert f.service().resume(f.repository.get(f.task.id), f.repository) == 3
+    f.activate(3)
+    assert f.service().prepare(f.request, f.worktree.path) is not None
+    assert source.read_text() == ("VALUE = 'continued'\n" if modified else "VALUE = 'retained'\n")
+    assert _git(f.worktree.path, "rev-parse", "HEAD") == f.task.base_ref
+
+
+def test_retained_ignored_source_does_not_adopt_another_ignored_source(
+    v2_fixture: V2Fixture,
+) -> None:
+    f = v2_fixture
+    source = ignored_source(f)
+    relative = source.relative_to(f.worktree.path).as_posix()
+    service = f.service(retained_source_paths=lambda request, root: (relative,))
+    before = service.started(f.request, f.worktree.path)
+    assert before is not None
+    other = source.with_name("unapproved.py")
+    other.write_text("VALUE = 'must remain'\n")
+    with pytest.raises(ContinuationExecutionUncertain):
+        service.interrupted(
+            f.request,
+            f.worktree.path,
+            before=before,
+            cause="local_execution_limit",
+            original_error_code=AgentErrorCode.TIMEOUT,
+            process_stop=f.stopped(),
+            output_present=False,
+        )
+    assert f.store.receipts_for_task(f.task.id) == ()
+    assert other.read_text() == "VALUE = 'must remain'\n"
+
+
+def test_exact_sealed_progress_paths_retain_ignored_source_without_baseline_resolver(
+    v2_fixture: V2Fixture,
+) -> None:
+    f = v2_fixture
+    source = ignored_source(f)
+    relative = source.relative_to(f.worktree.path).as_posix()
+    progress_id = f.progress(extra_paths=(relative,))
+    service = f.service()
+    receipt = f.interrupt(service, text=None)
+    assert receipt.request.continuation_checkpoint_id == progress_id
+    assert receipt.capture.to_capture().changed_paths == ("src/app.py", relative)
+    assert "VALUE = 'retained'" in receipt.capture.patch
+    assert f.reserve(service) == 3
+    f.activate(3)
+    assert f.service().prepare(f.request, f.worktree.path) is not None
 
 
 def test_progress_then_interruption_retains_exact_progress_input(v2_fixture: V2Fixture) -> None:

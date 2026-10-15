@@ -702,6 +702,7 @@ class ProductionBaselineFactCollector:
                         source_reference,
                         plan.facts.permissions,
                         denied_paths=plan.facts.denied_paths,
+                        retained_source_paths=plan.dirty_capture.to_capture().changed_paths,
                     )
                     if (
                         current_capture.worktree.head_revision != binding.execution_source_revision
@@ -803,7 +804,10 @@ class ProductionBaselineFactCollector:
                 )
                 return
             capture = self.git.capture_mutations(
-                worktree, facts.permissions, denied_paths=facts.denied_paths
+                worktree,
+                facts.permissions,
+                denied_paths=facts.denied_paths,
+                retained_source_paths=plan.dirty_capture.to_capture().changed_paths,
             )
             if capture.index_diff_sha256 != hashlib.sha256(b"").hexdigest():
                 raise ValueError("保留现场暂存区已变化, 不能沿用原继续决定")
@@ -817,6 +821,7 @@ class ProductionBaselineFactCollector:
                     facts.permissions,
                     facts.denied_paths,
                     worktree,
+                    retained_source_paths=plan.dirty_capture.to_capture().changed_paths,
                 )
                 != plan.prepared_dirty_tree
             ):

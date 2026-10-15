@@ -229,8 +229,17 @@ def capture_rejected_checkpoint(
     if str(worktree.path) != start.worktree_path or worktree.detached:
         raise ContinuationRejected("被拒产出的工作区身份已变化")
     denied = task.constraints.denied_paths if task.constraints else ()
+    from ai_software_engineer.manager.execution_baseline import retained_source_paths_for_request
+
     capture = CapturedMutations.from_capture(
-        git.capture_mutations(worktree, start.request.permissions, denied_paths=denied)
+        git.capture_mutations(
+            worktree,
+            start.request.permissions,
+            denied_paths=denied,
+            retained_source_paths=retained_source_paths_for_request(
+                state, task, start.request, worktree.path
+            ),
+        )
     )
     record = RejectedCoderOutputCheckpoint(
         task_snapshot_sha256=digest(task.to_wire()),
