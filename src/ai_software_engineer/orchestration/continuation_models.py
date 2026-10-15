@@ -7,10 +7,11 @@ stop, mutation, budget and owner-fenced queue facts before publishing it.
 
 from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, Field, StrictBool, StrictInt, model_validator
+from pydantic import AwareDatetime, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 from ai_software_engineer.agents.continuation import InterruptionAdmissionRejected
 from ai_software_engineer.agents.execution import (
+    ExecutionAbortReason,
     ExecutionStop,
     NativeProcessStop,
     SynchronousToolLoopStop,
@@ -96,6 +97,30 @@ class ExecutionCaptureStart(DomainModel):
 class ExecutionCaptureStop(DomainModel):
     """Owned-runner final observation; it grants no retry or artifact authority."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "required": ["execution_abort_reason"],
+                        "properties": {"execution_abort_reason": {"type": "object"}},
+                    },
+                    "then": {
+                        "required": ["original_error_code"],
+                        "properties": {
+                            "cause": {"type": "null"},
+                            "original_error_code": {"const": "WORK_INTERRUPTED"},
+                            "process_stop": {
+                                "required": ["session_proof"],
+                                "properties": {"session_proof": {"type": "object"}},
+                            },
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
     kind: Literal["execution_capture_stop"] = "execution_capture_stop"
     schema_version: Literal["v1"] = "v1"
     task_id: TaskId
@@ -105,11 +130,20 @@ class ExecutionCaptureStop(DomainModel):
     output_present: StrictBool
     cause: ContinuationCause | None = None
     original_error_code: AgentErrorCode | None = None
+    execution_abort_reason: ExecutionAbortReason | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     observation_sha256: StageSha256
 
     @model_validator(mode="after")
     def require_real_cause(self) -> Self:
         self.process_stop.validate_integrity()
+        if self.execution_abort_reason is not None and (
+            self.cause is not None
+            or self.original_error_code is not AgentErrorCode.WORK_INTERRUPTED
+            or self.process_stop.session_proof is None
+        ):
+            raise ValueError("guard abort requires a complete owned stop and no provider cause")
         if self.cause == "service_pause" and (
             self.process_stop.kind != "service_pause"
             or self.original_error_code is not AgentErrorCode.SERVICE_PAUSED

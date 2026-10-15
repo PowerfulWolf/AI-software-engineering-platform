@@ -1488,6 +1488,43 @@
     },
     "ExecutionCaptureStop": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "execution_abort_reason": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "execution_abort_reason"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cause": {
+                "type": "null"
+              },
+              "original_error_code": {
+                "const": "WORK_INTERRUPTED"
+              },
+              "process_stop": {
+                "properties": {
+                  "session_proof": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "session_proof"
+                ]
+              }
+            },
+            "required": [
+              "original_error_code"
+            ]
+          }
+        }
+      ],
       "description": "Owned-runner final observation; it grants no retry or artifact authority.",
       "properties": {
         "kind": {
@@ -1529,7 +1566,8 @@
             {
               "enum": [
                 "local_execution_limit",
-                "provider_transient"
+                "provider_transient",
+                "service_pause"
               ],
               "type": "string"
             },
@@ -1544,6 +1582,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/AgentErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "execution_abort_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionAbortReason"
             },
             {
               "type": "null"
@@ -3771,6 +3820,37 @@
         "stop_sha256"
       ],
       "title": "SynchronousToolLoopStop",
+      "type": "object"
+    },
+    "ExecutionAbortReason": {
+      "additionalProperties": false,
+      "description": "Safe trusted authority facts, never provider text or an automatic retry cause.",
+      "properties": {
+        "kind": {
+          "const": "lease_authority_unconfirmed",
+          "default": "lease_authority_unconfirmed",
+          "title": "Kind",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "enum": [
+                "local_expiry",
+                "renewal_exception",
+                "heartbeat_stop_timeout"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        }
+      },
+      "title": "ExecutionAbortReason",
       "type": "object"
     }
   },

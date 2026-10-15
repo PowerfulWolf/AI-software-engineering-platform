@@ -61,6 +61,27 @@
     },
     "AgentFailure": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SERVICE_PAUSED"
+              }
+            },
+            "required": [
+              "code"
+            ]
+          },
+          "then": {
+            "properties": {
+              "transient": {
+                "const": false
+              }
+            }
+          }
+        }
+      ],
       "description": "Typed failure evidence with an explicit retry classification.",
       "properties": {
         "code": {
@@ -82,28 +103,7 @@
         "transient"
       ],
       "title": "AgentFailure",
-      "type": "object",
-      "allOf": [
-        {
-          "if": {
-            "required": [
-              "code"
-            ],
-            "properties": {
-              "code": {
-                "const": "SERVICE_PAUSED"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "transient": {
-                "const": false
-              }
-            }
-          }
-        }
-      ]
+      "type": "object"
     },
     "AgentPermissions": {
       "additionalProperties": false,
@@ -698,6 +698,17 @@
           ],
           "default": null
         },
+        "stopped_execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoppedCoderExecutionProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "completed_output": {
           "anyOf": [
             {
@@ -1020,6 +1031,51 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "stopped_execution"
+            ],
+            "properties": {
+              "stopped_execution": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "legacy_containment": {
+                "type": "null"
+              },
+              "completed_output": {
+                "type": "null"
+              },
+              "stopped_provider_failure": {
+                "type": "null"
+              },
+              "native_rule_change": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "implementation_artifact_id": {
+                "type": "null"
+              },
+              "continuation": {
+                "type": "object",
+                "properties": {
+                  "retry_cause": {
+                    "const": "stopped_execution_unknown"
+                  }
+                }
+              }
+            }
+          }
         }
       ]
     },
@@ -1048,10 +1104,24 @@
             "legacy_execution_abandoned",
             "completed_output_unavailable",
             "completed_output_rejected",
-            "provider_prerequisite_repaired"
+            "provider_prerequisite_repaired",
+            "stopped_execution_unknown"
           ],
           "title": "Retry Cause",
           "type": "string"
+        },
+        "stopped_execution_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stopped Execution Sha256"
         },
         "completed_output_sha256": {
           "anyOf": [
@@ -1322,6 +1392,76 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "retry_cause"
+            ],
+            "properties": {
+              "retry_cause": {
+                "const": "stopped_execution_unknown"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "current_invocation_start_sha256",
+              "stopped_execution_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "current_invocation_start_sha256": {
+                "type": "string"
+              },
+              "stopped_execution_sha256": {
+                "type": "string"
+              },
+              "reservation_already_applied": {
+                "const": false
+              },
+              "current_invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "containment_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "stopped_execution_sha256"
+            ],
+            "properties": {
+              "stopped_execution_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "retry_cause": {
+                "const": "stopped_execution_unknown"
+              }
+            }
+          }
         }
       ]
     },
@@ -1339,6 +1479,7 @@
         "legacy_workspace_rescue",
         "completed_output_rescue",
         "stopped_provider_retry",
+        "stopped_execution_rescue",
         "context_capacity_resume"
       ],
       "title": "BaselinePurpose",
@@ -2560,6 +2701,37 @@
       "title": "EvidenceType",
       "type": "string"
     },
+    "ExecutionAbortReason": {
+      "additionalProperties": false,
+      "description": "Safe trusted authority facts, never provider text or an automatic retry cause.",
+      "properties": {
+        "kind": {
+          "const": "lease_authority_unconfirmed",
+          "default": "lease_authority_unconfirmed",
+          "title": "Kind",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "enum": [
+                "local_expiry",
+                "renewal_exception",
+                "heartbeat_stop_timeout"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        }
+      },
+      "title": "ExecutionAbortReason",
+      "type": "object"
+    },
     "ExecutionBaselineBinding": {
       "additionalProperties": false,
       "description": "One completed source rebind, never a role verdict or a new Product approval.",
@@ -2610,6 +2782,19 @@
           "default": null,
           "title": "Legacy Containment Sha256"
         },
+        "stopped_execution_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stopped Execution Sha256"
+        },
         "completed_output_sha256": {
           "anyOf": [
             {
@@ -2648,6 +2833,19 @@
           ],
           "default": null,
           "title": "Context Capacity Receipt Sha256"
+        },
+        "service_pause_outcome_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Pause Outcome Sha256"
         },
         "scope": {
           "$ref": "#/$defs/EngineeringScope"
@@ -2814,19 +3012,6 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Binding Sha256",
           "type": "string"
-        },
-        "service_pause_outcome_sha256": {
-          "anyOf": [
-            {
-              "pattern": "^[a-f0-9]{64}$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Service Pause Outcome Sha256"
         }
       },
       "required": [
@@ -3025,6 +3210,78 @@
               },
               "superseded_implementation_artifact_id": {
                 "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "stopped_execution_rescue"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "stopped_execution_sha256",
+              "continuation_mode"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "stopped_execution_sha256": {
+                "type": "string"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "service_pause_outcome_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "stopped_execution_sha256"
+            ],
+            "properties": {
+              "stopped_execution_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "stopped_execution_rescue"
               }
             }
           }
@@ -3316,6 +3573,83 @@
             ],
             "properties": {
               "purpose": {
+                "const": "stopped_execution_rescue"
+              }
+            }
+          },
+          "then": {
+            "required": [],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "conflicted": {
+                "const": false
+              },
+              "facts": {
+                "required": [
+                  "stopped_execution"
+                ],
+                "properties": {
+                  "stopped_execution": {
+                    "type": "object"
+                  },
+                  "legacy_containment": {
+                    "type": "null"
+                  },
+                  "completed_output": {
+                    "type": "null"
+                  },
+                  "stopped_provider_failure": {
+                    "type": "null"
+                  },
+                  "native_rule_change": {
+                    "type": "null"
+                  },
+                  "context_capacity_receipt_sha256": {
+                    "type": "null"
+                  },
+                  "implementation_artifact_id": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "facts": {
+                "required": [
+                  "stopped_execution"
+                ],
+                "properties": {
+                  "stopped_execution": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "stopped_execution_rescue"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
                 "const": "context_capacity_resume"
               }
             }
@@ -3448,6 +3782,43 @@
     },
     "ExecutionCaptureStop": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "execution_abort_reason": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "execution_abort_reason"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cause": {
+                "type": "null"
+              },
+              "original_error_code": {
+                "const": "WORK_INTERRUPTED"
+              },
+              "process_stop": {
+                "properties": {
+                  "session_proof": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "session_proof"
+                ]
+              }
+            },
+            "required": [
+              "original_error_code"
+            ]
+          }
+        }
+      ],
       "description": "Owned-runner final observation; it grants no retry or artifact authority.",
       "properties": {
         "kind": {
@@ -3489,7 +3860,8 @@
             {
               "enum": [
                 "local_execution_limit",
-                "provider_transient"
+                "provider_transient",
+                "service_pause"
               ],
               "type": "string"
             },
@@ -3504,6 +3876,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/AgentErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "execution_abort_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionAbortReason"
             },
             {
               "type": "null"
@@ -4830,6 +5213,82 @@
       "title": "OwnedSessionStopProof",
       "type": "object"
     },
+    "PausedInvocationProof": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "process_stop": {
+                "properties": {
+                  "kind": {
+                    "const": "service_pause"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "process_stop"
+            ]
+          },
+          "if": {
+            "properties": {
+              "admission_closed": {
+                "const": true
+              }
+            },
+            "required": [
+              "admission_closed"
+            ]
+          },
+          "then": {
+            "properties": {
+              "process_stop": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Trusted stopped/no-start execution bound to one exact admitted request.",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/AgentRequest"
+        },
+        "process_stop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeProcessStop"
+            },
+            {
+              "$ref": "#/$defs/SynchronousToolLoopStop"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Process Stop"
+        },
+        "admission_closed": {
+          "default": false,
+          "title": "Admission Closed",
+          "type": "boolean"
+        },
+        "proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request",
+        "proof_sha256"
+      ],
+      "title": "PausedInvocationProof",
+      "type": "object"
+    },
     "PlanAcceptanceMapping": {
       "additionalProperties": false,
       "properties": {
@@ -6091,6 +6550,85 @@
       "title": "RoleAssignment",
       "type": "object"
     },
+    "StoppedCoderExecutionProof": {
+      "additionalProperties": false,
+      "description": "Exact real start/stop and historical claim, never an invented result or cause.",
+      "properties": {
+        "kind": {
+          "const": "stopped_coder_execution_without_outcome",
+          "default": "stopped_coder_execution_without_outcome",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "invocation_start": {
+          "$ref": "#/$defs/DeliveryInvocationStart"
+        },
+        "capture_start": {
+          "$ref": "#/$defs/ExecutionCaptureStart"
+        },
+        "capture_stop": {
+          "$ref": "#/$defs/ExecutionCaptureStop"
+        },
+        "proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "invocation_start",
+        "capture_start",
+        "capture_stop",
+        "proof_sha256"
+      ],
+      "title": "StoppedCoderExecutionProof",
+      "type": "object",
+      "allOf": [
+        {
+          "properties": {
+            "capture_stop": {
+              "properties": {
+                "output_present": {
+                  "const": false
+                },
+                "cause": {
+                  "type": "null"
+                },
+                "process_stop": {
+                  "required": [
+                    "session_proof"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "failed"
+                    },
+                    "returncode": {
+                      "not": {
+                        "const": 0
+                      }
+                    },
+                    "session_proof": {
+                      "type": "object",
+                      "properties": {
+                        "proof_scope": {
+                          "const": "owned_session_empty"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "StoppedProviderFailureProof": {
       "additionalProperties": false,
       "description": "Original permanent failure and exact native stop, never a health assertion.",
@@ -6203,6 +6741,71 @@
           }
         }
       ]
+    },
+    "SynchronousToolLoopStop": {
+      "additionalProperties": false,
+      "description": "Trusted observation after a synchronous Responses route and its tools returned.\n\nThis is not a native process-group observation. The provider generates data;\nonly the bounded local registry runs tools, sequentially and synchronously.\nAn interrupted Host cannot create this receipt, nor can request/model text.",
+      "properties": {
+        "origin": {
+          "const": "synchronous_responses_tool_loop",
+          "default": "synchronous_responses_tool_loop",
+          "title": "Origin",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "completed_operation_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Completed Operation Ids",
+          "type": "array"
+        },
+        "kind": {
+          "default": "failed",
+          "enum": [
+            "failed",
+            "local_execution_limit",
+            "service_pause"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "stopped_at": {
+          "format": "date-time",
+          "title": "Stopped At",
+          "type": "string"
+        },
+        "stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stop Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "run_id",
+        "request_sha256",
+        "completed_operation_ids",
+        "stopped_at",
+        "stop_sha256"
+      ],
+      "title": "SynchronousToolLoopStop",
+      "type": "object"
     },
     "Task": {
       "additionalProperties": false,
@@ -6565,147 +7168,6 @@
         "files"
       ],
       "title": "WorkspaceMutationInventory",
-      "type": "object"
-    },
-    "PausedInvocationProof": {
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "else": {
-            "properties": {
-              "process_stop": {
-                "properties": {
-                  "kind": {
-                    "const": "service_pause"
-                  }
-                },
-                "type": "object"
-              }
-            },
-            "required": [
-              "process_stop"
-            ]
-          },
-          "if": {
-            "properties": {
-              "admission_closed": {
-                "const": true
-              }
-            },
-            "required": [
-              "admission_closed"
-            ]
-          },
-          "then": {
-            "properties": {
-              "process_stop": {
-                "type": "null"
-              }
-            }
-          }
-        }
-      ],
-      "description": "Trusted stopped/no-start execution bound to one exact admitted request.",
-      "properties": {
-        "request": {
-          "$ref": "#/$defs/AgentRequest"
-        },
-        "process_stop": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativeProcessStop"
-            },
-            {
-              "$ref": "#/$defs/SynchronousToolLoopStop"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Process Stop"
-        },
-        "admission_closed": {
-          "default": false,
-          "title": "Admission Closed",
-          "type": "boolean"
-        },
-        "proof_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Proof Sha256",
-          "type": "string"
-        }
-      },
-      "required": [
-        "request",
-        "proof_sha256"
-      ],
-      "title": "PausedInvocationProof",
-      "type": "object"
-    },
-    "SynchronousToolLoopStop": {
-      "additionalProperties": false,
-      "description": "Trusted observation after a synchronous Responses route and its tools returned.\n\nThis is not a native process-group observation. The provider generates data;\nonly the bounded local registry runs tools, sequentially and synchronously.\nAn interrupted Host cannot create this receipt, nor can request/model text.",
-      "properties": {
-        "origin": {
-          "const": "synchronous_responses_tool_loop",
-          "default": "synchronous_responses_tool_loop",
-          "title": "Origin",
-          "type": "string"
-        },
-        "task_id": {
-          "minLength": 1,
-          "title": "Task Id",
-          "type": "string"
-        },
-        "run_id": {
-          "minLength": 1,
-          "title": "Run Id",
-          "type": "string"
-        },
-        "request_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Request Sha256",
-          "type": "string"
-        },
-        "completed_operation_ids": {
-          "items": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "title": "Completed Operation Ids",
-          "type": "array"
-        },
-        "kind": {
-          "default": "failed",
-          "enum": [
-            "failed",
-            "local_execution_limit",
-            "service_pause"
-          ],
-          "title": "Kind",
-          "type": "string"
-        },
-        "stopped_at": {
-          "format": "date-time",
-          "title": "Stopped At",
-          "type": "string"
-        },
-        "stop_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Stop Sha256",
-          "type": "string"
-        }
-      },
-      "required": [
-        "task_id",
-        "run_id",
-        "request_sha256",
-        "completed_operation_ids",
-        "stopped_at",
-        "stop_sha256"
-      ],
-      "title": "SynchronousToolLoopStop",
       "type": "object"
     }
   },

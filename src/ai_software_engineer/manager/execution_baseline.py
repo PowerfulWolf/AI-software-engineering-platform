@@ -53,6 +53,9 @@ from ai_software_engineer.manager.completed_output_checkpoint import (
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
+from ai_software_engineer.manager.stopped_execution_checkpoint import (
+    require_stopped_coder_workspace,
+)
 from ai_software_engineer.manager.stopped_provider_checkpoint import (
     require_stopped_provider_workspace,
 )
@@ -108,6 +111,7 @@ class ExecutionBaselineService:
         if purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
+            BaselinePurpose.STOPPED_EXECUTION_RESCUE,
             BaselinePurpose.CONTEXT_CAPACITY_RESUME,
         }:
             if target_base_ref is not None or input_mode is not BaselineInputMode.PRESERVE_DRAFT:
@@ -173,7 +177,11 @@ class ExecutionBaselineService:
             expected_base = (
                 binding.execution_base_ref if binding is not None else facts.task.base_ref
             )
-            if purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+            if purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE:
+                if facts.stopped_execution is None:
+                    raise ValueError("原执行不符合已停止但结果未知的精确恢复前提, 原现场保留")
+                target_base_ref = expected_base
+            elif purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
                 if facts.completed_output is None or facts.legacy_containment is not None:
                     raise ValueError("原执行不符合已结束且报告未接纳的精确恢复前提, 原现场保留")
                 target_base_ref = expected_base
@@ -205,6 +213,14 @@ class ExecutionBaselineService:
                 retained_source_paths=retained_paths,
             )
             before = capture_mutation_inventory(worktree.path)
+            if facts.stopped_execution is not None:
+                require_stopped_coder_workspace(
+                    facts.stopped_execution,
+                    CapturedMutations.from_capture(dirty),
+                    before,
+                    facts.permissions,
+                    facts.denied_paths,
+                )
             if facts.completed_output is not None:
                 require_completed_output_workspace(
                     facts.completed_output,
@@ -232,6 +248,7 @@ class ExecutionBaselineService:
             if same_paused_base or purpose in {
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                 BaselinePurpose.CONTEXT_CAPACITY_RESUME,
             }:
                 preview = BaselineGitPreview(
@@ -352,6 +369,10 @@ class ExecutionBaselineService:
             authority.require_plan_confirmation(plan)
         elif plan.facts.native_rule_change is not None:
             raise ValueError("项目规范变化需要精确人工确认, 原源码更新能力不能自动批准")
+        if plan.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE:
+            if not isinstance(authority, BaselineOperatorAuthorization):
+                raise ValueError("未知结果停止恢复需要精确人工工程确认, 不能自动审批")
+            authority.require_plan_confirmation(plan)
         if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("容量恢复需要精确人工工程确认, 不能自动审批")
@@ -473,6 +494,7 @@ class ExecutionBaselineService:
                 BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                 BaselinePurpose.CONTEXT_CAPACITY_RESUME,
             }:
                 self.git.manager.verify_mutations(
@@ -488,7 +510,16 @@ class ExecutionBaselineService:
                 inventory = capture_mutation_inventory(Path(plan.dirty_capture.worktree_path))
                 if inventory != plan.before_inventory:
                     raise ValueError("救援方案封存后现场已变化, 请重新准备方案; 原文件保留")
-                if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
+                if plan.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE:
+                    assert current.stopped_execution is not None
+                    require_stopped_coder_workspace(
+                        current.stopped_execution,
+                        plan.dirty_capture,
+                        inventory,
+                        current.permissions,
+                        current.denied_paths,
+                    )
+                elif plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
                     assert current.completed_output is not None
                     require_completed_output_workspace(
                         current.completed_output,
@@ -554,6 +585,9 @@ class ExecutionBaselineService:
                     if current.legacy_containment is not None
                     else None
                 ),
+                stopped_execution_sha256=current.stopped_execution.proof_sha256
+                if current.stopped_execution
+                else None,
                 completed_output_sha256=(
                     current.completed_output.proof_sha256
                     if current.completed_output is not None

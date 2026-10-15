@@ -17,6 +17,7 @@ from ai_software_engineer.agents.continuation import (
     same_continuation_inputs,
 )
 from ai_software_engineer.agents.execution import (
+    ExecutionAbortReason,
     ExecutionGuard,
     ExecutionStop,
     NativeProcessStop,
@@ -328,6 +329,7 @@ class NativeCoderContinuation:
         output_present: bool,
         cause: ContinuationCause | None,
         original_error_code: AgentErrorCode | None,
+        execution_abort_reason: ExecutionAbortReason | None = None,
     ) -> None:
         """Seal only the runner's observation, even if ownership ended meanwhile.
 
@@ -350,6 +352,7 @@ class NativeCoderContinuation:
                 output_present=output_present,
                 cause=cause,
                 original_error_code=original_error_code,
+                execution_abort_reason=execution_abort_reason,
             )
         )
 

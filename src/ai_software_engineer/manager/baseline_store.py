@@ -225,6 +225,18 @@ class FileExecutionBaselineStore:
         require_context_capacity_binding(plan, binding)
         if binding.purpose != plan.purpose:
             raise ValueError("工程绑定与批准方案的处置目的不同")
+        stopped = plan.facts.stopped_execution
+        if binding.stopped_execution_sha256 != (stopped.proof_sha256 if stopped else None):
+            raise ValueError("未知结果停止绑定缺少对应完整原执行证明")
+        if stopped is not None:
+            stopped.validate_integrity()
+            authority = self.records.get(
+                "baseline-authorities", plan.plan_sha256, BaselineOperatorAuthorization
+            )
+            authority.validate_integrity()
+            authority.require_plan_confirmation(plan)
+            if authority.authorization_sha256 != binding.authority_sha256:
+                raise ValueError("未知结果停止恢复没有精确人工工程确认")
         proof = plan.facts.completed_output
         if (
             binding.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
@@ -306,6 +318,13 @@ class FileExecutionBaselineStore:
                 "平台按人工工程决定保留了完整当前草稿, 代码基线和需求分支保持。"
                 "原调用结果仍是未知; 这些草稿是新执行的工程输入, 不是原调用进度或候选通过证明。\n"
                 if binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                else (
+                    "原执行已真实停止, 原结果及原因仍未知且原历史不变。"
+                    "完整合法草稿仅作为新执行输入; "
+                    "本次消费普通工作额度, 不补造结果或退款。新Run须独立领取并重新产出, "
+                    "独立QA和Review不可跳过。\n"
+                )
+                if binding.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE
                 else (
                     "平台按精确人工工程决定保留完整合法草稿, 原代码基线和需求分支保持。"
                     "原执行已结束, 但报告内容仍未知; 保留草稿不是已接纳产出或候选通过证明。\n"

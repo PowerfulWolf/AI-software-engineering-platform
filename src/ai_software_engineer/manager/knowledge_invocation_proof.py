@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import Field, JsonValue, TypeAdapter
 
@@ -29,6 +29,7 @@ from ai_software_engineer.knowledge.preparation_retry import claim_identity_sha2
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.capacity_input_reader import (
     CapacityInputReader,
+    PriorInvocationFence,
     UninvokedClaimBoundary,
 )
 from ai_software_engineer.manager.context_capacity import ContextCapacityReceipt
@@ -50,6 +51,22 @@ class KnowledgeOnlyClaimProof(DomainModel):
     intent_sha256s: tuple[Sha256, ...] = Field(min_length=1)
     outcome_sha256s: tuple[Sha256, ...] = Field(min_length=1)
     execution_record_sha256s: tuple[Sha256, ...] = Field(min_length=1)
+
+
+class ReplayGuardedClaimObservation(KnowledgeOnlyClaimProof):
+    """Current deduction from a prior write-once start, never a backdated event."""
+
+    kind: Literal["replay_guarded_claim_observation"] = "replay_guarded_claim_observation"
+    blocking_start_sha256: Sha256
+    context_sha256s: tuple[Sha256, ...] = Field(min_length=1)
+    observation_sha256: Sha256
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+        if self.observation_sha256 != digest(
+            self.model_dump(mode="json", exclude={"observation_sha256"})
+        ):
+            raise ValueError("replay guarded claim observation integrity mismatch")
 
 
 class KnowledgeProofQueue(Protocol):
@@ -138,6 +155,96 @@ def read_failed_knowledge_claims(
     return tuple(result)
 
 
+def read_replay_guarded_claims(
+    *,
+    state: Path,
+    task: Task,
+    item: QueuedWorkItem,
+    claims: tuple[QueueClaim, ...],
+    scope: EngineeringScope,
+    requirement_id: str,
+    queue: KnowledgeProofQueue,
+    require_step: Callable[[QueuedWorkItem, QueuedRoleStep], None],
+    no_start_reader: CapacityInputReader,
+    fence: PriorInvocationFence,
+) -> tuple[ReplayGuardedClaimObservation, ...]:
+    """Observe complete returned preparation behind an earlier mandatory call fence.
+
+    This records no historical refusal and grants no execution or refund authority.
+    The caller separately proves the old call was contained and retains its UNKNOWN.
+    """
+    if not claims:
+        return ()
+    by_lease = {claim.lease.id: claim for claim in claims}
+    if len(by_lease) != len(claims):
+        raise ValueError("重领观察包含重复 claim")
+    lanes = _knowledge_lanes(
+        state=state, task=task, item=item, scope=scope, requirement_id=requirement_id
+    )
+    grouped: dict[str, list[_CompletedKnowledgeInvocation]] = {}
+    for value in _validated_knowledge_invocations(
+        state=state, task=task, scope=scope, lanes=lanes, queue=queue, require_step=require_step
+    ):
+        historical = value.historical
+        if historical.lease.id not in by_lease:
+            continue
+        require_claim_snapshot(by_lease[historical.lease.id], historical)
+        grouped.setdefault(historical.lease.id, []).append(value)
+    result = []
+    for lease_id in sorted(grouped):
+        completed = sorted(
+            grouped[lease_id], key=lambda v: (v.outcome.intent.created_at, v.outcome.intent.phase)
+        )
+        values = tuple(value.outcome for value in completed)
+        if any(value.state != "RETURNED" for value in values):
+            continue
+        if len({digest(value.intent.binding.to_wire()) for value in values}) != 1:
+            raise ValueError("同一重领 claim 的知识输入存在不同版本")
+        bound = values[0].intent.binding
+        claim = by_lease[lease_id]
+        step = queue.step_for_claim(claim)
+        require_step(item, step)
+        if bound.source_revision != fence.start.request.source_revision:
+            raise ValueError("重领观察改变原调用的源版本")
+        no_start_reader.require_claim_not_started(
+            UninvokedClaimBoundary(
+                task_id=task.id,
+                work_item_id=item.id,
+                lease_id=lease_id,
+                role=item.role,
+                attempt=item.attempt,
+                checkpoint_sequence=item.checkpoint_sequence,
+                dispatch_sequence=claim.work_item.dispatch_sequence,
+                observed_at=max(value.completed_at for value in values),
+                run_id=bound.run_id,
+                context_manifest_id=bound.context_manifest_id,
+            ),
+            prior_invocation_fence=fence,
+        )
+        observation = ReplayGuardedClaimObservation(
+            lease_id=lease_id,
+            claim_sha256=claim_identity_sha256(claim),
+            blocking_start_sha256=fence.start.start_sha256,
+            intent_sha256s=tuple(value.intent.intent_sha256 for value in values),
+            outcome_sha256s=tuple(value.outcome_sha256 for value in values),
+            execution_record_sha256s=tuple(
+                record.record_sha256 for value in values for record in value.executions
+            ),
+            context_sha256s=tuple(value.context_sha256 for value in completed),
+            observation_sha256="0" * 64,
+        )
+        result.append(
+            observation.model_copy(
+                update={
+                    "observation_sha256": digest(
+                        observation.model_dump(mode="json", exclude={"observation_sha256"})
+                    )
+                }
+            )
+        )
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class _KnowledgeLane:
     records: KnowledgeRecordStore
@@ -152,6 +259,7 @@ class _KnowledgeLane:
 class _CompletedKnowledgeInvocation:
     historical: QueueClaim
     outcome: KnowledgeInvocationOutcome
+    context_sha256: str
 
 
 def _knowledge_lanes(
@@ -245,10 +353,10 @@ def _validated_knowledge_invocations(
                     NativeCoderContinuation._require_stopped(execution.observation.process_stop)
             step = queue.step_for_claim(historical)
             require_step(historical.work_item, step)
-            _require_context(
+            context_sha256 = _require_context(
                 state, task, historical.work_item, historical, step, intent, snapshots, scope
             )
-            result.append(_CompletedKnowledgeInvocation(historical, outcome))
+            result.append(_CompletedKnowledgeInvocation(historical, outcome, context_sha256))
     return tuple(result)
 
 
@@ -302,7 +410,7 @@ def _require_context(
     intent: KnowledgeInvocationIntent,
     snapshots: KnowledgeRecordStore,
     scope: EngineeringScope,
-) -> None:
+) -> str:
     bound = intent.binding
     if (
         bound.source_revision != step.boundary.source_revision
@@ -367,3 +475,4 @@ def _require_context(
         )
     ):
         raise ValueError("知识准备原 Context 的 Task 或 claim 与冻结意图不一致")
+    return digest(context.to_wire())

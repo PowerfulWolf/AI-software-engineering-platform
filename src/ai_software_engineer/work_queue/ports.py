@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
+from ai_software_engineer.agents.execution import ExecutionAuthorityLost
 from ai_software_engineer.domain.enums import WorkItemStatus
 from ai_software_engineer.domain.workforce import (
     ModelSelection,
@@ -38,7 +39,7 @@ class QueueConflict(QueueError):
     """Current queue state, Lease ownership or replay identity changed."""
 
 
-class QueueLeaseLost(QueueConflict, DeliveryQueuePending):
+class QueueLeaseLost(ExecutionAuthorityLost, QueueConflict, DeliveryQueuePending):
     """An expired/released execution permit is recoverable, never a Task verdict."""
 
 

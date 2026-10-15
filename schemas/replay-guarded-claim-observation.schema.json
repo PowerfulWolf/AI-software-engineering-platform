@@ -1,0 +1,82 @@
+{
+  "additionalProperties": false,
+  "description": "Current deduction from a prior write-once start, never a backdated event.",
+  "properties": {
+    "lease_id": {
+      "minLength": 1,
+      "title": "Lease Id",
+      "type": "string"
+    },
+    "claim_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Claim Sha256",
+      "type": "string"
+    },
+    "intent_sha256s": {
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Intent Sha256S",
+      "type": "array"
+    },
+    "outcome_sha256s": {
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Outcome Sha256S",
+      "type": "array"
+    },
+    "execution_record_sha256s": {
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Execution Record Sha256S",
+      "type": "array"
+    },
+    "kind": {
+      "const": "replay_guarded_claim_observation",
+      "default": "replay_guarded_claim_observation",
+      "title": "Kind",
+      "type": "string"
+    },
+    "blocking_start_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Blocking Start Sha256",
+      "type": "string"
+    },
+    "context_sha256s": {
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Context Sha256S",
+      "type": "array"
+    },
+    "observation_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Observation Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "lease_id",
+    "claim_sha256",
+    "intent_sha256s",
+    "outcome_sha256s",
+    "execution_record_sha256s",
+    "blocking_start_sha256",
+    "context_sha256s",
+    "observation_sha256"
+  ],
+  "title": "ReplayGuardedClaimObservation",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/replay-guarded-claim-observation.schema.json"
+}

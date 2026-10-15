@@ -103,6 +103,22 @@ class BaselineQueueConsumption(DomainModel):
                 or self.binding.before_inventory_sha256 != self.binding.after_inventory_sha256
             ):
                 raise ValueError("旧执行救援消费必须保留现场并使用独立下一工作身份")
+        stopped = self.plan.facts.stopped_execution
+        if stopped is not None:
+            reservation = self.plan.facts.continuation
+            if (
+                reservation is None
+                or reservation.retry_cause != "stopped_execution_unknown"
+                or reservation.stopped_execution_sha256 != stopped.proof_sha256
+                or self.binding.stopped_execution_sha256 != stopped.proof_sha256
+                or self.binding.purpose is not BaselinePurpose.STOPPED_EXECUTION_RESCUE
+                or self.next_work_item_id == self.work_item_id
+                or reservation.reservation_already_applied
+                or reservation.retry_failure is not None
+            ):
+                raise ValueError("未知结果停止恢复消费必须绑定精确证明和新普通工作身份")
+        elif self.binding.stopped_execution_sha256 is not None:
+            raise ValueError("未知结果停止消费缺少对应原执行证明")
         proof = self.plan.facts.completed_output
         if (
             self.plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
@@ -375,6 +391,16 @@ def consume_baseline(
             or binding.authority_source != "engineering_operator_decision"
         ):
             raise QueueConflict("遗留未知执行不能退款、自动授权或复用旧工作预留")
+        if plan.facts.stopped_execution is not None and (
+            reservation is None
+            or reservation.reservation_already_applied
+            or reservation.retry_cause != "stopped_execution_unknown"
+            or reservation.retry_failure is not None
+            or binding.authority_source != "engineering_operator_decision"
+            or binding.continuation_mode is not BaselineContinuationMode.PAUSE
+            or binding.stopped_execution_sha256 != plan.facts.stopped_execution.proof_sha256
+        ):
+            raise QueueConflict("未知结果停止恢复不能退款、自动授权或复用旧工作预留")
         proof = plan.facts.completed_output
         if (
             proof is not None

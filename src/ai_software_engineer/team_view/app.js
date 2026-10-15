@@ -805,6 +805,9 @@ function consoleSupportsStoppedProviderRetry() {
 function consoleSupportsContextCapacityResume() {
   return consoleOperationContractVersion >= 8 && consoleSupportsPausedBaseline();
 }
+function consoleSupportsStoppedExecutionRescue() {
+  return consoleOperationContractVersion >= 9 && consoleSupportsPausedBaseline();
+}
 const configurationApplyStorageKey = "ase-configuration-apply";
 const configurationApplyTimeoutMs = 30000;
 let configurationApplyPending = readConfigurationApplyPending();
@@ -2093,6 +2096,17 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
       : providerPlan ? engineeringProviderPlanNextAction(providerPlan)
       : "点击下方“准备保留进度的续跑方案”，查看平台核验结果；之后再确认前提已修复。";
   }
+  if (ownerTask && engineeringStoppedExecutionRescueFacts(request, ownerTask, step) && !active && !decision) {
+    const stoppedPlan = engineeringBaselinePlan(request, ownerTask, step, "stopped_execution_rescue");
+    facts.happened = "原执行已保存真实停止记录，原调用结果仍未封存，不能据此判定开发完成或提供方故障。";
+    facts.preservation = stoppedPlan ? "完整合法草稿已封存，原需求、任务、分支和代码基线保留。"
+      : "原开发文件保留，平台需核验完整进度及真实停止证明。";
+    facts.platform = stoppedPlan ? "已准备精确工程恢复方案，批准后消耗一次普通工作额度并保持暂停。"
+      : "可以核验停止证明、完整开发文件及剩余额度，准备同一需求的恢复方案。";
+    facts.user = !consoleSupportsStoppedExecutionRescue() ? "请在服务空闲时更新并刷新原需求。"
+      : stoppedPlan ? "查看下方方案，批准保留进度并保持暂停；之后再明确继续原需求。"
+      : "点击下方“检查停止后的保留进度”，查看平台核验结果。";
+  }
   if (consoleAvailable === true && !consoleSupportsOperation("HANDLE_DELIVERY_WAIT")) {
     if (!active && !decision) {
       if (!handling) facts.platform = "当前页面的处理操作未获当前服务支持，请先更新运行中的服务。";
@@ -2108,6 +2122,26 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
 }
 async function copyEngineeringWaitReport(request, handling) {
   const proof = handling.investigation;
+  const stoppedCurrent = engineeringWaitSteps(request).find(({task, step}) => task.task_id === handling.task_id &&
+    step.work_item_id === handling.work_item_id && engineeringStoppedExecutionRescueFacts(request, task, step));
+  if (stoppedCurrent) {
+    const {task, step} = stoppedCurrent;
+    const plan = engineeringBaselinePlan(request, task, step, "stopped_execution_rescue");
+    const facts = engineeringWaitCurrentFacts(request, step, engineeringWaitProof(request, step), handling, null,
+      activeOperation(request.id, request.project_id));
+    const report = ["ASE 交付处理报告", "需求 · " + request.title, "当前原因 · " + facts.happened,
+      "开发进度 · " + facts.preservation, "平台可以做什么 · " + facts.platform, "用户操作 · " + facts.user,
+      ...(plan ? ["当前恢复方案 · " + plan.plan_sha256] : []),
+      "原处理结果 · " + humanizeBlockingText(handling.summary || "未提供"),
+      "原执行 · " + proof.original_run_id, "处理报告摘要 · " + handling.handling_sha256].join("\n");
+    try {
+      await navigator.clipboard.writeText(report);
+      operationNotice = {kind: "info", title: "处理报告已复制", message: "报告包含当前恢复方案及原处理历史。"};
+    } catch {
+      operationNotice = {kind: "error", title: "无法复制处理报告", message: "请展开排障信息，选择处理说明和报告摘要复制。"};
+    }
+    renderNotification(); return;
+  }
   const providerCurrent = engineeringWaitSteps(request).find(({task, step}) => task.task_id === handling.task_id &&
     step.work_item_id === handling.work_item_id && engineeringStoppedProviderRetryFacts(request, task, step));
   const providerPlan = providerCurrent && engineeringCurrentProviderPlan(request, providerCurrent.task, providerCurrent.step);
@@ -2213,6 +2247,7 @@ function engineeringWaitBox(request, task, step) {
   const proof = engineeringWaitProof(request, step);
   const completedPlan = engineeringCurrentCompletedPlan(request, task, step);
   const providerPlan = engineeringCurrentProviderPlan(request, task, step);
+  const stoppedPlan = engineeringBaselinePlan(request, task, step, "stopped_execution_rescue");
   const providerRetry = engineeringStoppedProviderRetryFacts(request, task, step);
   const proofSha256 = proof?.proof_sha256;
   const decision = engineeringWaitDecision(request, step, proof);
@@ -2235,8 +2270,8 @@ function engineeringWaitBox(request, task, step) {
     const collectionFailed = handling?.collection_failed === true;
     const rejectedOutputValid = Boolean(matchingRejectedCoderOutputEvidence(request, step, proof));
     const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof",
-      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || null]);
-    appendEngineeringInvestigation(result, proof, {historical: Boolean(completedPlan || providerPlan), collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid});
+      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || stoppedPlan?.plan_sha256 || null]);
+    appendEngineeringInvestigation(result, proof, {historical: Boolean(completedPlan || providerPlan || stoppedPlan), collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid});
     management.append(result);
   }
   if (controlUnavailable) management.append(deliveryControlUnavailableNotice(controlUnavailable));
@@ -2303,6 +2338,7 @@ function engineeringWaitBox(request, task, step) {
     el("p", "处理说明 · " + humanizeBlockingText(handling.summary || "未提供"), "muted"));
   appendEngineeringBaseline(management, request, task, step);
   appendEngineeringCompletedOutputRescue(management, request, task, step);
+  appendEngineeringStoppedExecutionRescue(management, request, task, step);
   appendEngineeringStoppedProviderRetry(management, request, task, step);
   if (!completedPlan) appendEngineeringLegacyRescue(management, request, task, step, proof, handling);
   management.append(technical);
@@ -2528,11 +2564,13 @@ function engineeringBaselinePlan(request, task, step, purpose = "source_rebind")
       plan.facts?.task?.id !== bound.task_id || plan.facts.task_revision !== bound.expected_task_revision ||
       plan.facts.work_item_id !== bound.expected_work_item_id ||
       plan.dirty_capture?.source_revision !== bound.expected_source_revision ||
-      (!["completed_output_rescue", "stopped_provider_retry", "context_capacity_resume"].includes(purpose) && plan.target_base_ref !== operation.intent?.target_base_ref) ||
+      (!["completed_output_rescue", "stopped_provider_retry", "context_capacity_resume", "stopped_execution_rescue"].includes(purpose) && plan.target_base_ref !== operation.intent?.target_base_ref) ||
       plan.input_mode !== operation.intent?.input_mode ||
       !["preserve_draft", "coder_reapply"].includes(plan.input_mode)) return null;
   if (purpose === "completed_output_rescue" && !matchingCompletedOutputRescuePlan(plan, bound, operation)) return null;
   if (purpose === "stopped_provider_retry" && !matchingStoppedProviderRetryPlan(plan, bound, operation)) return null;
+  if (purpose === "stopped_execution_rescue" && (!matchingStoppedExecutionRescuePlan(plan, bound, operation) ||
+      plan.facts.stopped_execution.invocation_start.request.run_id !== engineeringWaitProof(request, step)?.original_run_id)) return null;
   if (purpose === "context_capacity_resume") {
     const capacity = engineeringContextCapacityFacts(request, task, step);
     if (!capacity || !matchingContextCapacityPlan(plan, capacity, operation)) return null;
@@ -2729,7 +2767,8 @@ function engineeringCompletedOutputRescueFacts(request, task, step) {
   const bound = engineeringBaselineFacts(request, task, step);
   const proof = engineeringWaitProof(request, step);
   const plan = engineeringBaselinePlan(request, task, step, "completed_output_rescue");
-  if (!bound || step.wait_disposition?.facts.classification === "EXECUTION_BASELINE_PAUSED" ||
+  if (!bound || engineeringStoppedExecutionRescueFacts(request, task, step) ||
+      step.wait_disposition?.facts.classification === "EXECUTION_BASELINE_PAUSED" ||
       engineeringCurrentCompletedPlan(request, task, step)?.purpose === "source_rebind" ||
       proof?.provider_failure_code === "AUTHENTICATION_ERROR" ||
       engineeringBaselinePlan(request, task, step, "stopped_provider_retry") ||
@@ -2794,6 +2833,101 @@ function appendEngineeringCompletedOutputRescue(target, request, task, step) {
       continuation_mode: "pause", reference: "批准精确已结束执行恢复方案，保留完整合法进度、原分支与原基线，保持暂停",
     }, bound), "primary") : deliveryButton("准备保留进度的恢复方案", () => submitEngineeringCompletedOutputRescue({
       ...bound, action: "PROPOSE_EXECUTION_BASELINE", purpose: "completed_output_rescue", input_mode: "preserve_draft",
+    }, bound), "primary"));
+  }
+  target.append(panel);
+}
+function matchingStoppedExecutionRescuePlan(plan, bound, operation) {
+  const proof = plan.facts.stopped_execution;
+  const start = proof?.invocation_start;
+  const request = start?.request;
+  const capture = proof?.capture_start;
+  const stop = proof?.capture_stop;
+  const reservation = plan.facts.continuation;
+  const base = plan.previous_binding?.execution_base_ref || plan.facts.task.base_ref;
+  return proof?.kind === "stopped_coder_execution_without_outcome" &&
+    /^[a-f0-9]{64}$/.test(proof.proof_sha256 || "") && request?.task_id === bound.task_id &&
+    request.role === "coder" && request.source_revision === bound.expected_source_revision &&
+    start.work_item_id === bound.expected_work_item_id && start.checkpoint_sequence === bound.expected_task_revision &&
+    typeof request.run_id === "string" && request.run_id.length > 0 &&
+    capture?.request?.run_id === request.run_id && capture.request.task_id === bound.task_id &&
+    capture.request.source_revision === bound.expected_source_revision && capture.task_revision === bound.expected_task_revision &&
+    capture.worktree_path === plan.dirty_capture.worktree_path &&
+    stop?.task_id === bound.task_id && stop.run_id === request.run_id && stop.capture_start_sha256 === capture.start_sha256 &&
+    stop.process_stop?.kind === "failed" && Number.isInteger(stop.process_stop.returncode) && stop.process_stop.returncode !== 0 &&
+    stop.process_stop.session_proof?.proof_scope === "owned_session_empty" &&
+    /^[a-f0-9]{64}$/.test(stop.process_stop.session_proof.proof_sha256 || "") &&
+    stop.output_present === false && !stop.cause &&
+    reservation?.retry_cause === "stopped_execution_unknown" && reservation.stopped_execution_sha256 === proof.proof_sha256 &&
+    !plan.facts.legacy_containment && !plan.facts.completed_output && !plan.facts.stopped_provider_failure &&
+    !plan.facts.implementation_artifact_id && !plan.facts.native_rule_change &&
+    plan.target_base_ref === base && plan.prepared_source_revision === bound.expected_source_revision &&
+    plan.input_mode === "preserve_draft" && !plan.conflicted && operation.intent?.target_base_ref == null;
+}
+function engineeringStoppedExecutionRescueFacts(request, task, step) {
+  const bound = engineeringBaselineFacts(request, task, step);
+  const proof = engineeringWaitProof(request, step);
+  const missing = proof?.missing || [];
+  if (!bound || task.project_id !== request.project_id || task.request_id !== request.id ||
+      ["DONE", "CLOSED"].includes(request.stage) || step.wait_disposition?.facts.classification !== "EXECUTION_UNCERTAIN" ||
+      !/^run_[a-z0-9_]+$/.test(proof?.original_run_id || "") ||
+      !/^[a-f0-9]{64}$/.test(proof?.process_stop_sha256 || "") ||
+      missing.length !== 2 || !missing.includes("OUTCOME_UNKNOWN") || !missing.includes("CHECKPOINT_UNAVAILABLE") ||
+      proof.permitted_resolutions?.length || proof.interruption_receipt_sha256 || proof.retry_cause ||
+      proof.knowledge_preparation || proof.rejected_output || proof.provider_failure_code ||
+      engineeringWaitDecision(request, step, proof)) return null;
+  return bound;
+}
+async function submitEngineeringStoppedExecutionRescue(intent, originalBound) {
+  const request = requestById(intent.delivery_id);
+  const current = request && engineeringWaitSteps(request).find(({task, step}) =>
+    sameEngineeringWaitIntent(engineeringStoppedExecutionRescueFacts(request, task, step), originalBound));
+  const plan = current && engineeringBaselinePlan(request, current.task, current.step, "stopped_execution_rescue");
+  if (!current || request.project_id !== snapshot?.selected_project_id || !canControlCurrentTeam() ||
+      !consoleSupportsStoppedExecutionRescue() || activeOperation(request.id, request.project_id) ||
+      !["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"].includes(intent.action) ||
+      intent.action === "PROPOSE_EXECUTION_BASELINE" && (intent.purpose !== "stopped_execution_rescue" ||
+        intent.input_mode !== "preserve_draft" || intent.target_base_ref != null) ||
+      intent.action === "EXECUTE_EXECUTION_BASELINE" && (!plan || plan.plan_sha256 !== intent.expected_plan_sha256 ||
+        intent.continuation_mode !== "pause")) {
+    operationNotice = {kind: "error", title: "停止后的恢复前提已变化", message: "请重新核对当前执行和完整进度；旧方案不能批准。"};
+    renderDetail(); renderNotification(); return null;
+  }
+  return submitOperation(intent);
+}
+function appendEngineeringStoppedExecutionRescue(target, request, task, step) {
+  const bound = engineeringStoppedExecutionRescueFacts(request, task, step);
+  if (!bound) return;
+  const plan = engineeringBaselinePlan(request, task, step, "stopped_execution_rescue");
+  const operation = engineeringBaselineProposalOperation(bound, "stopped_execution_rescue");
+  const active = activeOperation(request.id, request.project_id);
+  const panel = viewGroup(el("section", undefined, "engineering-baseline-panel engineering-baseline-pending"), "stopped-execution-rescue:" + step.work_item_id);
+  panel.append(el("h4", "原执行已停止 · 保留进度恢复"));
+  panel.append(engineeringGuidanceList(plan ? [
+    "平台已核验真实停止证明，原调用结果仍未封存；原执行原因和历史保持，不视为开发完成。",
+    "完整合法草稿已封存，原需求、分支和代码基线保留。",
+    "批准后消耗 1 次剩余开发额度并保持暂停；之后明确继续原需求，仍需独立 QA 和 Review。",
+  ] : ["已有真实停止记录，但原调用结果仍未封存。平台将检查原执行、完整开发文件和剩余额度，检查本身不启动新的 Coder。"]));
+  if (plan) {
+    const details = engineeringDetails("停止证明与恢复方案", step.work_item_id + ":stopped-execution-plan");
+    details.append(el("p", "保留代码基线 · " + plan.target_base_ref, "paths"),
+      el("p", "原执行 · " + plan.facts.stopped_execution.invocation_start.request.run_id, "paths"),
+      el("p", "方案摘要 · " + plan.plan_sha256, "paths"));
+    panel.append(details);
+  }
+  const unavailable = deliveryControlUnavailableReason();
+  if (unavailable) panel.append(deliveryControlUnavailableNotice(unavailable));
+  else if (!consoleSupportsStoppedExecutionRescue()) panel.append(el("p", "当前服务尚不支持此停止后的恢复入口，请在服务空闲时更新并刷新原需求。", "muted"));
+  else if (active) panel.append(engineeringActiveOperationBox(request, active));
+  else if (canControlCurrentTeam()) {
+    if (!plan && ["FAILED", "INTERRUPTED"].includes(operation?.status)) panel.append(el("p", "本次检查未完成 · " +
+      humanizeBlockingText(operation.error_summary || "恢复前提未核验完整。") + " 请先处理所列原因，再检查保留进度。", "error"));
+    panel.append(plan ? deliveryButton("批准保留进度，保持暂停", () => submitEngineeringStoppedExecutionRescue({
+      action: "EXECUTE_EXECUTION_BASELINE", project_id: request.project_id, delivery_id: request.id,
+      expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id, expected_plan_sha256: plan.plan_sha256,
+      continuation_mode: "pause", reference: "批准精确停止证明与完整进度方案，保留未知原结果，消耗普通工作额度并保持暂停",
+    }, bound), "primary") : deliveryButton("检查停止后的保留进度", () => submitEngineeringStoppedExecutionRescue({
+      ...bound, action: "PROPOSE_EXECUTION_BASELINE", purpose: "stopped_execution_rescue", input_mode: "preserve_draft",
     }, bound), "primary"));
   }
   target.append(panel);
@@ -3127,6 +3261,7 @@ async function loadEngineeringNativeRuleReview(request, task, step, plan, delta)
 }
 function appendEngineeringBaseline(target, request, task, step) {
   const bound = engineeringBaselineFacts(request, task, step);
+  if (engineeringStoppedExecutionRescueFacts(request, task, step)) return;
   if (!bound) return;
   const sourcePlan = engineeringBaselinePlan(request, task, step);
   const plan = sourcePlan?.facts.stopped_provider_failure &&

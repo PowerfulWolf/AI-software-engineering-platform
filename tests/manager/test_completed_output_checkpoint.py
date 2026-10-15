@@ -8,7 +8,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -60,14 +60,19 @@ from ai_software_engineer.orchestration.continuation_models import (
     ExecutionCaptureStop,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
+from ai_software_engineer.owned_sessions import OwnedSessionController
 from ai_software_engineer.store import SqliteTaskRepository
-from ai_software_engineer.work_queue.execution_store import AcceptedRoleArtifact, MySqlRoleQueue
+from ai_software_engineer.work_queue.execution_store import (
+    AcceptedRoleArtifact,
+    MySqlRoleQueue,
+    RoleQueueAdmission,
+)
 from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationOutcome,
     DeliveryInvocationStart,
 )
 from ai_software_engineer.work_queue.models import QueueArtifactReceipt
-from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
+from ai_software_engineer.work_queue.worker import AcceptedArtifactStore, WorkerExecutionGuard
 from tests.git.test_worktree import _git
 from tests.manager.test_baseline_wait_fact_collection import IdleQueue
 from tests.manager.test_delivery_wait import seal_start
@@ -99,6 +104,11 @@ def _capture_stop(stop: ExecutionCaptureStop, **changes: object) -> ExecutionCap
 
 class CompletedQueue(IdleQueue):
     retired_output_artifacts: frozenset[str] = frozenset()
+    queue_admission: RoleQueueAdmission | None = None
+
+    def admission(self, task_id: str) -> RoleQueueAdmission | None:
+        assert task_id == self.item.task_id
+        return self.queue_admission
 
     def rejected_output_artifact_ids(self, task_id: str) -> frozenset[str]:
         assert task_id == self.item.task_id
@@ -153,6 +163,7 @@ def completed(
     problem = getattr(request, "param", None)
     stopped_provider = isinstance(problem, str) and problem.startswith("stopped_provider")
     rejected_output = isinstance(problem, str) and problem.startswith("invalid_")
+    stopped_unknown = isinstance(problem, str) and problem.startswith("stopped_unknown")
     variant = (
         problem.removeprefix("invalid_")
         if isinstance(problem, str) and problem.startswith("invalid_")
@@ -161,11 +172,18 @@ def completed(
     native = V2Fixture(
         tmp_path,
         Guard(descriptor),
-        work_limit=1 if variant in {"exhausted", "stopped_provider_exhausted"} else 5,
+        work_limit=1
+        if variant in {"exhausted", "stopped_provider_exhausted", "stopped_unknown_exhausted"}
+        else 5,
     )
     process: subprocess.Popen[bytes] | None = None
     try:
-        if variant in {"named", "named_policy"} or rejected_output or stopped_provider:
+        if (
+            variant in {"named", "named_policy"}
+            or rejected_output
+            or stopped_provider
+            or stopped_unknown
+        ):
             # Baseline migration requires a semantic branch frozen in a fresh
             # NEW Task. Never alter a sealed invocation or an existing Task row.
             native.repository.close()
@@ -227,7 +245,14 @@ def completed(
         assert continuation.started(native.request, native.worktree.path) is not None
         if not stopped_provider:
             (native.worktree.path / "src/app.py").write_text("VALUE = 2\n")
-        if variant in {"live_process", "stopped_provider_live_process"}:
+        session_proof = None
+        if stopped_unknown:
+            process = subprocess.Popen(
+                (sys.executable, "-c", "import time; time.sleep(60)"), start_new_session=True
+            )
+            session_proof = OwnedSessionController(process).stop(timeout_seconds=0.2)
+            returncode = process.wait(timeout=5)
+        elif variant in {"live_process", "stopped_provider_live_process"}:
             process = subprocess.Popen(
                 (sys.executable, "-c", "import time; time.sleep(60)"), start_new_session=True
             )
@@ -248,16 +273,23 @@ def completed(
             process_id=process.pid,
             group_id=process.pid,
             returncode=returncode,
-            kind="failed" if stopped_provider else "completed",
-            stopped_at=NOW + timedelta(seconds=1),
+            kind="failed" if stopped_provider or stopped_unknown else "completed",
+            stopped_at=datetime.now(UTC) if stopped_unknown else NOW + timedelta(seconds=1),
+            session_proof=session_proof,
         )
         continuation.record_native_stop(
             native.request,
             native.worktree.path,
             process_stop=stop,
-            output_present=not stopped_provider and variant != "output_absent",
+            output_present=not stopped_provider
+            and not stopped_unknown
+            and variant != "output_absent",
             cause=None,
-            original_error_code=AgentErrorCode.AUTHENTICATION_ERROR if stopped_provider else None,
+            original_error_code=AgentErrorCode.AUTHENTICATION_ERROR
+            if stopped_provider
+            else AgentErrorCode.PROVIDER_ERROR
+            if stopped_unknown
+            else None,
         )
         capture_start = native.store.capture_start(native.request.run_id)
         capture_stop = native.store.capture_stop(native.request.run_id)
@@ -294,7 +326,8 @@ def completed(
         )
         outcome = _outcome(start, result)
         records = KnowledgeRecordStore(tmp_path / "invocations")
-        records.put("invocation-outcomes", queue.item.id, outcome)
+        if not stopped_unknown:
+            records.put("invocation-outcomes", queue.item.id, outcome)
         native.guard.live = False
         task = native.repository.get(native.task.id)
         # Public Host coverage owns admission/dispatch validation. This seam uses
@@ -314,11 +347,16 @@ def completed(
         collector.state = tmp_path
         collector.queue = cast(MySqlRoleQueue, queue)
         collector.git = native.git
+        collector.capacity_artifacts = native.artifacts
         collector.permissions = native.request.permissions
         collector.guard = WorkerExecutionGuard()
+        collector.artifacts = AcceptedArtifactStore(
+            native.artifacts, cast(MySqlRoleQueue, queue), task.id, collector.guard
+        )
         collector.locks_root = tmp_path / "idle-locks"
         collector._scope_held = False
         collector._idle_cursor = None
+        collector.route_root = tmp_path / "model-routes"
         yield CompletedFixture(
             native, queue, collector, start, outcome, capture_start, capture_stop, ledger, tmp_path
         )

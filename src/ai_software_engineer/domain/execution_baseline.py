@@ -35,6 +35,7 @@ class BaselinePurpose(StrEnum):
     LEGACY_WORKSPACE_RESCUE = "legacy_workspace_rescue"
     COMPLETED_OUTPUT_RESCUE = "completed_output_rescue"
     STOPPED_PROVIDER_RETRY = "stopped_provider_retry"
+    STOPPED_EXECUTION_RESCUE = "stopped_execution_rescue"
     CONTEXT_CAPACITY_RESUME = "context_capacity_resume"
 
 
@@ -72,6 +73,9 @@ class ExecutionBaselineBinding(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     legacy_containment_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    stopped_execution_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     completed_output_sha256: Sha256 | None = Field(
@@ -142,6 +146,23 @@ class ExecutionBaselineBinding(DomainModel):
                 raise ValueError(
                     "legacy rescue must preserve the exact source under human authority"
                 )
+        elif self.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE:
+            if (
+                self.stopped_execution_sha256 is None
+                or self.execution_base_ref != self.prior_execution_base_ref
+                or self.execution_source_revision != self.prior_source_revision
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.continuation_mode is not BaselineContinuationMode.PAUSE
+                or self.authority_source != "engineering_operator_decision"
+                or self.legacy_containment_sha256 is not None
+                or self.completed_output_sha256 is not None
+                or self.stopped_provider_failure_sha256 is not None
+                or self.context_capacity_receipt_sha256 is not None
+                or self.service_pause_outcome_sha256 is not None
+                or self.superseded_implementation_artifact_id is not None
+                or self.before_inventory_sha256 != self.after_inventory_sha256
+            ):
+                raise ValueError("未知结果停止恢复必须保留原基线和完整现场, 精确批准后保持暂停")
         elif self.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
             if (
                 self.execution_base_ref != self.prior_execution_base_ref
@@ -190,6 +211,10 @@ class ExecutionBaselineBinding(DomainModel):
             and self.service_pause_outcome_sha256 is None
         ) or self.legacy_containment_sha256 is not None:
             raise ValueError("代码基线更新必须选择不同的执行基线, 不能混入旧执行隔离证据")
+        if (self.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE) != (
+            self.stopped_execution_sha256 is not None
+        ):
+            raise ValueError("未知结果停止证明只能属于独立精确恢复绑定")
         if self.service_pause_outcome_sha256 is not None and (
             self.purpose is not BaselinePurpose.SOURCE_REBIND
             or self.legacy_containment_sha256 is not None

@@ -39,6 +39,10 @@ from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationIntent,
     observe_verifier_preparation,
 )
+from ai_software_engineer.orchestration.continuation_models import (
+    ExecutionCaptureStart,
+    ExecutionCaptureStop,
+)
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.team_workspace import _read_regular, _reject_symlinks
 from ai_software_engineer.work_queue.claim_snapshot import require_claim_snapshot
@@ -64,6 +68,15 @@ class UninvokedClaimBoundary:
     observed_at: datetime
     run_id: str
     context_manifest_id: str
+
+
+@dataclass(frozen=True)
+class PriorInvocationFence:
+    """Exact independently contained prior call; never a historical refusal event."""
+
+    start: DeliveryInvocationStart
+    capture_start: ExecutionCaptureStart | None = None
+    capture_stop: ExecutionCaptureStop | None = None
 
 
 class CapacityInputQueue(Protocol):
@@ -462,7 +475,11 @@ class CapacityInputReader:
         )
 
     def require_claim_not_started(
-        self, marker: UninvokedClaimBoundary, *, allow_later_claims: bool = False
+        self,
+        marker: UninvokedClaimBoundary,
+        *,
+        allow_later_claims: bool = False,
+        prior_invocation_fence: PriorInvocationFence | None = None,
     ) -> None:
         """Reject all main/native/route/artifact facts conflicting with the original claim.
 
@@ -472,6 +489,8 @@ class CapacityInputReader:
         starts: tuple[DeliveryInvocationStart, ...] = ()
         outcomes: tuple[DeliveryInvocationOutcome, ...] = ()
         root = self.state / "invocations"
+        if prior_invocation_fence is not None and not self._capacity_ledger_exists(root):
+            raise ValueError("重领观察缺少原调用记录")
         if self._capacity_ledger_exists(root):
             records = KnowledgeRecordStore(root, read_only=True)
             starts = records.list("invocation-starts", DeliveryInvocationStart)
@@ -484,8 +503,12 @@ class CapacityInputReader:
                 "invocation-outcomes",
                 tuple((outcome.start.work_item_id, outcome) for outcome in outcomes),
             )
+            if prior_invocation_fence is not None:
+                self._require_prior_invocation_fence(marker, prior_invocation_fence, records)
             for start in (*starts, *(outcome.start for outcome in outcomes)):
                 start.validate_integrity()
+                if prior_invocation_fence is not None and start == prior_invocation_fence.start:
+                    continue
                 if self._conflicts_with_claim(
                     marker,
                     start.request,
@@ -541,6 +564,11 @@ class CapacityInputReader:
                 if path.name.startswith("capture-start-"):
                     run_id = path.name.removeprefix("capture-start-").removesuffix(".json")
                     native_start = native.capture_start(run_id)
+                    if prior_invocation_fence is not None and (
+                        native_start == prior_invocation_fence.capture_start
+                        and native_start.request == prior_invocation_fence.start.request
+                    ):
+                        continue
                     if self._conflicts_with_claim(
                         marker,
                         native_start.request,
@@ -551,9 +579,15 @@ class CapacityInputReader:
                         raise ValueError("容量停止的原 claim 已有原生执行记录, 不能证明未调用")
                 elif path.name.startswith("capture-stop-"):
                     run_id = path.name.removeprefix("capture-stop-").removesuffix(".json")
-                    native.capture_stop(run_id)
+                    native_stop = native.capture_stop(run_id)
                     # Reading the matching start also verifies stop/start Run and SHA.
                     native_start = native.capture_start(run_id)
+                    if prior_invocation_fence is not None and (
+                        native_start == prior_invocation_fence.capture_start
+                        and native_stop == prior_invocation_fence.capture_stop
+                        and native_start.request == prior_invocation_fence.start.request
+                    ):
+                        continue
                     if self._conflicts_with_claim(
                         marker,
                         native_start.request,
@@ -602,6 +636,55 @@ class CapacityInputReader:
                 candidate=artifact if isinstance(artifact, ImplementationReportArtifact) else None,
                 outcomes=outcomes,
             )
+
+    def _require_prior_invocation_fence(
+        self,
+        marker: UninvokedClaimBoundary,
+        fence: PriorInvocationFence,
+        records: KnowledgeRecordStore,
+    ) -> None:
+        start = fence.start
+        start.validate_integrity()
+        prior = self.queue.original_claim(start.lease_id)
+        current = self.queue.original_claim(marker.lease_id)
+        if (
+            records.find("invocation-starts", marker.work_item_id, DeliveryInvocationStart) != start
+            or records.find("invocation-outcomes", marker.work_item_id, DeliveryInvocationOutcome)
+            is not None
+            or start.lease_id == marker.lease_id
+            or prior.lease.id != start.lease_id
+            or current.lease.id != marker.lease_id
+            or not (prior.claimed_at <= start.started_at < current.claimed_at)
+            or prior.work_item.dispatch_sequence >= current.work_item.dispatch_sequence
+            or current.work_item.dispatch_sequence != marker.dispatch_sequence
+            or (start.work_item_id, start.checkpoint_sequence)
+            != (marker.work_item_id, marker.checkpoint_sequence)
+            or any(
+                (
+                    claim.work_item.id,
+                    claim.work_item.task_id,
+                    claim.work_item.role,
+                    claim.work_item.attempt,
+                    claim.work_item.checkpoint_sequence,
+                )
+                != (
+                    marker.work_item_id,
+                    marker.task_id,
+                    marker.role,
+                    marker.attempt,
+                    marker.checkpoint_sequence,
+                )
+                for claim in (prior, current)
+            )
+            or (start.request.task_id, start.request.role, start.request.attempt)
+            != (marker.task_id, marker.role, marker.attempt)
+            or (self.permissions is not None and start.request.permissions != self.permissions)
+            or self.queue.step_for_invocation(
+                start.work_item_id, start.request.execution_baseline_sha256
+            ).boundary.source_revision
+            != start.request.source_revision
+        ):
+            raise ValueError("重领观察缺少精确更早的未完成调用屏障")
 
     def _require_other_model_fact(
         self,

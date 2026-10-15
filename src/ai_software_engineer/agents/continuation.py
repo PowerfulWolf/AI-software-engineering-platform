@@ -4,7 +4,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from ai_software_engineer.agents.execution import ExecutionStop, NativeProcessStop
+from ai_software_engineer.agents.execution import (
+    ExecutionAbortReason,
+    ExecutionStop,
+    NativeProcessStop,
+)
 from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentResult
 from ai_software_engineer.domain.continuation import ContinuationCause
 from ai_software_engineer.domain.task import Task
@@ -82,6 +86,7 @@ class NativeStopRecordingControl(Protocol):
         output_present: bool,
         cause: ContinuationCause | None,
         original_error_code: AgentErrorCode | None,
+        execution_abort_reason: ExecutionAbortReason | None = None,
     ) -> None: ...
 
 

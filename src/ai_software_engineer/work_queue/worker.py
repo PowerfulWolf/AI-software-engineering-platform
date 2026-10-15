@@ -13,7 +13,7 @@ from threading import Event, Lock, Thread
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents.continuation import ContinuationExecutionUncertain
-from ai_software_engineer.agents.execution import bind_execution_guard
+from ai_software_engineer.agents.execution import ExecutionAbortReason, bind_execution_guard
 from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.artifacts.ordering import ArtifactOrderingError
 from ai_software_engineer.artifacts.ports import ArtifactRef
@@ -73,6 +73,7 @@ class WorkerLease:
         self._token = owner_token
         self._stop = Event()
         self._lost = Event()
+        self._abort_reason: ExecutionAbortReason | None = None
         self._lifecycle = Lock()
         self._knowledge_wait: KnowledgeGap | None = None
         self._delivery_wait: DeliveryDisposition | None = None
@@ -94,8 +95,12 @@ class WorkerLease:
         if self._thread.is_alive():
             self._thread.join(35)
         if self._thread.is_alive():
+            if self._abort_reason is None:
+                self._abort_reason = ExecutionAbortReason(detail="heartbeat_stop_timeout")
             self._lost.set()
-            raise QueueLeaseLost("Worker heartbeat did not stop")
+            raise QueueLeaseLost(
+                "Worker heartbeat did not stop", execution_abort_reason=self._abort_reason
+            )
 
     def _heartbeat(self) -> None:
         while not self._stop.wait(min(10, self._ttl.total_seconds() / 3)):
@@ -113,6 +118,8 @@ class WorkerLease:
                     )
                     self._expires_at = now + self._ttl
                 except Exception:
+                    if self._abort_reason is None:
+                        self._abort_reason = ExecutionAbortReason(detail="renewal_exception")
                     self._lost.set()
                     return
 
@@ -121,8 +128,13 @@ class WorkerLease:
             raise DeliveryWaiting(self._delivery_wait)
         if self._knowledge_wait is not None:
             raise KnowledgeGapRaised(self._knowledge_wait)
-        if self._lost.is_set() or datetime.now(UTC) >= self._expires_at:
-            raise QueueLeaseLost("Worker lease renewal was lost")
+        if not self._lost.is_set() and datetime.now(UTC) >= self._expires_at:
+            self._abort_reason = ExecutionAbortReason(detail="local_expiry")
+            self._lost.set()
+        if self._lost.is_set():
+            raise QueueLeaseLost(
+                "Worker lease renewal was lost", execution_abort_reason=self._abort_reason
+            )
 
     def mutation_fence(self, cursor: DictCursor, task_id: str) -> None:
         self.check()

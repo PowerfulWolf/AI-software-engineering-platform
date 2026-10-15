@@ -42,7 +42,8 @@ def _result_schema() -> dict[str, object]:
                 "properties": {"code": {"enum": ["WORK_INTERRUPTED", "SERVICE_PAUSED"]}},
             },
             "then": {"properties": {"transient": {"const": False}}},
-        }
+        },
+        *failure.get("allOf", []),
     ]
     schema["allOf"] = [
         {
@@ -260,6 +261,7 @@ def main() -> None:
         ]
     }
     capture_schema["$defs"]["ExecutionCaptureStop"]["allOf"] = [
+        *capture_schema["$defs"]["ExecutionCaptureStop"].get("allOf", []),
         {
             "if": {
                 "required": ["cause"],

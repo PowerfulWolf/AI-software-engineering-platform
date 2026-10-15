@@ -382,6 +382,10 @@ class ManagerConsoleAdapter:
                             else "原执行已核验结束, 报告内容仍未知。完整合法进度已封存; "
                             "请核对精确恢复方案, 批准后保持暂停, 再明确继续原需求。"
                             if plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+                            else "原执行的完整停止已核验, 原结果和原因仍未知。完整合法草稿已封存; "
+                            "请核对精确工程方案, 批准后保持暂停, "
+                            "再明确继续原需求并使用普通工作额度重新产出。"
+                            if plan.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE
                             else "调用前容量停止和完整进度已核验, 原代码版本保持。"
                             "请核对精确容量恢复方案, 批准后保持暂停, 再单独明确继续原需求。"
                             if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME

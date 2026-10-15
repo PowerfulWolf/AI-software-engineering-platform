@@ -610,6 +610,37 @@
       "title": "DeliveryResponsibility",
       "type": "string"
     },
+    "ExecutionAbortReason": {
+      "additionalProperties": false,
+      "description": "Safe trusted authority facts, never provider text or an automatic retry cause.",
+      "properties": {
+        "kind": {
+          "const": "lease_authority_unconfirmed",
+          "default": "lease_authority_unconfirmed",
+          "title": "Kind",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "enum": [
+                "local_expiry",
+                "renewal_exception",
+                "heartbeat_stop_timeout"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        }
+      },
+      "title": "ExecutionAbortReason",
+      "type": "object"
+    },
     "ExecutionCaptureStart": {
       "additionalProperties": false,
       "description": "Original claimed inventory, sealed before the native invocation starts.",
@@ -697,6 +728,43 @@
     },
     "ExecutionCaptureStop": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "execution_abort_reason": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "execution_abort_reason"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cause": {
+                "type": "null"
+              },
+              "original_error_code": {
+                "const": "WORK_INTERRUPTED"
+              },
+              "process_stop": {
+                "properties": {
+                  "session_proof": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "session_proof"
+                ]
+              }
+            },
+            "required": [
+              "original_error_code"
+            ]
+          }
+        }
+      ],
       "description": "Owned-runner final observation; it grants no retry or artifact authority.",
       "properties": {
         "kind": {
@@ -761,6 +829,17 @@
           ],
           "default": null
         },
+        "execution_abort_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionAbortReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "observation_sha256": {
           "pattern": "^[a-f0-9]{64}$",
           "title": "Observation Sha256",
@@ -776,101 +855,7 @@
         "observation_sha256"
       ],
       "title": "ExecutionCaptureStop",
-      "type": "object",
-      "allOf": [
-        {
-          "if": {
-            "required": [
-              "cause"
-            ],
-            "properties": {
-              "cause": {
-                "const": "local_execution_limit"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "original_error_code"
-            ],
-            "properties": {
-              "original_error_code": {
-                "const": "TIMEOUT"
-              },
-              "process_stop": {
-                "properties": {
-                  "kind": {
-                    "const": "local_execution_limit"
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "required": [
-              "cause"
-            ],
-            "properties": {
-              "cause": {
-                "const": "provider_transient"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "original_error_code"
-            ],
-            "properties": {
-              "original_error_code": {
-                "enum": [
-                  "PROVIDER_UNAVAILABLE",
-                  "QUOTA_EXHAUSTED",
-                  "RATE_LIMITED",
-                  "TIMEOUT"
-                ]
-              },
-              "process_stop": {
-                "properties": {
-                  "kind": {
-                    "const": "failed"
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "required": [
-              "cause"
-            ],
-            "properties": {
-              "cause": {
-                "const": "service_pause"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "original_error_code"
-            ],
-            "properties": {
-              "original_error_code": {
-                "const": "SERVICE_PAUSED"
-              },
-              "process_stop": {
-                "properties": {
-                  "kind": {
-                    "const": "service_pause"
-                  }
-                }
-              }
-            }
-          }
-        }
-      ]
+      "type": "object"
     },
     "ModelRouteReason": {
       "enum": [

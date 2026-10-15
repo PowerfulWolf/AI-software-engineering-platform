@@ -116,6 +116,7 @@ def test_all_known_embeddings_and_fresh_repair_regeneration_keep_exact_stop_grap
         "service-pause-stop.schema.json",
         "stopped-failure-budget-settlement.schema.json",
         "stopped-provider-failure.schema.json",
+        "stopped-coder-execution.schema.json",
         "structured-execution-observation.schema.json",
     }
     for path in paths:

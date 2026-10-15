@@ -92,14 +92,20 @@ class Facts:
     outcome: KnowledgeInvocationOutcome
 
 
-def knowledge_failure(tmp_path: Path, *, returned: bool = False) -> Facts:
+def knowledge_failure(
+    tmp_path: Path, *, returned: bool = False, dispatch_sequence: int = 0
+) -> Facts:
     repository = tmp_path / "repository"
     repository.mkdir()
     task = make_task().model_copy(
         update={"repository": str(repository), "status": TaskStatus.IMPLEMENTING, "attempts": 1}
     )
     item = queued_item(checkpoint_sequence=3).model_copy(
-        update={"task_id": task.id, "repository_scopes": (task.repository,)}
+        update={
+            "task_id": task.id,
+            "repository_scopes": (task.repository,),
+            "dispatch_sequence": dispatch_sequence,
+        }
     )
     claim = _claim(item, "lease_knowledge_failed")
     step = QueuedRoleStep(

@@ -34,6 +34,10 @@ from ai_software_engineer.manager.completed_output_checkpoint import (
     validate_completed_output_capture,
 )
 from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
+from ai_software_engineer.manager.stopped_execution_checkpoint import (
+    StoppedCoderExecutionProof,
+    validate_stopped_coder_capture,
+)
 from ai_software_engineer.manager.stopped_provider_checkpoint import (
     StoppedProviderFailureProof,
     validate_stopped_provider_capture,
@@ -56,7 +60,11 @@ class BaselineExecutionReservation(DomainModel):
         "completed_output_unavailable",
         "completed_output_rejected",
         "provider_prerequisite_repaired",
+        "stopped_execution_unknown",
     ]
+    stopped_execution_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     completed_output_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -73,7 +81,22 @@ class BaselineExecutionReservation(DomainModel):
 
     @model_validator(mode="after")
     def validate_reservation(self) -> Self:
-        if self.retry_cause == "uninvoked":
+        if self.retry_cause == "stopped_execution_unknown":
+            if (
+                self.original_run_id is None
+                or self.current_invocation_start_sha256 is None
+                or self.stopped_execution_sha256 is None
+                or self.next_execution_attempt != self.current_attempt + 1
+                or self.current_invocation_outcome_sha256 is not None
+                or self.interruption_receipt_sha256 is not None
+                or self.containment_sha256 is not None
+                or self.completed_output_sha256 is not None
+                or self.stopped_provider_failure_sha256 is not None
+                or self.retry_failure is not None
+                or self.reservation_already_applied
+            ):
+                raise ValueError("未知结果停止恢复必须消费普通工作额度, 不得补造结果或退款")
+        elif self.retry_cause == "uninvoked":
             if (
                 any(
                     value is not None
@@ -151,6 +174,10 @@ class BaselineExecutionReservation(DomainModel):
             and self.stopped_provider_failure_sha256 is not None
         ):
             raise ValueError("提供方前提失败证明不能混入其他执行预留")
+        if (self.retry_cause == "stopped_execution_unknown") != (
+            self.stopped_execution_sha256 is not None
+        ):
+            raise ValueError("未知结果停止证明不能混入其他执行预留")
         if self.retry_failure is not None and (
             self.retry_failure.attempt != self.current_attempt
             or self.retry_failure.run_id != self.original_run_id
@@ -184,6 +211,9 @@ class BaselineExecutionFacts(DomainModel):
     legacy_containment: LegacyExecutionContainment | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    stopped_execution: StoppedCoderExecutionProof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     completed_output: CompletedCoderOutputUnavailableProof | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -199,6 +229,39 @@ class BaselineExecutionFacts(DomainModel):
 
     @model_validator(mode="after")
     def validate_inputs(self) -> Self:
+        stopped, reservation = self.stopped_execution, self.continuation
+        if stopped is not None:
+            stopped.validate_integrity()
+            invocation = stopped.invocation_start
+            start, request = stopped.capture_start, invocation.request
+            if (
+                reservation is None
+                or reservation.retry_cause != "stopped_execution_unknown"
+                or reservation.stopped_execution_sha256 != stopped.proof_sha256
+                or reservation.original_run_id != request.run_id
+                or reservation.current_invocation_start_sha256 != invocation.start_sha256
+                or invocation.work_item_id != self.work_item_id
+                or invocation.checkpoint_sequence != self.checkpoint_sequence
+                or start.task_revision != self.task_revision
+                or start.task_intent_sha256 != task_intent_sha256(self.task)
+                or (start.scope.team_id, start.scope.project_id, start.scope.repository_id)
+                != (self.scope.team_id, self.scope.project_id, self.scope.repository_id)
+                or request.task_id != self.task.id
+                or request.permissions != self.permissions
+                or request.attempt != self.task.attempts
+                or reservation.current_attempt != request.attempt
+                or self.legacy_containment is not None
+                or self.completed_output is not None
+                or self.stopped_provider_failure is not None
+                or self.context_capacity_receipt_sha256 is not None
+                or self.implementation_artifact_id is not None
+                or self.native_rule_change is not None
+                or self.source_native_rules_sha256 != self.target_native_rules_sha256
+                or not set(request.input_artifact_ids).issubset(self.source_artifact_ids)
+            ):
+                raise ValueError("未知结果停止事实未绑定精确原任务、权限和普通工作预留")
+        elif reservation is not None and reservation.retry_cause == "stopped_execution_unknown":
+            raise ValueError("未知结果停止预留缺少完整原执行证明")
         change = self.native_rule_change
         if change is not None:
             change.validate_integrity()
@@ -356,6 +419,13 @@ class ExecutionBaselinePlan(DomainModel):
         self.facts.validate_integrity()
         CapturedMutations.model_validate(self.dirty_capture.to_wire())
         CapturedMutations.model_validate(self.complete_capture.to_wire())
+        if self.facts.stopped_execution is not None:
+            validate_stopped_coder_capture(
+                self.facts.stopped_execution,
+                self.dirty_capture,
+                self.before_inventory,
+                self.facts.permissions,
+            )
         if self.facts.completed_output is not None:
             validate_completed_output_capture(
                 self.facts.completed_output,
@@ -370,6 +440,10 @@ class ExecutionBaselinePlan(DomainModel):
                 self.before_inventory,
                 self.facts.permissions,
             )
+        if (self.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE) != (
+            self.facts.stopped_execution is not None
+        ):
+            raise ValueError("未知结果停止证明只能属于独立恢复方案")
         task = self.facts.task
         if (
             self.facts.native_rule_change is not None
@@ -406,6 +480,16 @@ class ExecutionBaselinePlan(DomainModel):
             survey = self.facts.legacy_containment.local_execution_survey
             if survey is not None and survey.worktree_path != self.dirty_capture.worktree_path:
                 raise ValueError("本机调查与恢复方案封存的工作区不同")
+        elif self.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE:
+            if (
+                self.facts.stopped_execution is None
+                or self.target_base_ref != expected_base
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.prepared_source_revision != self.dirty_capture.source_revision
+                or self.prepared_dirty_patch != self.dirty_capture.patch
+                or self.conflicted
+            ):
+                raise ValueError("未知结果停止恢复必须使用原基线和完整合法草稿")
         elif self.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
             if (
                 self.facts.completed_output is None
@@ -748,7 +832,8 @@ def require_completed_output_confirmation(
     """Rejected output is reproduced under exact human PAUSE, never auto-adopted."""
     proof = plan.facts.completed_output
     if (
-        plan.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE
+        plan.purpose
+        in {BaselinePurpose.COMPLETED_OUTPUT_RESCUE, BaselinePurpose.STOPPED_EXECUTION_RESCUE}
         or (proof is not None and proof.reason is CompletedCoderOutputReason.REJECTED)
     ) and continuation_mode is not BaselineContinuationMode.PAUSE:
         raise ValueError("已结束执行恢复批准后必须保持暂停, 再明确继续原需求")

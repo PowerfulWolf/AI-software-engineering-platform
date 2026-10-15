@@ -66,7 +66,10 @@ from ai_software_engineer.manager.baseline_models import (
     require_rescue_confirmation,
 )
 from ai_software_engineer.manager.baseline_native_rules import build_native_rule_change
-from ai_software_engineer.manager.capacity_input_reader import CapacityInputReader
+from ai_software_engineer.manager.capacity_input_reader import (
+    CapacityInputReader,
+    PriorInvocationFence,
+)
 from ai_software_engineer.manager.completed_output_checkpoint import (
     CompletedCoderOutputReason,
     CompletedCoderOutputUnavailableProof,
@@ -82,8 +85,10 @@ from ai_software_engineer.manager.dispatch import DeliveryAllocation
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.manager.knowledge_invocation_proof import (
     KnowledgeOnlyClaimProof,
+    ReplayGuardedClaimObservation,
     read_capacity_claim_snapshot,
     read_failed_knowledge_claims,
+    read_replay_guarded_claims,
 )
 from ai_software_engineer.manager.legacy_containment import (
     LegacyExecutionContainment,
@@ -97,6 +102,10 @@ from ai_software_engineer.manager.legacy_local_execution import (
     TrustedLegacyLocalExecutionObserver,
 )
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
+from ai_software_engineer.manager.stopped_execution_checkpoint import (
+    StoppedCoderExecutionProof,
+    require_stopped_coder_workspace,
+)
 from ai_software_engineer.manager.stopped_provider_checkpoint import (
     StoppedProviderFailureProof,
     require_stopped_provider_workspace,
@@ -145,6 +154,7 @@ class BaselineProposeCommand(DomainModel):
         if self.purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
+            BaselinePurpose.STOPPED_EXECUTION_RESCUE,
             BaselinePurpose.CONTEXT_CAPACITY_RESUME,
         }:
             if (
@@ -202,6 +212,7 @@ class BaselineProposeCommand(DomainModel):
             in {
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                 BaselinePurpose.CONTEXT_CAPACITY_RESUME,
             }
             else self.target_base_ref,
@@ -301,14 +312,21 @@ class BaselineInvocationProof(DomainModel):
     knowledge_only_claims: tuple[KnowledgeOnlyClaimProof, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
+    replay_guarded_claims: tuple[ReplayGuardedClaimObservation, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
     legacy_containment: LegacyExecutionContainment | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     legacy_binding_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    stopped_execution: StoppedCoderExecutionProof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     proof_kind: Literal[
         "definitive_outcome",
+        "stopped_execution_without_outcome",
         "owned_process_stopped",
         "unclaimed",
         "claimed_preflight",
@@ -319,6 +337,30 @@ class BaselineInvocationProof(DomainModel):
 
     @model_validator(mode="after")
     def validate_legacy(self) -> Self:
+        if self.replay_guarded_claims and (
+            self.proof_kind
+            not in {"stopped_execution_without_outcome", "legacy_execution_contained"}
+            or len({value.lease_id for value in self.replay_guarded_claims})
+            != len(self.replay_guarded_claims)
+        ):
+            raise ValueError("重领观察只能覆盖已独立隔离的精确原调用和不同真实 claim")
+        for observation in self.replay_guarded_claims:
+            observation.validate_integrity()
+            if observation.blocking_start_sha256 != self.start_sha256:
+                raise ValueError("重领观察没有绑定此精确原调用")
+        if self.proof_kind == "stopped_execution_without_outcome":
+            proof = self.stopped_execution
+            if (
+                proof is None
+                or proof.invocation_start.work_item_id != self.work_item_id
+                or proof.invocation_start.start_sha256 != self.start_sha256
+                or self.outcome_sha256 is not None
+                or self.interruption_receipt_sha256 is not None
+            ):
+                raise ValueError("未知结果停止证明不能替代原结果或停止收据")
+            proof.validate_integrity()
+        elif self.stopped_execution is not None:
+            raise ValueError("未知结果停止证明只能属于独立停止观察")
         if self.proof_kind == "claimed_knowledge_failure" and (
             not self.knowledge_only_claims
             or self.start_sha256 is not None
@@ -495,6 +537,7 @@ class ProductionBaselineFactCollector:
                 not in {
                     BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                     BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                    BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                     BaselinePurpose.CONTEXT_CAPACITY_RESUME,
                 }
                 and command.target_base_ref != target_base_ref
@@ -619,6 +662,34 @@ class ProductionBaselineFactCollector:
         def validate_new_consumption() -> None:
             if not self._scope_held or self._idle_cursor is None:
                 raise ValueError("旧执行救援缺少原持锁执行和队列屏障")
+            if (
+                plan.facts.stopped_execution is not None
+                or plan.facts.legacy_containment is not None
+            ):
+                if self.inputs.store is None:
+                    raise ValueError("恢复消费缺少精确原调查记录")
+                original = self.inputs.store.records.get(
+                    "baseline-quiescence",
+                    plan.facts.quiescence_proof_sha256,
+                    BaselineQuiescenceProof,
+                )
+                if digest(original.to_wire()) != plan.facts.quiescence_proof_sha256:
+                    raise ValueError("恢复消费的原调查摘要不一致")
+                task = self.repository.get(plan.facts.task.id)
+                current = self._invocations(
+                    task,
+                    self.queue.items_for_task(task.id),
+                    self._receipts(task),
+                    tuple(
+                        assignment
+                        for assignment in self.queue.list_assignments()
+                        if assignment.task_id == task.id
+                    ),
+                    legacy=plan.facts.legacy_containment,
+                    stopped_execution=plan.facts.stopped_execution,
+                )
+                if current != original.invocations:
+                    raise ValueError("恢复消费前原调用或重领观察事实已变化, 原现场保留")
             if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
                 require_context_capacity_binding(plan, binding)
                 if self.collect(plan.target_base_ref) != plan.facts:
@@ -660,6 +731,33 @@ class ProductionBaselineFactCollector:
                 require_complete_legacy_inventory(self.git, plan.dirty_capture, inventory)
                 self._verify_legacy_observation(
                     containment, worktree_root=Path(plan.dirty_capture.worktree_path)
+                )
+            if plan.facts.stopped_execution is not None:
+                task = self.repository.get(plan.facts.task.id)
+                item = self.queue.get(plan.facts.work_item_id)
+                if (
+                    self._stopped_execution(task, item, self.queue.step(item.id))
+                    != plan.facts.stopped_execution
+                ):
+                    raise ValueError("未知结果停止恢复的原核验事实已变化")
+                inventory = capture_mutation_inventory(Path(binding.worktree_path))
+                if (
+                    inventory != plan.before_inventory
+                    or inventory.sha256 != binding.after_inventory_sha256
+                ):
+                    raise ValueError("未知结果停止恢复的完整现场已变化")
+                for capture in (plan.dirty_capture, plan.complete_capture):
+                    self.git.verify_mutations(
+                        capture.to_capture(),
+                        plan.facts.permissions,
+                        denied_paths=plan.facts.denied_paths,
+                    )
+                require_stopped_coder_workspace(
+                    plan.facts.stopped_execution,
+                    plan.dirty_capture,
+                    inventory,
+                    plan.facts.permissions,
+                    plan.facts.denied_paths,
                 )
             if plan.facts.completed_output is not None:
                 task = self.repository.get(plan.facts.task.id)
@@ -897,6 +995,7 @@ class ProductionBaselineFactCollector:
         if self.purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
+            BaselinePurpose.STOPPED_EXECUTION_RESCUE,
             BaselinePurpose.CONTEXT_CAPACITY_RESUME,
         }:
             if target_base_ref is not None and target_base_ref != source.execution_base_ref:
@@ -954,7 +1053,16 @@ class ProductionBaselineFactCollector:
             if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
             else None
         )
-        invocation_proofs = self._invocations(task, items, receipts, assignments, legacy=legacy)
+        stopped_execution = (
+            self._stopped_execution(task, item, step)
+            if self.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE
+            else None
+        )
+        if self.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE and stopped_execution is None:
+            raise ValueError("原执行不符合完整已停止且无结果的精确恢复前提, 原现场保留")
+        invocation_proofs = self._invocations(
+            task, items, receipts, assignments, legacy=legacy, stopped_execution=stopped_execution
+        )
         completed_output = (
             self._completed_output(task, item, step)
             if not any(receipt.original_work_item_id == item.id for receipt in receipts)
@@ -981,6 +1089,7 @@ class ProductionBaselineFactCollector:
             legacy=legacy,
             completed_output=completed_output,
             stopped_provider_failure=stopped_provider_failure,
+            stopped_execution=stopped_execution,
         )
         current_capacity = self._current_capacity_receipt(task, item, invocation_proofs)
         proof = BaselineQuiescenceProof(
@@ -1021,6 +1130,7 @@ class ProductionBaselineFactCollector:
             legacy_containment=legacy,
             completed_output=completed_output,
             stopped_provider_failure=stopped_provider_failure,
+            stopped_execution=stopped_execution,
             context_capacity_receipt_sha256=current_capacity,
             permissions=self.permissions,
             denied_paths=task.constraints.denied_paths if task.constraints else (),
@@ -1177,6 +1287,7 @@ class ProductionBaselineFactCollector:
         assignments: tuple[RoleAssignment, ...],
         *,
         legacy: LegacyExecutionContainment | None = None,
+        stopped_execution: StoppedCoderExecutionProof | None = None,
     ) -> tuple[BaselineInvocationProof, ...]:
         root = self.state / "invocations"
         records = KnowledgeRecordStore(root, read_only=True) if root.is_dir() else None
@@ -1218,10 +1329,34 @@ class ProductionBaselineFactCollector:
             )
             capacity_markers = self._capacity_markers(task, item, preflight_claims)
             capacity_leases = {marker.lease_id for marker in capacity_markers}
+            fence = self._prior_invocation_fence(task, start, legacy, stopped_execution)
+            replay_markers = (
+                read_replay_guarded_claims(
+                    state=self.state,
+                    task=task,
+                    item=item,
+                    claims=tuple(
+                        claim for claim in preflight_claims if claim.lease.id not in capacity_leases
+                    ),
+                    scope=self.scope,
+                    requirement_id=getattr(self, "knowledge_requirement_id", self.requirement_id),
+                    queue=self.queue,
+                    require_step=self._require_step,
+                    no_start_reader=self._capacity_input_reader(),
+                    fence=fence,
+                )
+                if fence is not None
+                else ()
+            )
+            replay_leases = {marker.lease_id for marker in replay_markers}
             knowledge_markers = self._knowledge_markers(
                 task,
                 item,
-                tuple(claim for claim in preflight_claims if claim.lease.id not in capacity_leases),
+                tuple(
+                    claim
+                    for claim in preflight_claims
+                    if claim.lease.id not in capacity_leases | replay_leases
+                ),
             )
             knowledge_leases = {marker.lease_id for marker in knowledge_markers}
             markers = self._preflight_markers(
@@ -1230,7 +1365,7 @@ class ProductionBaselineFactCollector:
                 tuple(
                     claim
                     for claim in preflight_claims
-                    if claim.lease.id not in capacity_leases | knowledge_leases
+                    if claim.lease.id not in capacity_leases | knowledge_leases | replay_leases
                 ),
             )
             step = (
@@ -1274,13 +1409,51 @@ class ProductionBaselineFactCollector:
                     claim.work_item.checkpoint_sequence,
                 ) != (item.id, task.id, item.role, item.attempt, item.checkpoint_sequence):
                     raise ValueError("原调用与真实历史 claim 不一致")
+                stopped = (
+                    stopped_execution
+                    if stopped_execution is not None and stopped_execution.invocation_start == start
+                    else None
+                )
+                if (
+                    stopped is None
+                    and outcome is None
+                    and receipt is None
+                    and self.inputs.store is not None
+                ):
+                    for binding in self.inputs.store.bindings_for_task(task.id):
+                        prior = self.inputs.store.plan(binding.plan_sha256).facts.stopped_execution
+                        if prior is not None and prior.invocation_start == start:
+                            prior.validate_integrity()
+                            ledger = FileContinuationStore(
+                                self.state / "continuations" / task.id, task_id=task.id
+                            )
+                            if (
+                                ledger.capture_start(start.request.run_id) != prior.capture_start
+                                or ledger.capture_stop(start.request.run_id) != prior.capture_stop
+                                or self.queue.original_claim(start.lease_id).model_dump(
+                                    exclude={"lease": {"expires_at"}}
+                                )
+                                != prior.capture_start.claim.model_dump(
+                                    exclude={"lease": {"expires_at"}}
+                                )
+                            ):
+                                raise ValueError("历史未知结果停止证明与原封存执行不一致")
+                            NativeCoderContinuation._require_stopped(
+                                prior.capture_stop.process_stop, start.request
+                            )
+                            stopped = prior
                 if outcome is not None:
                     outcome.validate_integrity()
                     if outcome.start != start:
                         raise ValueError("原调用结果未绑定精确启动记录")
                     proof_kind: Literal[
-                        "definitive_outcome", "owned_process_stopped", "legacy_execution_contained"
+                        "definitive_outcome",
+                        "owned_process_stopped",
+                        "legacy_execution_contained",
+                        "stopped_execution_without_outcome",
                     ] = "definitive_outcome"
+                elif stopped is not None:
+                    proof_kind = "stopped_execution_without_outcome"
                 elif receipt is not None:
                     if (
                         receipt.request != start.request
@@ -1312,7 +1485,9 @@ class ProductionBaselineFactCollector:
                             marker.receipt_sha256 for marker in capacity_markers
                         ),
                         knowledge_only_claims=knowledge_markers,
+                        replay_guarded_claims=replay_markers,
                         proof_kind=proof_kind,
+                        stopped_execution=stopped,
                         legacy_containment=containment
                         if proof_kind == "legacy_execution_contained"
                         else None,
@@ -1357,6 +1532,114 @@ class ProductionBaselineFactCollector:
                 )
             )
         return tuple(result)
+
+    def _prior_invocation_fence(
+        self,
+        task: Task,
+        start: DeliveryInvocationStart | None,
+        legacy: LegacyExecutionContainment | None,
+        stopped: StoppedCoderExecutionProof | None,
+    ) -> PriorInvocationFence | None:
+        if start is None:
+            return None
+        if stopped is not None and stopped.invocation_start == start:
+            stopped.validate_integrity()
+            return PriorInvocationFence(start, stopped.capture_start, stopped.capture_stop)
+        if legacy is not None and legacy.original_start == start:
+            legacy.validate_integrity()
+            return PriorInvocationFence(start)
+        store = getattr(getattr(self, "inputs", None), "store", None)
+        if store is None:
+            return None
+        for binding in store.bindings_for_task(task.id):
+            plan = store.plan(binding.plan_sha256)
+            prior_stopped = plan.facts.stopped_execution
+            if prior_stopped is not None and prior_stopped.invocation_start == start:
+                prior_stopped.validate_integrity()
+                return PriorInvocationFence(
+                    start, prior_stopped.capture_start, prior_stopped.capture_stop
+                )
+            prior_legacy = plan.facts.legacy_containment
+            if prior_legacy is not None and prior_legacy.original_start == start:
+                prior_legacy.validate_integrity()
+                return PriorInvocationFence(start)
+        return None
+
+    def _stopped_execution(
+        self, task: Task, item: QueuedWorkItem, step: QueuedRoleStep
+    ) -> StoppedCoderExecutionProof | None:
+        records = KnowledgeRecordStore(self.state / "invocations", read_only=True)
+        start = records.find("invocation-starts", item.id, DeliveryInvocationStart)
+        if start is None:
+            return None
+        ledger = FileContinuationStore(self.state / "continuations" / task.id, task_id=task.id)
+        try:
+            capture_start = ledger.capture_start(start.request.run_id)
+            capture_stop = ledger.capture_stop(start.request.run_id)
+        except ContinuationRecordMissing:
+            return None
+        proof = StoppedCoderExecutionProof.create(
+            invocation_start=start, capture_start=capture_start, capture_stop=capture_stop
+        )
+        expected_scope = ContinuationScope(
+            team_id=self.scope.team_id,
+            project_id=self.scope.project_id,
+            repository_id=self.scope.repository_id,
+            requirement_id=self.requirement_id,
+            dispatch_sha256=self.allocation.dispatch_sha256,
+        )
+        self._require_legacy_routes(start)
+        if capture_start.scope != expected_scope:
+            raise ValueError("未知结果停止证明不属于当前需求和分配")
+
+        def validate_inputs(request: AgentRequest) -> None:
+            self._require_legacy_routes(start)
+            if (
+                request != start.request
+                or request.permissions != self.permissions
+                or request.source_revision != step.boundary.source_revision
+                or self.queue.get(item.id) != item
+                or self.queue.step(item.id) != step
+                or records.get("invocation-starts", item.id, DeliveryInvocationStart) != start
+                or records.find("invocation-outcomes", item.id, DeliveryInvocationOutcome)
+                is not None
+                or ledger.capture_start(request.run_id) != capture_start
+                or ledger.capture_stop(request.run_id) != capture_stop
+                or any(
+                    receipt.request.run_id == request.run_id
+                    for receipt in ledger.receipts_for_task(task.id)
+                )
+            ):
+                raise ValueError("未知结果停止恢复已有原结果、收据或精确队列事实变化")
+            if any(
+                artifact.producer.run_id == request.run_id
+                for artifact in self.capacity_artifacts.list_for_task(task.id)
+            ):
+                raise ValueError("原执行已有封存产物, 不能用未知结果恢复覆盖")
+            retired = self.queue.rejected_output_artifact_ids(task.id)
+            if any(
+                accepted.work_item_id == item.id
+                or (
+                    accepted.checkpoint_sequence >= start.checkpoint_sequence
+                    and accepted.receipt.artifact_id not in retired
+                )
+                for accepted in self.queue.accepted(task.id)
+            ) or any(
+                event.artifact_ids
+                for event in self.repository.list_events(task.id)[capture_start.task_revision :]
+            ):
+                raise ValueError("原执行之后已有产物发布或交付采纳, 不能覆盖原结果")
+
+        validate_capture_stop(
+            start=capture_start,
+            stop=capture_stop,
+            task=task,
+            task_revision=self.repository.current_revision(task.id),
+            historical_claim=self.queue.original_claim(start.lease_id),
+            task_lock=self.guard,
+            validate_inputs=validate_inputs,
+        )
+        return proof
 
     def _completed_output(
         self, task: Task, item: QueuedWorkItem, step: QueuedRoleStep
@@ -1489,9 +1772,13 @@ class ProductionBaselineFactCollector:
         legacy: LegacyExecutionContainment | None = None,
         completed_output: CompletedCoderOutputUnavailableProof | None = None,
         stopped_provider_failure: StoppedProviderFailureProof | None = None,
+        stopped_execution: StoppedCoderExecutionProof | None = None,
     ) -> BaselineExecutionReservation:
         if (
-            sum(value is not None for value in (legacy, completed_output, stopped_provider_failure))
+            sum(
+                value is not None
+                for value in (legacy, completed_output, stopped_provider_failure, stopped_execution)
+            )
             > 1
         ):
             raise ValueError("不同原执行恢复证明不能混用")
@@ -1502,7 +1789,8 @@ class ProductionBaselineFactCollector:
         )
         if start is None:
             if any(
-                value is not None for value in (legacy, completed_output, stopped_provider_failure)
+                value is not None
+                for value in (legacy, completed_output, stopped_provider_failure, stopped_execution)
             ):
                 raise ValueError("原执行恢复预留缺少真实调用开始记录")
             if item.attempt not in {max(task.attempts, 1), task.attempts + 1}:
@@ -1528,6 +1816,26 @@ class ProductionBaselineFactCollector:
         if outcome is not None and outcome.result.status is AgentRunStatus.SUCCEEDED:
             raise ValueError("原调用已有成功结果, 需要先接纳封存结果, 不能用基线更新覆盖")
         failure = None
+        if stopped_execution is not None:
+            stopped_execution.validate_integrity()
+            if (
+                stopped_execution.invocation_start != start
+                or outcome is not None
+                or receipt is not None
+                or task.attempts != start.request.attempt
+            ):
+                raise ValueError("未知结果停止恢复没有精确原执行身份")
+            successor = start.request.attempt + 1
+            if task.work_budget_exhausted or successor > task.max_attempts:
+                raise ValueError("未知结果停止恢复不补充原工作额度")
+            return BaselineExecutionReservation(
+                current_attempt=start.request.attempt,
+                next_execution_attempt=successor,
+                retry_cause="stopped_execution_unknown",
+                original_run_id=start.request.run_id,
+                current_invocation_start_sha256=start.start_sha256,
+                stopped_execution_sha256=stopped_execution.proof_sha256,
+            )
         if stopped_provider_failure is not None:
             stopped_provider_failure.validate_integrity()
             if (

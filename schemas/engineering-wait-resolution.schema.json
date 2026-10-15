@@ -1472,6 +1472,17 @@
           "default": null,
           "title": "Retry Cause"
         },
+        "verifier_pause": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PausedInvocationProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "permitted_resolutions": {
           "default": [],
           "items": {
@@ -1502,17 +1513,6 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Proof Sha256",
           "type": "string"
-        },
-        "verifier_pause": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PausedInvocationProof"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         }
       },
       "required": [

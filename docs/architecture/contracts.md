@@ -1018,6 +1018,69 @@ Run/Context/claim 与 QA/Review gates 保持。`HumanActionEvent(SUPPLY_EVIDENCE
 case，不把人工补证据算成自治。Console contract version=2 增加 purpose/confirmation 参数，
 版本 1 现有 actions 保持兼容。见 `.trellis/spec/core/legacy-execution-rescue.md`。
 
+### 已有真实停止但原结果缺失的 Coder 恢复
+
+`BaselinePurpose.STOPPED_EXECUTION_RESCUE` 只处理原 native Coder 已真实停止、无输出，
+但原最终 outcome 和可接续 checkpoint 均未发布的非终态 Task。该处置保留原未知原因与历史，
+通过新的工程决定封存完整合法草稿，使用原 Task 剩余的普通工作额度另行执行。
+`ExecutionAbortReason(kind=lease_authority_unconfirmed, detail=local_expiry|renewal_exception|
+heartbeat_stop_timeout)` 是未来可信执行器可选追加的安全事实；不存异常正文，不推断提供方原因。
+guard 失效后 native runner 只封存实际 stop，然后继续抛出失权；不能发布或缓存角色 result。
+新增可选字段缺省时从 wire/digest 省略，原记录不得补写或重新分类。
+
+可信 collector 产出 `StoppedCoderExecutionProof(kind=stopped_coder_execution_without_outcome)`，
+包含精确 `DeliveryInvocationStart`、`ExecutionCaptureStart`、`ExecutionCaptureStop` 和
+`proof_sha256`。原 request/Task revision/claim/Team/Project/Repository/Requirement/dispatch 必须
+完整对应；stop 必须为 `failed`、非零退出、`output_present=false`、`cause=null`，并有完整
+`owned_session_empty` 证明。平台重新核验实际 owned session 已结束，拒绝当前活跃 claim、
+新出现的 outcome/route final/receipt/已采纳产物，以及不安全或不完整的草稿。失租、服务重启、
+本机睡眠或不存在 PID 都不能独立替代停止证明。该 purpose 直接检查 proof，不能调用依赖已知
+cause 的旧 receipt reconciliation 来补造中断收据。
+
+普通 Continue 可能重领同一 WorkItem、完成只读 `RETURNED` 知识准备，再被原 write-once 未知
+调用阻止进入主岗位。该额外 claim 不能假定为失败知识调用或遗漏的 preflight。
+`BaselineInvocationProof.replay_guarded_claims` 使用统一的
+`ReplayGuardedClaimObservation` 当前调查证明：精确绑定额外 claim/完整 Context、全部已结束的
+知识 intent/outcome/独立 execution digests，以及唯一更早的 `blocking_start_sha256`。原 start
+必须属于相同 WorkItem/role/attempt/checkpoint/source，时间与 dispatch generation 严格更早，
+且仍无 outcome；原执行本身须有独立 containment。可信 reader 只精确允许这项早期屏障，并
+完整检查额外 claim 没有新的主岗位 native capture、route、raw artifact 或 receipt。缺少知识
+结果/Context、停止事实不完整或任何归属不明都拒绝。证明及摘要进入既有 `BaselineQuiescenceProof` 封存记录，
+准备、执行、消费时重新核验；不新增历史拒绝事件，不声称当时 `prepare()` 实际执行，
+不把成功知识结果改为失败，也不因结果未知忽略任意额外 claim。
+
+Console `operation_contract_version=9` 通过 `POST /api/v1/operations` 提供以下三步，所有请求
+包含当前 `project_id`、`delivery_id` 和 `expected_checkpoint_sha256`；操作者须有 ENGINEERING 职责：
+
+| Action | 其他精确字段与限制 |
+| --- | --- |
+| `PROPOSE_EXECUTION_BASELINE` | `purpose=stopped_execution_rescue`、`input_mode=preserve_draft`、`task_id`、`expected_task_intent_sha256`、`expected_task_revision`、`expected_work_item_id`、`expected_source_revision`；不得提供 `target_base_ref` |
+| `EXECUTE_EXECUTION_BASELINE` | `task_id`、`expected_plan_sha256`、人工 `reference`、`continuation_mode=pause`；不得附旧本机声明或提供方修复确认 |
+| `RESUME_EXECUTION_BASELINE` | `task_id`、当前 intent/revision/WorkItem/source、最新 `expected_execution_baseline_sha256`、暂停状态的 `expected_disposition_sha256` 和独立 `reference` |
+
+`TeamHost.propose_execution_baseline(BaselineProposeCommand, *, project_id)` 返回精确 plan；
+`execute_execution_baseline(BaselineExecuteCommand, *, project_id)` 返回暂停 binding；
+`continue_execution_baseline(BaselineContinueCommand, *, project_id)` 校验并释放该精确 hold。
+准备、批准保留和继续是三个独立操作。不得自动 EngineeringAdmission，不得在 execute 时立即
+resume、改源版本、切换 `coder_reapply`、改变冻结规范或权限；旧服务、旧 Project/plan/checkpoint
+或断开的前端控件必须拒绝提交。
+
+Plan 的 `facts.stopped_execution`、reservation/binding 的 `stopped_execution_sha256` 及
+`retry_cause=stopped_execution_unknown` 精确绑定原停止观察。沿用 append-only baseline
+plans/authorities/starts/bindings；`BaselineQueueConsumption` 在 idle Task/MySQL fence 内保留旧
+WorkItem，幂等预留一个不同的下一普通 attempt，状态为 `WAITING_HUMAN`。无 provider failure
+记录或退款，无 DDL/直接 SQL 修复。HEAD/index/branch/source、完整 capture 和 before/after
+inventory 不变；后续独立 `BaselineContinueAuthorization + BaselineQueueRelease` 使用已预留额度。
+历史 proof 遍历必须继续承认原 outcome/receipt 缺失，同时核验新 Coder/QA/Review 的真实结果。
+
+`EngineeringHumanActionRecorder` 以 `evalevt_stopped_<binding-prefix>` 记录一次
+`HumanActionEvent(SUPPLY_EVIDENCE)`，证据 URI 指向精确人工 authority。重复执行不得重复记账
+或增加介入事件；`EvaluationTraceBuilder + EvaluationEngine` 重算 ADR 必须包含
+`HUMAN_INTERVENTION`。新 Run/Context 需真实 claim，独立 QA PASS 和 Review APPROVE 仍绑定同一
+candidate。回滚须受控暂停并保留新契约 reader、全部新记录和草稿，不得删改原事实适配旧 binary。
+完整验证矩阵、存量处理和回滚见
+[stopped-invocation-rescue](../../.trellis/spec/core/stopped-invocation-rescue.md)。
+
 ### Preserved execution baseline and native-rule epoch
 
 `ExecutionBaselineBinding.continuation_mode="pause"` publishes an exact persistent engineering

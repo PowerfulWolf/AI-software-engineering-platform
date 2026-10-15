@@ -30,7 +30,13 @@ from ai_software_engineer.agents.continuation import (
     continuation_preview,
     native_stop_recorder,
 )
-from ai_software_engineer.agents.execution import ExecutionGuard, NativeProcessStop, execution_scope
+from ai_software_engineer.agents.execution import (
+    ExecutionAbortReason,
+    ExecutionAuthorityLost,
+    ExecutionGuard,
+    NativeProcessStop,
+    execution_scope,
+)
 from ai_software_engineer.agents.json_schema import (
     bind_coder_progress_sequence,
     strict_output_schema,
@@ -193,6 +199,7 @@ class CodexInvocationResult:
     timed_out: bool = False
     process_stop: NativeProcessStop | None = None
     stderr_truncated: bool = False
+    execution_abort_reason: ExecutionAbortReason | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,10 +281,18 @@ class SubprocessCodexCommandRunner:
         observer: Callable[[CodexInvocationResult], None] | None = None,
     ) -> CodexInvocationResult:
         guard = self._execution_guard
+        execution_abort_reason: ExecutionAbortReason | None = None
 
         def check_owner() -> None:
+            nonlocal execution_abort_reason
             if guard is not None:
-                guard.check()
+                try:
+                    guard.check()
+                except ExecutionAuthorityLost as error:
+                    # Only the trusted guard boundary supplies this classification.
+                    # Never retain the exception, message, cause or traceback.
+                    execution_abort_reason = error.execution_abort_reason
+                    raise
 
         from ai_software_engineer.service_pause import (
             ServicePauseRequested,
@@ -410,6 +425,8 @@ class SubprocessCodexCommandRunner:
 
         def publish(result: CodexInvocationResult) -> CodexInvocationResult:
             nonlocal observed
+            if execution_abort_reason is not None:
+                result = replace(result, execution_abort_reason=execution_abort_reason)
             if output is not None and output.stderr_truncated:
                 result = replace(result, stderr_truncated=True)
             # Cleanup can fail too. Do not clear the Host's live observation or
@@ -813,7 +830,9 @@ class CodexCliAgentAdapter:
                         process_stop=result.process_stop,
                         output_present=output_path.exists(),
                         cause=(
-                            "service_pause"
+                            None
+                            if result.execution_abort_reason is not None
+                            else "service_pause"
                             if paused
                             else "local_execution_limit"
                             if result.timed_out
@@ -823,11 +842,14 @@ class CodexCliAgentAdapter:
                                 else None
                             )
                         ),
-                        original_error_code=AgentErrorCode.SERVICE_PAUSED
+                        original_error_code=AgentErrorCode.WORK_INTERRUPTED
+                        if result.execution_abort_reason is not None
+                        else AgentErrorCode.SERVICE_PAUSED
                         if paused
                         else AgentErrorCode.TIMEOUT
                         if result.timed_out
                         else (code if result.returncode != 0 else None),
+                        execution_abort_reason=result.execution_abort_reason,
                     )
 
                 def run_owned(
@@ -875,6 +897,13 @@ class CodexCliAgentAdapter:
                 stdin=compiled_prompt,
                 timeout_seconds=float(request.timeout_seconds),
             )
+            if invocation.execution_abort_reason is not None:
+                # A runner's stop observation cannot revive a revoked guard or
+                # become a result merely because its subprocess has now ended.
+                raise ExecutionAuthorityLost(
+                    "Native execution authority could not be confirmed",
+                    execution_abort_reason=invocation.execution_abort_reason,
+                )
             if (
                 invocation.process_stop is not None
                 and invocation.process_stop.kind == "service_pause"
@@ -2002,6 +2031,8 @@ def _workspace_unchanged(root: Path, before: _FailedInvocationSnapshot) -> bool:
 def _classify_cli_failure(
     invocation: CodexInvocationResult,
 ) -> tuple[AgentErrorCode, bool]:
+    if invocation.execution_abort_reason is not None:
+        return AgentErrorCode.WORK_INTERRUPTED, False
     if invocation.returncode < 0:
         return AgentErrorCode.PROVIDER_ERROR, False
     recognized = _recognized_cli_failure(invocation)
@@ -2183,7 +2214,9 @@ def _failure_diagnostic(invocation: CodexInvocationResult) -> str:
         invocation.stderr, truncated=invocation.stderr_truncated
     ).complete
     cause = (
-        code.value
+        "LEASE_AUTHORITY_UNCONFIRMED"
+        if invocation.execution_abort_reason is not None
+        else code.value
         if code is not None
         else "INTERRUPTED"
         if invocation.returncode < 0

@@ -26,7 +26,10 @@ class EngineeringHumanActionRecorder:
             return
         store = FileExecutionBaselineStore(root, read_only=True)
         for binding in store.bindings_for_task(task.id):
-            if binding.purpose is not BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+            if binding.purpose not in {
+                BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
+                BaselinePurpose.STOPPED_EXECUTION_RESCUE,
+            }:
                 continue
             binding.require_task(task)
             authority = store.records.get(
@@ -35,6 +38,31 @@ class EngineeringHumanActionRecorder:
             plan = store.plan(binding.plan_sha256)
             authority.validate_integrity()
             authority.require_plan_confirmation(plan)
+            if binding.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE:
+                proof = plan.facts.stopped_execution
+                if proof is None or proof.proof_sha256 != binding.stopped_execution_sha256:
+                    raise ValueError("未知结果停止恢复缺少精确原执行证明")
+                proof.validate_integrity()
+                events.append(
+                    HumanActionEvent(
+                        event_id="evalevt_stopped_" + binding.binding_sha256[:32],
+                        case_id=case_id,
+                        task_id=task.id,
+                        occurred_at=authority.submitted_at,
+                        action=HumanAction.SUPPLY_EVIDENCE,
+                        evidence_uri=(
+                            store.root
+                            / store.records._name("baseline-authorities", binding.plan_sha256)
+                        )
+                        .absolute()
+                        .as_uri(),
+                        note=(
+                            "工程人员精确批准已真实停止但结果未知的原执行保留完整草稿另行执行; "
+                            "原结果和原因保持未知, 本次消耗普通工作额度。"
+                        ),
+                    )
+                )
+                continue
             containment = plan.facts.legacy_containment
             assert containment is not None
             local = containment.method == "operator_confirmed_local_stop"

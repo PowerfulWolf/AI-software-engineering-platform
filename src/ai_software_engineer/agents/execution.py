@@ -15,6 +15,28 @@ from ai_software_engineer.domain.project_delivery import StageSha256
 from ai_software_engineer.owned_sessions import OwnedSessionStopProof
 
 
+class ExecutionAbortReason(DomainModel):
+    """Safe trusted authority facts, never provider text or an automatic retry cause."""
+
+    kind: Literal["lease_authority_unconfirmed"] = "lease_authority_unconfirmed"
+    detail: Literal["local_expiry", "renewal_exception", "heartbeat_stop_timeout"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+
+class ExecutionAuthorityLost(RuntimeError):
+    """An execution guard revoked authority; callers must retain the original fence."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        execution_abort_reason: ExecutionAbortReason | None = None,
+    ) -> None:
+        self.execution_abort_reason = execution_abort_reason or ExecutionAbortReason()
+        super().__init__(message)
+
+
 class AgentInvocationControl(Protocol):
     """Durable exact request/result journal, owned by trusted composition."""
 

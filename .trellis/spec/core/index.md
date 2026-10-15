@@ -71,6 +71,10 @@
   reading projections, complete-store verification and unchanged full reapply input.
 - [`stopped-budget-settlement.md`](stopped-budget-settlement.md): exact stopped exhausted legacy wait settlement, atomic terminal event/queue closure and unchanged recovery approvals.
 
+- [`stopped-invocation-rescue.md`](stopped-invocation-rescue.md): exact owned-session stop with
+  absent outcome, same-base engineering PAUSE then separate RESUME, ordinary work accounting and
+  unchanged unknown execution history.
+
 - [`dynamic-credential-source.md`](dynamic-credential-source.md): exact AST provenance for
   runtime-generated negative security test input, unchanged generic secret detection and full captures.
 
