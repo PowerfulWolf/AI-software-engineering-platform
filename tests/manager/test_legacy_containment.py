@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from subprocess import SubprocessError
+from unittest.mock import Mock
 
 import pytest
 
@@ -14,13 +15,18 @@ from ai_software_engineer.agents.models import (
     AgentRunStatus,
 )
 from ai_software_engineer.domain import AgentRole, Task, WorkItemStatus
-from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.continuation import (
+    InterruptionContinuationPolicy,
+    task_intent_sha256,
+)
 from ai_software_engineer.domain.delivery_disposition import (
     DeliveryFailureFacts,
     decide_delivery_disposition,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.execution_baseline import BaselinePurpose
+from ai_software_engineer.git.mutation import WorkspaceMutationInventory
+from ai_software_engineer.git.ports import WorktreeRef
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import BaselineExecutionReservation
 from ai_software_engineer.manager.baseline_production import (
@@ -37,6 +43,11 @@ from ai_software_engineer.manager.legacy_local_execution import (
     LegacyLocalExecutionSurvey,
     LegacyRescuePrerequisiteError,
 )
+from ai_software_engineer.orchestration.continuation_models import (
+    ContinuationScope,
+    ExecutionCaptureStart,
+)
+from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
@@ -58,8 +69,15 @@ def legacy_fixture(
     tmp_path: Path,
 ) -> tuple[ProductionBaselineFactCollector, Task, QueuedWorkItem, LegacyExecutionContainment]:
     collector, task, item, receipt = reservation_fixture(tmp_path)
-    task = task.model_copy(update={"id": receipt.request.task_id})
-    item = item.model_copy(update={"repository_scopes": (task.repository,)})
+    task = task.model_copy(
+        update={
+            "id": receipt.request.task_id,
+            "interruption_continuation_policy": InterruptionContinuationPolicy(),
+        }
+    )
+    item = item.model_copy(
+        update={"repository_scopes": (task.repository,), "checkpoint_sequence": 1}
+    )
     # Use a separate temporary root rather than rewriting an immutable old start.
     collector.state = tmp_path / "legacy"
     records = KnowledgeRecordStore(collector.state / "invocations")
@@ -144,6 +162,19 @@ def legacy_fixture(
             return BOOT
 
     collector.queue, collector.observer = Queue(), Observer()
+    collector.git = Mock(
+        recover=Mock(
+            return_value=WorktreeRef(
+                task_id=task.id,
+                role=AgentRole.CODER,
+                attempt=1,
+                path=tmp_path.resolve(),
+                head_revision=start.request.source_revision,
+                branch="ai/feature/legacy-fixture",
+                detached=False,
+            )
+        )
+    )
     containment = collector._legacy_containment(task, item)
     return collector, task, item, containment
 
@@ -373,7 +404,7 @@ def test_saved_final_or_unknown_successor_route_refuses_legacy_abandonment(
     assert before == {path: path.read_bytes() for path in collector.state.rglob("*.json")}
 
 
-@pytest.mark.parametrize("kind", ["capture-start", "capture-stop", "receipt"])
+@pytest.mark.parametrize("kind", ["capture-stop", "receipt"])
 def test_existing_original_runner_record_keeps_native_fact_handling_path(
     tmp_path: Path,
     kind: str,
@@ -386,6 +417,119 @@ def test_existing_original_runner_record_keeps_native_fact_handling_path(
     with pytest.raises(ValueError, match="已有现场或停止记录"):
         collector._legacy_containment(task, item)
     assert marker.read_text() == "existing original record must not be overwritten"
+
+
+def test_start_only_capture_is_validated_and_does_not_block_legacy_rescue(
+    tmp_path: Path,
+) -> None:
+    collector, task, item, containment = legacy_fixture(tmp_path)
+    continuation_parent = collector.state / "continuations"
+    continuation_parent.mkdir(parents=True, mode=0o700)
+    ledger = FileContinuationStore.initialize(continuation_parent / task.id, task_id=task.id)
+    policy = task.interruption_continuation_policy
+    assert policy is not None
+    capture_start = ExecutionCaptureStart.create(
+        scope=ContinuationScope(
+            team_id=collector.scope.team_id,
+            project_id=collector.scope.project_id,
+            repository_id=collector.scope.repository_id,
+            requirement_id=collector.requirement_id,
+            dispatch_sha256=collector.allocation.dispatch_sha256,
+        ),
+        request=containment.original_start.request,
+        claim=containment.original_claim,
+        task_intent_sha256=task_intent_sha256(task),
+        task_revision=item.checkpoint_sequence,
+        policy_sha256=policy.policy_sha256,
+        worktree_path=str(tmp_path.resolve()),
+        inventory_before=WorkspaceMutationInventory(files=()),
+        started_at=containment.original_start.started_at,
+    )
+    ledger.put_capture_start(capture_start)
+    marker = (
+        collector.state
+        / "continuations"
+        / task.id
+        / (f"capture-start-{capture_start.request.run_id}.json")
+    )
+    before = marker.read_bytes()
+
+    recovered = collector._legacy_containment(task, item)
+
+    assert recovered.original_start == containment.original_start
+    assert recovered.original_claim == containment.original_claim
+    assert "process_stop" not in recovered.to_wire()
+    assert marker.read_bytes() == before
+    assert (
+        ledger.capture_start(capture_start.request.run_id).start_sha256
+        == capture_start.start_sha256
+    )
+    (proof,) = collector._invocations(task, (item,), (), (), legacy=recovered)
+    assert proof.outcome_sha256 is None and proof.interruption_receipt_sha256 is None
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "scope",
+        "claim",
+        "request",
+        "task_intent_sha256",
+        "task_revision",
+        "policy_sha256",
+        "worktree_path",
+    ],
+)
+def test_start_only_capture_must_bind_current_legacy_facts(tmp_path: Path, field: str) -> None:
+    collector, task, item, containment = legacy_fixture(tmp_path)
+    continuation_parent = collector.state / "continuations"
+    continuation_parent.mkdir(parents=True, mode=0o700)
+    ledger = FileContinuationStore.initialize(continuation_parent / task.id, task_id=task.id)
+    policy = task.interruption_continuation_policy
+    assert policy is not None
+    scope = ContinuationScope(
+        team_id=collector.scope.team_id,
+        project_id=collector.scope.project_id,
+        repository_id=collector.scope.repository_id,
+        requirement_id=collector.requirement_id,
+        dispatch_sha256=collector.allocation.dispatch_sha256,
+    )
+    values: dict[str, object] = {
+        "scope": scope,
+        "request": containment.original_start.request,
+        "claim": containment.original_claim,
+        "task_intent_sha256": task_intent_sha256(task),
+        "task_revision": item.checkpoint_sequence,
+        "policy_sha256": policy.policy_sha256,
+        "worktree_path": str(tmp_path.resolve()),
+        "inventory_before": WorkspaceMutationInventory(files=()),
+        "started_at": containment.original_start.started_at,
+    }
+    if field == "scope":
+        values[field] = scope.model_copy(update={"requirement_id": "delivery_other"})
+    elif field == "claim":
+        values[field] = containment.original_claim.model_copy(
+            update={
+                "work_item": containment.original_claim.work_item.model_copy(
+                    update={"id": "work_other"}
+                )
+            }
+        )
+    elif field == "request":
+        values[field] = containment.original_start.request.model_copy(
+            update={"source_revision": "f" * 40}
+        )
+    elif field in {"task_intent_sha256", "policy_sha256"}:
+        values[field] = "f" * 64
+    elif field == "worktree_path":
+        values[field] = str(tmp_path.resolve() / "other")
+    else:
+        values[field] = item.checkpoint_sequence + 1
+    capture_start = ExecutionCaptureStart.create(**values)
+    ledger.put_capture_start(capture_start)
+
+    with pytest.raises(ValueError, match="启动现场记录与当前需求事实不一致"):
+        collector._legacy_containment(task, item)
 
 
 def test_local_operator_prerequisite_can_use_the_existing_boot_without_faking_old_stop(

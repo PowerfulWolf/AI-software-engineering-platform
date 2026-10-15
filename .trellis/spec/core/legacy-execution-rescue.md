@@ -5,6 +5,14 @@ Only a nonterminal local native Coder invocation with a real exact invocation-st
 claim but genuinely missing final outcome and original capture/stop ledger. This is a new
 engineering disposition, never reconstruction of the old execution.
 
+An immutable `capture-start-<run_id>.json` may exist without a stop record when the old runner
+crashed or was interrupted before finalization. A start-only record is retained input, not proof
+that the process stopped and not a checkpoint or outcome. Legacy rescue may continue only after
+the record is re-read and its request, claim, scope, task intent, checkpoint revision, policy
+digest, and manager-owned worktree path match the current facts. A `capture-stop` or receipt for
+the same Run still selects the native original-record handling path; a malformed or mismatched
+start record fails closed. Rescue never writes, replaces, or completes any original record.
+
 ## Signatures and wire
 
 - `manager/legacy_containment.py`: `TrustedLocalBootObserver.observe() -> LocalBootObservation`
@@ -119,6 +127,8 @@ a real claim and the original permissions; independent QA/Review and same-candid
 | OS boot before/equal original start | Current local survey + new exact engineering cessation declaration |
 | Unreadable OS identity or incomplete survey / live execution | WAITING explanation, no plan or new invocation |
 | Original final result now exists | Reject rescue; use original result replay |
+| Start-only capture binds exact current facts | Validate it read-only, then allow new containment facts; preserve its bytes |
+| Start-only capture is malformed, mismatched, or worktree-drifted | Reject rescue and preserve the original UNKNOWN history |
 | Missing original claim/start or nonlocal execution | Reject; no new invocation |
 | Rescue authorization without exact same-device attestation | Reject before queue/source effects |
 | Platform policy admission or changed source/input mode | Reject; explicit engineering decision required |

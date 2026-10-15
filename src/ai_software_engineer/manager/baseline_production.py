@@ -105,6 +105,7 @@ from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCo
 from ai_software_engineer.orchestration.capture_reconciliation import validate_capture_stop
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
 from ai_software_engineer.orchestration.continuation_models import (
+    ContinuationRecordMissing,
     ContinuationScope,
     ExecutionInterruptionReceipt,
 )
@@ -1687,12 +1688,12 @@ class ProductionBaselineFactCollector:
         if any(
             (capture_root / name).exists() or (capture_root / name).is_symlink()
             for name in (
-                f"capture-start-{start.request.run_id}.json",
                 f"capture-stop-{start.request.run_id}.json",
                 f"receipt-{start.request.run_id}.json",
             )
         ):
             raise ValueError("原执行已有现场或停止记录, 请使用原执行记录处理路径")
+        self._require_legacy_capture_start(task, start, claim, capture_root)
         self._require_legacy_routes(start)
         # Resolve only the original manager-owned checkout. A missing checkout is
         # not rebuilt, and HTTP cannot select a process-survey root.
@@ -1748,6 +1749,55 @@ class ProductionBaselineFactCollector:
         )
         self._sealed_legacy_observation = containment
         return containment
+
+    def _require_legacy_capture_start(
+        self, task: Task, start: DeliveryInvocationStart, claim: QueueClaim, root: Path
+    ) -> None:
+        """A start-only ledger is retained input, never evidence that execution stopped."""
+        if not root.exists() and not root.is_symlink():
+            return
+        try:
+            capture = FileContinuationStore(root, task_id=task.id).capture_start(
+                start.request.run_id
+            )
+        except ContinuationRecordMissing:
+            return
+        recorded, policy = capture.claim, task.interruption_continuation_policy
+        if (
+            capture.request != start.request
+            or capture.scope
+            != ContinuationScope(
+                team_id=self.scope.team_id,
+                project_id=self.scope.project_id,
+                repository_id=self.scope.repository_id,
+                requirement_id=self.requirement_id,
+                dispatch_sha256=self.allocation.dispatch_sha256,
+            )
+            or capture.task_intent_sha256 != task_intent_sha256(task)
+            or capture.task_revision != start.checkpoint_sequence
+            or policy is None
+            or capture.policy_sha256 != policy.policy_sha256
+            or capture.started_at < start.started_at
+            or recorded.assignment != claim.assignment
+            or recorded.model_selection != claim.model_selection
+            # Heartbeats can extend the original lease after capture-start.
+            or recorded.lease.model_dump(exclude={"expires_at"})
+            != claim.lease.model_dump(exclude={"expires_at"})
+            or recorded.work_item != claim.work_item
+            or recorded.worker_id != claim.worker_id
+            or recorded.claimed_at != claim.claimed_at
+        ):
+            raise ValueError("启动现场记录与当前需求事实不一致, 原记录与草稿保留")
+        worktree = self.git.recover(
+            WorktreeSpec(
+                task_id=task.id,
+                role=AgentRole.CODER,
+                attempt=1,
+                source_revision=start.request.source_revision,
+            )
+        )
+        if capture.worktree_path != str(worktree.path):
+            raise ValueError("启动现场记录与当前需求事实不一致, 原记录与草稿保留")
 
     def _require_legacy_routes(self, start: DeliveryInvocationStart) -> None:
         root = self.route_root

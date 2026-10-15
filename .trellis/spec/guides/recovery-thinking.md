@@ -52,6 +52,12 @@ old absent facts. Legacy rescue must explicitly separate new engineering evidenc
 outcome/stop facts, require exact human provenance when old host identity is missing, and audit it
 as supplied evidence. See `../core/legacy-execution-rescue.md`.
 
+An existing `capture-start-<run_id>.json` does not by itself mean that the original execution has
+a stop record or a usable checkpoint. Re-read a start-only record and bind its complete request,
+claim, scope, task revision, policy and manager-owned worktree before allowing legacy preparation;
+reject any stop/receipt for that Run through the native fact path. Never create the missing stop,
+outcome or checkpoint while making this distinction.
+
 A complete current Git patch can still omit ignored files. With no trustworthy before inventory,
 compare the full current inventory against Git plus captured mutation bodies; reject unknown ignored
 inputs and links rather than bringing them into a new execution implicitly.
