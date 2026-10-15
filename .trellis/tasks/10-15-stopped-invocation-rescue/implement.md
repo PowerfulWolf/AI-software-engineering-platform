@@ -79,3 +79,19 @@ Only the root maintenance task records production operation IDs and the actual r
 deployment. Rollback pauses/drains execution and keeps compatible readers plus all newly appended
 proof/authority/binding/audit records. Never erase an immutable record or draft to make an older
 binary accept the state.
+
+## Console race found during production recovery
+
+`loadCurrentOperationDetails` cleared readiness on every unchanged poll while leaving the current
+enabled button visible. `deliveryButton` then silently returned; a second path rejected the exact
+approval because full Task JSON included changed read-side locators/timestamps. The correction keeps
+only already verified same-scope cached readiness until an actual inventory/cache change or read
+failure, waits for the same-scope pending read before fresh write checks, and projects only the three
+baseline actions through the explicit read-side field exclusions. New/unknown authority fields
+remain compared. The shared button wrapper now explains unavailable control.
+
+The focused VM tests cover successful overlap, failed reads, 15 real authority changes and visible
+refusal. The real Chrome test reads/approves three native-rule changes and overlaps an idle refresh
+with fresh full-plan reading, then observes one original PAUSE intent. No durable operation or
+approval migration is required. Production assets are cached by transport construction; deploy this
+follow-up only at a safe maintenance boundary, then refresh the original Requirement.

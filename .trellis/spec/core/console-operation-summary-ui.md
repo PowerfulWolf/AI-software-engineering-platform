@@ -95,6 +95,53 @@ observedApprovedRecoveryOperation(request, operation) // reading only, never con
 - A freshly accepted full Operation immediately denies duplicate work through a
   bounded reading projection; it does not start another polling/approval path.
 
+### Baseline writes during an unchanged poll (2026-10-15)
+
+Failure mode: every scoped poll cleared `operationDetailReadyScope` before its
+summary GET, while the retained approval button could remain enabled. The common
+`deliveryButton` wrapper silently ignored a click during that interval. Separately,
+comparing complete Task JSON across fresh write reads treated an idle heartbeat,
+`last_activity` or a read-only detail locator change as a new engineering approval.
+Neither changed the exact paused plan/binding, but the browser rejected the write.
+
+`loadCurrentOperationDetails` preserves a previously verified same-scope ready gate
+while reading an unchanged inventory, only when every required exact full digest
+remains cached. A first/new scope, changed inventory, cache mismatch or failed read
+still revokes readiness; this never converts a pending unverified source into
+authority. `recheckOperationWriteFacts` joins an already running detail read for the
+same selected scope before comparing the originally captured facts after each await.
+A failed or changed poll cannot be ignored, and a different scope/owner is never
+adopted. Required scoped summary/full GETs still occur before the actual POST.
+
+`operationWriteResourceSignature(intent, request)` retains the complete resource
+signature for all actions except `PROPOSE_EXECUTION_BASELINE`,
+`EXECUTE_EXECUTION_BASELINE` and `RESUME_EXECUTION_BASELINE`. Those three exclude
+only the explicit reading fields `title`, `documents`, `dialogue`, `detail_source`,
+`last_activity`, `execution_liveness`, `timeline`, `execution_history` and `runs`.
+For a queue step in `WAITING_HUMAN`/`WAITING_DEPENDENCY` without `LEASE_VALID`, only
+`heartbeat_at` is also excluded. All other current and future fields remain exact:
+Requirement checkpoint/stage/scopes, Task identity/revision/intent/candidate, queue
+role/status/attempt/agent/lease expiry/liveness, complete disposition/source/binding
+and pending continuation authority, plus the original full Operation ID/digest set,
+Team/Project/selection owner and capability manifest. Existing specific plan/native
+rule review predicates and server fences remain required. A revoked shared control
+now explains its existing unavailable reason instead of silently discarding the click.
+
+`tests/team_view/operation-summary-reading.test.cjs` covers the idle-poll positive
+case, 15 changed-authority negatives (including future unknown fields), same-scope
+pending/failed poll, and revoked-control feedback. The real browser counterpart
+in `tests/team_view/browser/operation-summary-reading.test.cjs` reads three complete
+native-rule diffs, confirms them, overlaps fresh full-plan reading with a poll that
+updates idle presentation fields, and verifies exactly one unchanged PAUSE intent.
+The prior complete-JSON comparison reproduces the original “当前团队、需求或完整方案
+已有变化” refusal in the focused continuation test.
+
+Stock data needs no migration or repeated approval: original Operations, decisions,
+Tasks and workspace bytes remain unchanged. Load the frontend at an idle maintenance
+boundary and refresh the original Requirement; recheck its same current exact plan or
+paused continuation. Roll back only these assets/read-side helpers; retain all durable
+facts. Do not restart an active role merely to apply this browser fix.
+
 ## Current recovery progress and sealed command results
 
 - `renderSummaryOperationHistory` reuses the same `currentOperationProgress`

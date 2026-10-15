@@ -26,6 +26,7 @@ function harness() {
       const reply = replies.shift();
       if (!reply) throw new Error("Unexpected request: " + url);
       if (reply.beforeResponse) reply.beforeResponse();
+      if (reply.wait) await reply.wait;
       return {ok: (reply.status || 200) < 400, status: reply.status || 200,
         headers: {get: () => reply.etag || '"current"'}, json: async () => reply.body};
     },
@@ -313,6 +314,124 @@ test("a complete unchanged fresh read permits the exact existing approval withou
   await h.run("recheckOperationWriteFacts(intent)");
   assert.equal(h.run('JSON.stringify(latestApproval("request_current", "' + digest("b") + '"))'), approval);
   assert.equal(h.run("canControlCurrentTeam()"), true);
+});
+
+async function pausedBaselineWrite() {
+  const h = harness(), source = summary();
+  h.run(`consoleAvailable=true; consoleDeliveryReady=true; operationsAvailable=true;
+    consoleOperationContractVersion=9;
+    consoleSupportedActions=["CONTINUE_DELIVERY", "PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE", "RESUME_EXECUTION_BASELINE"];
+    renderNotification=()=>{}; renderOperationStatus=()=>{}; renderDetail=()=>{}; observeSubmittedOperation=()=>{};
+    snapshot.requests[0].stage="DELIVERING";
+    snapshot.requests[0].scopes=[{root:"/fixture", selected_paths:["."], delivery_id:"delivery_current"}];
+    snapshot.tasks=[{id:"delivery_current", project_id:"project_current", request_id:"request_current",
+      task_id:"task_current", task_revision:4, task_intent_sha256:"${digest("c")}", status:"IMPLEMENTING",
+      terminal:false, last_activity:"2026-10-12T00:00:00Z", scope:{root:"/fixture",selected_paths:["."]},
+      detail_source:{resource_state_sha256:"${digest("d")}"},
+      role_queue:[{work_item_id:"work_current", role:"coder", attempt:2, status:"WAITING_HUMAN",
+        heartbeat_at:null, lease_expires_at:null, lease_liveness:"UNKNOWN",
+        wait_disposition_sha256:"${digest("d")}", wait_disposition:{responsibility:"engineering",
+          action:"RESUME_EXECUTION_BASELINE", facts:{task_id:"task_current", work_item_id:"work_current", role:"coder",
+            checkpoint_sequence:4, task_intent_sha256:"${digest("c")}", source_revision:"${"f".repeat(40)}",
+            classification:"EXECUTION_BASELINE_PAUSED", execution_baseline_sha256:"${digest("e")}"}}}]}];`);
+  h.replies.push({body:page([source])}, {body:full(source)});
+  await h.run("loadCurrentOperationDetails()");
+  h.run('bound=engineeringBaselinePauseFacts(snapshot.requests[0],snapshot.tasks[0],snapshot.tasks[0].role_queue[0])');
+  return {...h, source};
+}
+
+test("an unchanged scoped poll keeps verified controls ready while its summary is pending", async () => {
+  const h = await pausedBaselineWrite();
+  assert.equal(h.run("canControlCurrentTeam()"), true);
+  h.replies.push({status:304, beforeResponse() {
+    assert.equal(h.run("canControlCurrentTeam()"), true,
+      "an unchanged polling GET must not silently revoke an enabled exact approval");
+  }});
+  await h.run("loadCurrentOperationDetails()");
+  assert.equal(h.run("canControlCurrentTeam()"), true);
+});
+
+test("a fresh exact paused-baseline continuation survives read-only polling changes", async () => {
+  const h = await pausedBaselineWrite();
+  h.replies.push({status:304, beforeResponse() {
+    h.run(`snapshot.as_of="2026-10-12T00:02:00Z"; snapshot.requests[0].title="新的只读标题";
+      snapshot.tasks[0].last_activity="2026-10-12T00:02:00Z";
+      snapshot.tasks[0].role_queue[0].heartbeat_at="2026-10-12T00:01:00Z";
+      snapshot.tasks[0].detail_source.resource_state_sha256="${digest("f")}"`);
+  }}, {body:full(h.source)}, {body:{...summary(9,{action:"RESUME_EXECUTION_BASELINE", status:"QUEUED"}),
+    intent:{action:"RESUME_EXECUTION_BASELINE", project_id:"project_current", delivery_id:"request_current"}}});
+  const result = await h.run("submitEngineeringBaselineContinuation(bound)");
+  assert.equal(result?.operation_id, summary(9).operation_id, h.run("JSON.stringify(operationNotice)"));
+  const posts = h.requests.filter(request => request.options?.method === "POST");
+  assert.equal(posts.length, 1, "same exact continuation must reach POST despite presentation updates");
+  const intent = JSON.parse(posts[0].options.body).intent;
+  assert.equal(intent.expected_checkpoint_sha256, digest("b"));
+  assert.equal(intent.expected_execution_baseline_sha256, digest("e"));
+  assert.equal(intent.expected_disposition_sha256, digest("d"));
+  assert.equal(h.run("operationNotice?.kind"), undefined);
+});
+
+test("exact paused-baseline writes reject every changed authority field", async t => {
+  const changes = {
+    checkpoint:'snapshot.requests[0].checkpoint_sha256="' + digest("f") + '"',
+    requirementStage:'snapshot.requests[0].stage="CLOSED"',
+    scope:'snapshot.requests[0].scopes[0].root="/other"',
+    taskRevision:'snapshot.tasks[0].task_revision++',
+    taskIntent:'snapshot.tasks[0].task_intent_sha256="' + digest("a") + '"',
+    taskSource:'snapshot.tasks[0].role_queue[0].wait_disposition.facts.source_revision="' + "a".repeat(40) + '"',
+    candidate:'snapshot.tasks[0].candidate_revision="' + "a".repeat(40) + '"',
+    binding:'snapshot.tasks[0].role_queue[0].wait_disposition.facts.execution_baseline_sha256="' + digest("a") + '"',
+    disposition:'snapshot.tasks[0].role_queue[0].wait_disposition_sha256="' + digest("a") + '"',
+    ready:'snapshot.tasks[0].role_queue[0].status="READY"',
+    running:'snapshot.tasks[0].role_queue[0].status="RUNNING"',
+    lease:'snapshot.tasks[0].role_queue[0].lease_liveness="LEASE_VALID"',
+    leaseExpiry:'snapshot.tasks[0].role_queue[0].lease_expires_at="2026-10-12T00:10:00Z"',
+    claim:'snapshot.tasks[0].role_queue[0].pending_baseline_continuation={authorization_sha256:"' + digest("a") + '"}',
+    futureAuthority:'snapshot.tasks[0].new_authority_field="changed"',
+  };
+  for (const [name, change] of Object.entries(changes)) await t.test(name, async () => {
+    const h = await pausedBaselineWrite();
+    h.replies.push({status:304, beforeResponse() {h.run(change);}}, {body:full(h.source)});
+    assert.equal(await h.run("submitEngineeringBaselineContinuation(bound)"), null);
+    assert.equal(h.requests.some(request => request.options?.method === "POST"), false);
+    assert.equal(h.run("operationNotice?.kind"), "error");
+  });
+});
+
+test("a baseline write joins the same-scope poll and still rejects its failed refresh", async t => {
+  for (const failed of [false, true]) await t.test(failed ? "failed poll" : "unchanged poll", async () => {
+    const h = await pausedBaselineWrite();
+    let release;
+    const pending = new Promise(resolve => {release = resolve;});
+    h.replies.push({status:failed ? 503 : 304, wait:pending});
+    const polling = h.run("loadCurrentOperationDetails()").catch(error => error);
+    assert.equal(h.run("operationDetailReadFlight !== null"), true);
+    h.replies.push({status:304}, {body:full(h.source)}, {body:{...summary(9,{action:"RESUME_EXECUTION_BASELINE",status:"QUEUED"}),
+      intent:{action:"RESUME_EXECUTION_BASELINE",project_id:"project_current",delivery_id:"request_current"}}});
+    const writing = h.run("submitEngineeringBaselineContinuation(bound)");
+    await Promise.resolve();
+    assert.equal(h.requests.some(request => request.options?.method === "POST"), false,
+      "submission must wait for the exact in-flight scope before publishing");
+    release();
+    await polling;
+    const result = await writing;
+    assert.equal(h.requests.filter(request => request.options?.method === "POST").length, failed ? 0 : 1);
+    if (failed) {
+      assert.equal(result, null);
+      assert.equal(h.run("operationDetailReadyScope"), null);
+      assert.equal(h.run("operationNotice?.kind"), "error");
+    } else assert.equal(result?.operation_id, summary(9).operation_id);
+  });
+});
+
+test("an enabled retained delivery control explains revoked readiness instead of silently swallowing a click", () => {
+  const h = harness();
+  h.run(`document.createElement=()=>({isConnected:true, setAttribute(){}, closest(){return null;},
+    addEventListener(_name, listener){this.listener=listener;}, click(){return this.listener({});}});
+    renderNotification=()=>{}; consoleAvailable=true; consoleDeliveryReady=false; operationsAvailable=true;
+    let called=false; const approval=deliveryButton("批准原精确方案",()=>{called=true;}); approval.click();`);
+  assert.equal(h.run("called"), false);
+  assert.match(h.run("operationNotice.message"), /正在读取当前需求的完整处理方案/);
 });
 
 test("an older page detail is a reading source and cannot enter current approval operations", async () => {

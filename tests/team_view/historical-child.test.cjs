@@ -271,7 +271,8 @@ test("current Task and unmatched parents retain their truthful current detail co
   const h = detailState();
   h.run('selected.id = current.id; renderDetail({incremental: true});');
   assert.match(visibleText(h.panel), /当前进展.*当前执行 · 执行中/);
-  assert.match(visibleText(h.panel), /实现正在执行/);
+  assert.match(visibleText(h.panel), /实现 · 执行中 · 最近心跳/);
+  assert.ok(visibleText(h.panel).includes(h.run("current.execution.reason")));
   assert.doesNotMatch(visibleText(h.panel), /历史执行记录|当次执行结果|查看当前需求/);
   for (const change of ['old.request_id = "missing"', 'old.request_id = request.id; old.project_id = "other"']) {
     h.run(`${change}; selected.id = old.id; renderDetail({incremental: true});`);

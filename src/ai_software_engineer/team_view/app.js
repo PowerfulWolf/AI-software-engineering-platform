@@ -480,7 +480,11 @@ async function loadCurrentOperationDetails(signal) {
   const currentScope = () => revision === operationSummaryReadRevision && selectedOperationScopeKey(selectedOperationScope()) === key;
   const promise = (async () => {
     const priorScope = operationDetailReadyScope;
-    operationDetailReadyScope = null;
+    // An unchanged poll is a freshness read, not a new authorization. Keep the
+    // already verified scope until an actual inventory/cache change revokes it.
+    if (priorScope !== key || !currentOperationSources.every(item =>
+        operationDetailCache.get(item.operation_id)?.value.operation_sha256 === item.operation_sha256))
+      operationDetailReadyScope = null;
     const current = await readOperationSummaryPage(scope.projectId, scope.deliveryId, {signal});
     if (!currentScope()) throw new Error("所选需求已变化，请核对当前页面。");
     if (priorScope === key && operationDetailReadyInventory === current.inventory_sha256 &&
@@ -488,6 +492,7 @@ async function loadCurrentOperationDetails(signal) {
       operationDetailReadyScope = key;
       return;
     }
+    operationDetailReadyScope = null;
     currentOperationSources = [];
     operationDetailCache.clear();
     operations = [];
@@ -529,6 +534,10 @@ async function loadCurrentOperationDetails(signal) {
   })();
   operationDetailReadFlight = {key, promise};
   try { await promise; }
+  catch (error) {
+    if (currentScope()) operationDetailReadyScope = null;
+    throw error;
+  }
   finally { if (operationDetailReadFlight?.promise === promise) operationDetailReadFlight = null; }
 }
 function verifiedOperationSummaryPage(value, projectId, deliveryId) {
@@ -698,30 +707,51 @@ async function loadMoreOperationHistory(projectId, deliveryId, signal) {
     throw error;
   } finally { state.loading = false; }
 }
+function operationWriteResourceSignature(intent, request) {
+  const tasks = request ? currentRequestTasks(request) : [];
+  if (!["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE", "RESUME_EXECUTION_BASELINE"].includes(intent.action))
+    return JSON.stringify([request || null, tasks]);
+  const readingFields = new Set(["title", "documents", "dialogue", "detail_source", "last_activity",
+    "execution_liveness", "timeline", "execution_history", "runs"]);
+  // Keep all current and future authority fields. Only explicitly read-side
+  // content/locators and an idle wait's heartbeat timestamp are excluded.
+  const resource = value => value && Object.fromEntries(Object.entries(value)
+    .filter(([field]) => !readingFields.has(field)));
+  return JSON.stringify([resource(request) || null, tasks.map(task => ({...resource(task),
+    role_queue: (task.role_queue || []).map(step => {
+      if (!["WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(step.status) || step.lease_liveness === "LEASE_VALID") return step;
+      const {heartbeat_at: _heartbeat, ...authority} = step;
+      return authority;
+    }),
+  }))]);
+}
 async function recheckOperationWriteFacts(intent) {
   if (!operationSummaryMode()) return;
   const owner = operationWriteOwnerSignature();
   const projectId = currentProjectId(), revision = selectionIntentRevision;
   const request = intent.delivery_id && requestById(intent.delivery_id);
-  const requestSignature = JSON.stringify(request || null);
-  const taskSignature = JSON.stringify(request ? currentRequestTasks(request) : []);
+  const resourceSignature = operationWriteResourceSignature(intent, request);
   const sources = [...currentOperationSources];
   const sourceSignature = JSON.stringify(sources.map(item => [item.operation_id, item.operation_sha256]));
   const assertCurrent = () => {
     const current = intent.delivery_id && requestById(intent.delivery_id);
     if (owner !== operationWriteOwnerSignature() || revision !== selectionIntentRevision || projectId !== currentProjectId() ||
-        requestSignature !== JSON.stringify(current || null) ||
-        taskSignature !== JSON.stringify(current ? currentRequestTasks(current) : []) ||
+        resourceSignature !== operationWriteResourceSignature(intent, current) ||
         sourceSignature !== JSON.stringify(currentOperationSources.map(item => [item.operation_id, item.operation_sha256])) ||
         !canControlCurrentTeam()) throw new Error("当前团队、需求或完整方案已有变化，请重新核对并确认。");
   };
+  const settleCurrent = async () => {
+    const flight = operationDetailReadFlight;
+    if (flight?.key === selectedOperationScopeKey(selectedOperationScope())) await flight.promise;
+    assertCurrent();
+  };
   const summary = await readOperationSummaryPage(intent.project_id || projectId, intent.delivery_id || null);
-  assertCurrent();
+  await settleCurrent();
   if (intent.delivery_id && summary.active.some(item => operationTarget(item) === intent.delivery_id))
     throw new Error("已有操作正在处理，请等待当前结果；本次确认没有提交。");
   for (const source of sources) {
     await readFullOperation(source, {fresh: true});
-    assertCurrent();
+    await settleCurrent();
   }
   assertCurrent();
 }
@@ -1318,6 +1348,11 @@ const deliveryButton = (text, action, className = "link") => {
       return null;
     }
     if (canControlCurrentTeam()) return action(...args);
+    const unavailable = deliveryControlUnavailableReason();
+    operationNotice = {kind: "error", title: "交付操作暂不可用",
+      message: unavailable.reason + " " + unavailable.next_action};
+    renderNotification();
+    return null;
   }, className);
   control.setAttribute("data-delivery-control", "true");
   return control;

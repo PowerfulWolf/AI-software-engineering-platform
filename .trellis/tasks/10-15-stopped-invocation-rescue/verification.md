@@ -92,14 +92,46 @@ has been handed to the root task for sequential final verification.
 
 Do not treat a real production model run as a substitute for the offline public fixture.
 
-## Production existing-data disposition (pending)
+## Console follow-up discovered in production recovery
 
-Original K1 stays the recovery target. Original start/stop bytes, missing outcome and unknown cause
-are retained. Record precise public proposal, paused execution and separate resume operation IDs,
-plan/binding digests, Task/WorkItem identities, complete before/after inventory and final native
-delivery facts after those operations actually finish. No direct SQL repair, recreated Task,
-fabricated result or old checkpoint is permitted. A successful maintenance test does not imply
-K1 business delivery has passed QA or Review.
+- Independent read-only review found no remaining approval/poll race issue and reran
+  **77 related JavaScript tests**. Exact digest, Team/scope, failed-read and 15 real
+  authority-change refusal cases remain covered.
+- Implementer final focused VM regression batch: **187 passed**:
+  `node --test tests/team_view/operation-summary-reading.test.cjs tests/team_view/engineering-wait.test.cjs tests/team_view/stopped-invocation-rescue.test.cjs tests/team_view/stopped-provider-retry.test.cjs tests/team_view/operation-capabilities.test.cjs`. The old full Task JSON
+  comparison was separately observed to reproduce the original Chinese stale-facts refusal.
+- Real Chrome `tests/team_view/browser/operation-summary-reading.test.cjs`: **5 passed**.
+  The new case reads all three native-rule changes, explicitly confirms them, overlaps
+  polling with fresh complete-plan reading, and observes exactly one unchanged PAUSE intent.
+- Syntax checks passed for shipped `app.js` and both changed test files; diff whitespace
+  validation passed. No Python/API/Schema/database behavior changes in this follow-up.
+- Wider legacy-rescue browser fixtures were found to omit `result.delivery_id`, whereas
+  the real backend explicitly returns both Project and Requirement identity for HANDLE,
+  PROPOSE and EXECUTE. Both HEAD and modified frontend correctly refuse that unverified
+  association. Fixture alignment is tracked separately from the production race fix;
+  the real scope gate must remain intact. The fixture-only alignment preserves all foreign/refusal
+  cases. The historical-child VM now checks the actual role activity and reason: **9 passed**.
+  An independent reviewer found no issues in either fixture or the production recovery record.
+- Final real Chrome rerun, after aligning only the legacy fixture identities:
+  `NODE_PATH=/Users/zhangjunshuai/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules node --test tests/team_view/browser/operation-summary-reading.test.cjs tests/team_view/browser/legacy-rescue.test.cjs`
+  **23 passed, 0 failed in 19.37s**. It uses isolated Chrome/fake HTTP and does not access
+  production. The initial automatic approval attempt timed out without running; the authorized
+  retry actually completed. Final focused VM **187 passed**, historical-child VM **9 passed**,
+  shipped JS/test syntax and diff checks all passed. All owned test processes ended.
+
+## Production existing-data disposition (recovered; native delivery in progress)
+
+Maintenance commit `8adfe68a578c14a2d424f109709c9cd0977a0618` was independently reviewed, merged,
+pushed and deployed through controlled drain/restart. Public stopped-rescue PAUSE, source rebind
+to that exact latest main, and separate RESUME succeeded in starting a real Coder invocation on
+the original Task. All 15 draft files were byte-checked unchanged before the new Coder started;
+all original immutable start/stop/history bytes and missing outcome were retained. New Coder
+changes after invocation start are ordinary task work and are not required to match old draft bytes.
+
+See [production-recovery.md](production-recovery.md) for exact operations, plan/binding/authority
+digests, Task/WorkItem, source, claim and Run identities. No direct SQL repair or recreated Task.
+Original UNKNOWN history remains. The new invocation proves execution only; candidate, native
+QA/Review verdicts and K1 business completion must be recorded from their actual durable facts.
 
 ## Rollback
 

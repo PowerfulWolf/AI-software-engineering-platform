@@ -35,7 +35,7 @@ async function rescueUi(t, version = 4) {
     summary: "原执行记录不完整，不能安全继续。", user_action: "将处理报告交给平台维护者。",
     recheck_when: "平台补齐原记录后再检查。"};
   h.state.operations.push(operation("SUCCEEDED", {operation_id: "operation_old_handling", intent: waitIntent,
-    updated_at: "2026-10-05T01:00:00Z", result: {checkpoint_sha256: request.checkpoint_sha256, engineering_wait_handling: handling}}));
+    updated_at: "2026-10-05T01:00:00Z", result: {project_id: request.project_id, delivery_id: request.id,checkpoint_sha256: request.checkpoint_sha256, engineering_wait_handling: handling}}));
   const submitted = [];
   await h.page.route("http://ui.test/api/v1/operations", async route => {
     if (route.request().method() !== "POST") return route.fallback();
@@ -82,7 +82,7 @@ test("legacy rescue is visible, preserves same demand and only proceeds after ex
   assert.equal(submitted[0].input_mode, "preserve_draft");
   assert.equal(submitted[0].target_base_ref, fixture.facts.source_revision);
   const plan = planFor(fixture);
-  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   h.state.operationManifest.operation_contract_version = 4;
   await h.tick();
@@ -146,7 +146,7 @@ test("old service and withdrawn capability cannot submit the new rescue purpose 
   await prepare.click();
   await h.close();
   const plan = planFor(fixture);
-  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   h.state.operationManifest.operation_contract_version = 4;
   await h.tick();
@@ -167,7 +167,7 @@ test("a prepared rescue can be prepared again after execution rejects changed fa
   await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
   await h.close();
   const plan = planFor(fixture);
-  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
@@ -188,7 +188,7 @@ test("a prepared rescue can be prepared again after execution rejects changed fa
   fresh.plan_sha256 = "6".repeat(64);
   fresh.facts.legacy_containment.boot.boot_session_sha256 = "7".repeat(64);
   fresh.facts.legacy_containment.containment_sha256 = "8".repeat(64);
-  Object.assign(h.state.operations[3], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[3], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: fresh}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
@@ -221,7 +221,7 @@ test("operations read failure explains missing recovery controls after the toast
   await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
   await h.close();
   const plan = localPlanFor(fixture);
-  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
@@ -276,7 +276,7 @@ test("simultaneous team and operation read failure revokes recovery controls whi
   await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
   await h.close();
   const plan = localPlanFor(fixture);
-  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
@@ -354,7 +354,7 @@ test("local rescue confirms the visible declaration on explicit approval without
   await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
   await h.close();
   const plan = localPlanFor(fixture);
-  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
@@ -396,7 +396,7 @@ test("an unmet rescue prerequisite is a clear checked wait without approval and 
     source_revision: fixture.facts.source_revision, code: "LOCAL_EXECUTION_ACTIVE",
     summary: "当前仍有本机执行占用保留的工作现场。", next_action: "等待原调用及派生工具结束后重新检查恢复前提。",
     responsible_party: "平台执行服务"};
-  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, legacy_rescue_preparation: preparation}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
@@ -420,7 +420,7 @@ test("a local stop approval is withdrawn on version downgrade or changed survey"
   await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
   await h.close();
   const plan = localPlanFor(fixture);
-  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
@@ -484,7 +484,7 @@ test("foreign failures do not replace a ready rescue and a current failure revok
   await card.getByRole("button", {name: "准备保留进度的恢复方案", exact: true}).click();
   await h.close();
   const plan = localPlanFor(fixture);
-  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
@@ -526,7 +526,7 @@ test("a checked capture refusal keeps the saved draft and uses its maintenance s
     summary: "保留进度的完整草稿暂时无法封存, 原文件与开发进度已保留。",
     next_action: "请由平台维护者检查草稿捕获的文件格式、权限和敏感信息校验；处理后重新准备恢复方案，不要清空工作区或重建需求。",
     responsible_party: "平台执行服务"};
-  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations[1], {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, legacy_rescue_preparation: preparation}});
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
@@ -552,13 +552,13 @@ test("approved preservation stays paused, complete native rule review precedes s
       delivery_id: request.id, expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id,
       expected_task_intent_sha256: task.task_intent_sha256, expected_task_revision: 4, expected_work_item_id: step.work_item_id,
       expected_source_revision: facts.source_revision, target_base_ref: facts.source_revision, input_mode: "preserve_draft"},
-    result: {checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}}));
+    result: {project_id: request.project_id, delivery_id: request.id,checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}}));
   await h.tick();
   await card.getByRole("checkbox").check();
   await card.getByRole("button", {name: "批准保留进度，保持暂停", exact: true}).click();
   await h.close();
   assert.equal(submitted[0].continuation_mode, "pause");
-  Object.assign(h.state.operations.at(-1), {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations.at(-1), {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, stage: "ENGINEERING_BASELINE_UPDATED",
     next_action: "完整进度已保存，交付保持暂停。"}});
   Object.assign(facts, {classification: "EXECUTION_BASELINE_PAUSED", execution_baseline_sha256: "8".repeat(64), work_item_id: "work_preserved"});
@@ -583,7 +583,7 @@ test("approved preservation stays paused, complete native rule review precedes s
   const newPlan = {plan_sha256: "9".repeat(64), target_base_ref: "f".repeat(40), input_mode: "preserve_draft", conflicted: false,
     dirty_capture: {source_revision: facts.source_revision}, facts: {task: {id: task.task_id, branch_name: "ai/feature/original"},
       task_revision: 4, work_item_id: step.work_item_id, native_rule_change: {change_sha256: "7".repeat(64), target: epoch, changes: [delta]}}};
-  Object.assign(h.state.operations.at(-1), {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations.at(-1), {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: newPlan}});
   await h.page.route("http://ui.test/api/v1/operations/*/native-rules?*", route => route.fulfill({json: {
     delta, epoch, unified_diff: "--- AGENTS.md\n+++ AGENTS.md\n+<script>window.ruleAttack=true</script>\n+run incremental tests"}}));
@@ -610,7 +610,7 @@ test("approved preservation stays paused, complete native rule review precedes s
   await h.close();
   assert.equal(submitted[2].continuation_mode, "pause");
   assert.equal(submitted[2].approved_native_rule_change_sha256, "7".repeat(64));
-  Object.assign(h.state.operations.at(-1), {status: "SUCCEEDED", result: {
+  Object.assign(h.state.operations.at(-1), {status: "SUCCEEDED", result: {project_id: request.project_id, delivery_id: request.id,
     checkpoint_sha256: request.checkpoint_sha256, stage: "ENGINEERING_BASELINE_UPDATED", next_action: "基线已更新，保持暂停。"}});
   facts.source_revision = "f".repeat(40);
   facts.execution_baseline_sha256 = "6".repeat(64);
@@ -686,7 +686,7 @@ test("two repository rule reviews and explicit consent survive each other and po
         expected_task_intent_sha256: currentTask.task_intent_sha256, expected_task_revision: 4,
         expected_work_item_id: currentStep.work_item_id, expected_source_revision: facts.source_revision,
         target_base_ref: plan.target_base_ref, input_mode: plan.input_mode},
-      result: {checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
+      result: {project_id: request.project_id, delivery_id: request.id,checkpoint_sha256: request.checkpoint_sha256, execution_baseline_plan: plan}});
     h.state.operations.push(record);
     return {plan, record, inspection: {delta, epoch, unified_diff: "--- AGENTS.md\n+++ AGENTS.md\n+repository " + index + " complete rules"}};
   });

@@ -10,6 +10,8 @@ frozen permissions and independent native QA/Review gates.
 - Add an exact engineering-only same-base stopped-invocation rescue through public baseline APIs.
 - Recover the current K1 from its actual complete owned-session stop, without asserting its missing cause.
 - Document local sleep as observed supporting evidence, not a fabricated renewal exception/outcome.
+- Correct the Console baseline approval/poll race observed during the actual production recovery.
+  Preserve exact approval authority while ignoring only documented read-side refresh fields.
 
 ## Acceptance
 - A real guarded subprocess stops after lease guard failure; no result/verdict is published beyond the lost fence.
@@ -28,6 +30,11 @@ frozen permissions and independent native QA/Review gates.
   stale Project/checkpoint/plan reads, disconnected controls and incomplete operation records refuse.
 - The engineering decision records one replayable `HumanActionEvent(SUPPLY_EVIDENCE)`; evaluation
   recomputation must mark this delivery as assisted rather than autonomous.
+- An already verified same-scope unchanged poll cannot silently swallow a baseline action or
+  mistake display/idle-heartbeat updates for a different approval. Fresh full reads, real
+  authority changes, failed reads and unknown future fields must still reject stale submission.
+- Real Chrome review of three native-rule diffs, explicit confirmation and an overlapping
+  unchanged poll submits exactly one original digest-bound PAUSE operation.
 
 ## Allowed maintenance paths
 src/ai_software_engineer/{agents,domain,manager,orchestration,work_queue,web_console,team_view}/**

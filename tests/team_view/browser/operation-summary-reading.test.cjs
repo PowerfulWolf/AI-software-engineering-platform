@@ -142,3 +142,80 @@ test("closing a pending historical detail releases its late completed full respo
   assert.equal(await detail.locator(":scope > div").textContent(), "");
   assert.equal(await h.page.evaluate(id => operations.some(item => item.operation_id === id), record.operation_id), false);
 });
+
+test("three reviewed native rules remain approvable while an unchanged summary poll refreshes read-only facts", async t => {
+  const h = await summaryUI(t), request = h.team.requests[0], source = h.records[0];
+  request.stage = "DELIVERING";
+  request.scopes = [{root:"/fixture", selected_paths:["."], delivery_id:"delivery_paused"}];
+  const facts = {task_id:"task_paused", work_item_id:"work_paused", role:"coder", checkpoint_sequence:4,
+    task_intent_sha256:"c".repeat(64), source_revision:"c".repeat(40), classification:"EXECUTION_BASELINE_PAUSED",
+    execution_baseline_sha256:"d".repeat(64)};
+  const step = {work_item_id:facts.work_item_id, role:"coder", attempt:2, status:"WAITING_HUMAN",
+    lease_liveness:"UNKNOWN", heartbeat_at:null, lease_expires_at:null, wait_disposition_sha256:"e".repeat(64),
+    wait_disposition:{action:"RESUME_EXECUTION_BASELINE", responsibility:"engineering", facts}};
+  const task = {id:"delivery_paused", task_id:facts.task_id, task_revision:4,
+    task_intent_sha256:facts.task_intent_sha256, request_id:request.id, project_id:request.project_id,
+    scope:request.scopes[0], status:"IMPLEMENTING", terminal:false, title:"Paused original Task",
+    last_activity:"2026-10-12T02:00:00Z", role_queue:[step], assignments:[], documents:[], timeline:[], runs:[]};
+  h.team.tasks = [task];
+  h.state.operationManifest.supported_actions = ["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE", "RESUME_EXECUTION_BASELINE"];
+  h.state.operationManifest.operation_contract_version = 9;
+  const rules = {change_sha256:"7".repeat(64), target:{epoch_sha256:"8".repeat(64)},
+    changes:["AGENTS.md", ".trellis/spec/core/index.md", "docs/contract.md"].map(path => ({path, change:"modified",
+      before:{sha256:"2".repeat(64)}, after:{sha256:"3".repeat(64)}}))};
+  const plan = {purpose:"source_rebind", plan_sha256:"9".repeat(64), target_base_ref:"f".repeat(40),
+    input_mode:"preserve_draft", conflicted:false, dirty_capture:{source_revision:facts.source_revision},
+    facts:{task:{id:facts.task_id,branch_name:"codex/retained"},task_revision:4,work_item_id:facts.work_item_id,native_rule_change:rules}};
+  Object.assign(source, {action:"PROPOSE_EXECUTION_BASELINE", operation_sha256:"6".repeat(64),
+    baseline_purpose:"source_rebind", baseline_plan_sha256:plan.plan_sha256, task_id:facts.task_id,
+    approval_kind:null, approval_plan_sha256:null});
+  h.records.splice(1);
+  const complete = {...h.full(source), intent:{action:source.action,project_id:request.project_id,delivery_id:request.id,
+    expected_checkpoint_sha256:request.checkpoint_sha256, task_id:facts.task_id,
+    expected_task_intent_sha256:facts.task_intent_sha256,expected_task_revision:4,
+    expected_work_item_id:facts.work_item_id,expected_source_revision:facts.source_revision,
+    target_base_ref:plan.target_base_ref,input_mode:plan.input_mode},
+    result:{delivery_id:request.id,checkpoint_sha256:request.checkpoint_sha256,execution_baseline_plan:plan}};
+  let holding = false, release, started;
+  const pending = new Promise(resolve => {release=resolve;}), reading = new Promise(resolve => {started=resolve;});
+  t.after(() => release());
+  await h.page.route("**/api/v1/operations/" + source.operation_id, async route => {
+    if (holding) {started(); await pending;}
+    return route.fulfill({json:complete});
+  });
+  await h.page.route("**/native-rules?*", route => {
+    const path = new URL(route.request().url()).searchParams.get("path"), delta=rules.changes.find(item=>item.path===path);
+    return route.fulfill({json:{delta,epoch:rules.target,unified_diff:"--- "+path+"\n+++ "+path+"\n+reviewed contract"}});
+  });
+  await h.page.evaluate(() => clearOperationReadScope());
+  await h.tick();
+  await h.page.waitForFunction(() => operationDetailReadyScope !== null);
+  for (let count=0; count<3 && await h.page.locator("#notification").isVisible(); count++) await h.close();
+  const card = h.page.locator('#detail [data-key="engineering:work_paused:baseline"]');
+  for (const delta of rules.changes) await card.getByRole("button",{name:"查看规范变更 · "+delta.path,exact:true}).click();
+  const confirmation = card.getByRole("checkbox",{name:"确认目标版本的项目规范变更",exact:true});
+  await h.page.waitForFunction(() => document.querySelector('[aria-label="确认目标版本的项目规范变更"]')?.disabled === false);
+  await confirmation.check();
+  const approve = card.getByRole("button",{name:"批准更新基线，保持暂停",exact:true});
+  assert.equal(await approve.isEnabled(),true);
+  const submitted=[];
+  await h.page.route("**/api/v1/operations", route => {
+    assert.equal(route.request().method(),"POST");
+    const intent=route.request().postDataJSON().intent;submitted.push(intent);
+    return route.fulfill({status:202,json:{...complete,operation_id:"operation_"+"5".repeat(32),status:"QUEUED",intent,result:null}});
+  });
+  holding=true;
+  await approve.click();
+  await reading;
+  task.last_activity="2026-10-12T02:01:00Z"; task.title="只读标题更新";
+  step.heartbeat_at="2026-10-12T02:00:30Z";
+  await h.tick();
+  assert.equal(submitted.length,0,"the original fresh full read still owns submission");
+  release();
+  await h.page.waitForFunction(() => currentOperationSources.some(item=>item.status === "QUEUED"));
+  assert.equal(submitted.length,1);
+  assert.equal(submitted[0].action,"EXECUTE_EXECUTION_BASELINE");
+  assert.equal(submitted[0].expected_plan_sha256,plan.plan_sha256);
+  assert.equal(submitted[0].approved_native_rule_change_sha256,rules.change_sha256);
+  assert.equal(submitted[0].continuation_mode,"pause");
+});
