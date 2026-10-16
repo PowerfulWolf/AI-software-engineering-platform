@@ -1,5 +1,52 @@
 # Explicit delivery recovery — T044
 
+## Empty model-route containers during terminal discovery (2026-10-15)
+
+### Scope and signatures
+
+`NativeRecoverySourceReader.discover_failed_coder(scope) -> NativeRecoverySource` scans
+`model_route_root(sidecar)` through `FileModelRouteAttemptStore.list_for_run(run_id)`.
+The route store creates the Run directory before atomically publishing a sealed route.
+An interruption can therefore leave a genuine directory containing no route record.
+A directory is a storage container, not evidence of a completed or failed invocation.
+
+### Contracts and validation matrix
+
+- Validate every Run basename and reject symlinks/non-directories before candidate selection.
+- Only an actually empty directory with a valid Run identity contributes zero candidates.
+  This does not establish not-started, successful, failed, stopped or recoverable execution.
+- A nonempty directory without a sealed route remains unsafe; temporary/unknown files must
+  not be silently treated as an empty container. Every published JSON record still passes
+  the existing typed, digest, slot, Run identity and uniqueness checks.
+- Recovery still requires exactly one real recoverable terminal Coder route. The original
+  `_inspect` retains its Task/events, source epochs, original request/Context, upstream approval
+  and route checks. The recovery services separately verify stopped workspace, live execution
+  fences and exact scope/plan approvals before admission. The discovery correction cannot
+  supply a missing current result or approve a second Run.
+
+| Case | Required result |
+| --- | --- |
+| One exact current route plus old valid empty Run directory | Discover the current route, then complete original source inspection |
+| Only empty directories, or two real recoverable routes | Reject missing/ambiguous source |
+| Nonempty route-less directory or temporary publication | Reject unsafe route facts |
+| Bad Run basename, symlink/file, malformed JSON, wrong identity/digest | Existing rejection, no source/approval/execution |
+| Empty directory then later real record | Future fresh discovery reads that record normally; no cached absence |
+
+Good: an old UNKNOWN invocation has no published route, while a later stopped Coder has a
+real failure route; the later source remains recoverable through the full original gate.
+Base: no empty containers leaves discovery unchanged. Bad: fabricate a route, delete old
+directories, skip a corrupt record or use filesystem absence as stopped-process proof.
+
+### Existing data, tests and rollback
+
+No SQL, route, invocation, Task, approval or workspace migration. Retain every old container
+and immutable record. After verified idle deployment, run the original public Continue to
+prepare its exact scope supplement/plan; source discovery alone never executes a role.
+Regression tests use the real file store and actual empty/corrupt/foreign directories,
+preserve every file byte and verify unique candidate plus unchanged final inspection.
+Rollback only this reader at an idle boundary; old code may again reject the same legitimate
+history, but cannot be made compatible by deleting or rewriting historical facts.
+
 ## 新恢复计划冻结目标执行授权（2026-10-10）
 
 ### Scope / Trigger

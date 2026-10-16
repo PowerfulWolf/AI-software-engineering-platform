@@ -139,3 +139,53 @@ Use controlled pause and drain before runtime replacement. Retain all newly seal
 authorities, bindings, queue consumption/releases and human-action events. Deploy only a reader
 capable of validating the appended contracts; never mutate or delete historical records or input
 drafts to make an older binary run. Keep the Requirement paused if safe compatible rollback is unavailable.
+
+
+## Empty-route terminal discovery follow-up (2026-10-15)
+
+- Real-file RED: new `test_native_discovery.py` produced **4 failed, 13 passed** before
+  the reader correction, each failure at the same empty-directory gate as production.
+- GREEN: new 17-case discovery matrix passed. Expanded offline scope/baseline/Context,
+  fake SQL seam and terminal-workspace coverage: **126 passed in 65.27s**.
+- Independent reviewer reran all 17 new cases and 22 existing fallback/native non-MySQL
+  cases. Ruff/format for three Python files and strict mypy for native.py/new test passed.
+  All 13 full-file strict mypy findings in test_resume.py were confirmed against HEAD;
+  they predate this diff and are outside the changed fixture.
+- Read-only production `NativeRecoverySourceReader.discover_failed_coder` with the corrected
+  source actually selected `run_7396707cd0d34f7090547e0a4791429f` for the original K1 Task.
+  No SQL, source workspace, stop/outcome/route bytes, approvals or containers were changed.
+- First isolated public DB batch: **5 failed, 2 passed in 45.43s**. Scope discovery succeeded;
+  proposal rejected the old scripted fixture because `continuations` was absent. This is
+  the correct modern workspace-audit refusal, not a reason to bypass it. A bounded diagnostic
+  hook traced `read_terminal_workspace_snapshot` to the missing directory.
+- First native fixture alignment: **5 failed, 2 passed in 274.68s** before main Coder;
+  knowledge preparation still used the host executable and failed authentication. No recovery
+  verdict was inferred. Align the full host model config to a private offline executable for
+  both actual observed KnowledgeIntent and the native failed Coder process.
+- An independent review accepted the real-native fixture architecture and found no remaining
+  production-code issues. The low-severity documentation wording was corrected to distinguish
+  original source inspection from later stop/workspace/fence and exact-plan approval gates.
+
+The final public DB result and production recovery disposition must be appended after they
+actually complete. Never treat a passing directory test as complete delivery validation.
+
+
+- Further fixture debugging identified an additional private-script schema mismatch: the Coder
+  output wrapper has no `title`; use `schema.get('title')` to distinguish KnowledgeIntent while
+  retaining the full production schema gate. The intermediate two-test run failed before the
+  intended policy fixture in 9.54s and did not establish a recovery failure.
+- Final exact scope + full joint recovery: **2 passed in 187.32s**. This actually exercised
+  complete native capture/stop, required terminal workspace snapshot, preserved empty containers,
+  fresh main/preparation, exact two-step approvals and independent QA/Review to DONE. Extra
+  assertions bind the snapshot capture-start/capture-stop Run identity to the observed native call.
+
+
+- Remaining joint fixture variants: **3 failed in 399.16s**. The interrupted successor still
+  manufactured a failure without native continuation facts; knowledge variants lost their
+  delegate when inherited configured factory clone methods returned the base class. These are
+  pre-existing fixture composition gaps exposed by the modern target policy; their correction
+  continues separately. No production gate is weakened to accept them. The actual first terminal
+  recovery and full successful latest-main chain above passed with real native stop facts.
+- The isolated six-line reader change, 17 real-file regressions and source/target approval contract
+  are independently reviewed and ready for idle deployment. Follow-up fixture work remains in
+  the maintenance branch for separate review/commit; its pending tests are not reported as passed.

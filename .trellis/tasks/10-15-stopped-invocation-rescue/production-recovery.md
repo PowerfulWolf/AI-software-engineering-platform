@@ -91,3 +91,43 @@ boundary: transport caches app.js at construction, so a browser refresh alone ca
 Use controlled pause/drain. Keep all new proofs, plans, authorities, bindings and audit events.
 Only deploy readers compatible with stopped_execution_rescue and current observations; never
 reset old state or delete draft/history to make an old runtime accept it.
+
+## Native attempt 5 result (2026-10-15 10:52Z)
+
+The native process reached its 1800-second local execution limit and stopped at
+10:50:39.156318Z with returncode -15, no structured output and complete
+`owned_session_empty` proof. Exact stop observation:
+`4810aea246c245c056d04a3731950766238aaafc6a7e4408dd4da5ddab6a8571`.
+The durable outcome is FAILED / POLICY_VIOLATION, nontransient, without an artifact;
+`48ff51bdb73c845ffe6f2a2514b64c82c2eefa5a8348807585d1bb2dbb53ae57`.
+The interrupted draft capture rejected `src/ai_software_engineer/learning_collection/__init__.py`,
+which is absent from the frozen eight-file package write allowlist. This is a new,
+explicit recorded failure, distinct from the original unknown-result gap. No QA or
+Review has started and there is no candidate.
+
+The RESUME command itself ended SUCCEEDED at 10:51:01.355712Z with delivery stage
+BLOCKED and checkpoint `5719dc0f8ba2de24a8d642ce5c15055059f1741bde9ad07e945d45f0cdbf25e7`.
+The original Task and queue are BLOCKED/CLOSED. Follow-up investigation compares the
+actual frozen policy, original plan, changed inventory and supported public recovery;
+no permission or Task state has been modified to bypass this refusal.
+
+## Deployment and terminal recovery inspection
+
+After the real stop, queue closure and terminal Operation were persisted, controlled restart
+drained the original service and started PID 77590 with the frontend fix from `7750a63`.
+Public Console returned normal mode, delivery-ready and contract 9. The registered repository's
+clean main was fast-forwarded to `7750a63d1ddc5b10d27c569b6dd61090f0da7454`; the retained Coder
+checkout was not edited by maintenance.
+
+Public `CONTINUE_DELIVERY` without any approval was used to inspect terminal recovery:
+`operation_7d437fe7dda06c268f46d5689d41c2b2` completed at 10:57:56.447440Z with BLOCKED and
+`recoverable Coder identity is missing, unsafe or ambiguous`. A separate read-only typed
+source inspection traced its cause to `ValueError("empty model route directory")` in
+`NativeRecoverySourceReader.discover_failed_coder`, before current Coder inspection. This
+exposes a discovery defect in how route containers without sealed records are handled.
+A separate read-only full scan found 172 valid Run directories: 83 nonempty directories with
+readable typed routes and 89 physically empty containers. Those 89 have no corresponding
+invocation-start/outcome, so their role, Task and creation cause remain unknown; they must not
+be attributed to the two historical UNKNOWN Coder Runs (those have no route directory at all).
+The latest attempt 5 has one genuine sealed route and outcome. No container or data was
+deleted or repaired. Regression and correction are in progress.

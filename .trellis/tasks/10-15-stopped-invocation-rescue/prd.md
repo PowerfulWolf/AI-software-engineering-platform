@@ -10,6 +10,8 @@ frozen permissions and independent native QA/Review gates.
 - Add an exact engineering-only same-base stopped-invocation rescue through public baseline APIs.
 - Recover the current K1 from its actual complete owned-session stop, without asserting its missing cause.
 - Document local sleep as observed supporting evidence, not a fabricated renewal exception/outcome.
+- Correct terminal recovery discovery when valid Run directories contain no sealed route records.
+  Preserve all real route verification, unique-source and exact scope/plan approval gates.
 - Correct the Console baseline approval/poll race observed during the actual production recovery.
   Preserve exact approval authority while ignoring only documented read-side refresh fields.
 
@@ -37,7 +39,7 @@ frozen permissions and independent native QA/Review gates.
   unchanged poll submits exactly one original digest-bound PAUSE operation.
 
 ## Allowed maintenance paths
-src/ai_software_engineer/{agents,domain,manager,orchestration,work_queue,web_console,team_view}/**
+src/ai_software_engineer/{agents,domain,manager,orchestration,recovery,work_queue,web_console,team_view}/**
 schemas/**; tests/**; docs/**; .trellis/spec/**; .trellis/tasks/10-15-stopped-invocation-rescue/**
 scripts/sync-*-schemas.py; scripts/sync-*-schema.py
 The production K1 worktree is not a maintenance write target.

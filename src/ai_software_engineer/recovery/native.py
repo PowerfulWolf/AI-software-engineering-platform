@@ -218,7 +218,11 @@ class NativeRecoverySourceReader:
                 run_id = TypeAdapter(RunId).validate_python(directory.name)
                 attempts = store.list_for_run(run_id)
                 if not attempts:
-                    raise ValueError("empty model route directory")
+                    # A genuinely empty container has no sealed route facts. It
+                    # proves neither a failed Run nor that execution never began.
+                    if any(directory.iterdir()):
+                        raise ValueError("nonempty model route directory has no sealed routes")
+                    continue
                 final = attempts[-1]
                 if (
                     final.task_id == task.id
