@@ -75,3 +75,16 @@ progress, drafts and approvals stay immutable. No new Requirement is needed. Nat
 still must produce a candidate and independent QA/Review; an operation success is not delivery success.
 Before new records publish, code may revert; afterwards keep additive readers and pause execution
 for a forward repair. Never delete bindings/audits/drafts or restart an incompatible older reader.
+
+
+## Evaluation audit
+
+`EngineeringHumanActionRecorder.record()` must include STOPPED_FAILURE_RETRY in its explicit
+binding families. Reopen exact plan/failure proof/binding/authority; append a stable
+`evalevt_failure_<binding-prefix32>` SUPPLY_EVIDENCE HumanActionEvent at authority.submitted_at
+with immutable authority URI. The note says unknown failure and ordinary-work cost, never a
+repaired cause. Exact replay is idempotent; altered same-ID events or missing/tampered authority
+must reject. Runtime invocation calls the recorder before execution, so ADR recomputation sees
+HUMAN_INTERVENTION. An Operation authorization artifact alone does not feed evaluation events.
+Tests require exact/replay/tamper and ADR INELIGIBLE/HUMAN_INTERVENTION, plus public same-Task DONE
+assertions. Do not retroactively synthesize old AUTH events or widen this change to other purposes.

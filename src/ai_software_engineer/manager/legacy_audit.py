@@ -1,4 +1,4 @@
-"""Record legacy rescue's supplied human evidence in ordinary ADR evaluation."""
+"""Record engineering recovery's human evidence in ordinary ADR evaluation."""
 
 from pathlib import Path
 
@@ -29,6 +29,7 @@ class EngineeringHumanActionRecorder:
             if binding.purpose not in {
                 BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
+                BaselinePurpose.STOPPED_FAILURE_RETRY,
             }:
                 continue
             binding.require_task(task)
@@ -38,6 +39,42 @@ class EngineeringHumanActionRecorder:
             plan = store.plan(binding.plan_sha256)
             authority.validate_integrity()
             authority.require_plan_confirmation(plan)
+            if binding.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY:
+                plan.validate_integrity()
+                failure = plan.facts.stopped_failure
+                if (
+                    failure is None
+                    or plan.purpose is not binding.purpose
+                    or failure.proof_sha256 != binding.stopped_failure_sha256
+                    or authority.authorization_sha256 != binding.authority_sha256
+                    or authority.plan_sha256 != binding.plan_sha256
+                    or authority.facts_sha256 != binding.facts_sha256
+                    or authority.task_id != binding.task_id
+                    or authority.task_intent_sha256 != binding.task_intent_sha256
+                    or authority.continuation_mode != binding.continuation_mode
+                ):
+                    raise ValueError("原执行失败恢复缺少精确原执行证明或人工工程决定")
+                failure.validate_integrity()
+                events.append(
+                    HumanActionEvent(
+                        event_id="evalevt_failure_" + binding.binding_sha256[:32],
+                        case_id=case_id,
+                        task_id=task.id,
+                        occurred_at=authority.submitted_at,
+                        action=HumanAction.SUPPLY_EVIDENCE,
+                        evidence_uri=(
+                            store.root
+                            / store.records._name("baseline-authorities", binding.plan_sha256)
+                        )
+                        .absolute()
+                        .as_uri(),
+                        note=(
+                            "工程人员精确批准原执行失败后保留完整合法草稿另行执行; "
+                            "原失败原因仍未知, 本次消耗一次剩余普通工作额度。"
+                        ),
+                    )
+                )
+                continue
             if binding.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE:
                 proof = plan.facts.stopped_execution
                 if proof is None or proof.proof_sha256 != binding.stopped_execution_sha256:

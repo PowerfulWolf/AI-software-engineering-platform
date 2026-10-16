@@ -63,6 +63,14 @@ from ai_software_engineer.domain.execution_baseline import (
 )
 from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
+from ai_software_engineer.evaluation import (
+    AdrStatus,
+    EvaluationEngine,
+    EvaluationTraceBuilder,
+    FileEvaluationEventStore,
+    HumanAction,
+    HumanActionEvent,
+)
 from ai_software_engineer.execution import SubprocessCommandExecutor
 from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
 from ai_software_engineer.git.baseline import BaselineGitConflict
@@ -70,6 +78,7 @@ from ai_software_engineer.knowledge.agents import KnowledgeConsultation
 from ai_software_engineer.knowledge.models import KnowledgeSnapshot
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager import production_backend, production_delivery
+from ai_software_engineer.manager.baseline_models import BaselineOperatorAuthorization
 from ai_software_engineer.manager.baseline_production import (
     BaselineContinueCommand,
     BaselineExecuteCommand,
@@ -95,6 +104,7 @@ from ai_software_engineer.orchestration.continuation_models import (
     ExecutionInterruptionReceipt,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
+from ai_software_engineer.runtime import _default_case_id
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.work_queue.baseline import consumptions
 from ai_software_engineer.work_queue.dispatcher import (
@@ -1387,6 +1397,40 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     assert len(calls) == count
     assert baseline_store.bindings_for_task(frozen_task.id) == (binding,)
     assert len(consumptions(host.work_queue, frozen_task.id)) == 1
+    if stopped_failure_retry:
+        evaluation_events = FileEvaluationEventStore(sidecar / "evaluations", read_only=True)
+        case_id = _default_case_id(frozen_task.id)
+        human_evidence = tuple(
+            event
+            for event in evaluation_events.list_for_case(case_id)
+            if isinstance(event, HumanActionEvent) and event.action is HumanAction.SUPPLY_EVIDENCE
+        )
+        assert len(human_evidence) == 1
+        (human_event,) = human_evidence
+        assert human_event.event_id == "evalevt_failure_" + binding.binding_sha256[:32]
+        assert human_event.task_id == frozen_task.id and human_event.case_id == case_id
+        authority = baseline_store.records.get(
+            "baseline-authorities", binding.plan_sha256, BaselineOperatorAuthorization
+        )
+        assert human_event.occurred_at == authority.submitted_at
+        assert (
+            human_event.evidence_uri
+            == (
+                baseline_store.root
+                / baseline_store.records._name("baseline-authorities", binding.plan_sha256)
+            )
+            .absolute()
+            .as_uri()
+        )
+        with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+            trace = EvaluationTraceBuilder(
+                repository=tasks,
+                artifact_store=artifacts,
+                event_store=evaluation_events,
+            ).build(case_id)
+        evaluated = EvaluationEngine().evaluate((trace,)).cases[0]
+        assert evaluated.adr.status is AdrStatus.INELIGIBLE
+        assert "HUMAN_INTERVENTION" in evaluated.adr.reasons
 
 
 @pytest.mark.mysql

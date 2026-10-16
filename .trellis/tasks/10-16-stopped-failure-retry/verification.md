@@ -38,3 +38,21 @@ Real Chrome targeted new controls: **2 passed / 3.149s**, first platform check �
 explicit consent → exact PAUSE, same-plan DOM/focus retained during polling, 390/1440px layouts,
 changed-plan consent reset, detached controls and contract9 produce no POST. Full unrelated Node
 suite did not terminate due to existing timers and is not claimed as passed; only targeted137.
+
+Follow-up review found a missing evaluation audit family before production EXECUTE. New purpose
+was omitted from EngineeringHumanActionRecorder and no generic recorder covered it. Original
+143/test/public green did not assert ADR intervention. A focused forward repair and public
+assertion are required before delivery; production has only sealed the proposal, no retry yet.
+广域 Node 结果：450 passed / 1 failed / 1 cancelled (readiness.test.cjs:643 expected older
+read-progress wording, then pending timer); this change does not touch that read path. No full
+suite green is claimed. Targeted controls137 and real browser2 remain the relevant passing checks.
+
+Audit forward fix: new public native/MySQL test including exact HumanActionEvent and ADR
+INELIGIBLE/HUMAN_INTERVENTION assertions **2 passed / 43.35s**. Independent reviewer found the
+missing family fixed; exact store/proof/authority/one-event replay gates preserved. No production
+retry executed before this repair. Production sealed proposal is c7f7b42d… (same Task/base,
+16 files, 2806 inventory items). Its 107474-byte patch SHA256 9e84a2c8… exactly equals the full
+original recovery patch; failed invocation has zero source mutation. All195 original records match.
+Audit unit final: **6 passed / 27.44s** including exact ID/URI/time, replay and same-ID conflict,
+missing authority and four tampered proof/authority cases, real TraceBuilder/Engine intervention
+recomputation. Ruff/format/mypy(two audit files)/diff passed. Public audited DONE flow also passed.
