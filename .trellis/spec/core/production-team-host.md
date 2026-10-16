@@ -592,8 +592,9 @@ Contracts:
   guard before importing pytest: if external or preloaded package/module code would replace a
   current source package/module/namespace, refuse before that dependency executes. Cached support
   modules are checked before user code starts. Ordinary dependencies without a current-source
-  collision and compatible namespace portions remain usable. This is a source-binding prerequisite
-  failure (`NOT_RUN`), not a business-test verdict or permission to repair/install dependencies.
+  collision and compatible namespace portions remain usable. An actual launcher refusal is a
+  source-binding prerequisite failure (`NOT_RUN`), not a business-test verdict or permission to
+  repair/install dependencies.
 - The manager writes a fixed shell launcher using fully quoted fixed argv and literal `"$@"`;
   no eval, user shell text, `shell=True` or environment expansion enters it. The mode selects
   pytest or bounded Python `-c`, `-m`, or a script inside the current worktree. Unknown startup
@@ -618,6 +619,11 @@ Contracts:
 - All focused test selectors, cwd, imports and evidence still belong to the current worktree.
   Reuse absolute tools without `uv sync`, `uv run` dependency resolution, environment creation,
   copying or installation. The prompt requires source `__file__` checks when verifying imports.
+- Report completed source-binding checks and verification commands from their actual command
+  results. `NOT_RUN` applies to an actual launcher source-shadow refusal, unavailable required
+  tooling or an unexecuted check; the generic tooling instruction must not require it for a
+  successful inspection. A successful source-binding check alone does not establish candidate
+  acceptance or replace independent QA/Review.
 - If required Python tools are unavailable, report that engineering prerequisite and `NOT_RUN`;
   preserve legal changes in a coder-progress checkpoint with remaining plan steps and concrete
   next actions when it prevents completion. Do not fabricate PASS or add `blocked_reason` to
