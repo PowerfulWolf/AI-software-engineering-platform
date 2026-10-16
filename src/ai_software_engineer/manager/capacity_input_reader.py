@@ -11,6 +11,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import JsonValue, TypeAdapter
 
 from ai_software_engineer.agents import AgentRequest, AgentRunStatus
+from ai_software_engineer.agents.continuation import same_continuation_inputs
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.context import ContextBundle, FileContextStore
@@ -40,6 +41,7 @@ from ai_software_engineer.manager.verifier_preparation import (
     observe_verifier_preparation,
 )
 from ai_software_engineer.orchestration.continuation_models import (
+    ContinuationAdmission,
     ExecutionCaptureStart,
     ExecutionCaptureStop,
 )
@@ -605,18 +607,21 @@ class CapacityInputReader:
                     allow_later_claims=allow_later_claims,
                 )
                 for receipt in native.receipts_for_task(marker.task_id)
-            ) or any(
-                marker.run_id == admission.interrupted_run_id
-                or self._conflicts_with_claim(
+            ):
+                raise ValueError("容量停止的原 Run 已有原生恢复记录, 不能证明未调用")
+            for admission in native.admissions_for_task(marker.task_id):
+                if prior_invocation_fence is not None and self._prior_incoming_admission(
+                    marker, prior_invocation_fence, native, admission
+                ):
+                    continue
+                if marker.run_id == admission.interrupted_run_id or self._conflicts_with_claim(
                     marker,
                     admission.new_request,
                     admission.next_work_item_id,
                     admission.next_lease_id,
                     allow_later_claims=allow_later_claims,
-                )
-                for admission in native.admissions_for_task(marker.task_id)
-            ):
-                raise ValueError("容量停止的原 Run 已有原生恢复记录, 不能证明未调用")
+                ):
+                    raise ValueError("容量停止的原 Run 已有原生恢复记录, 不能证明未调用")
         artifact_root = self.state.parent / "artifacts"
         if self._capacity_ledger_exists(artifact_root):
             for path in artifact_root.glob("art_*.json"):
@@ -636,6 +641,61 @@ class CapacityInputReader:
                 candidate=artifact if isinstance(artifact, ImplementationReportArtifact) else None,
                 outcomes=outcomes,
             )
+
+    def _prior_incoming_admission(
+        self,
+        marker: UninvokedClaimBoundary,
+        fence: PriorInvocationFence,
+        native: FileContinuationStore,
+        admission: ContinuationAdmission,
+    ) -> bool:
+        """Recognize only entry into the contained old call, never its successor."""
+        start, capture, stop = fence.start, fence.capture_start, fence.capture_stop
+        if capture is None or stop is None or admission.new_request.run_id != start.request.run_id:
+            return False
+        if (
+            admission.new_request != start.request
+            or admission.next_work_item_id != start.work_item_id
+            or admission.next_lease_id != start.lease_id
+            or admission.next_lease_id == marker.lease_id
+            or admission.interrupted_run_id in {start.request.run_id, marker.run_id}
+        ):
+            raise ValueError("重领观察的原调用准入没有绑定精确原请求、WorkItem 和租约")
+        capture.validate_integrity()
+        stop.validate_integrity()
+        prior = self.queue.original_claim(start.lease_id)
+        current = self.queue.original_claim(marker.lease_id)
+        require_claim_snapshot(capture.claim, prior)
+        # The typed store reopens the complete predecessor receipt and verifies
+        # its digest, scope, policy and same-continuation request contract.
+        canonical = native.admission_for_run(start.request.run_id)
+        receipt = native.get_receipt(admission.interrupted_run_id)
+        if (
+            canonical != admission
+            or native.capture_start(start.request.run_id) != capture
+            or native.capture_stop(start.request.run_id) != stop
+            or capture.request != start.request
+            or (capture.claim.work_item.id, capture.claim.lease.id)
+            != (start.work_item_id, start.lease_id)
+            or admission.scope != capture.scope
+            or receipt.scope != capture.scope
+            or admission.receipt_sha256 != receipt.receipt_sha256
+            or admission.policy_sha256 != receipt.policy_sha256
+            or admission.policy_sha256 != capture.policy_sha256
+            or receipt.task_intent_sha256 != capture.task_intent_sha256
+            or capture.claim.work_item.parent_work_item_id != receipt.original_work_item_id
+            or not same_continuation_inputs(start.request, receipt.request, cause=receipt.cause)
+            or not (
+                receipt.created_at <= admission.created_at
+                and prior.claimed_at
+                <= start.started_at
+                <= admission.created_at
+                <= capture.started_at
+                < current.claimed_at
+            )
+        ):
+            raise ValueError("重领观察的原调用准入与完整前驱收据、claim 或时序不一致")
+        return True
 
     def _require_prior_invocation_fence(
         self,

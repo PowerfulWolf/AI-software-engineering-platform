@@ -1,5 +1,37 @@
 # Stopped invocation without a published outcome
 
+## Repeated recovery with a historical incoming admission (2026-10-16)
+
+A replay-guarded fresh claim can follow an original Coder that itself entered through a native
+recovery admission. Its complete PriorInvocationFence already accounts for the old invocation
+and capture start/stop. The no-start scanner may recognize only that exact incoming admission,
+with canonical record/request/WorkItem/lease equality, complete matching receipt and scope/policy/
+continuation/parent facts. Native admission occurs after invocation-start and before capture-start;
+check its actual chronology before the current guard claim. Do not require it to predate invocation.
+No generic receipt, outgoing admission or current-claim native record exemption is introduced.
+Missing/incomplete prior fences, mismatches, aliases, late records or current output/route facts
+still refuse. This is not a context-capacity receipt retirement rule. Required tests cover a real
+repeated public recovery and exact refusal matrix; retain all old proposal and execution history.
+
+Internal seam: `manager/capacity_input_reader.py::CapacityInputReader._prior_incoming_admission(
+marker: UninvokedClaimBoundary, fence: PriorInvocationFence, native: FileContinuationStore,
+admission: ContinuationAdmission) -> bool`. The existing `require_claim_not_started` calls it
+only during admission scanning with a prior fence; complete receipt scanning remains unchanged.
+Validate `new_request`, `next_work_item_id`, `next_lease_id`, `receipt_sha256`, `policy_sha256`,
+scope and original parent plus canonical capture/claim records. Required chronology is
+`receipt.created_at <= admission.created_at` and
+`prior.claimed_at <= start.started_at <= admission.created_at <= capture.started_at
+< current.claimed_at`. Mismatch raises the existing rejection rather than granting partial proof.
+
+Good: the repeated public native fixture reaches precise PAUSE/RESUME and independent DONE.
+Base: an exact incoming admission permits proof only that the fresh guard did not call main.
+Bad: missing predecessor receipt/full capture fence, modified request/claim/policy/parent,
+alias, before-start/late admission, current capture or outgoing admission. Required regression
+entry points are `test_exact_incoming_native_admission_preserves_prior_unknown_and_bytes`,
+`test_incoming_admission_does_not_weaken_other_execution_refusals` and the public
+`test_public_stopped_unknown_coder_pauses_then_independently_delivers_original_task[incoming-admission]`;
+keep `test_native_alternate_run_receipt_or_admission_cannot_hide_original_claim` passing.
+
 ## Blocked delivery re-entry and retained progress (2026-10-16)
 
 A raw platform execution exception can leave delivery BLOCKED/INVARIANT_VIOLATION while the

@@ -81,7 +81,22 @@ pidfiles absent and all195 original immutable files unchanged. Audit
 `/tmp/ase-k1-controlled-stop-independent-audit-20261016-0647.json` SHA
 ff781cbcaf7fbc2eda95d7ab6ef4f45d503a52c7f9107ed93270c698e48f13fa records these observations.
 No fault retirement, inspection successor or maintenance-completion exception was needed.
-Deployment and public original-K1 re-entry remain pending verification.
+At the implementation commit, deployment and public original-K1 re-entry were pending.
+The actual observations are recorded below.
+
+## Actual deployment and re-entry
+
+Maintenance229eabd (includingf3be38e) was independently reviewed, merged/pushed to main and
+started under new instance console_instance_69a6aab47708df27e2aa5547fffb9311, PID17458.
+The public Continue operation_04b806b5df43944929dcea7567bca9c7 succeeded at07:00:16.897601Z:
+old claim EXPIRED, fresh guarded claim RELEASED, WorkItem EXECUTION_UNCERTAIN wait. Original
+Task/revision/attempt/source and all existing main starts/outcomes remain unchanged; there was
+no repeated main Coder call. The fresh claim completed real read-only knowledge preparation.
+
+The subsequent rescue proposal was rejected by an independent historical incoming-admission
+compatibility defect, before execution or a new reservation. Follow maintenance task
+10-16-replay-guarded-admission for its exact independent evidence and remaining treatment.
+This re-entry task's deployed behavior is verified; production K1 delivery remains unfinished.
 
 ## Rollback
 

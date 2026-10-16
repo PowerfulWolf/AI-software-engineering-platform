@@ -128,17 +128,18 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _ReportTempla
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    ("late_raw_artifact", "blocked_raw_owned", "reentry_refusal"),
+    ("late_raw_artifact", "blocked_raw_owned", "reentry_refusal", "incoming_admission"),
     [
-        (False, False, None),
-        (True, False, None),
-        (False, True, None),
-        (False, True, "late-artifact"),
-        (False, True, "late-route"),
-        (False, True, "late-claim"),
-        (False, True, "closed-successor"),
-        (False, True, "unexpired-original"),
-        (False, True, "unknown-session"),
+        (False, False, None, False),
+        (True, False, None, False),
+        (False, True, None, False),
+        (False, True, "late-artifact", False),
+        (False, True, "late-route", False),
+        (False, True, "late-claim", False),
+        (False, True, "closed-successor", False),
+        (False, True, "unexpired-original", False),
+        (False, True, "unknown-session", False),
+        (False, False, None, True),
     ],
     ids=[
         "delivery",
@@ -150,6 +151,7 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _ReportTempla
         "reentry-closed-successor",
         "reentry-unexpired-original",
         "reentry-unknown-session",
+        "incoming-admission",
     ],
 )
 def test_public_stopped_unknown_coder_pauses_then_independently_delivers_original_task(
@@ -159,7 +161,10 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
     late_raw_artifact: bool,
     blocked_raw_owned: bool,
     reentry_refusal: str | None,
+    incoming_admission: bool,
 ) -> None:
+    stopped_attempt = 2 if incoming_admission else 1
+    initial_call_count = stopped_attempt
     repository = tmp_path / "target"
     repository.mkdir()
     (repository / "hello.txt").write_text("hello\n")
@@ -279,6 +284,33 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
         production_backend, "ConfiguredStructuredClientFactory", lambda *_: ObservedClients()
     )
 
+    class PredecessorRunner(SubprocessCodexCommandRunner):
+        def run_observed(
+            self,
+            argv: tuple[str, ...],
+            *,
+            cwd: Path,
+            environment: Mapping[str, str],
+            stdin: str,
+            timeout_seconds: float,
+            observer: Callable[[CodexInvocationResult], None],
+        ) -> CodexInvocationResult:
+            # A real earlier bounded invocation produces its native receipt and
+            # one-use incoming admission for the following unknown Coder.
+            return super().run_observed(
+                (
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; import time; "
+                    "Path('hello.txt').write_text('earlier retained draft\\n'); time.sleep(10)",
+                ),
+                cwd=cwd,
+                environment=environment,
+                stdin=stdin,
+                timeout_seconds=min(timeout_seconds, 0.5),
+                observer=observer,
+            )
+
     class ExpiringRunner(SubprocessCodexCommandRunner):
         def run_observed(
             self,
@@ -344,7 +376,7 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
             assert request.execution_baseline_sha256 == expected_binding
             policy = WorkspacePolicy(cwd, request.permissions)
             if request.role is AgentRole.CODER:
-                assert request.attempt == 2
+                assert request.attempt == stopped_attempt + 1
                 assert (cwd / "hello.txt").read_text() == "retained stopped draft\n"
                 policy.authorize_write("hello.txt")
                 with pytest.raises(WorkspacePolicyError):
@@ -442,11 +474,12 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
                     self._model,
                 )
             )
-            self._runner = (
-                ExpiringRunner(guard)
-                if request.role is AgentRole.CODER and request.attempt == 1
-                else CompletedRunner(self, request)
-            )
+            if request.role is AgentRole.CODER and request.attempt == stopped_attempt:
+                self._runner = ExpiringRunner(guard)
+            elif incoming_admission and request.role is AgentRole.CODER and request.attempt == 1:
+                self._runner = PredecessorRunner(guard)
+            else:
+                self._runner = CompletedRunner(self, request)
             return super().run(request)
 
     monkeypatch.setattr(production_delivery, "CodexCliAgentAdapter", ObservedCodex)
@@ -504,8 +537,8 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
             console.run_once()
     else:
         console.run_once()
-    assert len(calls) == 1
-    (stopped,) = calls
+    assert len(calls) == initial_call_count
+    stopped = calls[-1]
     pending = service.status(product.delivery_id).checkpoint
     if blocked_raw_owned:
         assert pending.stage is DeliveryStage.BLOCKED
@@ -533,6 +566,28 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
         records.find("invocation-outcomes", stopped.claim.work_item.id, DeliveryInvocationOutcome)
         is None
     )
+    known_starts = records.list("invocation-starts", DeliveryInvocationStart)
+    known_outcomes = records.list("invocation-outcomes", DeliveryInvocationOutcome)
+    native_receipts = ledger.receipts_for_task(pending.task_id)
+    if incoming_admission:
+        (predecessor,) = calls[:-1]
+        (receipt,) = native_receipts
+        assert receipt.request == predecessor.request
+        assert receipt.cause == "local_execution_limit"
+        admission = ledger.admission_for_run(stopped.request.run_id)
+        assert admission is not None and admission.new_request == stopped.request
+        assert admission.interrupted_run_id == predecessor.request.run_id
+        assert admission.receipt_sha256 == receipt.receipt_sha256
+        assert (admission.next_work_item_id, admission.next_lease_id) == (
+            stopped.claim.work_item.id,
+            stopped.claim.lease.id,
+        )
+        assert stopped.claim.work_item.parent_work_item_id == receipt.original_work_item_id
+        capture = ledger.capture_start(stopped.request.run_id)
+        assert original_start.started_at <= admission.created_at <= capture.started_at
+        assert len(known_starts) == 2 and len(known_outcomes) == 1
+    else:
+        assert not native_receipts
     original_invocation_bytes = {
         path: path.read_bytes()
         for root in (
@@ -667,9 +722,9 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
         monkeypatch.setattr(backend, "reconcile", original_reconcile)
         assert service.status(pending.delivery_id).checkpoint == pending
         assert host.work_queue.items_for_task(pending.task_id) == expected_items
-        assert len(calls) == 1
-        assert records.list("invocation-starts", DeliveryInvocationStart) == (original_start,)
-        assert records.list("invocation-outcomes", DeliveryInvocationOutcome) == ()
+        assert len(calls) == initial_call_count
+        assert records.list("invocation-starts", DeliveryInvocationStart) == known_starts
+        assert records.list("invocation-outcomes", DeliveryInvocationOutcome) == known_outcomes
         assert all(path.read_bytes() == body for path, body in original_invocation_bytes.items())
         with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
             assert tasks.get(pending.task_id) == original_task
@@ -709,7 +764,7 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
     )
     console.run_once()
     monkeypatch.setattr(DispatcherLoop, "tick", original_tick)
-    assert len(calls) == 1, "ordinary continuation must not invoke another Coder"
+    assert len(calls) == initial_call_count, "ordinary continuation must not invoke another Coder"
     waiting = host.work_queue.get(expired.id)
     assert waiting.status in (WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY)
     assert waiting.wait_disposition is not None
@@ -727,14 +782,14 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
     # replay-refusal marker exists; recovery must form a fresh engineering
     # observation from existing exact facts rather than inventing an old receipt.
     assert all(path.read_bytes() == body for path, body in original_invocation_bytes.items())
-    assert records.list("invocation-starts", DeliveryInvocationStart) == (original_start,)
-    assert records.list("invocation-outcomes", DeliveryInvocationOutcome) == ()
+    assert records.list("invocation-starts", DeliveryInvocationStart) == known_starts
+    assert records.list("invocation-outcomes", DeliveryInvocationOutcome) == known_outcomes
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         frozen = tasks.get(pending.task_id)
         revision = tasks.current_revision(pending.task_id)
         frozen_events = tasks.list_events(pending.task_id)
     assert frozen.status is TaskStatus.IMPLEMENTING
-    assert frozen.attempts == frozen.work_attempt == 1 and not frozen.retry_failures
+    assert frozen.attempts == frozen.work_attempt == stopped_attempt and not frozen.retry_failures
     original_history = {
         path: path.read_bytes()
         for path in (sidecar / "state/continuations" / frozen.id).rglob("*.json")
@@ -848,7 +903,7 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
         assert host.work_queue.step(waiting.id) == prior_step
         assert host.work_queue.claims_for_work_item(waiting.id) == reclaim_claims
         assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
-        assert len(calls) == len(native_adapters) == 1
+        assert len(calls) == len(native_adapters) == initial_call_count
         with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
             assert tasks.get(frozen.id) == frozen
             assert tasks.current_revision(frozen.id) == revision
@@ -861,7 +916,7 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
         assert all(path.read_bytes() == body for path, body in original_invocation_bytes.items())
         assert all(path.read_bytes() == body for path, body in original_artifact_bytes.items())
         assert records.find("invocation-outcomes", waiting.id, DeliveryInvocationOutcome) is None
-        assert not ledger.receipts_for_task(frozen.id)
+        assert ledger.receipts_for_task(frozen.id) == native_receipts
         assert _git_output("rev-parse", "HEAD", cwd=repository) == source
         assert (repository / "hello.txt").read_text() == "hello\n"
         return
@@ -871,7 +926,7 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
     expected_binding = binding.binding_sha256
     assert binding.stopped_execution_sha256 == plan.facts.stopped_execution.proof_sha256
     assert binding.execution_source_revision == binding.execution_base_ref == source
-    assert len(calls) == 1 and len(consumptions(host.work_queue, frozen.id)) == 1
+    assert len(calls) == initial_call_count and len(consumptions(host.work_queue, frozen.id)) == 1
     assert capture_mutation_inventory(stopped.workspace) == inventory
     assert index_path.read_bytes() == index_bytes
     assert _git_output("branch", "--show-current", cwd=stopped.workspace) == stopped.branch
@@ -883,7 +938,7 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
         if item.status is not WorkItemStatus.CLOSED
     )
     assert preserved.status is WorkItemStatus.WAITING_HUMAN
-    assert preserved.attempt == 2 and preserved.parent_work_item_id == waiting.id
+    assert preserved.attempt == stopped_attempt + 1 and preserved.parent_work_item_id == waiting.id
     assert preserved.wait_disposition is not None
     console.submit(
         ResumeExecutionBaselineIntent(
@@ -907,13 +962,13 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
     assert resumed is not None and resumed.status is ConsoleOperationStatus.SUCCEEDED, resumed
     delivered = service.status(pending.delivery_id).checkpoint
     assert delivered.stage is DeliveryStage.DONE, delivered.failure_summary
-    assert [call.request.role for call in calls] == [
+    assert [call.request.role for call in calls[initial_call_count - 1 :]] == [
         AgentRole.CODER,
         AgentRole.CODER,
         AgentRole.QA,
         AgentRole.REVIEWER,
     ]
-    successor, qa_call, reviewer_call = calls[1:]
+    successor, qa_call, reviewer_call = calls[initial_call_count:]
     assert successor.workspace == stopped.workspace and successor.branch == stopped.branch
     assert successor.request.permissions == stopped.request.permissions
     assert len({call.request.run_id for call in calls}) == len(calls)
@@ -924,7 +979,10 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
     assert qa_call.request.source_revision == reviewer_call.request.source_revision == candidate
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         completed = tasks.get(frozen.id)
-    assert completed.status is TaskStatus.DONE and completed.attempts == completed.work_attempt == 2
+    assert (
+        completed.status is TaskStatus.DONE
+        and completed.attempts == completed.work_attempt == stopped_attempt + 1
+    )
     assert not completed.retry_failures and task_intent_sha256(completed) == task_intent_sha256(
         frozen
     )
@@ -942,7 +1000,7 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
     assert all(path.read_bytes() == body for path, body in original_invocation_bytes.items())
     assert records.get("invocation-starts", waiting.id, DeliveryInvocationStart) == original_start
     assert records.find("invocation-outcomes", waiting.id, DeliveryInvocationOutcome) is None
-    assert not ledger.receipts_for_task(frozen.id)
+    assert ledger.receipts_for_task(frozen.id) == native_receipts
     assert not FileModelRouteAttemptStore(model_route_root(sidecar)).list_for_run(
         stopped.request.run_id
     )
@@ -1002,7 +1060,7 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
         "context_sha256s",
         "observation_sha256",
     }, "current engineering observation must not invent a historical refusal, result or stop"
-    for call in calls[1:]:
+    for call in calls[initial_call_count:]:
         assert proofs_by_item[call.claim.work_item.id].proof_kind == "definitive_outcome"
     for value, name in (
         (plan.to_wire(), "execution-baseline-plan.schema.json"),
