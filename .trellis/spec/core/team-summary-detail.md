@@ -68,6 +68,27 @@ Standalone native candidate verification 没有 joint owner 时，选中详情�
 仍从已核验的当前 native checkpoint 构造其真实 Request owner；不能因跳过其他 Task 装配
 而遗漏 owner，也不能用 query 自报归属代替真实 source Task 与 native history 的核验。
 
+Request detail 的正文只装配真实当前 owner 的 native work 及其 verification descendants。
+历史 joint/native ownership、原生 checkpoint 链、退休记录、Task ID 归属歧义和所有 reservation
+envelope/source/repository/release 一致性仍完整核验；仅省略最终会被
+`_current_requirement_work` 丢弃的旧工作及无关需求的工程/队列/正文投影。
+`_read_verifications(..., selected_source_delivery_ids: frozenset[str] | None)` 的筛选发生在
+完整 reservation envelope 与真实 source/repository 校验之后，不能按 query 自报归属略过检查。
+普通 full/summary/Task detail 保持原有装配范围。
+
+Request 的 `resource_state_sha256` 按原契约只绑定真实 owner checkpoint，但独立第二次
+Request source observation 仍重新完整读取当前 Task 的 SQL、工程授权与 verification 事实，
+以及 Team/Project/journal/native/退休/ownership。不能因这些字段不进入 source hash 而省略原有
+最后检查；仅省略真实归属检查后确定不会返回的历史或无关 Task 装配。两个 observation 不共享
+权限或跨请求 cache。真实未归属 joint 的 standalone native 仍使用其当前 checkpoint。
+
+Good：含多个旧 Task 的 Request 只装配一个真实当前 native work，最终 fresh checkpoint
+仍决定是否可返回。Base：Task detail 保留所有历史。Bad：直接信任 request_id、跳过外来损坏
+journal/ownership，或用先前的 checkpoint 代替第二次真实观察。
+独立性能基线为真实 K1 完整 Request detail 11.571s wall/10.898s CPU；DB 仅0.37s。
+不得将瞬态 `TEAM_READ_IN_PROGRESS` 当成数据丢失或证明的死锁。性能验证用计数及独立真实
+只读 profile；不以可移植的墙钟时间阈值代替完整性测试。
+
 摘要从装配开始跳过未选中 pretty documents/dialogue、run 展示与历史 Task 完整 hydration，
 禁止先 full snapshot 再 strip。摘要仍完整核验当前 Task 所需 accepted artifact、evaluation、
 engineering disposition、continuation 和 exact receipt，不能删掉决定安全恢复与终态的事实读取。

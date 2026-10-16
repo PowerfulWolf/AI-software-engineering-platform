@@ -766,6 +766,24 @@ class ProductionTeamReader:
             # legitimize another native delivery's reuse, even across repositories.
             raise ValueError("ambiguous native Task ownership")
 
+        # Historical members remain fully verified ownership facts above, but
+        # _current_requirement_work excludes their Task projections from every
+        # Request. Select only contributors to this Request independently in
+        # each body/source observation; current SQL and authority stay fresh.
+        selected_request_native_ids = (
+            frozenset(
+                native.checkpoint.delivery_id
+                for native, base in native_views
+                if base.request_id == selected_query.id
+                and (
+                    native.checkpoint.delivery_id not in ownership
+                    or native.checkpoint.delivery_id in current_native_ids
+                )
+            )
+            if selected_query is not None and selected_query.kind == "request"
+            else None
+        )
+
         # Filesystem prefixes first, SQL snapshot second: SQL cannot lag the captured checkpoints.
         # A pre-dispatch failure has no SQL Task, Assignment or verification source to enrich.
         # Its durable filesystem checkpoint is sufficient for an honest blocked work card.
@@ -783,6 +801,11 @@ class ProductionTeamReader:
                     cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
                     task_reads = _TaskReadSnapshot(cursor, route_attempts, branch_cache)
                     for native, base in native_views:
+                        if (
+                            selected_request_native_ids is not None
+                            and native.checkpoint.delivery_id not in selected_request_native_ids
+                        ):
+                            continue
                         if selected_verification or (
                             selected_native_task
                             and selected_query is not None
@@ -880,6 +903,7 @@ class ProductionTeamReader:
                                 selected_id=selected_query.id
                                 if selected_verification and selected_query is not None
                                 else None,
+                                selected_source_delivery_ids=selected_request_native_ids,
                             )
                         )
             finally:
@@ -887,6 +911,11 @@ class ProductionTeamReader:
                 connection.close()
         else:
             for native, base in native_views:
+                if (
+                    selected_request_native_ids is not None
+                    and native.checkpoint.delivery_id not in selected_request_native_ids
+                ):
+                    continue
                 if selected_verification or (
                     selected_native_task
                     and selected_query is not None
@@ -2285,6 +2314,7 @@ def _read_verifications(
     requirement_checkpoints: Mapping[str, str] | None = None,
     resource_states: dict[str, str] | None = None,
     selected_id: str | None = None,
+    selected_source_delivery_ids: frozenset[str] | None = None,
 ) -> tuple[TaskView, ...]:
     """Project verification reservations as first-class read-side work items."""
     cursor.execute(
@@ -2326,6 +2356,13 @@ def _read_verifications(
         native, request_id, source_scope = source
         if reservation.repository_id != native.checkpoint.repository_id:
             raise ValueError("verification reservation project mismatch")
+        if (
+            selected_source_delivery_ids is not None
+            and native.checkpoint.delivery_id not in selected_source_delivery_ids
+        ):
+            # Envelope/order/release/source/repository checks above still apply
+            # to excluded history. Its full body cannot affect this Request.
+            continue
         verification_id = f"verification_{reservation.plan_sha256[:32]}"
         if selected_id is not None and selected_id != verification_id:
             continue
