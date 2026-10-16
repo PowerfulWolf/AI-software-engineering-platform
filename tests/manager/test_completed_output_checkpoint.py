@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from ai_software_engineer.agents.codex_cli import CodexCliAgentAdapter
 from ai_software_engineer.agents.execution import NativeProcessStop
+from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, ModelRouteAttempt
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
     AgentFailure,
@@ -162,6 +163,7 @@ def completed(
     descriptor = os.open(tmp_path / "original.lock", os.O_RDWR | os.O_CREAT, 0o600)
     problem = getattr(request, "param", None)
     stopped_provider = isinstance(problem, str) and problem.startswith("stopped_provider")
+    stopped_failure = isinstance(problem, str) and problem.startswith("stopped_failure")
     rejected_output = isinstance(problem, str) and problem.startswith("invalid_")
     stopped_unknown = isinstance(problem, str) and problem.startswith("stopped_unknown")
     variant = (
@@ -173,7 +175,13 @@ def completed(
         tmp_path,
         Guard(descriptor),
         work_limit=1
-        if variant in {"exhausted", "stopped_provider_exhausted", "stopped_unknown_exhausted"}
+        if variant
+        in {
+            "exhausted",
+            "stopped_provider_exhausted",
+            "stopped_unknown_exhausted",
+            "stopped_failure_exhausted",
+        }
         else 5,
     )
     process: subprocess.Popen[bytes] | None = None
@@ -182,6 +190,7 @@ def completed(
             variant in {"named", "named_policy"}
             or rejected_output
             or stopped_provider
+            or stopped_failure
             or stopped_unknown
         ):
             # Baseline migration requires a semantic branch frozen in a fresh
@@ -236,14 +245,14 @@ def completed(
         monkeypatch.setattr(CodexCliAgentAdapter, "run", forbidden_model)
         queue = CompletedQueue(native)
         native.claim = queue.original
-        if stopped_provider:
+        if stopped_provider or stopped_failure:
             # Permanent provider failure introduces no new mutations. The lawful
             # retained draft was already present at the immutable capture start.
             (native.worktree.path / "src/app.py").write_text("VALUE = 2\n")
         start = seal_start(native, queue, tmp_path)
         continuation = native.service()
         assert continuation.started(native.request, native.worktree.path) is not None
-        if not stopped_provider:
+        if not (stopped_provider or stopped_failure):
             (native.worktree.path / "src/app.py").write_text("VALUE = 2\n")
         session_proof = None
         if stopped_unknown:
@@ -252,19 +261,33 @@ def completed(
             )
             session_proof = OwnedSessionController(process).stop(timeout_seconds=0.2)
             returncode = process.wait(timeout=5)
-        elif variant in {"live_process", "stopped_provider_live_process"}:
+        elif variant in {
+            "live_process",
+            "stopped_provider_live_process",
+            "stopped_failure_live_process",
+        }:
             process = subprocess.Popen(
                 (sys.executable, "-c", "import time; time.sleep(60)"), start_new_session=True
             )
             # A stale/forged historical observation must never defeat the current
             # real PGID probe. This test-owned process is cleaned up below.
-            returncode = 1 if stopped_provider else 0
+            returncode = 1 if stopped_provider or stopped_failure else 0
+        elif stopped_failure:
+            process = subprocess.Popen(
+                (sys.executable, "-c", "import time; time.sleep(0.3); raise SystemExit(1)"),
+                start_new_session=True,
+            )
+            controller = OwnedSessionController(process)
+            returncode = process.wait(timeout=5)
+            session_proof = controller.require_empty()
         else:
             process = subprocess.Popen(
                 (
                     sys.executable,
                     "-c",
-                    "raise SystemExit(1)" if stopped_provider else "raise SystemExit(0)",
+                    "raise SystemExit(1)"
+                    if stopped_provider or stopped_failure
+                    else "raise SystemExit(0)",
                 ),
                 start_new_session=True,
             )
@@ -273,8 +296,12 @@ def completed(
             process_id=process.pid,
             group_id=process.pid,
             returncode=returncode,
-            kind="failed" if stopped_provider or stopped_unknown else "completed",
-            stopped_at=datetime.now(UTC) if stopped_unknown else NOW + timedelta(seconds=1),
+            kind="failed"
+            if stopped_provider or stopped_failure or stopped_unknown
+            else "completed",
+            stopped_at=datetime.now(UTC)
+            if stopped_unknown or stopped_failure
+            else NOW + timedelta(seconds=1),
             session_proof=session_proof,
         )
         continuation.record_native_stop(
@@ -282,11 +309,14 @@ def completed(
             native.worktree.path,
             process_stop=stop,
             output_present=not stopped_provider
+            and not stopped_failure
             and not stopped_unknown
             and variant != "output_absent",
             cause=None,
             original_error_code=AgentErrorCode.AUTHENTICATION_ERROR
             if stopped_provider
+            else AgentErrorCode.PROVIDER_UNAVAILABLE
+            if stopped_failure
             else AgentErrorCode.PROVIDER_ERROR
             if stopped_unknown
             else None,
@@ -297,7 +327,11 @@ def completed(
         ledger_root.parent.mkdir(mode=0o700)
         ledger = FileContinuationStore.initialize(ledger_root, task_id=native.task.id)
         ledger.put_capture_start(capture_start)
-        if variant not in {"missing_stop", "stopped_provider_missing_stop"}:
+        if variant not in {
+            "missing_stop",
+            "stopped_provider_missing_stop",
+            "stopped_failure_missing_stop",
+        }:
             ledger.put_capture_stop(capture_stop)
         result = (
             AgentResult.model_validate(
@@ -315,6 +349,17 @@ def completed(
                 {
                     **native.result().to_wire(),
                     "error": AgentFailure(
+                        code=AgentErrorCode.PROVIDER_UNAVAILABLE,
+                        message="Original native invocation failed; cause remains unclassified.",
+                        transient=False,
+                    ),
+                }
+            )
+            if stopped_failure
+            else AgentResult.model_validate(
+                {
+                    **native.result().to_wire(),
+                    "error": AgentFailure(
                         code=AgentErrorCode.INVALID_OUTPUT,
                         message="原产出未接纳; GIT_CONTRACT。",
                         transient=False,
@@ -328,6 +373,20 @@ def completed(
         records = KnowledgeRecordStore(tmp_path / "invocations")
         if not stopped_unknown:
             records.put("invocation-outcomes", queue.item.id, outcome)
+        if stopped_failure:
+            FileModelRouteAttemptStore(tmp_path / "model-routes").append(
+                ModelRouteAttempt.create(
+                    request=native.request,
+                    route_index=1,
+                    provider="native_fixture",
+                    model="native_fixture",
+                    route_kind="codex_cli",
+                    started_at=NOW,
+                    completed_at=datetime.now(UTC),
+                    result=result,
+                    fallback=False,
+                )
+            )
         native.guard.live = False
         task = native.repository.get(native.task.id)
         # Public Host coverage owns admission/dispatch validation. This seam uses

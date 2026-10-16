@@ -197,3 +197,5 @@
   exact current SOURCE/same-base plans, Chinese diagnostics and retained original findings.
 - [`stopped-provider-retry.md`](stopped-provider-retry.md): exact permanent provider prerequisite failure, original lawful draft, human prerequisite confirmation and ordinary-work same-Task PAUSE/RESUME.
 - [`stopped-provider-ui.md`](stopped-provider-ui.md): typed provider-failure preparation, exact human confirmation and retained controls during polling.
+
+- [`stopped-failure-retry.md`](stopped-failure-retry.md): exact stopped unknown native failure, explicit ordinary-work engineering PAUSE/RESUME and unchanged failed history.

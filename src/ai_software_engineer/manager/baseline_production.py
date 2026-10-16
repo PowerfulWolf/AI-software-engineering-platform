@@ -64,6 +64,8 @@ from ai_software_engineer.manager.baseline_models import (
     require_provider_confirmation_shape,
     require_provider_prerequisite_confirmation,
     require_rescue_confirmation,
+    require_stopped_failure_confirmation,
+    require_stopped_failure_confirmation_shape,
 )
 from ai_software_engineer.manager.baseline_native_rules import build_native_rule_change
 from ai_software_engineer.manager.capacity_input_reader import (
@@ -105,6 +107,10 @@ from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy
 from ai_software_engineer.manager.stopped_execution_checkpoint import (
     StoppedCoderExecutionProof,
     require_stopped_coder_workspace,
+)
+from ai_software_engineer.manager.stopped_failure_checkpoint import (
+    StoppedFailureProof,
+    require_stopped_failure_workspace,
 )
 from ai_software_engineer.manager.stopped_provider_checkpoint import (
     StoppedProviderFailureProof,
@@ -154,6 +160,7 @@ class BaselineProposeCommand(DomainModel):
         if self.purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
+            BaselinePurpose.STOPPED_FAILURE_RETRY,
             BaselinePurpose.STOPPED_EXECUTION_RESCUE,
             BaselinePurpose.CONTEXT_CAPACITY_RESUME,
         }:
@@ -212,6 +219,7 @@ class BaselineProposeCommand(DomainModel):
             in {
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                BaselinePurpose.STOPPED_FAILURE_RETRY,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                 BaselinePurpose.CONTEXT_CAPACITY_RESUME,
             }
@@ -244,11 +252,21 @@ class BaselineExecuteCommand(DomainModel):
     confirm_provider_prerequisites_repaired: Literal[True] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    confirm_stopped_failure_retry: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def distinct_confirmation(self) -> Self:
         if self.confirm_legacy_containment and self.confirm_local_execution_stopped:
             raise ValueError("两种旧执行恢复确认不能同时使用")
+        require_stopped_failure_confirmation_shape(
+            self.confirm_stopped_failure_retry,
+            self.continuation_mode,
+            self.confirm_legacy_containment,
+            self.confirm_local_execution_stopped,
+            self.confirm_provider_prerequisites_repaired,
+        )
         require_provider_confirmation_shape(
             self.confirm_provider_prerequisites_repaired,
             self.continuation_mode,
@@ -272,6 +290,9 @@ class BaselineExecuteCommand(DomainModel):
             change.change_sha256 if change is not None else None
         ):
             raise ValueError("请明确确认此精确目标版本的项目规范变更")
+        require_stopped_failure_confirmation(
+            plan, self.confirm_stopped_failure_retry, self.continuation_mode
+        )
         require_provider_prerequisite_confirmation(
             plan, self.confirm_provider_prerequisites_repaired, self.continuation_mode
         )
@@ -537,6 +558,7 @@ class ProductionBaselineFactCollector:
                 not in {
                     BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                     BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                    BaselinePurpose.STOPPED_FAILURE_RETRY,
                     BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                     BaselinePurpose.CONTEXT_CAPACITY_RESUME,
                 }
@@ -552,6 +574,7 @@ class ProductionBaselineFactCollector:
                 BaselinePurpose.SOURCE_REBIND,
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                BaselinePurpose.STOPPED_FAILURE_RETRY,
             }
             or item.status not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
             or disposition is None
@@ -847,6 +870,34 @@ class ProductionBaselineFactCollector:
                     if reference.head_revision != binding.execution_source_revision:
                         raise ValueError("提供方前提失败基线更新后的代码版本已变化")
 
+            if plan.facts.stopped_failure is not None:
+                task = self.repository.get(plan.facts.task.id)
+                item = self.queue.get(plan.facts.work_item_id)
+                if (
+                    self._stopped_failure(task, item, self.queue.step(item.id))
+                    != plan.facts.stopped_failure
+                ):
+                    raise ValueError("原执行失败的原核验事实已变化, 恢复尚未安排")
+                inventory = capture_mutation_inventory(Path(binding.worktree_path))
+                if (
+                    inventory != plan.before_inventory
+                    or inventory.sha256 != binding.after_inventory_sha256
+                ):
+                    raise ValueError("原执行失败恢复后的完整现场已变化, 保留原文件")
+                for capture in (plan.dirty_capture, plan.complete_capture):
+                    self.git.verify_mutations(
+                        capture.to_capture(),
+                        plan.facts.permissions,
+                        denied_paths=plan.facts.denied_paths,
+                    )
+                require_stopped_failure_workspace(
+                    plan.facts.stopped_failure,
+                    plan.dirty_capture,
+                    inventory,
+                    plan.facts.permissions,
+                    plan.facts.denied_paths,
+                )
+
         consume_baseline(
             self.queue,
             plan,
@@ -995,6 +1046,7 @@ class ProductionBaselineFactCollector:
         if self.purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
+            BaselinePurpose.STOPPED_FAILURE_RETRY,
             BaselinePurpose.STOPPED_EXECUTION_RESCUE,
             BaselinePurpose.CONTEXT_CAPACITY_RESUME,
         }:
@@ -1082,6 +1134,17 @@ class ProductionBaselineFactCollector:
             and stopped_provider_failure is None
         ):
             raise ValueError("原执行不符合已停止的提供方前提失败恢复条件, 原状态和现场保留")
+        stopped_failure = (
+            self._stopped_failure(task, item, step)
+            if self.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY
+            and not any(receipt.original_work_item_id == item.id for receipt in receipts)
+            and legacy is None
+            and completed_output is None
+            and stopped_provider_failure is None
+            else None
+        )
+        if self.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY and stopped_failure is None:
+            raise ValueError("原执行不符合精确已停止失败恢复条件, 原状态和现场保留")
         reservation = self._reservation(
             task,
             item,
@@ -1089,6 +1152,7 @@ class ProductionBaselineFactCollector:
             legacy=legacy,
             completed_output=completed_output,
             stopped_provider_failure=stopped_provider_failure,
+            stopped_failure=stopped_failure,
             stopped_execution=stopped_execution,
         )
         current_capacity = self._current_capacity_receipt(task, item, invocation_proofs)
@@ -1130,6 +1194,7 @@ class ProductionBaselineFactCollector:
             legacy_containment=legacy,
             completed_output=completed_output,
             stopped_provider_failure=stopped_provider_failure,
+            stopped_failure=stopped_failure,
             stopped_execution=stopped_execution,
             context_capacity_receipt_sha256=current_capacity,
             permissions=self.permissions,
@@ -1700,12 +1765,84 @@ class ProductionBaselineFactCollector:
         self._validate_stopped_proof(task, item, step, proof)
         return proof
 
+    def _stopped_failure(
+        self, task: Task, item: QueuedWorkItem, step: QueuedRoleStep
+    ) -> StoppedFailureProof | None:
+        root = self.state / "invocations"
+        records = KnowledgeRecordStore(root, read_only=True) if root.is_dir() else None
+        outcome = (
+            records.find("invocation-outcomes", item.id, DeliveryInvocationOutcome)
+            if records
+            else None
+        )
+        if (
+            outcome is None
+            or outcome.result.status is not AgentRunStatus.FAILED
+            or outcome.result.error is None
+            or outcome.result.error.code is not AgentErrorCode.PROVIDER_UNAVAILABLE
+            or outcome.result.error.transient
+        ):
+            return None
+        assert records is not None
+        start = records.get("invocation-starts", item.id, DeliveryInvocationStart)
+        ledger = FileContinuationStore(self.state / "continuations" / task.id, task_id=task.id)
+        proof = StoppedFailureProof.create(
+            outcome=outcome,
+            capture_start=ledger.capture_start(start.request.run_id),
+            capture_stop=ledger.capture_stop(start.request.run_id),
+        )
+        self._validate_stopped_proof(task, item, step, proof)
+        self._validate_stopped_failure_publications(task, proof)
+
+        return proof
+
+    def _validate_stopped_failure_publications(
+        self, task: Task, proof: StoppedFailureProof
+    ) -> None:
+        """Fail closed on late raw output, receipts or inconsistent sealed native routes."""
+        request = proof.outcome.start.request
+        ledger = FileContinuationStore(self.state / "continuations" / task.id, task_id=task.id)
+        if any(
+            receipt.request.run_id == request.run_id
+            for receipt in ledger.receipts_for_task(task.id)
+        ):
+            raise ValueError("原执行失败已有中断收据, 不能覆盖原事实")
+        if any(
+            artifact.producer.run_id == request.run_id
+            for artifact in self.capacity_artifacts.list_for_task(task.id)
+        ):
+            raise ValueError("原执行失败已有封存产物, 不能覆盖原输出")
+        if self.route_root is None or not self.route_root.is_dir():
+            raise ValueError("原执行失败缺少完整原生调用路由事实")
+        routes = FileModelRouteAttemptStore(self.route_root, read_only=True).list_for_run(
+            request.run_id
+        )
+        if not routes:
+            raise ValueError("原执行失败缺少完整原生调用路由事实")
+        for ordinal, route in enumerate(routes, start=1):
+            route.validate_integrity()
+            if route.route_index != ordinal or route.request_sha256 != digest(request.to_wire()):
+                raise ValueError("原执行失败路由未绑定精确原调用")
+            if route.task_id != task.id or route.role is not AgentRole.CODER:
+                raise ValueError("原执行失败路由身份不一致")
+            if ordinal < len(routes) and route.outcome is not RouteAttemptOutcome.FALLBACK:
+                raise ValueError("原执行失败路由链包含竞争终结结果")
+        final = routes[-1]
+        if (
+            final.outcome is not RouteAttemptOutcome.FAILED
+            or final.route_kind != "codex_cli"
+            or final.result != proof.outcome.result
+        ):
+            raise ValueError("原执行失败最终原生路由与原结果不一致")
+
     def _validate_stopped_proof(
         self,
         task: Task,
         item: QueuedWorkItem,
         step: QueuedRoleStep,
-        proof: CompletedCoderOutputUnavailableProof | StoppedProviderFailureProof,
+        proof: CompletedCoderOutputUnavailableProof
+        | StoppedProviderFailureProof
+        | StoppedFailureProof,
     ) -> None:
         proof.validate_integrity()
         outcome, capture_start, capture_stop = (
@@ -1727,6 +1864,8 @@ class ProductionBaselineFactCollector:
             raise ValueError("完成但结果未接纳的原执行不属于当前需求和分配")
 
         def validate_inputs(request: AgentRequest) -> None:
+            if isinstance(proof, StoppedFailureProof):
+                self._validate_stopped_failure_publications(task, proof)
             if (
                 request != start.request
                 or request.permissions != self.permissions
@@ -1772,12 +1911,19 @@ class ProductionBaselineFactCollector:
         legacy: LegacyExecutionContainment | None = None,
         completed_output: CompletedCoderOutputUnavailableProof | None = None,
         stopped_provider_failure: StoppedProviderFailureProof | None = None,
+        stopped_failure: StoppedFailureProof | None = None,
         stopped_execution: StoppedCoderExecutionProof | None = None,
     ) -> BaselineExecutionReservation:
         if (
             sum(
                 value is not None
-                for value in (legacy, completed_output, stopped_provider_failure, stopped_execution)
+                for value in (
+                    legacy,
+                    completed_output,
+                    stopped_provider_failure,
+                    stopped_failure,
+                    stopped_execution,
+                )
             )
             > 1
         ):
@@ -1790,7 +1936,13 @@ class ProductionBaselineFactCollector:
         if start is None:
             if any(
                 value is not None
-                for value in (legacy, completed_output, stopped_provider_failure, stopped_execution)
+                for value in (
+                    legacy,
+                    completed_output,
+                    stopped_provider_failure,
+                    stopped_failure,
+                    stopped_execution,
+                )
             ):
                 raise ValueError("原执行恢复预留缺少真实调用开始记录")
             if item.attempt not in {max(task.attempts, 1), task.attempts + 1}:
@@ -1857,6 +2009,28 @@ class ProductionBaselineFactCollector:
                 current_invocation_start_sha256=start.start_sha256,
                 current_invocation_outcome_sha256=stopped_provider_failure.outcome.outcome_sha256,
                 stopped_provider_failure_sha256=stopped_provider_failure.proof_sha256,
+            )
+        if stopped_failure is not None:
+            stopped_failure.validate_integrity()
+            if (
+                stopped_failure.outcome != outcome
+                or stopped_failure.outcome.start != start
+                or receipt is not None
+                or legacy is not None
+                or completed_output is not None
+                or task.attempts != start.request.attempt
+                or task.work_budget_exhausted
+                or start.request.attempt + 1 > task.max_attempts
+            ):
+                raise ValueError("原执行失败接续没有剩余普通工作额度或精确原执行")
+            return BaselineExecutionReservation(
+                current_attempt=start.request.attempt,
+                next_execution_attempt=start.request.attempt + 1,
+                retry_cause="stopped_failure_retry",
+                original_run_id=start.request.run_id,
+                current_invocation_start_sha256=start.start_sha256,
+                current_invocation_outcome_sha256=stopped_failure.outcome.outcome_sha256,
+                stopped_failure_sha256=stopped_failure.proof_sha256,
             )
         if completed_output is not None:
             completed_output.validate_integrity()

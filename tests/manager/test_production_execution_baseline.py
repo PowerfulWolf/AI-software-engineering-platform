@@ -182,7 +182,11 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     unknown_failure: bool = False,
     work_limit: int = 3,
     rejected_completed_output: bool = False,
+    stopped_failure_retry: bool = False,
 ) -> None:
+    if stopped_failure_retry:
+        assert unknown_failure and capture_pending and same_base and work_limit > 1
+        assert not (completed_output or provider_failure or rejected_completed_output)
     repository = tmp_path / "target"
     repository.mkdir()
     (repository / "hello.txt").write_text("hello\n")
@@ -413,7 +417,10 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             if isinstance(trusted, PreservedWorktreeBaselineContext):
                 assert trusted.retained_patch == trusted.binding.retained_patch
                 assert "complete_patch" not in json.loads(section.content)
-                if not provider_failure and request.role is AgentRole.CODER:
+                if (
+                    not (provider_failure or stopped_failure_retry)
+                    and request.role is AgentRole.CODER
+                ):
                     assert (cwd / "hello.txt").read_text() == "retained draft\n"
             else:
                 assert isinstance(trusted, ExecutionBaselineContext)
@@ -472,7 +479,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
                     policy.authorize_write(".trellis/spec/core/forbidden.md")
                 prior = (
                     "hello\n"
-                    if provider_failure
+                    if provider_failure or stopped_failure_retry
                     else "retained draft\n"
                     if mode is BaselineInputMode.PRESERVE_DRAFT
                     else "upstream greeting\n"
@@ -748,6 +755,20 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         frozen_task = tasks.get(pending.task_id)
         frozen_revision = tasks.current_revision(pending.task_id)
+        frozen_events = tasks.list_events(pending.task_id)
+    frozen_failure_bytes = (
+        {
+            path: path.read_bytes()
+            for root in (
+                sidecar / "state/invocations",
+                sidecar / "state/continuations" / pending.task_id,
+                sidecar / "runs/model-routes",
+            )
+            for path in root.rglob("*.json")
+        }
+        if stopped_failure_retry
+        else {}
+    )
     if unknown_failure:
         assert results[0].status is AgentRunStatus.FAILED
         assert results[0].artifact is None and results[0].error is not None
@@ -777,7 +798,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         current = host.requirement_entry().status(public_delivery_id).checkpoint
         assert current.children[0].checkpoint == pending
         assert (repository / "hello.txt").read_text() == "hello\n"
-        return
+        if not stopped_failure_retry:
+            return
+        assert work_limit > 1
     (current_item,) = tuple(
         item
         for item in host.work_queue.items_for_task(pending.task_id)
@@ -790,7 +813,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             "INVALID_OUTPUT"
             if rejected_completed_output
             else "NONTRANSIENT_INFRA"
-            if completed_output or provider_failure
+            if completed_output or provider_failure or stopped_failure_retry
             else "EXECUTION_UNCERTAIN"
         )
     else:
@@ -815,7 +838,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         expected_work_item_id=current_item.id,
         expected_source_revision=approved_source,
         target_base_ref=None if same_base else execution_base,
-        purpose=BaselinePurpose.STOPPED_PROVIDER_RETRY
+        purpose=BaselinePurpose.STOPPED_FAILURE_RETRY
+        if stopped_failure_retry
+        else BaselinePurpose.STOPPED_PROVIDER_RETRY
         if same_base and provider_failure
         else BaselinePurpose.COMPLETED_OUTPUT_RESCUE
         if same_base
@@ -858,6 +883,14 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             ),
             project_id="project_test",
         )
+    if stopped_failure_retry:
+        with pytest.raises(ValueError):
+            host.propose_execution_baseline(
+                command.model_copy(update={"expected_source_revision": "f" * 40}),
+                project_id="project_test",
+            )
+        assert host.work_queue.get(current_item.id) == current_item
+        assert all(path.read_bytes() == body for path, body in frozen_failure_bytes.items())
     if capture_pending:
         assert receipt_store.receipts_for_task(pending.task_id) == ()
         assert host.work_queue.get(current_item.id) == current_item
@@ -897,6 +930,25 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             else "completed_output_unavailable"
         )
         assert native_plan.facts.continuation.retry_failure is None
+    elif stopped_failure_retry:
+        assert original_receipts == ()
+        assert native_plan.facts.stopped_failure is not None
+        failure_proof = native_plan.facts.stopped_failure
+        assert failure_proof.outcome.result == results[0]
+        assert failure_proof.capture_stop == stop
+        assert failure_proof.capture_stop.process_stop.session_proof is not None
+        assert (
+            failure_proof.capture_stop.process_stop.session_proof.proof_scope
+            == "owned_session_empty"
+        )
+        assert native_plan.facts.continuation is not None
+        reservation = native_plan.facts.continuation
+        assert reservation.retry_cause == "stopped_failure_retry"
+        assert reservation.stopped_failure_sha256 == failure_proof.proof_sha256
+        assert reservation.current_attempt == frozen_task.attempts
+        assert reservation.next_execution_attempt == frozen_task.attempts + 1
+        assert not reservation.reservation_already_applied
+        assert reservation.retry_failure is None
     elif provider_failure:
         assert original_receipts == ()
         assert native_plan.facts.stopped_provider_failure is not None
@@ -976,7 +1028,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         plan = preserve
     assert (
         plan.complete_capture.patch == ""
-        if provider_failure
+        if provider_failure or stopped_failure_retry
         else plan.complete_capture.patch.endswith("+retained draft\n")
     )
     assert plan.dirty_capture.worktree_path == str(original_worktree)
@@ -987,6 +1039,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         expected_plan_sha256=plan.plan_sha256,
         reference="exact-engineering-baseline-decision",
         confirm_provider_prerequisites_repaired=True if provider_failure else None,
+        confirm_stopped_failure_retry=True if stopped_failure_retry else None,
         continuation_mode=BaselineContinuationMode.PAUSE
         if native_pause or same_base
         else BaselineContinuationMode.RESUME,
@@ -994,7 +1047,9 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     )
     if same_base:
         assert plan.purpose is (
-            BaselinePurpose.STOPPED_PROVIDER_RETRY
+            BaselinePurpose.STOPPED_FAILURE_RETRY
+            if stopped_failure_retry
+            else BaselinePurpose.STOPPED_PROVIDER_RETRY
             if provider_failure
             else BaselinePurpose.COMPLETED_OUTPUT_RESCUE
         )
@@ -1002,6 +1057,14 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         assert plan.facts.native_rule_change is None
         assert plan.facts.legacy_containment is None
         assert "target_base_ref" not in command.to_wire()
+        if stopped_failure_retry:
+            with pytest.raises(ValueError):
+                host.execute_execution_baseline(
+                    execute.model_copy(update={"confirm_stopped_failure_retry": None}),
+                    project_id="project_test",
+                )
+            assert host.work_queue.get(current_item.id) == current_item
+            assert len(calls) == 1
         with pytest.raises(ValueError, match="暂停"):
             host.execute_execution_baseline(
                 execute.model_copy(update={"continuation_mode": BaselineContinuationMode.RESUME}),
@@ -1024,6 +1087,18 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     # Keep the native Supervisor paused while publication commits the same-item overlay.
     binding = host.execute_execution_baseline(execute, project_id="project_test")
     expected_binding = binding.binding_sha256
+    if stopped_failure_retry:
+        assert plan.facts.stopped_failure is not None
+        assert binding.stopped_failure_sha256 == plan.facts.stopped_failure.proof_sha256
+        assert binding.authority_source == "engineering_operator_decision"
+        assert binding.continuation_mode is BaselineContinuationMode.PAUSE
+        assert all(path.read_bytes() == body for path, body in frozen_failure_bytes.items())
+        with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+            assert tasks.get(frozen_task.id) == frozen_task.model_copy(
+                update={"attempts": frozen_task.attempts + 1}
+            )
+            assert tasks.current_revision(frozen_task.id) == frozen_revision
+            assert tasks.list_events(frozen_task.id) == frozen_events
     if provider_failure:
         assert plan.facts.stopped_provider_failure is not None
         assert (
@@ -1038,7 +1113,7 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         assert binding.continuation_mode is BaselineContinuationMode.PAUSE
         assert binding.authority_source == "engineering_operator_decision"
     if same_base:
-        if not provider_failure:
+        if not (provider_failure or stopped_failure_retry):
             assert plan.facts.completed_output is not None
             assert binding.completed_output_sha256 == plan.facts.completed_output.proof_sha256
         assert binding.execution_source_revision == binding.execution_base_ref == approved_source
@@ -1135,10 +1210,13 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             host.continue_execution_baseline(continue_command, project_id="project_test")
         assert host.work_queue.get(rebound_item.id) == rebound_item and len(calls) == 1
         (original_worktree / "hello.txt").write_text(
-            "staged drift\n" if provider_failure else "retained draft\n"
+            "staged drift\n" if provider_failure or stopped_failure_retry else "retained draft\n"
         )
         _git("add", "hello.txt", cwd=original_worktree)
-        with pytest.raises(ValueError, match="现场|暂存区" if provider_failure else "暂存区"):
+        with pytest.raises(
+            ValueError,
+            match="现场|暂存区" if provider_failure or stopped_failure_retry else "暂存区",
+        ):
             host.continue_execution_baseline(continue_command, project_id="project_test")
         assert host.work_queue.get(rebound_item.id) == rebound_item and len(calls) == 1
         _git("reset", "--mixed", binding.execution_source_revision, cwd=original_worktree)
@@ -1153,10 +1231,13 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
             host.continue_execution_baseline(continue_command, project_id="project_test")
         assert host.work_queue.get(rebound_item.id).status is WorkItemStatus.READY
         assert len(calls) == 1
-        if provider_failure:
+        if provider_failure or stopped_failure_retry:
             (original_worktree / "hello.txt").write_text("staged drift\n")
         _git("add", "hello.txt", cwd=original_worktree)
-        with pytest.raises(ValueError, match="现场|暂存区" if provider_failure else "暂存区"):
+        with pytest.raises(
+            ValueError,
+            match="现场|暂存区" if provider_failure or stopped_failure_retry else "暂存区",
+        ):
             host.continue_execution_baseline(continue_command, project_id="project_test")
         assert host.work_queue.get(rebound_item.id).status is WorkItemStatus.READY
         assert len(calls) == 1
@@ -1242,11 +1323,14 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
     assert len({call.request.run_id for call in calls}) == len(calls)
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         completed_task = tasks.get(frozen_task.id)
+        if stopped_failure_retry:
+            assert tasks.list_events(frozen_task.id)[: len(frozen_events)] == frozen_events
     assert completed_task.status is TaskStatus.DONE
     assert completed_task.base_ref == frozen_task.base_ref == approved_source
     assert task_intent_sha256(completed_task) == task_intent_sha256(frozen_task)
     assert completed_task.attempts == completed_task.work_attempt == 2
     assert not completed_task.retry_failures
+    assert all(path.read_bytes() == body for path, body in frozen_failure_bytes.items())
     assert delivered.preparation_sha256 == pending.preparation_sha256
     assert delivered.approval_sha256 == pending.approval_sha256
     assert all(path.read_bytes() == body for path, body in preparation_bytes.items())

@@ -241,6 +241,7 @@ def validate_declared_scopes(wire: WirePayload, expected: StateDeletionScope) ->
             "legacy_containment",
             "completed_output",
             "stopped_provider_failure",
+            "stopped_failure",
             "native_rule_change",
             "target",
         ):

@@ -264,6 +264,18 @@ class FileExecutionBaselineStore:
             authority.require_plan_confirmation(plan)
             if authority.authorization_sha256 != binding.authority_sha256:
                 raise ValueError("提供方前提失败恢复没有对应的精确人工工程确认")
+        failure = plan.facts.stopped_failure
+        if binding.stopped_failure_sha256 != (failure.proof_sha256 if failure else None):
+            raise ValueError("原执行失败绑定缺少对应的完整原执行证据")
+        if failure is not None:
+            failure.validate_integrity()
+            authority = self.records.get(
+                "baseline-authorities", plan.plan_sha256, BaselineOperatorAuthorization
+            )
+            authority.validate_integrity()
+            authority.require_plan_confirmation(plan)
+            if authority.authorization_sha256 != binding.authority_sha256:
+                raise ValueError("原执行失败恢复没有对应的精确人工工程确认")
         if binding.purpose is not BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
             if binding.legacy_containment_sha256 is not None:
                 raise ValueError("普通基线绑定不能冒充旧执行救援")
@@ -347,6 +359,12 @@ class FileExecutionBaselineStore:
                     "新执行仍需独立领取和重新产出, QA 与 Review 不得跳过。\n"
                 )
                 if binding.stopped_provider_failure_sha256 is not None
+                else (
+                    "原执行失败已记录并真实停止, 原因仍未知; 完整合法草稿和历史保持。"
+                    "工程授权者接受消费一次剩余普通工作额度, 未声明原因为已知或已修复。"
+                    "新 Run 必须独立领取并重新产出, 候选、独立 QA 与 Review 不得跳过。\n"
+                )
+                if binding.stopped_failure_sha256 is not None
                 else (
                     "平台已核验调用前容量停止并准备保留进度的继续方案, 原代码版本和完整进度保持。"
                     "原主岗位调用尚未启动, 本次继续沿用已预留的原执行额度; "

@@ -56,6 +56,9 @@ from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy
 from ai_software_engineer.manager.stopped_execution_checkpoint import (
     require_stopped_coder_workspace,
 )
+from ai_software_engineer.manager.stopped_failure_checkpoint import (
+    require_stopped_failure_workspace,
+)
 from ai_software_engineer.manager.stopped_provider_checkpoint import (
     require_stopped_provider_workspace,
 )
@@ -111,6 +114,7 @@ class ExecutionBaselineService:
         if purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
+            BaselinePurpose.STOPPED_FAILURE_RETRY,
             BaselinePurpose.STOPPED_EXECUTION_RESCUE,
             BaselinePurpose.CONTEXT_CAPACITY_RESUME,
         }:
@@ -125,6 +129,10 @@ class ExecutionBaselineService:
         with source_inspection_scope(), self.store.execution_lock(), self.facts.execution_scope():
             facts = self.facts.collect(target_base_ref)
             self._require_facts(facts)
+            if (purpose is BaselinePurpose.STOPPED_FAILURE_RETRY) != (
+                facts.stopped_failure is not None
+            ):
+                raise ValueError("原执行失败恢复只能使用独立同基线方案")
             previous = self.store.bindings_for_task(facts.task.id)
             binding = previous[-1] if previous else None
             if purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
@@ -189,6 +197,10 @@ class ExecutionBaselineService:
                 if facts.stopped_provider_failure is None:
                     raise ValueError("原执行不符合已停止的提供方前提失败恢复条件, 原现场保留")
                 target_base_ref = expected_base
+            elif purpose is BaselinePurpose.STOPPED_FAILURE_RETRY:
+                if facts.stopped_failure is None:
+                    raise ValueError("原执行不符合已停止的原执行失败恢复条件, 原现场保留")
+                target_base_ref = expected_base
             elif purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
                 if facts.context_capacity_receipt_sha256 is None:
                     raise ValueError("当前没有精确的调用前容量停止记录, 原进度保留")
@@ -237,6 +249,14 @@ class ExecutionBaselineService:
                     facts.permissions,
                     facts.denied_paths,
                 )
+            if facts.stopped_failure is not None:
+                require_stopped_failure_workspace(
+                    facts.stopped_failure,
+                    CapturedMutations.from_capture(dirty),
+                    before,
+                    facts.permissions,
+                    facts.denied_paths,
+                )
             conflicted = False
             preview: BaselineGitPreview | None
             same_paused_base = (
@@ -248,6 +268,7 @@ class ExecutionBaselineService:
             if same_paused_base or purpose in {
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                BaselinePurpose.STOPPED_FAILURE_RETRY,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                 BaselinePurpose.CONTEXT_CAPACITY_RESUME,
             }:
@@ -392,6 +413,10 @@ class ExecutionBaselineService:
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("提供方前提失败恢复需要精确人工工程确认, 不能自动审批")
             authority.require_plan_confirmation(plan)
+        if plan.facts.stopped_failure is not None:
+            if not isinstance(authority, BaselineOperatorAuthorization):
+                raise ValueError("原执行失败恢复需要精确人工工程确认, 不能自动审批")
+            authority.require_plan_confirmation(plan)
         task = plan.facts.task
         if (
             authority.task_id != task.id
@@ -494,6 +519,7 @@ class ExecutionBaselineService:
                 BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
+                BaselinePurpose.STOPPED_FAILURE_RETRY,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                 BaselinePurpose.CONTEXT_CAPACITY_RESUME,
             }:
@@ -532,6 +558,15 @@ class ExecutionBaselineService:
                     assert current.stopped_provider_failure is not None
                     require_stopped_provider_workspace(
                         current.stopped_provider_failure,
+                        plan.dirty_capture,
+                        inventory,
+                        current.permissions,
+                        current.denied_paths,
+                    )
+                elif plan.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY:
+                    assert current.stopped_failure is not None
+                    require_stopped_failure_workspace(
+                        current.stopped_failure,
                         plan.dirty_capture,
                         inventory,
                         current.permissions,
@@ -601,6 +636,9 @@ class ExecutionBaselineService:
                     current.stopped_provider_failure.proof_sha256
                     if current.stopped_provider_failure is not None
                     else None
+                ),
+                stopped_failure_sha256=(
+                    current.stopped_failure.proof_sha256 if current.stopped_failure else None
                 ),
                 scope=current.scope,
                 task_id=current.task.id,

@@ -702,6 +702,9 @@ def _engineering_history(
                                 "批准保留完整草稿继续。"
                             )
                             if baseline_plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                            else "工程授权者接受原失败原因未知, 批准保留完整合法草稿, "
+                            "消耗一次普通工作额度并暂停。"
+                            if baseline_plan.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY
                             else "工程人员声明原提供方前提已检查并修复, "
                             "批准保留完整合法草稿并暂停。"
                             if baseline_plan.facts.stopped_provider_failure is not None
@@ -735,6 +738,8 @@ def _engineering_history(
                             if baseline_plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
                             else "原提供方前提失败的保留进度处理已开始, 尚未启动新的开发执行。"
                             if baseline_plan.purpose is BaselinePurpose.STOPPED_PROVIDER_RETRY
+                            else "原失败的保留进度处理已开始, 原因仍未知; 尚未启动新的开发执行。"
+                            if baseline_plan.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY
                             else "容量等待的保留进度处理已开始, 原代码版本保持不变; "
                             "尚未启动新的开发执行。"
                             if baseline_plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
@@ -776,6 +781,9 @@ def _engineering_history(
                         "原失败记录与完整合法草稿已保留, 原代码基线保持; "
                         "需求暂停, 需明确继续后才安排新开发执行。"
                         if binding.purpose is BaselinePurpose.STOPPED_PROVIDER_RETRY
+                        else "原失败记录与完整合法草稿已保留, 原因仍未知; "
+                        "消耗一次普通工作额度并暂停, 需单独明确继续。"
+                        if binding.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY
                         else "容量等待的完整进度和工程决定已保存, 原代码版本保持; "
                         "原需求暂停, 需单独明确继续后才安排新执行。"
                         if binding.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME

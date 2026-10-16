@@ -838,6 +838,9 @@ function consoleSupportsContextCapacityResume() {
 function consoleSupportsStoppedExecutionRescue() {
   return consoleOperationContractVersion >= 9 && consoleSupportsPausedBaseline();
 }
+function consoleSupportsStoppedFailureRetry() {
+  return consoleOperationContractVersion >= 10 && consoleSupportsPausedBaseline();
+}
 const configurationApplyStorageKey = "ase-configuration-apply";
 const configurationApplyTimeoutMs = 30000;
 let configurationApplyPending = readConfigurationApplyPending();
@@ -2142,6 +2145,17 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
       : stoppedPlan ? "查看下方方案，批准保留进度并保持暂停；之后再明确继续原需求。"
       : "点击下方“检查停止后的保留进度”，查看平台核验结果。";
   }
+  if (ownerTask && engineeringStoppedFailureRetryFacts(request, ownerTask, step) && !active && !decision) {
+    const failurePlan = engineeringBaselinePlan(request, ownerTask, step, "stopped_failure_retry");
+    facts.happened = "原模型调用失败，原因仍未知，没有可接纳的开发报告；原失败记录保留。";
+    facts.preservation = failurePlan ? "平台已核验真实停止证明并完整封存合法草稿，原需求、任务、分支和代码基线保留。"
+      : "原开发文件保留；平台仍需核验真实停止和完整合法进度。";
+    facts.platform = failurePlan ? "精确工程方案已准备，批准后消耗一次普通工作额度并保持暂停；原失败原因仍未知。"
+      : "可检查原执行停止、完整开发进度和剩余普通工作额度；检查不启动 Coder。";
+    facts.user = !consoleSupportsStoppedFailureRetry() ? "请在服务空闲时更新并刷新原需求。"
+      : failurePlan ? "查看下方方案，确认接受未知原因和一次普通工作额度，批准保持暂停后再独立明确继续。"
+      : "点击下方“检查失败后的保留进度”，先查看平台核验结果。";
+  }
   if (consoleAvailable === true && !consoleSupportsOperation("HANDLE_DELIVERY_WAIT")) {
     if (!active && !decision) {
       if (!handling) facts.platform = "当前页面的处理操作未获当前服务支持，请先更新运行中的服务。";
@@ -2157,6 +2171,27 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
 }
 async function copyEngineeringWaitReport(request, handling) {
   const proof = handling.investigation;
+  const failureCurrent = engineeringWaitSteps(request).find(({task, step}) => task.task_id === handling.task_id &&
+    step.work_item_id === handling.work_item_id && engineeringStoppedFailureRetryFacts(request, task, step));
+  if (failureCurrent) {
+    const {task, step} = failureCurrent;
+    const plan = engineeringBaselinePlan(request, task, step, "stopped_failure_retry");
+    const facts = engineeringWaitCurrentFacts(request, step, engineeringWaitProof(request, step), handling, null,
+      activeOperation(request.id, request.project_id));
+    const report = ["ASE 交付处理报告", "需求 · " + request.title, "当前原因 · " + facts.happened,
+      "开发进度 · " + facts.preservation, "平台可以做什么 · " + facts.platform, "用户操作 · " + facts.user,
+      ...(plan ? ["当前恢复方案 · " + plan.plan_sha256,
+        "额度 · 批准消耗 1 次普通工作额度，不退还原执行额度；保持暂停后再独立继续，仍需独立 QA 和 Review。"] : []),
+      "原处理结果 · " + humanizeBlockingText(handling.summary || "未提供"),
+      "原执行 · " + (proof.original_run_id || "未核验"), "处理报告摘要 · " + handling.handling_sha256].join("\n");
+    try {
+      await navigator.clipboard.writeText(report);
+      operationNotice = {kind: "info", title: "处理报告已复制", message: "报告包含当前方案、未知失败原因及原处理历史。"};
+    } catch {
+      operationNotice = {kind: "error", title: "无法复制处理报告", message: "请展开排障信息，选择处理说明和报告摘要复制。"};
+    }
+    renderNotification(); return;
+  }
   const stoppedCurrent = engineeringWaitSteps(request).find(({task, step}) => task.task_id === handling.task_id &&
     step.work_item_id === handling.work_item_id && engineeringStoppedExecutionRescueFacts(request, task, step));
   if (stoppedCurrent) {
@@ -2283,6 +2318,8 @@ function engineeringWaitBox(request, task, step) {
   const completedPlan = engineeringCurrentCompletedPlan(request, task, step);
   const providerPlan = engineeringCurrentProviderPlan(request, task, step);
   const stoppedPlan = engineeringBaselinePlan(request, task, step, "stopped_execution_rescue");
+  const failurePlan = engineeringBaselinePlan(request, task, step, "stopped_failure_retry");
+  const stoppedFailureRetry = engineeringStoppedFailureRetryFacts(request, task, step);
   const providerRetry = engineeringStoppedProviderRetryFacts(request, task, step);
   const proofSha256 = proof?.proof_sha256;
   const decision = engineeringWaitDecision(request, step, proof);
@@ -2305,8 +2342,8 @@ function engineeringWaitBox(request, task, step) {
     const collectionFailed = handling?.collection_failed === true;
     const rejectedOutputValid = Boolean(matchingRejectedCoderOutputEvidence(request, step, proof));
     const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof",
-      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || stoppedPlan?.plan_sha256 || null]);
-    appendEngineeringInvestigation(result, proof, {historical: Boolean(completedPlan || providerPlan || stoppedPlan), collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid});
+      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || stoppedPlan?.plan_sha256 || failurePlan?.plan_sha256 || null]);
+    appendEngineeringInvestigation(result, proof, {historical: Boolean(completedPlan || providerPlan || stoppedPlan || failurePlan), collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid});
     management.append(result);
   }
   if (controlUnavailable) management.append(deliveryControlUnavailableNotice(controlUnavailable));
@@ -2316,13 +2353,13 @@ function engineeringWaitBox(request, task, step) {
   } else if (canControlCurrentTeam() && !running) {
     const canResolve = engineeringWaitCanResolve(request, step, proof);
     const actions = viewBlock(el("div", undefined, "engineering-wait-actions"), "engineering-wait-actions",
-      [bound, proof, handling, Boolean(rescue), canResolve, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || null, Boolean(providerRetry)]);
-    if (!completedPlan && !providerRetry && consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && !knowledgePreparationWaitExhausted(step, proof) &&
+      [bound, proof, handling, Boolean(rescue), canResolve, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || failurePlan?.plan_sha256 || null, Boolean(providerRetry), Boolean(stoppedFailureRetry)]);
+    if (!completedPlan && !providerRetry && !stoppedFailureRetry && consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && !knowledgePreparationWaitExhausted(step, proof) &&
       !["NEEDS_AUTHORIZATION", "PLATFORM_ATTENTION", "BUDGET_EXHAUSTED", "WAITING_PREREQUISITES"].includes(handling?.status))
       actions.append(deliveryButton(engineeringWaitHandlingLabel(step), () => submitEngineeringWaitOperation({
         ...bound, action: "HANDLE_DELIVERY_WAIT",
       }), "primary"));
-    if (!completedPlan && !providerRetry && consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && !knowledgePreparationWaitExhausted(step, proof) && handling?.status === "PLATFORM_ATTENTION")
+    if (!completedPlan && !providerRetry && !stoppedFailureRetry && consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && !knowledgePreparationWaitExhausted(step, proof) && handling?.status === "PLATFORM_ATTENTION")
       actions.append(deliveryButton("平台修复后重新处理", () => submitEngineeringWaitOperation({
         ...bound, action: "HANDLE_DELIVERY_WAIT",
       }), "primary"));
@@ -2375,6 +2412,7 @@ function engineeringWaitBox(request, task, step) {
   appendEngineeringCompletedOutputRescue(management, request, task, step);
   appendEngineeringStoppedExecutionRescue(management, request, task, step);
   appendEngineeringStoppedProviderRetry(management, request, task, step);
+  appendEngineeringStoppedFailureRetry(management, request, task, step);
   if (!completedPlan) appendEngineeringLegacyRescue(management, request, task, step, proof, handling);
   management.append(technical);
   return management;
@@ -2490,7 +2528,7 @@ function matchingContextCapacityPlan(plan, bound, operation) {
     plan.input_mode === "preserve_draft" && !plan.conflicted &&
     plan.target_base_ref === base && plan.prepared_source_revision === bound.baseline.expected_source_revision &&
     facts.context_capacity_receipt_sha256 === bound.receipt_sha256 &&
-    !facts.native_rule_change && !facts.legacy_containment && !facts.completed_output && !facts.stopped_provider_failure;
+    !facts.native_rule_change && !facts.legacy_containment && !facts.completed_output && !facts.stopped_provider_failure && !facts.stopped_failure;
 }
 async function submitEngineeringContextCapacityOperation(intent, original) {
   const request = requestById(intent.delivery_id);
@@ -2599,11 +2637,14 @@ function engineeringBaselinePlan(request, task, step, purpose = "source_rebind")
       plan.facts?.task?.id !== bound.task_id || plan.facts.task_revision !== bound.expected_task_revision ||
       plan.facts.work_item_id !== bound.expected_work_item_id ||
       plan.dirty_capture?.source_revision !== bound.expected_source_revision ||
-      (!["completed_output_rescue", "stopped_provider_retry", "context_capacity_resume", "stopped_execution_rescue"].includes(purpose) && plan.target_base_ref !== operation.intent?.target_base_ref) ||
+      (!["completed_output_rescue", "stopped_provider_retry", "context_capacity_resume", "stopped_execution_rescue", "stopped_failure_retry"].includes(purpose) && plan.target_base_ref !== operation.intent?.target_base_ref) ||
       plan.input_mode !== operation.intent?.input_mode ||
       !["preserve_draft", "coder_reapply"].includes(plan.input_mode)) return null;
   if (purpose === "completed_output_rescue" && !matchingCompletedOutputRescuePlan(plan, bound, operation)) return null;
   if (purpose === "stopped_provider_retry" && !matchingStoppedProviderRetryPlan(plan, bound, operation)) return null;
+  if (purpose === "stopped_failure_retry" && (!matchingStoppedFailureRetryPlan(plan, bound, operation) ||
+      engineeringWaitProof(request, step)?.original_run_id &&
+      plan.facts.stopped_failure.outcome.start.request.run_id !== engineeringWaitProof(request, step).original_run_id)) return null;
   if (purpose === "stopped_execution_rescue" && (!matchingStoppedExecutionRescuePlan(plan, bound, operation) ||
       plan.facts.stopped_execution.invocation_start.request.run_id !== engineeringWaitProof(request, step)?.original_run_id)) return null;
   if (purpose === "context_capacity_resume") {
@@ -2614,6 +2655,7 @@ function engineeringBaselinePlan(request, task, step, purpose = "source_rebind")
       !matchingStoppedProviderRetryPlan(plan, bound, operation, false)) return null;
   if (purpose === "source_rebind" && plan.facts.completed_output &&
       !matchingCompletedOutputRescuePlan(plan, bound, operation, false)) return null;
+  if (purpose !== "stopped_failure_retry" && plan.facts.stopped_failure) return null;
   return plan;
 }
 function engineeringCurrentProviderPlan(request, task, step) {
@@ -2657,7 +2699,7 @@ function matchingStoppedProviderRetryPlan(plan, bound, operation, sameSource = t
     Number.isInteger(stop.process_stop.returncode) && stop.process_stop.returncode !== 0 && stop.output_present === false &&
     !stop.cause && [null, undefined, "AUTHENTICATION_ERROR"].includes(stop.original_error_code) && reservation?.retry_cause === "provider_prerequisite_repaired" &&
     reservation.stopped_provider_failure_sha256 === proof.proof_sha256 && !plan.facts.completed_output &&
-    !plan.facts.legacy_containment && !plan.facts.implementation_artifact_id &&
+    !plan.facts.legacy_containment && !plan.facts.stopped_failure && !plan.facts.implementation_artifact_id &&
     (!sameSource || !plan.facts.native_rule_change && plan.target_base_ref === base &&
       plan.prepared_source_revision === bound.expected_source_revision && operation.intent?.target_base_ref == null) &&
     (!sameSource || plan.input_mode === "preserve_draft" && !plan.conflicted);
@@ -2744,6 +2786,117 @@ function appendEngineeringStoppedProviderRetry(target, request, task, step) {
   }
   target.append(panel);
 }
+function matchingStoppedFailureRetryPlan(plan, bound, operation) {
+  const proof = plan.facts.stopped_failure;
+  const start = proof?.outcome?.start;
+  const request = start?.request;
+  const result = proof?.outcome?.result;
+  const capture = proof?.capture_start;
+  const stop = proof?.capture_stop;
+  const reservation = plan.facts.continuation;
+  const base = plan.previous_binding?.execution_base_ref || plan.facts.task.base_ref;
+  return proof?.kind === "stopped_failure" && /^[a-f0-9]{64}$/.test(proof.proof_sha256 || "") &&
+    request?.task_id === bound.task_id && request.role === "coder" && request.source_revision === bound.expected_source_revision &&
+    start.work_item_id === bound.expected_work_item_id && start.checkpoint_sequence === bound.expected_task_revision &&
+    typeof request.run_id === "string" && request.run_id.length > 0 && result?.status === "FAILED" &&
+    result.artifact == null && result.error?.code === "PROVIDER_UNAVAILABLE" && result.error.transient === false &&
+    capture?.request?.run_id === request.run_id && capture.request.task_id === bound.task_id &&
+    capture.request.source_revision === bound.expected_source_revision && capture.task_revision === bound.expected_task_revision &&
+    capture.worktree_path === plan.dirty_capture.worktree_path && stop?.task_id === bound.task_id && stop.run_id === request.run_id &&
+    stop.capture_start_sha256 === capture.start_sha256 && stop.process_stop?.kind === "failed" &&
+    Number.isInteger(stop.process_stop.returncode) && stop.process_stop.returncode !== 0 &&
+    stop.process_stop.session_proof?.proof_scope === "owned_session_empty" &&
+    /^[a-f0-9]{64}$/.test(stop.process_stop.session_proof.proof_sha256 || "") && stop.output_present === false &&
+    !stop.cause && [null, undefined, "PROVIDER_UNAVAILABLE"].includes(stop.original_error_code) &&
+    reservation?.retry_cause === "stopped_failure_retry" && reservation.stopped_failure_sha256 === proof.proof_sha256 &&
+    !plan.facts.stopped_provider_failure && !plan.facts.stopped_execution && !plan.facts.completed_output &&
+    !plan.facts.legacy_containment && !plan.facts.context_capacity_receipt_sha256 && !plan.facts.implementation_artifact_id &&
+    !plan.facts.native_rule_change && plan.target_base_ref === base && plan.prepared_source_revision === bound.expected_source_revision &&
+    operation.intent?.target_base_ref == null && plan.input_mode === "preserve_draft" && !plan.conflicted;
+}
+function engineeringStoppedFailureRetryFacts(request, task, step) {
+  const bound = engineeringBaselineFacts(request, task, step);
+  const proof = engineeringWaitProof(request, step);
+  if (!bound || task.project_id !== request.project_id || task.request_id !== request.id ||
+      ["DONE", "CLOSED"].includes(request.stage) || step.wait_disposition?.facts.classification !== "NONTRANSIENT_INFRA" ||
+      proof?.knowledge_preparation || proof?.rejected_output || proof?.interruption_receipt_sha256 ||
+      proof?.permitted_resolutions?.length || proof?.missing?.includes("BUDGET_EXHAUSTED") ||
+      proof?.provider_failure_code && proof.provider_failure_code !== "PROVIDER_UNAVAILABLE" ||
+      proof?.retry_cause || engineeringCurrentCompletedPlan(request, task, step) ||
+      engineeringCurrentProviderPlan(request, task, step) || engineeringWaitDecision(request, step, proof)) return null;
+  return bound;
+}
+async function submitEngineeringStoppedFailureRetry(intent, originalBound) {
+  const request = requestById(intent.delivery_id);
+  const current = request && engineeringWaitSteps(request).find(({task, step}) =>
+    sameEngineeringWaitIntent(engineeringStoppedFailureRetryFacts(request, task, step), originalBound));
+  const plan = current && engineeringBaselinePlan(request, current.task, current.step, "stopped_failure_retry");
+  const propose = intent.action === "PROPOSE_EXECUTION_BASELINE";
+  const execute = intent.action === "EXECUTE_EXECUTION_BASELINE";
+  if (!current || request.project_id !== snapshot?.selected_project_id || !canControlCurrentTeam() ||
+      !consoleSupportsStoppedFailureRetry() || activeOperation(request.id, request.project_id) ||
+      intent.project_id !== originalBound.project_id || intent.expected_checkpoint_sha256 !== originalBound.expected_checkpoint_sha256 ||
+      intent.task_id !== originalBound.task_id || intent.confirm_provider_prerequisites_repaired === true || !propose && !execute ||
+      propose && (intent.purpose !== "stopped_failure_retry" || intent.target_base_ref != null || intent.input_mode !== "preserve_draft") ||
+      execute && (!plan || plan.plan_sha256 !== intent.expected_plan_sha256 || intent.continuation_mode !== "pause" ||
+        intent.confirm_stopped_failure_retry !== true)) {
+    operationNotice = {kind: "error", title: "失败后的恢复方案已变化",
+      message: "请重新查看当前需求与精确方案，明确接受未知原因和一次普通工作额度后再批准。"};
+    renderDetail(); renderNotification(); return null;
+  }
+  return submitOperation(intent);
+}
+function appendEngineeringStoppedFailureRetry(target, request, task, step) {
+  const bound = engineeringStoppedFailureRetryFacts(request, task, step);
+  if (!bound) return;
+  const plan = engineeringBaselinePlan(request, task, step, "stopped_failure_retry");
+  const planSha256 = plan?.plan_sha256;
+  const operation = engineeringBaselineProposalOperation(bound, "stopped_failure_retry");
+  const active = activeOperation(request.id, request.project_id);
+  const panel = viewGroup(el("section", undefined, "engineering-baseline-panel engineering-baseline-pending"), "stopped-failure-retry:" + step.work_item_id);
+  panel.append(viewBlock(el("h4", "原调用失败 · 保留进度继续"), "failure-title", true));
+  const explanation = viewBlock(el("div"), "failure-explanation", plan || bound);
+  explanation.append(engineeringGuidanceList(plan ? [
+    "平台已核验原执行已停止，没有可接纳的开发报告；原因仍未知，原失败记录保留。",
+    "完整合法开发进度已封存，原需求、任务、分支和代码基线保留。此决定不声称原故障原因已查明或修复。",
+    "批准后消耗 1 次剩余开发额度并保持暂停，不退还原执行额度；之后单独点击“继续原需求”，仍需独立 QA 和 Review。",
+  ] : ["原调用失败，原因仍未知。平台将核验真实停止、完整合法开发文件和剩余额度，检查本身不启动 Coder，也不证明故障已修复。"]));
+  if (plan) {
+    const details = engineeringDetails("失败记录与保留进度方案", step.work_item_id + ":stopped-failure-plan");
+    details.append(el("p", "原执行 · " + plan.facts.stopped_failure.outcome.start.request.run_id, "paths"),
+      el("p", "保留代码基线 · " + plan.target_base_ref, "paths"), el("p", "方案摘要 · " + planSha256, "paths"));
+    explanation.append(details);
+  }
+  panel.append(explanation);
+  const unavailable = deliveryControlUnavailableReason();
+  if (unavailable) panel.append(deliveryControlUnavailableNotice(unavailable));
+  else if (!consoleSupportsStoppedFailureRetry()) panel.append(el("p", "当前服务尚不支持此失败后的工程恢复入口，请在服务空闲时更新并刷新原需求。", "muted"));
+  else if (active) panel.append(engineeringActiveOperationBox(request, active));
+  else if (canControlCurrentTeam()) {
+    const controls = viewBlock(el("div", undefined, "engineering-baseline-form"), "failure-controls",
+      [bound, plan, operation?.status, consoleOperationContractVersion, consoleSupportedActions, canControlCurrentTeam()]);
+    if (!plan && ["FAILED", "INTERRUPTED"].includes(operation?.status)) controls.append(el("p", "本次检查未完成 · " +
+      humanizeBlockingText(operation.error_summary || "恢复前提未核验完整。") + " 原现场和失败记录保留，请先处理所列原因。", "error"));
+    if (plan) {
+      const confirmation = el("input"); confirmation.type = "checkbox"; confirmation.checked = false;
+      confirmation.setAttribute("aria-label", "接受原失败原因未知，并消耗一次普通工作额度");
+      const field = el("label", undefined, "settings-checkbox-control");
+      field.append(confirmation, el("span", "我接受原失败原因仍未知，批准精确方案保留完整合法进度，消耗一次普通工作额度并保持暂停。"));
+      const approve = deliveryButton("批准保留进度，保持暂停", () => submitEngineeringStoppedFailureRetry({
+        action: "EXECUTE_EXECUTION_BASELINE", project_id: bound.project_id, delivery_id: bound.delivery_id,
+        expected_checkpoint_sha256: bound.expected_checkpoint_sha256, task_id: bound.task_id, expected_plan_sha256: planSha256,
+        continuation_mode: "pause", confirm_stopped_failure_retry: confirmation.checked === true,
+        reference: "工程授权者接受原失败原因仍未知，批准精确方案保留完整合法进度和原失败历史，消耗一次普通工作额度并保持暂停，之后另行明确继续",
+      }, bound), "primary");
+      approve.disabled = true; confirmation.addEventListener("change", () => {approve.disabled = confirmation.checked !== true;});
+      controls.append(field, approve);
+    } else controls.append(deliveryButton("检查失败后的保留进度", () => submitEngineeringStoppedFailureRetry({
+      ...bound, action: "PROPOSE_EXECUTION_BASELINE", purpose: "stopped_failure_retry", input_mode: "preserve_draft",
+    }, bound), "primary"));
+    panel.append(controls);
+  }
+  target.append(panel);
+}
 function completedOutputRejected(plan) {
   return plan?.facts.completed_output?.outcome?.result?.error?.code === "INVALID_OUTPUT";
 }
@@ -2793,7 +2946,7 @@ function matchingCompletedOutputRescuePlan(plan, bound, operation, sameSource = 
     stop.process_stop.returncode === 0 && stop.output_present === true && !stop.cause && !stop.original_error_code &&
     reservation?.retry_cause === (result.error.code === "INVALID_OUTPUT" ? "completed_output_rejected" : "completed_output_unavailable") &&
     reservation.completed_output_sha256 === proof.proof_sha256 &&
-    !plan.facts.legacy_containment && !plan.facts.stopped_provider_failure && !plan.facts.implementation_artifact_id &&
+    !plan.facts.legacy_containment && !plan.facts.stopped_provider_failure && !plan.facts.stopped_failure && !plan.facts.implementation_artifact_id &&
     (!sameSource || !plan.facts.native_rule_change && plan.target_base_ref === base &&
       plan.prepared_source_revision === bound.expected_source_revision &&
       plan.input_mode === "preserve_draft" && !plan.conflicted && operation.intent?.target_base_ref == null);
@@ -2802,7 +2955,7 @@ function engineeringCompletedOutputRescueFacts(request, task, step) {
   const bound = engineeringBaselineFacts(request, task, step);
   const proof = engineeringWaitProof(request, step);
   const plan = engineeringBaselinePlan(request, task, step, "completed_output_rescue");
-  if (!bound || engineeringStoppedExecutionRescueFacts(request, task, step) ||
+  if (!bound || engineeringStoppedExecutionRescueFacts(request, task, step) || engineeringStoppedFailureRetryFacts(request, task, step) ||
       step.wait_disposition?.facts.classification === "EXECUTION_BASELINE_PAUSED" ||
       engineeringCurrentCompletedPlan(request, task, step)?.purpose === "source_rebind" ||
       proof?.provider_failure_code === "AUTHENTICATION_ERROR" ||
@@ -2894,7 +3047,7 @@ function matchingStoppedExecutionRescuePlan(plan, bound, operation) {
     /^[a-f0-9]{64}$/.test(stop.process_stop.session_proof.proof_sha256 || "") &&
     stop.output_present === false && !stop.cause &&
     reservation?.retry_cause === "stopped_execution_unknown" && reservation.stopped_execution_sha256 === proof.proof_sha256 &&
-    !plan.facts.legacy_containment && !plan.facts.completed_output && !plan.facts.stopped_provider_failure &&
+    !plan.facts.legacy_containment && !plan.facts.completed_output && !plan.facts.stopped_provider_failure && !plan.facts.stopped_failure &&
     !plan.facts.implementation_artifact_id && !plan.facts.native_rule_change &&
     plan.target_base_ref === base && plan.prepared_source_revision === bound.expected_source_revision &&
     plan.input_mode === "preserve_draft" && !plan.conflicted && operation.intent?.target_base_ref == null;
@@ -3222,6 +3375,7 @@ async function submitEngineeringBaselineOperation(intent, originalBound) {
       activeOperation(request.id, request.project_id) || (intent.action === "EXECUTE_EXECUTION_BASELINE" &&
       (!plan || plan.plan_sha256 !== intent.expected_plan_sha256 || plan.conflicted ||
        intent.continuation_mode !== "pause" ||
+       plan.facts.stopped_failure ||
        plan.facts.stopped_provider_failure && (!consoleSupportsStoppedProviderRetry() || intent.confirm_provider_prerequisites_repaired !== true) ||
        plan.facts.stopped_provider_failure && engineeringCurrentProviderPlan(request, current.task, current.step)?.plan_sha256 !== plan.plan_sha256 ||
        plan.facts.completed_output && engineeringCurrentCompletedPlan(request, current.task, current.step)?.plan_sha256 !== plan.plan_sha256 ||
@@ -3296,7 +3450,7 @@ async function loadEngineeringNativeRuleReview(request, task, step, plan, delta)
 }
 function appendEngineeringBaseline(target, request, task, step) {
   const bound = engineeringBaselineFacts(request, task, step);
-  if (engineeringStoppedExecutionRescueFacts(request, task, step)) return;
+  if (engineeringStoppedExecutionRescueFacts(request, task, step) || engineeringStoppedFailureRetryFacts(request, task, step)) return;
   if (!bound) return;
   const sourcePlan = engineeringBaselinePlan(request, task, step);
   const plan = sourcePlan?.facts.stopped_provider_failure &&

@@ -1201,3 +1201,15 @@ explicit `PausedInvocationProof(admission_closed=true)` with no process stop. Ev
 before the owned-process registry is released. Coder recovery requires a newly approved exact
 execution baseline; QA and Review recovery requires the matching original pause proof and a fresh
 independent role execution. The old continuation allowance is never widened automatically.
+
+## Stopped unclassified native failure retry (2026-10-16)
+
+`StoppedFailureProof` binds the exact Coder FAILED/PROVIDER_UNAVAILABLE(false) outcome, native
+owned-session stop and original capture. `BaselinePurpose.STOPPED_FAILURE_RETRY`,
+`facts.stopped_failure`, reservation/binding `stopped_failure_sha256` and explicit
+`confirm_stopped_failure_retry=True` allow one ordinary-work attempt on the same Task/base.
+Public Console contract 10 uses proposal → exact PAUSE approval → separate latest-bound RESUME.
+There is no prerequisite-repair assertion, transient refund or old result rewrite. Full original
+claim/route/raw-output/receipt and complete lawful pre-existing draft are rechecked at consumption.
+Exact signatures, negative matrix, schema/browser/native-MySQL tests and storage/rollback handling:
+[stopped-failure-retry](../../.trellis/spec/core/stopped-failure-retry.md).

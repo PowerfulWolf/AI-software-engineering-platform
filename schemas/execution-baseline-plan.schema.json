@@ -731,6 +731,17 @@
           ],
           "default": null
         },
+        "stopped_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoppedFailureProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "context_capacity_receipt_sha256": {
           "anyOf": [
             {
@@ -1076,6 +1087,64 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "stopped_failure_retry"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "stopped_failure"
+            ],
+            "properties": {
+              "stopped_failure": {
+                "type": "object"
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "completed_output": {
+                "type": "null"
+              },
+              "stopped_provider_failure": {
+                "type": "null"
+              },
+              "stopped_execution": {
+                "type": "null"
+              },
+              "native_rule_change": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "stopped_failure": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -1105,6 +1174,7 @@
             "completed_output_unavailable",
             "completed_output_rejected",
             "provider_prerequisite_repaired",
+            "stopped_failure_retry",
             "stopped_execution_unknown"
           ],
           "title": "Retry Cause",
@@ -1148,6 +1218,19 @@
           ],
           "default": null,
           "title": "Stopped Provider Failure Sha256"
+        },
+        "stopped_failure_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stopped Failure Sha256"
         },
         "containment_sha256": {
           "anyOf": [
@@ -1462,6 +1545,68 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "retry_cause"
+            ],
+            "properties": {
+              "retry_cause": {
+                "const": "stopped_failure_retry"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "current_invocation_start_sha256",
+              "current_invocation_outcome_sha256",
+              "stopped_failure_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "current_invocation_start_sha256": {
+                "type": "string"
+              },
+              "current_invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "stopped_failure_sha256": {
+                "type": "string"
+              },
+              "containment_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_execution_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
+              "reservation_already_applied": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "stopped_failure_sha256": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -1479,6 +1624,7 @@
         "legacy_workspace_rescue",
         "completed_output_rescue",
         "stopped_provider_retry",
+        "stopped_failure_retry",
         "stopped_execution_rescue",
         "context_capacity_resume"
       ],
@@ -2821,6 +2967,19 @@
           "default": null,
           "title": "Stopped Provider Failure Sha256"
         },
+        "stopped_failure_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stopped Failure Sha256"
+        },
         "context_capacity_receipt_sha256": {
           "anyOf": [
             {
@@ -3282,6 +3441,66 @@
             "properties": {
               "purpose": {
                 "const": "stopped_execution_rescue"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "stopped_failure_retry"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "stopped_failure_sha256",
+              "continuation_mode"
+            ],
+            "properties": {
+              "stopped_failure_sha256": {
+                "type": "string"
+              },
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_execution_sha256": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "service_pause_outcome_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "stopped_failure_sha256": {
+                "type": "null"
               }
             }
           }
@@ -6280,6 +6499,134 @@
         }
       ]
     },
+    "StoppedFailureProof": {
+      "additionalProperties": false,
+      "description": "Exact stopped unclassified failure; no inferred cause or provider health assertion.",
+      "properties": {
+        "kind": {
+          "const": "stopped_failure",
+          "default": "stopped_failure",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/DeliveryInvocationOutcome"
+        },
+        "capture_start": {
+          "$ref": "#/$defs/ExecutionCaptureStart"
+        },
+        "capture_stop": {
+          "$ref": "#/$defs/ExecutionCaptureStop"
+        },
+        "proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome",
+        "capture_start",
+        "capture_stop",
+        "proof_sha256"
+      ],
+      "title": "StoppedFailureProof",
+      "type": "object",
+      "allOf": [
+        {
+          "properties": {
+            "outcome": {
+              "properties": {
+                "start": {
+                  "properties": {
+                    "request": {
+                      "properties": {
+                        "role": {
+                          "const": "coder"
+                        }
+                      }
+                    }
+                  }
+                },
+                "result": {
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "FAILED"
+                    },
+                    "artifact": {
+                      "type": "null"
+                    },
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "PROVIDER_UNAVAILABLE"
+                        },
+                        "transient": {
+                          "const": false
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "capture_stop": {
+              "properties": {
+                "output_present": {
+                  "const": false
+                },
+                "cause": {
+                  "type": "null"
+                },
+                "original_error_code": {
+                  "enum": [
+                    null,
+                    "PROVIDER_UNAVAILABLE"
+                  ]
+                },
+                "execution_abort_reason": {
+                  "type": "null"
+                },
+                "process_stop": {
+                  "required": [
+                    "session_proof"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "failed"
+                    },
+                    "returncode": {
+                      "type": "integer",
+                      "not": {
+                        "const": 0
+                      }
+                    },
+                    "session_proof": {
+                      "type": "object",
+                      "properties": {
+                        "proof_scope": {
+                          "const": "owned_session_empty"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "StoppedProviderFailureProof": {
       "additionalProperties": false,
       "description": "Original permanent failure and exact native stop, never a health assertion.",
@@ -7105,6 +7452,70 @@
         "properties": {
           "purpose": {
             "const": "stopped_execution_rescue"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "purpose"
+        ],
+        "properties": {
+          "purpose": {
+            "const": "stopped_failure_retry"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input_mode": {
+            "const": "preserve_draft"
+          },
+          "conflicted": {
+            "const": false
+          },
+          "facts": {
+            "required": [
+              "stopped_failure"
+            ],
+            "properties": {
+              "stopped_failure": {
+                "type": "object"
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "completed_output": {
+                "type": "null"
+              },
+              "stopped_provider_failure": {
+                "type": "null"
+              },
+              "stopped_execution": {
+                "type": "null"
+              },
+              "native_rule_change": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "facts": {
+            "properties": {
+              "stopped_failure": {
+                "type": "null"
+              }
+            }
           }
         }
       }

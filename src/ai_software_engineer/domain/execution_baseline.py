@@ -35,6 +35,7 @@ class BaselinePurpose(StrEnum):
     LEGACY_WORKSPACE_RESCUE = "legacy_workspace_rescue"
     COMPLETED_OUTPUT_RESCUE = "completed_output_rescue"
     STOPPED_PROVIDER_RETRY = "stopped_provider_retry"
+    STOPPED_FAILURE_RETRY = "stopped_failure_retry"
     STOPPED_EXECUTION_RESCUE = "stopped_execution_rescue"
     CONTEXT_CAPACITY_RESUME = "context_capacity_resume"
 
@@ -82,6 +83,9 @@ class ExecutionBaselineBinding(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     stopped_provider_failure_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    stopped_failure_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     context_capacity_receipt_sha256: Sha256 | None = Field(
@@ -190,6 +194,24 @@ class ExecutionBaselineBinding(DomainModel):
                 or self.before_inventory_sha256 != self.after_inventory_sha256
             ):
                 raise ValueError("提供方前提失败恢复必须保留原基线和完整现场, 精确批准后保持暂停")
+        elif self.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY:
+            if (
+                self.execution_base_ref != self.prior_execution_base_ref
+                or self.execution_source_revision != self.prior_source_revision
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.continuation_mode is not BaselineContinuationMode.PAUSE
+                or self.authority_source != "engineering_operator_decision"
+                or self.stopped_failure_sha256 is None
+                or self.legacy_containment_sha256 is not None
+                or self.completed_output_sha256 is not None
+                or self.stopped_provider_failure_sha256 is not None
+                or self.stopped_execution_sha256 is not None
+                or self.context_capacity_receipt_sha256 is not None
+                or self.service_pause_outcome_sha256 is not None
+                or self.superseded_implementation_artifact_id is not None
+                or self.before_inventory_sha256 != self.after_inventory_sha256
+            ):
+                raise ValueError("原执行失败恢复必须保留原基线和完整现场, 精确批准后保持暂停")
         elif self.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
             if (
                 self.context_capacity_receipt_sha256 is None
@@ -246,6 +268,10 @@ class ExecutionBaselineBinding(DomainModel):
             or self.superseded_implementation_artifact_id is not None
         ):
             raise ValueError("提供方前提失败绑定需要独立人工确认和暂停, 不能混用其他恢复证据")
+        if (self.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY) != (
+            self.stopped_failure_sha256 is not None
+        ):
+            raise ValueError("原执行失败证明只能用于独立同基线人工暂停恢复")
         if (
             self.input_mode is BaselineInputMode.CODER_REAPPLY
             and self.execution_source_revision != self.execution_base_ref

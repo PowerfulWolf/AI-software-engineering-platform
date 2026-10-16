@@ -373,6 +373,11 @@ class ManagerConsoleAdapter:
                             "请确认原模型认证或执行器配置前提已修复, 批准保留进度并保持暂停, "
                             "再明确继续原需求; 原失败记录保留, 消耗普通开发额度。"
                             if plan.purpose is BaselinePurpose.STOPPED_PROVIDER_RETRY
+                            else "原调用失败和真实停止已核验, 原因仍未知, 原失败历史保留。"
+                            "完整合法进度已封存; 请核对精确方案, "
+                            "明确接受未知原因与一次普通工作额度, "
+                            "批准后保持暂停, 再单独明确继续原需求; 仍需独立 QA 和 Review。"
+                            if plan.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY
                             else "原 Coder 执行已核验结束, 原报告未接纳, 失败记录保留。"
                             "完整合法代码草稿已封存; 请核对精确方案, 批准后保持暂停, "
                             "再明确继续, 使用普通开发额度重新产出; 候选、QA 和 Review 仍需完成。"
