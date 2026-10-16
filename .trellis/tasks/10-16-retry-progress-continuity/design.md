@@ -45,7 +45,7 @@ test-environment authorization; no real provider or production SQL modification.
 ## Existing K1 and rollback
 
 Bindings a083d424… and 7b486204… are immutable and retain their original retirement meaning.
-Active Run0d6c… legitimately has selected01/02 and may establish a new accepted progress;
+At design time, Run0d6c… legitimately had selected01/02 and could establish a new accepted progress;
 verify its actual completed set before claiming restored step continuity. Do not alter or
 interrupt its request/checkout to implement this maintenance change. A new maintenance
 deployment waits for an actual safe idle boundary and controlled restart.
