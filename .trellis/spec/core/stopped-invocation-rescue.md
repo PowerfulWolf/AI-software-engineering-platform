@@ -1,5 +1,46 @@
 # Stopped invocation without a published outcome
 
+## Blocked delivery re-entry and retained progress (2026-10-16)
+
+A raw platform execution exception can leave delivery BLOCKED/INVARIANT_VIOLATION while the
+actual Task remains IMPLEMENTING and its sole original claim is ACTIVE but expired. Public
+Continue may re-enter only after a trusted typed stopped-execution pre-check validates the
+original start/capture/stop, exact Task/revision/source/permissions/step/dispatch/historical
+claim, absent outcome/any route/output/receipt/raw Run artifact, no effective/later claim and
+current owned-session emptiness. It must not authorize from a summary string or widen ordinary
+BLOCKED retry. Reconcile before collecting the fresh proof. The original Task flock guards
+the proof read through the exact checkpoint append; release it before Worker reacquires it.
+The production supervisor takes this flock before its Dispatcher tick. It is not a general
+database fence for arbitrary external dispatchers. The later full rescue keeps its existing
+Task/SQL fence and final-consumption validation; external writers must remain quiesced.
+
+Append only an ordinary DELIVERING checkpoint, then reuse existing Dispatcher reclaim and
+Worker lifecycle. Production retry delay can require two Continue operations. A fresh claim may
+finish legitimate read-only knowledge preparation, but the immutable start without outcome
+must prohibit another main Coder call and produce the existing owner-fenced engineering wait.
+No new queue mutation, result, receipt, cause, refund or Task reset is introduced by re-entry.
+The normal full rescue proposal still requires its idle Task/SQL fence and exact PAUSE/RESUME.
+
+The internal signatures are
+`ProductionProjectDeliveryBackend.stopped_execution_retry_scope(checkpoint) ->
+AbstractContextManager[StoppedCoderExecutionProof | None]` and
+`UnifiedProjectEntryService.retry_stopped_execution(command, *, proof_scope) ->
+ProjectDeliveryResult`. The proof factory is trusted composition, never browser-supplied
+proof data. `read_stopped_coder_execution(...) -> StoppedCoderExecutionProof | None` is shared
+with the full baseline collector, which retains its original idle SQL transaction fence.
+No new HTTP action or browser assertion that an execution stopped is introduced.
+
+New same-base STOPPED_EXECUTION_RESCUE binding construction must not retire already accepted
+compatible progress. Real downstream request checkpoint/paths and work-slice completed steps
+remain available. Old explicit retirement bindings keep their original meaning; source rebind
+or reapply continues to retire incompatible progress. No reader may revive a retired ancestor.
+
+Regressions must exercise the real public blocked/native/MySQL path through original claim
+expiry, fresh guarded claim and exact recovery, plus current-live/late-claim/result/route/
+artifact/proof/scope drift refusals. Assert old record bytes, Task/attempt/source and role call
+counts, retained accepted steps and independent same-candidate QA/Review. See maintenance task
+10-16-stopped-blocked-reentry for exact executable matrix and rollback.
+
 ## Scope and contracts
 A Coder may lose lease authority during local computer sleep. The owner fence must still reject
 Task/result publication, while the trusted native runner stops and records its own real session.
@@ -76,7 +117,7 @@ expired lease, manufacture Coder result or expand frozen interruption allowed_ca
 `manager/baseline_production.py::BaselineProposeCommand` and
 `web_console/models.py::ProposeExecutionBaselineIntent` accept the new purpose through the
 existing `POST /api/v1/operations` endpoint. Console `/api/v1/console` reports
-`operation_contract_version=9`; the browser must recheck that capability on retained controls.
+`operation_contract_version=10`; the browser must recheck that capability on retained controls.
 
 | Intent action | Required exact input |
 | --- | --- |

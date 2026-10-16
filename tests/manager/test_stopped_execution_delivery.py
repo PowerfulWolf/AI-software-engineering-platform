@@ -17,8 +17,11 @@ from jsonschema import Draft202012Validator, FormatChecker
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents import (
+    AgentErrorCode,
+    AgentFailure,
     AgentRequest,
     AgentResult,
+    AgentRunStatus,
     FallbackStructuredModelClient,
     StructuredModelResult,
     StructuredModelRoute,
@@ -28,7 +31,11 @@ from ai_software_engineer.agents.codex_cli import (
     CodexInvocationResult,
     SubprocessCodexCommandRunner,
 )
-from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
+from ai_software_engineer.agents.fallback import (
+    FileModelRouteAttemptStore,
+    ModelRouteAttempt,
+    model_route_root,
+)
 from ai_software_engineer.agents.openai_compatible import HttpResponse
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
@@ -56,6 +63,7 @@ from ai_software_engineer.domain.execution_baseline import (
     ExecutionBaselineBinding,
 )
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
+from ai_software_engineer.domain.workforce import TaskLease
 from ai_software_engineer.evaluation import (
     AdrStatus,
     EvaluationEngine,
@@ -73,10 +81,11 @@ from ai_software_engineer.manager import production_backend, production_delivery
 from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
 from ai_software_engineer.manager.baseline_production import ProductionBaselineFactCollector
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
-from ai_software_engineer.manager.delivery import StartProjectDelivery
+from ai_software_engineer.manager.delivery import ResumeProjectDelivery, StartProjectDelivery
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
+from ai_software_engineer.owned_processes import OwnedProcessesUncertain
 from ai_software_engineer.owned_sessions import require_recorded_session_empty
 from ai_software_engineer.runtime import _default_case_id
 from ai_software_engineer.store import MySqlTaskRepository
@@ -94,6 +103,7 @@ from ai_software_engineer.web_console.models import (
     ResumeExecutionBaselineIntent,
 )
 from ai_software_engineer.work_queue import baseline as queue_baseline
+from ai_software_engineer.work_queue import worker as queue_worker
 from ai_software_engineer.work_queue.baseline import consumptions
 from ai_software_engineer.work_queue.dispatcher import DispatcherLoop, DispatcherTickResult
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
@@ -102,6 +112,7 @@ from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationStart,
 )
 from ai_software_engineer.work_queue.models import QueuedWorkItem
+from ai_software_engineer.work_queue.ports import QueueLeaseLost
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 from tests.knowledge.test_invocation_native import _http_client, _HttpTransport
 from tests.manager.test_production_backend import (
@@ -116,12 +127,38 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _ReportTempla
 
 
 @pytest.mark.mysql
-@pytest.mark.parametrize("late_raw_artifact", [False, True], ids=["delivery", "late-artifact"])
+@pytest.mark.parametrize(
+    ("late_raw_artifact", "blocked_raw_owned", "reentry_refusal"),
+    [
+        (False, False, None),
+        (True, False, None),
+        (False, True, None),
+        (False, True, "late-artifact"),
+        (False, True, "late-route"),
+        (False, True, "late-claim"),
+        (False, True, "closed-successor"),
+        (False, True, "unexpired-original"),
+        (False, True, "unknown-session"),
+    ],
+    ids=[
+        "delivery",
+        "late-artifact",
+        "blocked-raw-owned",
+        "reentry-late-artifact",
+        "reentry-late-route",
+        "reentry-late-claim",
+        "reentry-closed-successor",
+        "reentry-unexpired-original",
+        "reentry-unknown-session",
+    ],
+)
 def test_public_stopped_unknown_coder_pauses_then_independently_delivers_original_task(
     tmp_path: Path,
     mysql_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
     late_raw_artifact: bool,
+    blocked_raw_owned: bool,
+    reentry_refusal: str | None,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -134,6 +171,16 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
     native_adapters: list[CodexCliAgentAdapter] = []
     expected_binding: str | None = None
     original_complete = _ScriptedStructuredClient.complete
+    initial_tick = DispatcherLoop.tick
+    dispatchers: list[DispatcherLoop] = []
+
+    def observe_dispatcher(
+        self: DispatcherLoop, *, now: datetime, work_item_id: str | None = None
+    ) -> DispatcherTickResult:
+        dispatchers.append(self)
+        return initial_tick(self, now=now, work_item_id=work_item_id)
+
+    monkeypatch.setattr(DispatcherLoop, "tick", observe_dispatcher)
 
     def inspect_source(
         self: _ScriptedStructuredClient,
@@ -258,19 +305,26 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
                 expires_at=expires,
             )
             lease._expires_at = expires
-            return super().run_observed(
-                (
-                    sys.executable,
-                    "-c",
-                    "from pathlib import Path; import time; "
-                    "Path('hello.txt').write_text('retained stopped draft\\n'); time.sleep(10)",
-                ),
-                cwd=cwd,
-                environment=environment,
-                stdin=stdin,
-                timeout_seconds=timeout_seconds,
-                observer=observer,
-            )
+            try:
+                return super().run_observed(
+                    (
+                        sys.executable,
+                        "-c",
+                        "from pathlib import Path; import time; "
+                        "Path('hello.txt').write_text('retained stopped draft\\n'); time.sleep(10)",
+                    ),
+                    cwd=cwd,
+                    environment=environment,
+                    stdin=stdin,
+                    timeout_seconds=timeout_seconds,
+                    observer=observer,
+                )
+            except QueueLeaseLost as error:
+                if blocked_raw_owned:
+                    # Reproduce the historical raw-owned routing bug after the
+                    # real child has stopped and sealed its actual stop proof.
+                    raise OwnedProcessesUncertain("fixture historical raw owned refusal") from error
+                raise
 
     class CompletedRunner:
         def __init__(self, adapter: CodexCliAgentAdapter, request: AgentRequest) -> None:
@@ -438,10 +492,27 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
         ),
         idempotency_key="stopped-public-product-approval",
     )
-    console.run_once()
+    if blocked_raw_owned:
+
+        class UnusedOwnedUncertainty(OwnedProcessesUncertain):
+            pass
+
+        with monkeypatch.context() as legacy:
+            # The pre-f3be38e supervisor did not catch this genuine type. Only
+            # emulate that original routing during the initial real invocation.
+            legacy.setattr(queue_worker, "OwnedProcessesUncertain", UnusedOwnedUncertainty)
+            console.run_once()
+    else:
+        console.run_once()
     assert len(calls) == 1
     (stopped,) = calls
     pending = service.status(product.delivery_id).checkpoint
+    if blocked_raw_owned:
+        assert pending.stage is DeliveryStage.BLOCKED
+        assert pending.failed_stage is DeliveryStage.DELIVERING
+        assert pending.task_status is TaskStatus.IMPLEMENTING
+        assert pending.failure_code is not None
+        assert pending.failure_code.value == "INVARIANT_VIOLATION"
     assert pending.task_id is not None and pending.repository_id is not None
     sidecar = host.projects()[0].root / "repositories" / pending.repository_id
     ledger = FileContinuationStore(
@@ -477,6 +548,134 @@ def test_public_stopped_unknown_coder_pauses_then_independently_delivers_origina
     )
     assert expired.status is WorkItemStatus.RUNNING
     assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
+    if reentry_refusal is not None:
+        backend = service._backend
+        assert isinstance(backend, production_backend.ProductionProjectDeliveryBackend)
+        original_reconcile = backend.reconcile
+        injected = False
+        expected_items = host.work_queue.items_for_task(pending.task_id)
+        with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+            original_task = tasks.get(pending.task_id)
+            original_revision = tasks.current_revision(pending.task_id)
+            original_events = tasks.list_events(pending.task_id)
+
+        def late_reconcile(checkpoint: object) -> None:
+            nonlocal injected, expected_items
+            assert checkpoint == pending
+            original_reconcile(pending)
+            assert not injected
+            injected = True
+            if reentry_refusal == "late-artifact":
+                artifact = seal_artifact(
+                    _coder_draft(native_adapters[0], stopped.request),
+                    validated_at=datetime.now(UTC),
+                )
+                FileArtifactStore(sidecar / "artifacts").put(artifact)
+            elif reentry_refusal == "late-route":
+                result = AgentResult(
+                    run_id=stopped.request.run_id,
+                    task_id=stopped.request.task_id,
+                    role=stopped.request.role,
+                    attempt=stopped.request.attempt,
+                    source_revision=stopped.request.source_revision,
+                    context_manifest_id=stopped.request.context_manifest_id,
+                    status=AgentRunStatus.FAILED,
+                    error=AgentFailure(
+                        code=AgentErrorCode.PROVIDER_ERROR,
+                        message="adversarial late sealed route result",
+                        transient=False,
+                    ),
+                )
+                FileModelRouteAttemptStore(model_route_root(sidecar)).append(
+                    ModelRouteAttempt.create(
+                        request=stopped.request,
+                        route_index=1,
+                        provider="codex",
+                        model="offline-native",
+                        route_kind="codex_cli",
+                        started_at=original_start.started_at,
+                        completed_at=datetime.now(UTC),
+                        result=result,
+                        fallback=False,
+                    )
+                )
+            elif reentry_refusal == "late-claim":
+                # Exercise the existing real Dispatcher with a non-increasing
+                # claim clock; identity/dispatch generations must reject it.
+                host.work_queue.reclaim_expired(
+                    now=datetime.now(UTC), retry_at=stopped.claim.claimed_at
+                )
+                tick = initial_tick(
+                    dispatchers[-1], now=stopped.claim.claimed_at, work_item_id=expired.id
+                )
+                assert tick.claim is not None
+                assert tick.claim.claimed_at <= stopped.claim.claimed_at
+                expected_items = host.work_queue.items_for_task(stopped.request.task_id)
+            elif reentry_refusal == "closed-successor":
+                # A contradictory closed child is not absence just because its
+                # checkpoint/counter and wall clock are older. Test the trusted
+                # queue read seam; no historical production SQL is rewritten.
+                successor = expired.model_copy(
+                    update={
+                        "id": "work_contradictory_closed_successor",
+                        "parent_work_item_id": expired.id,
+                        "checkpoint_sequence": max(0, expired.checkpoint_sequence - 1),
+                        "status": WorkItemStatus.CLOSED,
+                        "created_at": expired.created_at - timedelta(seconds=1),
+                        "updated_at": expired.created_at,
+                    }
+                )
+                original_items = host.work_queue.items_for_task
+
+                def with_closed_child(task_id: str) -> tuple[QueuedWorkItem, ...]:
+                    return (*original_items(task_id), successor)
+
+                monkeypatch.setattr(host.work_queue, "items_for_task", with_closed_child)
+                expected_items = host.work_queue.items_for_task(stopped.request.task_id)
+            elif reentry_refusal == "unexpired-original":
+                original_active = host.work_queue.list_active_leases(
+                    now=datetime.min.replace(tzinfo=UTC)
+                )
+                assert any(lease.id == stopped.claim.lease.id for lease in original_active)
+                future = datetime.now(UTC) + timedelta(minutes=5)
+
+                def with_live_original(*, now: datetime) -> tuple[TaskLease, ...]:
+                    leases = tuple(
+                        lease.model_copy(update={"expires_at": future})
+                        if lease.id == stopped.claim.lease.id
+                        else lease
+                        for lease in original_active
+                    )
+                    return tuple(lease for lease in leases if lease.expires_at > now)
+
+                monkeypatch.setattr(host.work_queue, "list_active_leases", with_live_original)
+            else:
+                from ai_software_engineer import owned_sessions
+
+                def unknown(proof: object) -> None:
+                    raise owned_sessions.OwnedSessionUnknown("fixture current session is unknown")
+
+                monkeypatch.setattr(owned_sessions, "require_recorded_session_empty", unknown)
+
+        monkeypatch.setattr(backend, "reconcile", late_reconcile)
+        with pytest.raises((ValueError, RuntimeError)):
+            service.retry_stopped_execution(
+                ResumeProjectDelivery(delivery_id=pending.delivery_id),
+                proof_scope=backend.stopped_execution_retry_scope,
+            )
+        assert injected
+        monkeypatch.setattr(backend, "reconcile", original_reconcile)
+        assert service.status(pending.delivery_id).checkpoint == pending
+        assert host.work_queue.items_for_task(pending.task_id) == expected_items
+        assert len(calls) == 1
+        assert records.list("invocation-starts", DeliveryInvocationStart) == (original_start,)
+        assert records.list("invocation-outcomes", DeliveryInvocationOutcome) == ()
+        assert all(path.read_bytes() == body for path, body in original_invocation_bytes.items())
+        with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+            assert tasks.get(pending.task_id) == original_task
+            assert tasks.current_revision(pending.task_id) == original_revision
+            assert tasks.list_events(pending.task_id) == original_events
+        return
     original_tick = DispatcherLoop.tick
 
     def quick_expiry_retry(

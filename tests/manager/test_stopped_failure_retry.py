@@ -58,6 +58,7 @@ from tests.git.test_worktree import _git
 from tests.manager.test_completed_output_checkpoint import CompletedFixture, _outcome
 from tests.manager.test_completed_output_checkpoint import completed as completed_fixture
 from tests.manager.test_execution_baseline import Collector
+from tests.manager.test_stopped_execution_rescue import service_for as stopped_execution_service
 from tests.orchestration.test_native_continuation_v2 import V2Fixture
 from tests.orchestration.test_retry import AttemptIdentityFactory, ScriptedAdapter
 from tests.orchestration.test_runner import _clock, _definitions
@@ -129,7 +130,7 @@ class TestStoppedFailureAcceptedProgress:
             if isinstance(template, PlanArtifact):
                 steps = tuple(
                     template.content.steps[0].model_copy(update={"step_id": f"step0{index}"})
-                    for index in range(1, 4)
+                    for index in range(1, 5)
                 )
                 template = template.model_copy(
                     update={
@@ -157,8 +158,8 @@ class TestStoppedFailureAcceptedProgress:
                         update={
                             "content": progress.content.model_copy(
                                 update={
-                                    "completed_step_ids": ("step01",),
-                                    "remaining_step_ids": ("step02", "step03"),
+                                    "completed_step_ids": ("step01", "step02"),
+                                    "remaining_step_ids": ("step03", "step04"),
                                     "changed_files": (
                                         ChangedFile(
                                             path="src/app.py",
@@ -179,7 +180,9 @@ class TestStoppedFailureAcceptedProgress:
         monkeypatch.setattr(V2Fixture, "_accept", accept)
         monkeypatch.setattr(V2Fixture, "activate", activate)
 
-    @pytest.mark.parametrize("completed", ["stopped_failure"], indirect=True)
+    @pytest.mark.parametrize(
+        "completed", ["stopped_failure", "stopped_unknown_named"], indirect=True
+    )
     def test_pause_replay_resume_retains_checkpoint_in_actual_next_coder_work_slice(
         self, completed: CompletedFixture
     ) -> None:
@@ -188,17 +191,28 @@ class TestStoppedFailureAcceptedProgress:
         assert isinstance(progress, CoderProgressArtifact)
         assert f.native.request.continuation_checkpoint_id == progress.artifact_id
         assert f.native.request.continuation_changed_paths == ("src/app.py",)
-        service = service_for(f, progress=progress)
+        purpose = (
+            BaselinePurpose.STOPPED_EXECUTION_RESCUE
+            if f.capture_stop.original_error_code is AgentErrorCode.PROVIDER_ERROR
+            else BaselinePurpose.STOPPED_FAILURE_RETRY
+        )
+        service = (
+            stopped_execution_service(f, progress=progress)
+            if purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE
+            else service_for(f, progress=progress)
+        )
         assert isinstance(service.facts, Collector)
         collector = service.facts
         before, history = capture_mutation_inventory(f.native.worktree.path), f.sealed_bytes()
-        plan = service.propose(None, purpose=BaselinePurpose.STOPPED_FAILURE_RETRY)
+        plan = service.propose(None, purpose=purpose)
         authority = BaselineOperatorAuthorization.for_plan(
             plan,
             principal=LocalOperatorPrincipal.trusted_local(),
-            reference="same-source retry preserves accepted completed step01",
+            reference="same-source retry preserves accepted completed step01 and step02",
             submitted_at=datetime.now(UTC),
-            confirm_stopped_failure_retry=True,
+            confirm_stopped_failure_retry=(
+                True if purpose is BaselinePurpose.STOPPED_FAILURE_RETRY else None
+            ),
             continuation_mode=BaselineContinuationMode.PAUSE,
         )
         reservations: set[str] = set()
@@ -217,6 +231,7 @@ class TestStoppedFailureAcceptedProgress:
                     "checkpoint_sequence": f.native.repository.current_revision(f.task.id),
                     "work_item_id": "work_next_paused",
                     "stopped_failure": None,
+                    "stopped_execution": None,
                     "continuation": BaselineExecutionReservation(
                         current_attempt=reservation.next_execution_attempt,
                         next_execution_attempt=reservation.next_execution_attempt,
@@ -287,8 +302,8 @@ class TestStoppedFailureAcceptedProgress:
                     "supersedes": progress.artifact_id,
                     "content": progress.content.model_copy(
                         update={
-                            "completed_step_ids": ("step01", "step02"),
-                            "remaining_step_ids": ("step03",),
+                            "completed_step_ids": ("step01", "step02", "step03"),
+                            "remaining_step_ids": ("step04",),
                         }
                     ),
                 }
@@ -324,9 +339,9 @@ class TestStoppedFailureAcceptedProgress:
         assert request.source_revision == f.native.request.source_revision
         assert request.permissions == f.native.request.permissions
         assert request.work_slice is not None
-        assert request.work_slice.completed_step_ids == ("step01",)
-        assert request.work_slice.selected_step_ids == ("step02",)
-        assert request.work_slice.later_step_ids == ("step03",)
+        assert request.work_slice.completed_step_ids == ("step01", "step02")
+        assert request.work_slice.selected_step_ids == ("step03",)
+        assert request.work_slice.later_step_ids == ("step04",)
         assert request.work_slice.authorized_work_remaining == 4
         assert binding.superseded_progress_artifact_id is None
         assert current.active_progress == progress

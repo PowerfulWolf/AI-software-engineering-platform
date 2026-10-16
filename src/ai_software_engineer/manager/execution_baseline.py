@@ -666,6 +666,7 @@ class ExecutionBaselineService:
                     in {
                         BaselinePurpose.CONTEXT_CAPACITY_RESUME,
                         BaselinePurpose.STOPPED_FAILURE_RETRY,
+                        BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                     }
                     else current.progress_artifact_id
                 ),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Protocol, Self
@@ -47,6 +48,7 @@ from ai_software_engineer.manager.preparation import (
 )
 from ai_software_engineer.manager.python_verification import PytestSelection
 from ai_software_engineer.manager.python_verification_runner import MAX_PYTEST_SELECTIONS
+from ai_software_engineer.manager.stopped_execution_checkpoint import StoppedCoderExecutionProof
 from ai_software_engineer.multi_directory.attachments import RequirementAttachmentId
 from ai_software_engineer.orchestration.retry import (
     BlockedResult,
@@ -651,6 +653,56 @@ class UnifiedProjectEntryService:
                 raise
             return ProjectDeliveryResult(checkpoint=current, diagnostic=error.safe_summary)
         return ProjectDeliveryResult(checkpoint=current)
+
+    def retry_stopped_execution(
+        self,
+        command: ResumeProjectDelivery,
+        *,
+        proof_scope: Callable[
+            [ProjectDeliveryCheckpoint], AbstractContextManager[StoppedCoderExecutionProof | None]
+        ],
+    ) -> ProjectDeliveryResult:
+        """Re-enter only the trusted stopped-unknown proof, never generic BLOCKED retry."""
+        store, current = self._current(command.delivery_id)
+        if (
+            current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or current.failed_stage is not DeliveryStage.DELIVERING
+            or current.failure_code is not DeliveryFailureCode.INVARIANT_VIOLATION
+            or current.task_id is None
+            or current.task_status is not TaskStatus.IMPLEMENTING
+            or current.task_revision is None
+            or current.candidate_revision is not None
+        ):
+            return ProjectDeliveryResult(checkpoint=current)
+        # Reconciliation may discover new durable facts. It must finish before
+        # the fresh stopped/absence proof used for the checkpoint append.
+        self._backend.reconcile(current)
+        # Trusted backend composition holds the actual Task flock while reading
+        # fresh process/claim facts and until the new checkpoint is appended.
+        with proof_scope(current) as proof:
+            if proof is None:
+                return ProjectDeliveryResult(checkpoint=current)
+            proof.validate_integrity()
+            request, capture = proof.invocation_start.request, proof.capture_start
+            if (
+                self._current(command.delivery_id)[1] != current
+                or request.task_id != current.task_id
+                or capture.task_revision != current.task_revision
+                or capture.scope.requirement_id != current.delivery_id
+                or capture.scope.repository_id != current.repository_id
+                or capture.scope.dispatch_sha256 != current.dispatch_commit_sha256
+            ):
+                raise DeliveryCommandRejected("停止执行证明已偏离当前需求 checkpoint, 原现场保留")
+            self._next(
+                store,
+                current,
+                stage=DeliveryStage.DELIVERING,
+                next_action=DeliveryNextAction.RUN_DELIVERY,
+                at=command.submitted_at,
+            )
+        # Worker needs this same flock. Release the proof scope before normal
+        # Dispatcher expiry/reclaim and its durable invocation replay refusal.
+        return self.resume(command)
 
     def retry_interrupted_stage(self, command: ResumeProjectDelivery) -> ProjectDeliveryResult:
         """Resume a platform-interrupted stage without resetting a terminal Task."""

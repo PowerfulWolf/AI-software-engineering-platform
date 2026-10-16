@@ -9,6 +9,7 @@ from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, ModelRouteAttempt
+from ai_software_engineer.domain.artifact import CoderProgressArtifact
 from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal
 from ai_software_engineer.domain.execution_baseline import BaselineContinuationMode, BaselinePurpose
 from ai_software_engineer.git.baseline import GitExecutionBaselineAdapter
@@ -54,7 +55,9 @@ def proof_for(f: CompletedFixture) -> StoppedCoderExecutionProof:
     )
 
 
-def service_for(f: CompletedFixture) -> ExecutionBaselineService:
+def service_for(
+    f: CompletedFixture, *, progress: CoderProgressArtifact | None = None
+) -> ExecutionBaselineService:
     proof = proof_for(f)
     facts = BaselineExecutionFacts(
         task=f.task,
@@ -67,6 +70,7 @@ def service_for(f: CompletedFixture) -> ExecutionBaselineService:
         source_native_rules_sha256="3" * 64,
         target_native_rules_sha256="3" * 64,
         source_artifact_ids=f.native.request.input_artifact_ids,
+        progress_artifact_id=progress.artifact_id if progress is not None else None,
         continuation=f.collector._reservation(f.task, f.queue.item, (), stopped_execution=proof),
         stopped_execution=proof,
         permissions=f.native.request.permissions,
@@ -95,6 +99,7 @@ def test_stopped_proof_and_pause_preserve_original_unknown_history(
             (Path(__file__).parents[2] / "schemas/stopped-coder-execution.schema.json").read_text()
         )
     ).validate(proof.to_wire())
+    assert proof.capture_stop.original_error_code is not None
     assert proof.capture_stop.original_error_code.value == "PROVIDER_ERROR"
     with f.collector.execution_scope():
         assert f.collector._stopped_execution(f.task, f.queue.item, f.queue.bound) == proof
@@ -139,16 +144,21 @@ def test_stopped_proof_refuses_weaker_or_foreign_stop(
 ) -> None:
     f = completed
     wire = proof_for(f).to_wire()
+    stop = wire["capture_stop"]
+    start = wire["invocation_start"]
+    assert isinstance(stop, dict) and isinstance(start, dict)
     if change == "no_session":
-        wire["capture_stop"]["process_stop"]["session_proof"] = None
+        process = stop["process_stop"]
+        assert isinstance(process, dict)
+        process["session_proof"] = None
     elif change == "output":
-        wire["capture_stop"]["output_present"] = True
+        stop["output_present"] = True
     elif change == "cause":
-        wire["capture_stop"]["cause"] = "local_execution_limit"
+        stop["cause"] = "local_execution_limit"
     elif change == "foreign_start":
-        wire["invocation_start"]["lease_id"] = "lease_foreign"
+        start["lease_id"] = "lease_foreign"
     else:
-        wire["capture_stop"]["observation_sha256"] = "f" * 64
+        stop["observation_sha256"] = "f" * 64
     with pytest.raises((ValueError, ContinuationRejected)):
         StoppedCoderExecutionProof.model_validate(wire)
 
@@ -228,6 +238,7 @@ def test_stopped_collector_freshly_rejects_an_existing_result_or_unproved_route(
             result=f.outcome.result,
             fallback=kind == "fallback_route",
         )
+        assert f.collector.route_root is not None
         FileModelRouteAttemptStore(f.collector.route_root).append(route)
     before = f.sealed_bytes()
     with f.collector.execution_scope(), pytest.raises(ValueError):

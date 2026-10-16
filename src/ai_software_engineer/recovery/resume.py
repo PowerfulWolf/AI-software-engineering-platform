@@ -285,7 +285,11 @@ class DeliveryResumeController:
                     return self._continue_completion(verification_plan, completion)
 
         if not terminal_candidate:
-            retried = self._entry.retry_interrupted_stage(command)
+            retried = self._entry.retry_stopped_execution(
+                command, proof_scope=self._backend.stopped_execution_retry_scope
+            )
+            if retried.checkpoint == current:
+                retried = self._entry.retry_interrupted_stage(command)
             if retried.checkpoint != current:
                 outcome = (
                     DeliveryResumeOutcome.WAITING_HUMAN

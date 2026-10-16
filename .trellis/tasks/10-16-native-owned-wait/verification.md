@@ -37,6 +37,21 @@ run passes in5.20s; affected-file strict Mypy, Ruff/format and diff checks pass.
 are limited to native typed normalization and the existing supervisor uncertainty catch.
 This does not establish the original OS trigger or recover the old parent checkpoint.
 
+The outer `EvidenceCapturingAgentAdapter` case is a generic supervisor regression boundary,
+not the observed production composition. Deployed `1c0af07` uses the configured native adapter,
+fallback wrapper and evaluating runtime; it does not instantiate that evidence wrapper.
+The observed records establish the real cleanup/stop and missing final outcome, but cannot
+identify the original OS observation trigger or establish the live Host registry contents.
+Only the original Host's actual controlled drain can report its current readiness/refusal.
+
+Independent deployment precheck at 06:25:40Z found all225 Operations terminal, no unexpired
+ACTIVE claim and exactly one expired ACTIVE/RUNNING item (Run6). The original195 immutable
+files are unchanged; the original owned-session proof was independently rechecked
+EMPTY_CONFIRMED without creating a new stop. Report
+`/tmp/ase-k1-predeploy-global-readonly-20261016-0630.json` has SHA
+f941bc07c1fa990381702394b072c100d032da461e71e9324029b3e3467f6761.
+This read-only observation is not a service replacement proof or queue mutation authority.
+
 ## 存量数据处置
 
 No production SQL or historical facts have been edited. The parent/native delivery checkpoints

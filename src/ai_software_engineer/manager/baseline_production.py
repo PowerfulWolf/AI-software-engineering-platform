@@ -106,6 +106,7 @@ from ai_software_engineer.manager.legacy_local_execution import (
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
 from ai_software_engineer.manager.stopped_execution_checkpoint import (
     StoppedCoderExecutionProof,
+    read_stopped_coder_execution,
     require_stopped_coder_workspace,
 )
 from ai_software_engineer.manager.stopped_failure_checkpoint import (
@@ -1633,78 +1634,25 @@ class ProductionBaselineFactCollector:
     def _stopped_execution(
         self, task: Task, item: QueuedWorkItem, step: QueuedRoleStep
     ) -> StoppedCoderExecutionProof | None:
-        records = KnowledgeRecordStore(self.state / "invocations", read_only=True)
-        start = records.find("invocation-starts", item.id, DeliveryInvocationStart)
-        if start is None:
-            return None
-        ledger = FileContinuationStore(self.state / "continuations" / task.id, task_id=task.id)
-        try:
-            capture_start = ledger.capture_start(start.request.run_id)
-            capture_stop = ledger.capture_stop(start.request.run_id)
-        except ContinuationRecordMissing:
-            return None
-        proof = StoppedCoderExecutionProof.create(
-            invocation_start=start, capture_start=capture_start, capture_stop=capture_stop
-        )
-        expected_scope = ContinuationScope(
-            team_id=self.scope.team_id,
-            project_id=self.scope.project_id,
-            repository_id=self.scope.repository_id,
-            requirement_id=self.requirement_id,
-            dispatch_sha256=self.allocation.dispatch_sha256,
-        )
-        self._require_legacy_routes(start)
-        if capture_start.scope != expected_scope:
-            raise ValueError("未知结果停止证明不属于当前需求和分配")
-
-        def validate_inputs(request: AgentRequest) -> None:
-            self._require_legacy_routes(start)
-            if (
-                request != start.request
-                or request.permissions != self.permissions
-                or request.source_revision != step.boundary.source_revision
-                or self.queue.get(item.id) != item
-                or self.queue.step(item.id) != step
-                or records.get("invocation-starts", item.id, DeliveryInvocationStart) != start
-                or records.find("invocation-outcomes", item.id, DeliveryInvocationOutcome)
-                is not None
-                or ledger.capture_start(request.run_id) != capture_start
-                or ledger.capture_stop(request.run_id) != capture_stop
-                or any(
-                    receipt.request.run_id == request.run_id
-                    for receipt in ledger.receipts_for_task(task.id)
-                )
-            ):
-                raise ValueError("未知结果停止恢复已有原结果、收据或精确队列事实变化")
-            if any(
-                artifact.producer.run_id == request.run_id
-                for artifact in self.capacity_artifacts.list_for_task(task.id)
-            ):
-                raise ValueError("原执行已有封存产物, 不能用未知结果恢复覆盖")
-            retired = self.queue.rejected_output_artifact_ids(task.id)
-            if any(
-                accepted.work_item_id == item.id
-                or (
-                    accepted.checkpoint_sequence >= start.checkpoint_sequence
-                    and accepted.receipt.artifact_id not in retired
-                )
-                for accepted in self.queue.accepted(task.id)
-            ) or any(
-                event.artifact_ids
-                for event in self.repository.list_events(task.id)[capture_start.task_revision :]
-            ):
-                raise ValueError("原执行之后已有产物发布或交付采纳, 不能覆盖原结果")
-
-        validate_capture_stop(
-            start=capture_start,
-            stop=capture_stop,
-            task=task,
-            task_revision=self.repository.current_revision(task.id),
-            historical_claim=self.queue.original_claim(start.lease_id),
+        return read_stopped_coder_execution(
+            task,
+            item,
+            step,
+            expected_scope=ContinuationScope(
+                team_id=self.scope.team_id,
+                project_id=self.scope.project_id,
+                repository_id=self.scope.repository_id,
+                requirement_id=self.requirement_id,
+                dispatch_sha256=self.allocation.dispatch_sha256,
+            ),
+            state=self.state,
+            route_root=self.route_root,
+            repository=self.repository,
+            queue=self.queue,
+            artifacts=self.capacity_artifacts,
+            permissions=self.permissions,
             task_lock=self.guard,
-            validate_inputs=validate_inputs,
         )
-        return proof
 
     def _completed_output(
         self, task: Task, item: QueuedWorkItem, step: QueuedRoleStep

@@ -6,8 +6,8 @@ import hashlib
 import json
 import os
 import subprocess
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import closing
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -147,6 +147,10 @@ from ai_software_engineer.manager.stages import (
     ProjectStageAdvancer,
     StageAdvanceAuthorization,
     StageAdvanceRequest,
+)
+from ai_software_engineer.manager.stopped_execution_checkpoint import (
+    StoppedCoderExecutionProof,
+    read_stopped_coder_execution,
 )
 from ai_software_engineer.manager.store import FileProjectPreparationStore
 from ai_software_engineer.manager.team_roster import (
@@ -2109,6 +2113,152 @@ class ProductionProjectDeliveryBackend:
                 else None,
             )
         return self._facts(preparation)
+
+    @contextmanager
+    def stopped_execution_retry_scope(
+        self, checkpoint: ProjectDeliveryCheckpoint
+    ) -> Iterator[StoppedCoderExecutionProof | None]:
+        """Only re-enter an exact stopped unknown Coder while its Task lock is held.
+
+        No idle SQL fence or queue mutation belongs here: the existing Dispatcher
+        expires/reclaims the old claim after this scope has released the flock.
+        """
+        from ai_software_engineer.domain.task import task_matches_dispatch
+        from ai_software_engineer.manager.queue_capacity import production_role_queue
+        from ai_software_engineer.orchestration.continuation_models import ContinuationScope
+        from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
+
+        if (
+            checkpoint.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or checkpoint.failed_stage is not DeliveryStage.DELIVERING
+            or checkpoint.failure_code is not DeliveryFailureCode.INVARIANT_VIOLATION
+            or checkpoint.task_id is None
+            or checkpoint.task_status is not TaskStatus.IMPLEMENTING
+            or checkpoint.task_revision is None
+            or checkpoint.candidate_revision is not None
+            or checkpoint.dispatch_commit_id is None
+        ):
+            yield None
+            return
+        facts = self._sealed_facts_for_checkpoint(checkpoint)
+        authority = MySqlDispatchAuthority(
+            self._dsn, request_revisions=facts.product, planner_records=facts.planning
+        )
+        allocation = authority.get_allocation(checkpoint.dispatch_commit_id)
+        queue = self._role_queue or production_role_queue(self._dsn)
+        state = facts.workspace.directory("state")
+        guard = WorkerExecutionGuard()
+        permissions = _agent_definitions(allocation, _task_commands(facts.profile))[
+            AgentRole.CODER
+        ].permissions
+        expected_scope = ContinuationScope(
+            team_id=self._config.team_id,
+            project_id=facts.workspace.manifest.project_id,
+            repository_id=allocation.repository_id,
+            requirement_id=checkpoint.delivery_id,
+            dispatch_sha256=allocation.dispatch_sha256,
+        )
+        with (
+            guard.task_scope(state / "queue-worker-locks", checkpoint.task_id),
+            closing(MySqlTaskRepository(self._dsn)) as repository,
+        ):
+            task = repository.get(checkpoint.task_id)
+            if (
+                allocation.task_id != task.id
+                or allocation.repository_id != checkpoint.repository_id
+                or allocation.dispatch_sha256 != checkpoint.dispatch_commit_sha256
+                or not task_matches_dispatch(task, allocation.task)
+                or task.repository != checkpoint.repository_root
+                or task.repository != str(facts.workspace.repository_root)
+                or task.metadata.get("repository_id") != checkpoint.repository_id
+                or task.status is not TaskStatus.IMPLEMENTING
+                or repository.current_revision(task.id) != checkpoint.task_revision
+            ):
+                raise ValueError("原停止执行与当前需求、任务或分配已不一致, 原现场保留")
+            admission = queue.admission(task.id)
+            items = queue.items_for_task(task.id)
+            pending = tuple(item for item in items if item.status is not WorkItemStatus.CLOSED)
+            if (
+                admission is None
+                or admission.allocation_sha256 != allocation.dispatch_sha256
+                or admission.repository_id != allocation.repository_id
+                or len(pending) != 1
+            ):
+                raise ValueError("原停止执行缺少唯一原队列接纳事实, 原现场保留")
+            (item,) = pending
+            step = queue.step(item.id)
+            claims = queue.claims_for_work_item(item.id)
+            if (
+                item.status is not WorkItemStatus.RUNNING
+                or item.role is not AgentRole.CODER
+                or item.attempt != task.attempts
+                or item.checkpoint_sequence != checkpoint.task_revision
+                or step.allocation_sha256 != allocation.dispatch_sha256
+                or len(claims) != 1
+            ):
+                raise ValueError("原停止执行已有后继领取或队列边界变化, 原现场保留")
+            (original,) = claims
+            # Read ACTIVE rows including expired rows. An expired lease is not
+            # stop proof; current original-session emptiness is checked below.
+            active = tuple(
+                lease
+                for lease in queue.list_active_leases(now=datetime.min.replace(tzinfo=UTC))
+                if lease.task_id == task.id
+            )
+            if (
+                len(active) != 1
+                or active[0].id != original.lease.id
+                or active[0].expires_at > datetime.now(UTC)
+                or any(
+                    known.id != item.id
+                    and (
+                        (known.checkpoint_sequence, known.attempt)
+                        >= (item.checkpoint_sequence, item.attempt)
+                        or known.parent_work_item_id == item.id
+                    )
+                    for known in items
+                )
+            ):
+                raise ValueError("原停止执行仍有有效领取或后继所有者, 原现场保留")
+
+            def read_proof() -> StoppedCoderExecutionProof | None:
+                return read_stopped_coder_execution(
+                    task,
+                    item,
+                    step,
+                    expected_scope=expected_scope,
+                    state=state,
+                    route_root=model_route_root(facts.workspace.root),
+                    repository=repository,
+                    queue=queue,
+                    artifacts=FileArtifactStore(
+                        facts.workspace.directory("artifacts"), read_only=True
+                    ),
+                    permissions=permissions,
+                    task_lock=guard,
+                )
+
+            proof = read_proof()
+            if proof is not None and proof.invocation_start.lease_id != original.lease.id:
+                raise ValueError("停止证明未绑定唯一原领取, 原现场保留")
+            if (
+                repository.get(task.id) != task
+                or repository.current_revision(task.id) != checkpoint.task_revision
+                or queue.items_for_task(task.id) != items
+                or queue.step(item.id) != step
+                or queue.claims_for_work_item(item.id) != claims
+                or read_proof() != proof
+                or tuple(
+                    lease
+                    for lease in queue.list_active_leases(now=datetime.min.replace(tzinfo=UTC))
+                    if lease.task_id == task.id
+                )
+                != active
+            ):
+                raise ValueError("原停止执行调查期间事实已变化, 原现场保留")
+            # The entry service appends its fresh checkpoint inside this scope,
+            # then exits before normal Worker acquisition of this same flock.
+            yield proof
 
     def execution_baseline_service(
         self,
