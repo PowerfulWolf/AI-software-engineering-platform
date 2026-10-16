@@ -37,3 +37,63 @@ code等于PROVIDER_UNAVAILABLE就声明transient。先前只修truncated出口�
 
 不追溯改写任何已保存error/transient、Run、stop、retry或审批。历史unknown等待的公开受控结案
 由独立delivery-wait修复处理。无数据库迁移；回滚代码不会删除历史，旧版本会重新引入未知重试。
+
+## Safe main-error detail in future native failures (2026-10-16)
+
+### Scope and signatures
+
+`CodexCliAgentAdapter.run` adds a safe display summary only to its ordinary nonzero provider
+failure's existing `AgentFailure.message`: `; main_error=<JSON string>`. `_safe_cli_failure_detail`
+selects the summary; the decoded string is at most 500 characters. `_failure_diagnostic` retains
+the original cause/rc/two-hashes format, and `_classify_cli_failure` still consumes the original
+invocation. New display text cannot supply retry, transient, refund, stop or approval authority.
+
+### Contracts
+
+Remove the complete exact configured proxy key from the already controlled environment before
+redaction/selection. A configured but unavailable key requires hidden detail. Apply complete
+stderr redaction before selecting a main error so multiline private-key material cannot become
+a fake safe line; apply URL/control/credential cleanup before truncation. Select only complete
+untruncated native main stderr. Never promote stdout, MCP/background logs or arbitrary transcript.
+For main JSON, expose only a string `error.message` or top-level `message`, excluding siblings,
+request, headers, prompt and stack. Missing/incomplete/non-message content returns explicit
+unavailable text. Dirty policy, timeout and guard-abort paths keep their original metadata.
+`safe_diagnostic(text, *, limit=500, exact_secret=None)` also removes a supplied exact key after
+full ANSI/OSC/control/URL normalization and before the final bound. Cleanup can reconstruct a
+split credential; raw-only or post-truncation replacement is insufficient. The default bounded
+behavior remains unchanged. Configured proxy summaries with unresolved escapes are hidden.
+Whitespace/nonprintable configured proxy keys also hide new details because normalization can
+change the credential itself. The existing credential is not modified or rejected for execution.
+
+Existing ModelRouteAttempt and DeliveryInvocationOutcome persist the safe AgentResult through
+their ordinary immutable writes/reopens, with no new Schema/database field. Python
+`team_view.blocker_text._role_failure` and JavaScript `humanizeBlockingText` decode only a JSON
+string marker, bound the text and preserve old Run/hash explanations. Rendering uses text nodes.
+Other model-call cards still show their existing fields; this is the blocking-detail boundary.
+
+### Validation / error matrix
+
+| Input | Required output |
+| --- | --- |
+| Complete main unknown native error | Bounded safe detail, original nontransient classification |
+| JSON error.message/message with prompt/debug siblings | Message only, no sibling body |
+| Proxy key, labeled credential, private key, URL or control bytes | Complete-value redaction before bounds |
+| Missing configured proxy key, stdout/background, truncated/incomplete | Explicit detail unavailable |
+| Dirty/timeout/authority abort | Existing hash-only policy behavior |
+| Reopened route/outcome | Same safe message, original immutable hash/identity checks |
+| Old hash-only blocker / invalid marker / HTML | Old behavior / refuse wrong marker / text-only display |
+
+### Cases, tests and prevention
+
+Good: the actual adapter failure reopens from route/outcome and its safe unknown main error is
+visible in blocking detail. Base: old hash-only failures remain readable but no body is invented.
+Bad: copy whole stderr or a JSON object, guess a missing cause, or let display text refund work.
+Wrong: test only the selector and assume a persisted/UI message survives. Correct: real offline
+native child → adapter → route/outcome reopen, plus Python/Node display regressions, complete
+secret/truncation/provenance negatives and unchanged classifier/privacy tests.
+
+The historical K1 rc1 failures retained only stderr hashes. Neither this fix nor a restart can
+recover those bodies. Preserve their exact records; load the tested code at an idle boundary,
+then use a new exact same-Task PAUSE and separate RESUME only within remaining ordinary budget.
+Future diagnostics establish only their own invocation's cause. No historical backfill or SQL
+repair is needed; rollback preserves published messages/readers and every old failure/approval.

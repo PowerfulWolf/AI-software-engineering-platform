@@ -34,7 +34,7 @@ and failure/recovery presentation. This does not authorize real model replay or 
 StructuredModelError(code: AgentErrorCode, safe_message: str, *, transient: bool,
                      timeout_kind: Literal["local_execution_limit"] | None = None)
 StructuredModelError.with_context(context: str) -> StructuredModelError
-safe_diagnostic(text: str, *, limit: int = 500) -> str
+safe_diagnostic(text: str, *, limit: int = 500, exact_secret: str | None = None) -> str
 provider_error_detail(stderr: str) -> str
 ```
 
@@ -52,6 +52,11 @@ watchdog timeout maps to `MODEL_EXECUTION_LIMIT`. Existing Console Operation
 - Redact complete values before truncating: credentials, URL/DSN, ANSI/control characters;
   Responses must also remove its exact configured API key even if unlabeled in the response.
   Use the shared `redact_text` primitive. Final summary is at most 500 characters.
+- A caller with an exact configured credential may supply `exact_secret`: remove its complete
+  value before cleanup and again after complete ANSI/OSC/control/URL normalization, before the
+  final bound. The default behavior is unchanged. Native Delivery uses this only for its selected
+  safe main diagnostic; see [native failure detail](native-cli-unknown-failure.md). This does not
+  authorize raw provider transcripts or an unbounded diagnostic output mode.
 - Fallback retains existing eligibility and order; the raised error identifies the last failed
   provider/model/reasoning. Knowledge intent/assessment and final role generation add phase
   context. Invalid stage output maps to INVALID_OUTPUT without exposing Pydantic input values.

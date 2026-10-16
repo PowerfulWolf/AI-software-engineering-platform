@@ -7,7 +7,10 @@ predate the Chinese console and leaves identifiers, digests and error codes inta
 
 from __future__ import annotations
 
+import json
 import re
+
+from ai_software_engineer.agents.diagnostics import safe_diagnostic
 
 # The Chinese UI copy intentionally uses full-width punctuation.
 # ruff: noqa: E501, RUF001
@@ -94,6 +97,11 @@ _ROLE_FAILURE = re.compile(
     r"VERIFICATION_INCONCLUSIVE|WORK_INTERRUPTED):\s*)?(?P<role>Coder|QA|Reviewer) failed at attempt "
     r"(?P<attempt>\d+): (?P<detail>.*)$"
 )
+_NATIVE_PROVIDER_FAILURE = re.compile(
+    r"^(?:(?:coder|qa|reviewer) run run_[0-9a-z]+ failed: )?"
+    r"Codex CLI provider execution failed; cause=[A-Z0-9_]+; returncode=-?\d+; "
+    r"stdout_sha256=[0-9a-f]{64}; stderr_sha256=[0-9a-f]{64}$"
+)
 _KNOWLEDGE_FAILURE = re.compile(
     r"^(?:(?:TRANSIENT_INFRA|NONTRANSIENT_INFRA|BUDGET_EXHAUSTED|POLICY_VIOLATION):\s*)?"
     r"(?P<role>coder|qa|reviewer) knowledge "
@@ -147,11 +155,29 @@ def _coder_output_diagnostic(detail: str) -> str | None:
     return reasons.get(rule[1] if rule else "", "开发报告不符合本轮步骤约定，平台未接纳报告")
 
 
+def _native_provider_failure_detail(detail: str) -> tuple[str, str | None]:
+    metadata, marker, encoded = detail.partition("; main_error=")
+    if not marker or _NATIVE_PROVIDER_FAILURE.fullmatch(metadata) is None:
+        return detail, None
+    # The diagnostic is data: exclude it from reason and Run/hash selection even
+    # when malformed, and never expose extra fields after its first JSON value.
+    if not encoded.startswith('"'):
+        return metadata, None
+    try:
+        summary, _ = json.JSONDecoder().raw_decode(encoded)
+    except (ValueError, RecursionError):
+        return metadata, None
+    if not isinstance(summary, str):
+        return metadata, None
+    return metadata, safe_diagnostic(summary) or None
+
+
 def _role_failure(text: str) -> str | None:
     match = _ROLE_FAILURE.fullmatch(text)
     if match is None:
         return None
     role, attempt, detail = match.group("role"), match.group("attempt"), match.group("detail")
+    detail, main_error = _native_provider_failure_detail(detail)
     run_id = re.search(r"\brun_[0-9a-z]+\b", detail)
     digests = re.findall(r"\b[0-9a-f]{64}\b", detail)
     if output_reason := _coder_output_diagnostic(detail):
@@ -211,7 +237,9 @@ def _role_failure(text: str) -> str | None:
         reason = "执行中断后工作区仍有未确认改动，平台已暂停并等待精确恢复审批"
     else:
         reason = "执行失败，原始诊断已封存"
-    facts = [f"执行记录 {run_id.group(0)}"] if run_id else []
+    facts = [f"主错误摘要：{main_error}"] if main_error else []
+    if run_id:
+        facts.append(f"执行记录 {run_id.group(0)}")
     facts.extend(f"证据摘要 {digest}" for digest in digests[:2])
     suffix = "；".join(facts)
     return f"{role} 第 {attempt} 次执行失败：{reason}" + (f"；{suffix}" if suffix else "") + "。"

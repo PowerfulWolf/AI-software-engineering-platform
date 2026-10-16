@@ -270,6 +270,148 @@ def test_localizes_role_failure_and_keeps_run_and_evidence_ids(classification: s
     assert "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" in localized
 
 
+def _native_failure_message(encoded_detail: str) -> str:
+    return (
+        "NONTRANSIENT_INFRA: Coder failed at attempt 2: coder run run_original failed: "
+        "Codex CLI provider execution failed; cause=UNKNOWN_EXIT; returncode=1; "
+        f"stdout_sha256={'a' * 64}; stderr_sha256={'b' * 64}; main_error={encoded_detail}"
+    )
+
+
+def test_native_summary_preserves_reason_run_and_hashes() -> None:
+    summary = '服务错误 "TIMEOUT"; main_error=run_fake ' + "c" * 64
+    localized = localize_blocking_text(_native_failure_message(json.dumps(summary)))
+    assert localized == (
+        "Coder 第 2 次执行失败：Codex CLI 模型服务执行失败"
+        f"；主错误摘要：{summary}；执行记录 run_original"
+        f"；证据摘要 {'a' * 64}；证据摘要 {'b' * 64}。"
+    )
+
+
+@pytest.mark.parametrize("encoded", ('"可展示错误"; extra=hidden', '"可展示错误" "hidden"'))
+def test_native_failure_decodes_only_the_first_json_string(encoded: str) -> None:
+    localized = localize_blocking_text(_native_failure_message(encoded))
+    assert localized is not None
+    assert "主错误摘要：可展示错误" in localized
+    assert "hidden" not in localized
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    ('{"message":"hidden TIMEOUT"}', '["hidden"]', "true", "null", '"unterminated TIMEOUT', '""'),
+)
+def test_native_failure_rejects_malformed_or_nonstring_summary(encoded: str) -> None:
+    localized = localize_blocking_text(_native_failure_message(encoded))
+    assert localized is not None
+    assert "主错误摘要" not in localized
+    assert "hidden" not in localized
+    assert "模型服务或执行器超时" not in localized
+    assert "执行记录 run_original" in localized
+    assert f"证据摘要 {'a' * 64}" in localized
+    assert f"证据摘要 {'b' * 64}" in localized
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    ("[" * 20_000 + "0" + "]" * 20_000, '{"nested":' * 5_000 + "0" + "}" * 5_000),
+    ids=("deep_array", "deep_object"),
+)
+def test_native_failure_rejects_deep_nonstring_summary_without_decoding(encoded: str) -> None:
+    localized = localize_blocking_text(_native_failure_message(encoded))
+    assert localized is not None
+    assert "主错误摘要" not in localized
+    assert "执行记录 run_original" in localized
+    assert f"证据摘要 {'a' * 64}" in localized
+    assert f"证据摘要 {'b' * 64}" in localized
+
+
+def test_native_failure_redacts_complete_summary_before_bounding_it() -> None:
+    summary = (
+        "错误\x1b[31m\nAuthorization: Bearer secret_token\nhttps://user:password@example.com/path "
+        + "长" * 550
+    )
+    localized = localize_blocking_text(_native_failure_message(json.dumps(summary)))
+    assert localized is not None
+    safe_summary = localized.split("；主错误摘要：", 1)[1].split("；执行记录", 1)[0]
+    assert len(safe_summary) == 500
+    assert safe_summary.endswith("…")
+    assert "secret_token" not in localized
+    assert "password" not in localized
+    assert "\x1b" not in localized
+    assert "\n" not in localized
+
+
+def test_browser_and_reader_agree_on_native_safe_failure_summary() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for browser wording parity")
+    app = Path(__file__).parents[2] / "src/ai_software_engineer/team_view/app.js"
+    encoded_summaries = [
+        json.dumps('服务错误 "TIMEOUT"; main_error=run_fake ' + "c" * 64),
+        json.dumps("Coder requested continuation after the configured run budget"),
+        json.dumps("QA verification could not complete in the current environment"),
+        json.dumps("failed Coder identity is missing, unsafe or ambiguous"),
+        '"可展示错误"; extra=hidden',
+        '{"message":"hidden TIMEOUT"}',
+        '"unterminated TIMEOUT',
+        json.dumps("长" * 550),
+    ]
+    messages = [_native_failure_message(value) for value in encoded_summaries]
+    script = r"""
+const fs = require("node:fs"), vm = require("node:vm");
+const context = vm.createContext({document: {getElementById: () => ({addEventListener() {}})}});
+const source = fs.readFileSync(process.argv[1], "utf8");
+vm.runInContext(source.slice(0, source.indexOf('for (const target of ["team"')), context);
+context.messages = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(vm.runInContext("messages.map(humanizeBlockingText)", context)));
+"""
+    result = subprocess.run(
+        (node, "-e", script, str(app)),
+        input=json.dumps(messages),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    assert json.loads(result.stdout) == [localize_blocking_text(value) for value in messages]
+
+
+@pytest.mark.parametrize(
+    "summary",
+    (
+        "Coder requested continuation after the configured run budget",
+        "QA verification could not complete in the current environment",
+        "failed Coder identity is missing, unsafe or ambiguous",
+    ),
+)
+def test_browser_preserves_native_failure_already_localized_by_reader(summary: str) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for browser wording parity")
+    localized = localize_blocking_text(_native_failure_message(json.dumps(summary)))
+    assert localized is not None
+    # The reader also prefixes localized wait detail with its static reason.
+    messages = [localized, "当前交付已暂停，历史与工作现场保留。 " + localized]
+    app = Path(__file__).parents[2] / "src/ai_software_engineer/team_view/app.js"
+    script = r"""
+const fs = require("node:fs"), vm = require("node:vm");
+const context = vm.createContext({document: {getElementById: () => ({addEventListener() {}})}});
+const source = fs.readFileSync(process.argv[1], "utf8");
+vm.runInContext(source.slice(0, source.indexOf('for (const target of ["team"')), context);
+context.messages = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(vm.runInContext("messages.map(humanizeBlockingText)", context)));
+"""
+    result = subprocess.run(
+        (node, "-e", script, str(app)),
+        input=json.dumps(messages),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    assert json.loads(result.stdout) == messages
+
+
 def test_localizes_nontransient_knowledge_failure_without_inventing_a_diagnosis() -> None:
     assert (
         localize_blocking_text(

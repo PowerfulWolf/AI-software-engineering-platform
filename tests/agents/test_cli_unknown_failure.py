@@ -57,4 +57,4 @@ def test_unknown_failure_is_preserved_by_actual_adapter_without_credential_guess
     assert result.error.code is AgentErrorCode.PROVIDER_UNAVAILABLE
     assert not result.error.transient
     assert "AUTHENTICATION" not in result.error.message
-    assert "unclassified native exit" not in result.error.message
+    assert 'main_error="Error: unclassified native exit"' in result.error.message

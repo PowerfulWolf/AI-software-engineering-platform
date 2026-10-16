@@ -1077,6 +1077,7 @@ def test_dirty_failure_preserves_safe_diagnostics_without_enabling_retry(
     assert f"cause={cause}" in result.error.message
     assert hashlib.sha256(private.encode()).hexdigest() in result.error.message
     assert private not in result.model_dump_json()
+    assert "main_error=" not in result.error.message
     assert len(result.error.message) < 400
     assert _git(root, "rev-parse", "HEAD") == base
     assert (root / "src" / "partial.py").read_text() == "partial = True\n"

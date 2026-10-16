@@ -4549,6 +4549,31 @@ function requestBlockingSummary(request) {
     suggestedAction,
   };
 }
+function nativeProviderFailureDetail(detail) {
+  const marker = "; main_error=";
+  const index = detail.indexOf(marker);
+  const metadata = index < 0 ? detail : detail.slice(0, index);
+  if (index < 0 || !/^(?:(?:coder|qa|reviewer) run run_[0-9a-z]+ failed: )?Codex CLI provider execution failed; cause=[A-Z0-9_]+; returncode=-?\d+; stdout_sha256=[0-9a-f]{64}; stderr_sha256=[0-9a-f]{64}$/.test(metadata))
+    return {detail, summary: null};
+  // Published summaries are redacted by the adapter. Decode only their first
+  // JSON string, keep them out of reason/metadata selection and render as text.
+  const token = detail.slice(index + marker.length).match(/^"(?:[^"\\]|\\.)*"/);
+  if (!token) return {detail: metadata, summary: null};
+  try {
+    const decoded = JSON.parse(token[0]);
+    const characters = Array.from(decoded.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim());
+    const summary = characters.length > 500 ? characters.slice(0, 499).join("") + "…" : characters.join("");
+    return {detail: metadata, summary: summary || null};
+  } catch {
+    return {detail: metadata, summary: null};
+  }
+}
+function isLocalizedNativeProviderFailure(text) {
+  // The reader may prefix its already-localized detail with a static wait
+  // reason. Preserve that complete display value without re-reading summary
+  // prose as another blocker. The fixed native reason and both hashes must fit.
+  return /(?:^| )(?:Coder|QA|Reviewer) 第 \d+ 次执行失败：(?:Codex CLI 模型服务执行失败|模型服务认证失败，当前阶段未完成|模型服务触发限流，当前阶段未完成|模型服务或执行器超时，当前阶段未完成)；主错误摘要：[^\r\n]+；(?:执行记录 run_[0-9a-z]+；)?证据摘要 [0-9a-f]{64}；证据摘要 [0-9a-f]{64}。$/.test(text);
+}
 function humanizeBlockingText(value) {
   const text = String(value || "").trim();
   if (!text) return "暂未记录具体原因。";
@@ -4616,21 +4641,27 @@ function humanizeBlockingText(value) {
     ARTIFACT_VALIDATION: "角色产物未通过完整性校验，平台拒绝推进阶段；请保留原记录并按失败原因恢复。",
   };
   if (Object.prototype.hasOwnProperty.call(exact, text)) return exact[text];
+  if (isLocalizedNativeProviderFailure(text)) return text;
+  const roleFailure = text.match(
+    /^(?:(?:TRANSIENT_INFRA|NONTRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|VERIFICATION_INCONCLUSIVE|WORK_INTERRUPTED):\s*)?(Coder|QA|Reviewer) failed at attempt (\d+): (.*)$/,
+  );
+  const nativeFailure = roleFailure ? nativeProviderFailureDetail(roleFailure[3]) : null;
+  const classificationText = nativeFailure && nativeFailure.detail !== roleFailure[3] ? nativeFailure.detail : text;
   if (
-    text.includes("Coder requested continuation after the configured run budget")
+    classificationText.includes("Coder requested continuation after the configured run budget")
   )
     return "Coder 已用完本轮连续执行次数，但实现尚未完成，需要创建恢复任务后继续。";
   if (
-    text.includes(
+    classificationText.includes(
       "QA verification could not complete in the current environment",
     )
   )
     return "QA 未能在当前环境完成验证；候选代码已保留，继续交付时只会重新执行 QA/Review。";
   if (
-    text.includes(
+    classificationText.includes(
       "failed Coder identity is missing, unsafe or ambiguous",
     ) ||
-    text.includes(
+    classificationText.includes(
       "recoverable Coder identity is missing, unsafe or ambiguous",
     )
   )
@@ -4648,11 +4679,8 @@ function humanizeBlockingText(value) {
       return `代码仓库 ${repository[1]} 已阻塞；计划阶段校验失败（INVARIANT_VIOLATION），Planner 已安全停止。`;
     return `代码仓库 ${repository[1]} 已阻塞；请检查该仓库的交付检查点。`;
   }
-  const roleFailure = text.match(
-    /^(?:(?:TRANSIENT_INFRA|NONTRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|VERIFICATION_INCONCLUSIVE|WORK_INTERRUPTED):\s*)?(Coder|QA|Reviewer) failed at attempt (\d+): (.*)$/,
-  );
   if (roleFailure) {
-    const detail = roleFailure[3];
+    const detail = nativeFailure.detail;
     const reason = coderOutputDiagnostic(detail) || (detail.startsWith("工程执行已中断。草稿已保留。")
       ? "工程执行中断，草稿已保留，由工程团队核对并处理"
       : detail.includes("candidate review prompt exceeds its configured Context budget")
@@ -4690,7 +4718,7 @@ function humanizeBlockingText(value) {
         : "执行失败，原始诊断已封存");
     const run = detail.match(/\brun_[0-9a-z]+\b/);
     const digests = [...detail.matchAll(/\b[0-9a-f]{64}\b/g)].slice(0, 2).map((item) => item[0]);
-    const facts = [run?.[0] ? `执行记录 ${run[0]}` : "", ...digests.map((digest) => `证据摘要 ${digest}`)]
+    const facts = [nativeFailure.summary ? `主错误摘要：${nativeFailure.summary}` : "", run?.[0] ? `执行记录 ${run[0]}` : "", ...digests.map((digest) => `证据摘要 ${digest}`)]
       .filter(Boolean);
     return `${roleFailure[1]} 第 ${roleFailure[2]} 次执行失败：${reason}${facts.length ? `；${facts.join("；")}` : ""}。`;
   }

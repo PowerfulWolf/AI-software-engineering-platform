@@ -6,13 +6,19 @@ import re
 from ai_software_engineer.redaction import redact_text
 
 
-def safe_diagnostic(text: str, *, limit: int = 500) -> str:
+def safe_diagnostic(text: str, *, limit: int = 500, exact_secret: str | None = None) -> str:
     """Clean complete values before truncating, including credential-bearing URLs."""
+    if exact_secret:
+        text = text.replace(exact_secret, "[REDACTED:api_key]")
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
     text = re.sub(r"\x1b\][^\x07]*(?:\x07|\x1b\\)", "", text)
     text = redact_text(text).text
     text = re.sub(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s<>\"']+", "[REDACTED:URL]", text)
     text = " ".join("".join(c if c.isprintable() else " " for c in text).split())
+    if exact_secret:
+        # Removing terminal formatting can join pieces of a configured secret.
+        # Remove the complete reconstructed value before any truncation.
+        text = text.replace(exact_secret, "[REDACTED:api_key]")
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 

@@ -30,6 +30,7 @@ from ai_software_engineer.agents.continuation import (
     continuation_preview,
     native_stop_recorder,
 )
+from ai_software_engineer.agents.diagnostics import safe_diagnostic
 from ai_software_engineer.agents.execution import (
     ExecutionAbortReason,
     ExecutionAuthorityLost,
@@ -587,6 +588,7 @@ class CodexCliAgentAdapter:
         self._prepared_inputs: dict[str, _PreparedNativeInput] = {}
         self._executable = executable
         self._proxy_overrides = codex_cli_proxy_overrides(proxy_base_url, proxy_api_key_env)
+        self._proxy_api_key_env = proxy_api_key_env
         self._reasoning_effort = reasoning_effort
         source_environment = environment if environment is not None else os.environ
         self._environment = _filtered_environment(source_environment)
@@ -982,7 +984,21 @@ class CodexCliAgentAdapter:
                 return _failure(
                     request,
                     code,
-                    "Codex CLI provider execution failed; " + _failure_diagnostic(invocation),
+                    "Codex CLI provider execution failed; "
+                    + _failure_diagnostic(invocation)
+                    + "; main_error="
+                    + json.dumps(
+                        _safe_cli_failure_detail(
+                            invocation,
+                            proxy_key_required=self._proxy_api_key_env is not None,
+                            proxy_key=(
+                                self._environment.get(self._proxy_api_key_env)
+                                if self._proxy_api_key_env is not None
+                                else None
+                            ),
+                        ),
+                        ensure_ascii=False,
+                    ),
                     transient=transient,
                     duration_ms=_elapsed_ms(started),
                 )
@@ -2231,6 +2247,81 @@ def _failure_diagnostic(invocation: CodexInvocationResult) -> str:
         f"stdout_sha256={hashlib.sha256(invocation.stdout.encode()).hexdigest()}; "
         f"stderr_sha256={hashlib.sha256(invocation.stderr.encode()).hexdigest()}"
     )
+
+
+def _safe_cli_failure_detail(
+    invocation: CodexInvocationResult,
+    *,
+    proxy_key_required: bool = False,
+    proxy_key: str | None = None,
+) -> str:
+    """Preserve selected safe prose without granting failure or retry authority."""
+    unavailable = "未获得可安全展示的原生主错误详情"
+    if proxy_key_required and not proxy_key:
+        return unavailable
+    if proxy_key and any(
+        character.isspace() or not character.isprintable() for character in proxy_key
+    ):
+        # Normalization can change the configured value itself. Preserve only
+        # metadata when its exact reconstruction cannot be safely redacted.
+        return unavailable
+    if invocation.stderr_truncated or len(invocation.stderr) > _STREAM_LIMIT:
+        return unavailable
+    original = _select_main_cli_failure_diagnostic(invocation.stderr)
+    if not original.complete or not original.text:
+        return unavailable
+    # Never split multiline credentials before redaction, or retain an unlabeled
+    # configured proxy key. The original stderr remains hash-only in metadata.
+    stderr = (
+        invocation.stderr.replace(proxy_key, "[REDACTED:api_key]")
+        if proxy_key
+        else invocation.stderr
+    )
+    selected = _select_main_cli_failure_diagnostic(redact_text(stderr).text)
+    if not selected.complete or not selected.text:
+        return unavailable
+    lines = selected.text.splitlines()
+    main = re.match(r"^(?:error|fatal)\s*:\s*(.*)$", lines[0], re.IGNORECASE)
+    first = main[1] if main is not None else lines[0]
+    object_start = first.find("{")
+    json_text = None
+    if object_start >= 0:
+        # Providers also embed response objects after a main status prefix.
+        json_text = "\n".join((first[object_start:], *lines[1:]))
+    else:
+        if re.search(r'\[\s*(?:["{\[\]\d-]|true\b|false\b|null\b)', first):
+            return unavailable
+        for index, line in enumerate(lines[1:], start=1):
+            if line.lstrip().startswith("{"):
+                json_text = "\n".join(lines[index:])
+                break
+    if json_text is not None:
+        try:
+            payload = json.loads(json_text)
+        except (ValueError, RecursionError):
+            return unavailable
+        if not isinstance(payload, dict):
+            return unavailable
+        error = payload.get("error")
+        message = error.get("message") if isinstance(error, dict) else None
+        if not isinstance(message, str):
+            message = payload.get("message")
+        if not isinstance(message, str):
+            return unavailable
+        if proxy_key:
+            # JSON may have escaped the configured value in the original text.
+            message = message.replace(proxy_key, "[REDACTED:api_key]")
+        detail = message
+    else:
+        # Continuations establish classification provenance, but arbitrary extra
+        # fields, tracebacks and transcripts are never displayed.
+        detail = lines[0]
+    if proxy_key_required and "\\" in detail:
+        # Arbitrary/nested JSON escaping can encode any subset of a credential.
+        # Without a completely decoded value, fail closed rather than enumerate
+        # a few encodings or normalize away the evidence of an encoded secret.
+        return unavailable
+    return safe_diagnostic(detail, limit=500, exact_secret=proxy_key) or unavailable
 
 
 def _process_text(value: str | bytes | None) -> str:
