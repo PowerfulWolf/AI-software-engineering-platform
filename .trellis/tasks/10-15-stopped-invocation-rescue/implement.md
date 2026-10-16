@@ -95,3 +95,53 @@ refusal. The real Chrome test reads/approves three native-rule changes and overl
 with fresh full-plan reading, then observes one original PAUSE intent. No durable operation or
 approval migration is required. Production assets are cached by transport construction; deploy this
 follow-up only at a safe maintenance boundary, then refresh the original Requirement.
+
+
+## Terminal route discovery correction (2026-10-15)
+
+The next real K1 call sealed a complete stopped failure, but terminal discovery rejected an
+unrelated empty Run container before selecting that actual failure. A real-file regression
+reproduced the same `empty model route directory` exception: 4 failed, 13 passed before the
+patch. The reader now validates each Run identity/type, skips only physically zero-entry
+containers and retains every sealed-record/uniqueness check plus the original `_inspect`.
+Unknown nonempty entries, temporary publications, damaged records and ambiguous candidates
+still fail closed. No route or invocation history is removed or reconstructed.
+
+Independent review found no production-code issue. Its documentation finding was corrected:
+source discovery is not stop/workspace or exact-recovery approval. Those remain separate
+checks in the recovery services. Public scope fixtures must use actual native process/capture
+facts; the old scripted `POLICY_VIOLATION` result is insufficient under the current terminal
+workspace contract and correctly fails with missing continuation records.
+
+### Native public recovery fixture contract
+
+`_OutOfScopeInterruptedFactory` now derives from the configured delivery factory and preserves
+its backend-installed Worker guard, baseline verifiers and interruption control through factory
+cloning. A private local executable replaces only the external model; it runs through the actual
+native subprocess runner. The Coder writes the omitted draft and exits unsuccessfully, allowing
+the adapter to seal the real owned-session-empty stop, capture start/stop and policy violation.
+The public scope and plan approvals must produce a workspace snapshot bound to that exact Run;
+a manufactured failure result or a mocked snapshot cannot substitute for these facts.
+
+The same private executable must be configured on the Host `ProductionConfig`, because claimed
+knowledge preparation builds its own structured client before the delivery adapter runs. For
+`KnowledgeIntent`, the executable reads the actual `--output-schema` and writes the legal
+`{"queries": []}` response to `--output-last-message` without changing the worktree. This keeps
+the real admission, process observation and returned knowledge outcome. Overriding only the
+delivery factory leaves knowledge pointed at a real provider and makes the fixture depend on
+host credentials. The native Coder output schema is an object wrapper around the artifact union
+and has no top-level `title`; fixture dispatch must use `schema.get("title")`, not index it.
+
+The real MySQL run has passed the exact-scope case and the joint successful recovery case
+(`2 passed in 187.32s`), including distinct Coder, QA and Reviewer claims and preserved empty
+route containers. The remaining joint interruption/knowledge-wait parameters are validated
+separately by the root task. These fixture corrections do not relax production gates.
+
+The full configured fixture also preserves its delegate across all seven `with_*` factory
+clone seams and initial seed admission. Repeated interruption uses the same observed native
+execution path. Coder progress partitions the actual `request.work_slice`, retaining prior
+completed steps and declaring selected/later work unfinished. Before explicit wait attachment,
+GET keeps DELIVERING and projects the real released knowledge wait separately; the regression
+checks its exact queue, Task, role, attempt, source and public pending gap instead of expecting
+a read request to mutate the parent checkpoint. All five targeted public scope/current-main/
+interruption/Coder-wait/QA-wait scenarios now have final passing isolated-MySQL results.

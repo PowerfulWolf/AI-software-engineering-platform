@@ -131,3 +131,76 @@ invocation-start/outcome, so their role, Task and creation cause remain unknown;
 be attributed to the two historical UNKNOWN Coder Runs (those have no route directory at all).
 The latest attempt 5 has one genuine sealed route and outcome. No container or data was
 deleted or repaired. Regression and correction are in progress.
+
+
+## Empty-route discovery deployed (2026-10-16)
+
+Maintenance `774e0a6` was independently reviewed, passed the 17-case real-file discovery
+regression and expanded offline validation, and was fast-forwarded/pushed to main. The public
+latest-main scope-to-plan/full-success fixture also passed using real owned native stop facts.
+Three older interrupted/knowledge-wait fixture variants remain under separate fixture repair;
+no production checks were relaxed to accept their missing facts or discarded adapter config.
+
+Controlled service restart reported all operations/writes saved and executors/index finished,
+then replaced the service with PID 96526. Public Console is normal, delivery-ready, contract 9.
+The registered clean repository main was fetched and fast-forwarded to the same maintenance
+revision. The retained Coder worktree was not modified. All 120 pre-deployment immutable
+invocation, continuation and route file SHA-256 values remained identical after deployment.
+
+Public inspection `operation_f41269b02b9bc430cc01c59cf968baa5` was submitted without scope or
+plan approval against parent checkpoint `5719dc0f8ba2de24a8d642ce5c15055059f1741bde9ad07e945d45f0cdbf25e7`.
+It must return actual exact scope facts before any delegated approval is submitted. No empty
+historical container was deleted, no stop/outcome was fabricated and no terminal Task reset.
+
+
+The deployed discovery passed through the original full source checks and public inspection
+returned `coder_scope` for exactly `src/ai_software_engineer/learning_collection/__init__.py`.
+Scope digest `60166e92b269e1467d9e367062750897afad97502f3d8f7929df21fca75aafd8`
+was approved under the user's delegated engineering approval via
+`operation_7bc592e9d9e853359dc1ee8934fbf438`; the original failure remains unchanged.
+The operation completed at 2026-10-16T02:04:56.985227Z, preparing (without executing)
+recovery plan `622f711324450abfffedc2a8d696e2dea70d2794a870452926d7267b8e6e553d`.
+
+Plan inspection independently validated the typed digest and all 16 complete file bodies against
+current retained worktree SHA-256 values. It binds source Task revision 6, original Product
+approval/base `5f38922cd5cb9f236170f7edbd0ccb6f0ba6194b`, effective execution base `8adfe68`,
+real run739 native stop/outcome and complete 2810-entry workspace snapshot
+`8eb22c889c812f68a125b2f5784bff2b898f69f574303e34075fe2811849feef`.
+Target is clean registered main `774e0a6fcc920d9a6ce3738e80b9cc43045be7eb`, branch
+`ai/feature/project-delivery-learning-loop-recovery`; no main-update path overlaps any retained
+file. Source/target permissions include only the approved exact supplement; no protected rule
+writes, merge or state capability. Target authorization copies the source frozen retry budget;
+QA and Review remain independent. The plan is awaiting its separate exact approval.
+
+
+The independent read-only plan audit reconstructed every patch hunk from effective base8adfe68,
+matched all 16 body bytes and all 2810 current inventory entries, checked the original upstream
+checkpoint/artifact SHAs and source frozen permissions/budget, and verified target clean main
+and native-rule diffs. No issue prevented exact approval. The audit did not independently query
+SQL claim/event digests; the public approval continues to enforce the full current native gate.
+
+Separate plan approval/execution `operation_fe9537edf2d6a5a5fb185326c4f870f3` was submitted through
+public CONTINUE against the unchanged parent checkpoint under the user's delegated approval.
+It was RUNNING at 2026-10-16T02:10:23.971804Z. Successful operation submission does not establish
+Coder invocation, candidate or DONE. Record actual claim/Run and delivery results when sealed.
+
+## Approved terminal recovery preparation progress (2026-10-16)
+
+The exact authorization was persisted at 02:14:09Z and the sealed NEW recovery Task input at
+02:16:05Z. A read-only consistent SQL observation at 02:25Z found neither dispatch nor SQL Task.
+The next observation confirmed committed dispatch
+`dispatch_commit_622f711324450abfffedc2a8d696e2dea70d2794a870452926d7267b8e6e553d`,
+SHA `4daf9dfa45e0527e14ee73c64c77a769c618f1dddae074205afe91b9ebf74b3a`, with
+`committed_at=2026-10-16T02:25:43.501204Z`; its observer marker was published at 02:27:46Z.
+Recovery Task identity is `task_recovery_622f711324450abfffedc2a8d696e2de`, exact source
+`774e0a6fcc920d9a6ce3738e80b9cc43045be7eb`. The SQL Task was not yet materialized at this
+observation; seed verification and actual claimed/native execution remain to be established.
+
+During this preparation the service remained active (observed CPU 81.1%, later 49.9%) without
+new error logs. Independent static tracing found repeated full current-fact validation: five
+facts inspections before authorization and twelve more from sealed Task to dispatch. Each
+inspection still performs complete source/target/terminal and workspace checks. This explains
+a costly path, but is not a measured per-stage timing allocation or permission to cache mutable
+current/READY facts. No service restart, target main update or gate change was made while this
+exact operation was running. All 120 pre-deployment immutable history file hashes were checked
+again at 02:23Z and remained identical. Record later seed/claim/native results below.

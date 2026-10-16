@@ -189,3 +189,44 @@ actually complete. Never treat a passing directory test as complete delivery val
 - The isolated six-line reader change, 17 real-file regressions and source/target approval contract
   are independently reviewed and ready for idle deployment. Follow-up fixture work remains in
   the maintenance branch for separate review/commit; its pending tests are not reported as passed.
+
+
+## Parameterized fixture completion follow-up (2026-10-16)
+
+Independent read-only review traced the three remaining variants to two old fixture gaps:
+synthetic successor failures had no native continuation records, and inherited configured
+factory clone methods discarded the wrapper delegate. The corrected fixture keeps the entire
+configured factory through seven clone seams and initial seed admission. A private observed
+Knowledge CLI handles actual INPUT JSON and exact recovery Task/role/progress controls. No
+source/snapshot/claim/approval gate is mocked. Independent actual private-process smoke covered
+seven knowledge branches, Assessment GAP and both initial/seeded native failures; Ruff/format
+passed and no new mypy issue was introduced. Root owns the serial isolated-MySQL rerun.
+
+
+- Corrected three-variant public DB rerun: **2 passed, 1 failed in 614.42s**. Repeated
+  terminal native recovery and QA knowledge-wait recovery passed. Coder knowledge-wait now
+  reached the real progress gate and failed the old hardcoded `finish_change` step ID:
+  `CoderSliceRejected: progress must partition the exact complete approved step set`.
+  The fixture now copies `request.work_slice.completed_step_ids` and the exact selected+later
+  partition; offline replay of the real saved invocation reproduces RED then validates GREEN.
+  Only that final parameter is rerun; all production step/QA/Review checks remain unchanged.
+
+- The next single Coder-knowledge run passed the real progress partition gate, then failed
+  at the old pre-attachment read projection assertion: **1 failed in 232.30s**. Durable facts
+  contained the actual attempt-2 KnowledgeIntent/Assessment GAP and released WAITING_HUMAN
+  queue item. Current read-side contract preserves DELIVERING before explicit Continue attaches
+  that gap, and separately projects its execution wait. The fixture now checks that exact stage,
+  waiting responsibility/reason, sole current Coder attempt-2 queue, absent live lease, and the
+  public pending-knowledge reader's exact Task/role/source/gap binding. Post-Continue persisted
+  WAITING_HUMAN, unchanged invocation, no repeated Coder and eventual QA/Review/DONE assertions
+  remain. Independent review found no issue and five existing offline projection checks passed.
+  The intermediate failed run is not reported as green.
+
+- Final isolated-MySQL Coder knowledge-wait rerun: **1 passed in 231.94s**. This traversed
+  the genuine attempt-2 gap, read-only pre-attachment projection, fresh Host Continue attachment,
+  exact knowledge resolution approval and independent Coder/QA/Review to DONE without replaying
+  the original invocation. Together with the already passed exact-scope/full-success pair and
+  repeated-interruption/QA-wait pair, all five targeted public scenarios have final passing
+  results. Independent read-only review accepted both the actual work-slice partition and
+  current projection assertions. Ruff, format and diff checks passed; strict mypy has the same
+  13 independently verified pre-existing full-file errors and no new finding in the fixture diff.

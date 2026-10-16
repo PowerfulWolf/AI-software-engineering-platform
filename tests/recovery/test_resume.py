@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from collections.abc import Callable, Mapping
 from datetime import timedelta
 from pathlib import Path
@@ -18,12 +19,19 @@ from ai_software_engineer.agents import (
     AgentRequest,
     AgentResult,
     AgentRunStatus,
+    CodexCliAgentAdapter,
     StoredContextResolver,
     StructuredModelResult,
 )
+from ai_software_engineer.agents.continuation import CoderInterruptionControl
 from ai_software_engineer.agents.execution import ExecutionGuard
+from ai_software_engineer.agents.workspace_admission import (
+    FirstCoderRunWorkspaceAdmission,
+    InitialWorkspaceAdmission,
+)
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import FileContextStore
+from ai_software_engineer.context.execution_baseline import ExecutionBaselineContextVerifier
 from ai_software_engineer.domain import (
     AgentDefinition,
     AgentRole,
@@ -32,10 +40,12 @@ from ai_software_engineer.domain import (
     QaReportArtifact,
     QaReportStatus,
     TaskStatus,
+    WorkItemStatus,
 )
 from ai_software_engineer.domain.artifact import Evidence, QaTestRun
 from ai_software_engineer.domain.enums import EvidenceType, QaTestStatus
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, TransientRetryPolicy
+from ai_software_engineer.git.candidate_commit import CandidateCommitSkill
 from ai_software_engineer.knowledge.gaps import KnowledgeGap
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
@@ -48,6 +58,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
+from ai_software_engineer.manager.native_verification import RegisteredNativePythonVerifier
 from ai_software_engineer.manager.production_delivery import (
     ConfiguredDeliveryRouteAdapterFactory,
     DeliveryRouteAdapterFactory,
@@ -66,6 +77,7 @@ from ai_software_engineer.recovery.resume import (
     JointDeliveryResumeResult,
 )
 from ai_software_engineer.recovery.seed import RecoverySeedService
+from ai_software_engineer.recovery.verification_execution import VerificationEvidenceProvider
 from ai_software_engineer.recovery.verification_native import NativeCandidateSourceReader
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
@@ -555,6 +567,11 @@ class _SeededInterruptedRecoveryFactory(DeliveryRouteAdapterFactory):
         return _SeededInterruptedRecoveryAdapter(self._seed, binding.worktree.path)
 
 
+class _SeededNativeInterruptedRecoveryFactory(ConfiguredDeliveryRouteAdapterFactory):
+    def __init__(self, seed: RecoverySeedService) -> None:
+        super().__init__(initial_workspace_admission=FirstCoderRunWorkspaceAdmission(seed))
+
+
 class _SeededCompleteRecoveryAdapter(AgentAdapter):
     def __init__(
         self, seed: RecoverySeedService, definition: AgentDefinition, workspace: Path
@@ -588,46 +605,99 @@ class _SeededCompleteRecoveryFactory(DeliveryRouteAdapterFactory):
 
 
 class _OutOfScopeInterruptedAdapter(AgentAdapter):
-    def __init__(self, owner: _OutOfScopeInterruptedFactory, workspace: Path) -> None:
+    def __init__(
+        self, owner: _OutOfScopeInterruptedFactory, delegate: CodexCliAgentAdapter
+    ) -> None:
         self._owner = owner
-        self._workspace = workspace
+        self._delegate = delegate
+
+    def prepare_input(self, request: AgentRequest) -> None:
+        self._delegate.prepare_input(request)
+
+    def discard_prepared_input(self, request: AgentRequest) -> None:
+        self._delegate.discard_prepared_input(request)
 
     def run(self, request: AgentRequest) -> AgentResult:
         assert request.role is AgentRole.CODER
         self._owner.requests.append(request)
-        (self._workspace / "omitted.txt").write_text("retained work\n", encoding="utf-8")
-        return AgentResult(
-            run_id=request.run_id,
-            task_id=request.task_id,
-            role=request.role,
-            attempt=request.attempt,
-            source_revision=request.source_revision,
-            context_manifest_id=request.context_manifest_id,
-            status=AgentRunStatus.FAILED,
-            error=AgentFailure(
-                code=AgentErrorCode.POLICY_VIOLATION,
-                message="Coder worktree changes violated the machine policy: omitted.txt",
-                transient=False,
-            ),
-        )
+        return self._delegate.run(request)
 
 
-class _OutOfScopeInterruptedFactory(DeliveryRouteAdapterFactory):
-    def __init__(self) -> None:
+class _OutOfScopeInterruptedFactory(ConfiguredDeliveryRouteAdapterFactory):
+    def __init__(self, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        super().__init__()
         self.requests: list[AgentRequest] = []
+        executable = root / "out-of-scope-codex"
+        self.executable = str(executable)
+        self.knowledge_control = root / "native-knowledge-control.json"
+        self.configure_knowledge_gap(None)
+        executable.write_text(
+            f"#!{sys.executable}\n"
+            "from pathlib import Path\n"
+            "import json\n"
+            "import sys\n"
+            "schema_path = Path(sys.argv[sys.argv.index('--output-schema') + 1])\n"
+            "schema = json.loads(schema_path.read_text())\n"
+            "if schema.get('title') in ('KnowledgeIntent', 'KnowledgeAssessment'):\n"
+            "    prompt = sys.stdin.read()\n"
+            "    payload = json.loads(prompt.rsplit('\\nINPUT=', 1)[1])\n"
+            "    binding = payload['binding']\n"
+            f"    control = json.loads(Path({str(self.knowledge_control)!r}).read_text())\n"
+            "    gap = (control['enabled'] and binding['task_id'].startswith('task_recovery_')\n"
+            "           and binding['role'] == control['role']\n"
+            "           and (control['role'] != 'coder' or control['coder_progress']))\n"
+            "    response = ({'queries': ['独立验收前提'] if gap else []}\n"
+            "                if schema['title'] == 'KnowledgeIntent' else\n"
+            "                {'status': 'GAP', 'gap_question': '请确认测试前提。'})\n"
+            "    assert schema['title'] == 'KnowledgeIntent' or gap\n"
+            "    output = Path(sys.argv[sys.argv.index('--output-last-message') + 1])\n"
+            "    output.write_text(json.dumps(response), encoding='utf-8')\n"
+            "    raise SystemExit(0)\n"
+            "if Path('omitted.txt').exists():\n"
+            "    Path('hello.txt').write_text('partially implemented\\n', encoding='utf-8')\n"
+            "else:\n"
+            "    Path('omitted.txt').write_text('retained work\\n', encoding='utf-8')\n"
+            "sys.stderr.write('error: authentication failure in offline fixture\\n')\n"
+            "raise SystemExit(1)\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
+        create = ConfiguredDeliveryRouteAdapterFactory.create
 
-    def create(
-        self,
-        *,
-        route: ProviderRouteConfig,
-        definition: AgentDefinition,
-        binding: RoleWorktreeBinding,
-        context_resolver: StoredContextResolver,
-        config: ProductionConfig,
-        environment: Mapping[str, str],
-    ) -> AgentAdapter:
-        del route, definition, context_resolver, config, environment
-        return _OutOfScopeInterruptedAdapter(self, binding.worktree.path)
+        def native(
+            factory: ConfiguredDeliveryRouteAdapterFactory,
+            *,
+            route: ProviderRouteConfig,
+            definition: AgentDefinition,
+            binding: RoleWorktreeBinding,
+            context_resolver: StoredContextResolver,
+            config: ProductionConfig,
+            environment: Mapping[str, str],
+        ) -> AgentAdapter:
+            # Backend-installed Worker guard and interruption control remain on
+            # the cloned Configured factory. Only the external model is offline;
+            # the actual owned process, native stop and capture are production.
+            delegate = create(
+                factory,
+                route=route,
+                definition=definition,
+                binding=binding,
+                context_resolver=context_resolver,
+                config=config.model_copy(update={"codex_executable": str(executable)}),
+                environment=environment,
+            )
+            assert isinstance(delegate, CodexCliAgentAdapter)
+            return _OutOfScopeInterruptedAdapter(self, delegate)
+
+        monkeypatch.setattr(ConfiguredDeliveryRouteAdapterFactory, "create", native)
+
+    def configure_knowledge_gap(
+        self, role: str | None, *, enabled: bool = False, coder_progress: bool = False
+    ) -> None:
+        self.knowledge_control.write_text(
+            json.dumps({"role": role, "enabled": enabled, "coder_progress": coder_progress}),
+            encoding="utf-8",
+        )
 
 
 class _KnowledgeFixtureAdapter(AgentAdapter):
@@ -677,12 +747,61 @@ class _KnowledgeFixtureAdapter(AgentAdapter):
 class _KnowledgeFixtureFactory(ConfiguredDeliveryRouteAdapterFactory):
     """Use real knowledge/queue composition with explicitly offline delivery tools."""
 
-    def __init__(self, delegate: DeliveryRouteAdapterFactory) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        delegate: DeliveryRouteAdapterFactory,
+        configured: ConfiguredDeliveryRouteAdapterFactory | None = None,
+    ) -> None:
+        if configured is None:
+            super().__init__()
+        else:
+            super().__init__(
+                initial_workspace_admission=configured._initial_admission,
+                execution_guard=configured._execution_guard,
+                verification_evidence=configured._verification_evidence,
+                interruption_control=configured._interruption_control,
+                registered_verifier=configured._registered_verifier,
+                baseline_verifier=configured._baseline_verifier,
+                candidate_commit_factory=configured._candidate_commit_factory,
+            )
         self.delegate = delegate
 
     def with_execution_guard(self, guard: ExecutionGuard) -> _KnowledgeFixtureFactory:
-        return self
+        return _KnowledgeFixtureFactory(self.delegate, super().with_execution_guard(guard))
+
+    def with_initial_workspace_admission(
+        self, admission: InitialWorkspaceAdmission
+    ) -> _KnowledgeFixtureFactory:
+        return _KnowledgeFixtureFactory(
+            self.delegate, super().with_initial_workspace_admission(admission)
+        )
+
+    def with_verification_evidence(
+        self, provider: VerificationEvidenceProvider
+    ) -> _KnowledgeFixtureFactory:
+        return _KnowledgeFixtureFactory(self.delegate, super().with_verification_evidence(provider))
+
+    def with_interruption_control(
+        self, control: CoderInterruptionControl
+    ) -> _KnowledgeFixtureFactory:
+        return _KnowledgeFixtureFactory(self.delegate, super().with_interruption_control(control))
+
+    def with_registered_verifier(
+        self, registry: RegisteredNativePythonVerifier
+    ) -> _KnowledgeFixtureFactory:
+        return _KnowledgeFixtureFactory(self.delegate, super().with_registered_verifier(registry))
+
+    def with_baseline_verifier(
+        self, verifier: ExecutionBaselineContextVerifier
+    ) -> _KnowledgeFixtureFactory:
+        return _KnowledgeFixtureFactory(self.delegate, super().with_baseline_verifier(verifier))
+
+    def with_candidate_commit_factory(
+        self, factory: Callable[[RoleWorktreeBinding, AgentDefinition], CandidateCommitSkill]
+    ) -> _KnowledgeFixtureFactory:
+        return _KnowledgeFixtureFactory(
+            self.delegate, super().with_candidate_commit_factory(factory)
+        )
 
     def create(
         self,
@@ -882,6 +1001,7 @@ def test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery(
 def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
     tmp_path: Path,
     mysql_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -903,7 +1023,8 @@ def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
         ),
     )
     environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
-    interrupted = _OutOfScopeInterruptedFactory()
+    interrupted = _OutOfScopeInterruptedFactory(tmp_path, monkeypatch)
+    config = config.model_copy(update={"codex_executable": interrupted.executable})
     host = TeamHost(
         config=config,
         environment=environment,
@@ -953,6 +1074,8 @@ def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
     assert proposed.recovery_plan_file is not None
     _, plan = host.recovery_entry().open_plan(Path(proposed.recovery_plan_file))
     assert plan.scope_supplement is not None
+    assert plan.workspace_snapshot is not None
+    assert plan.workspace_snapshot.run_id == interrupted.requests[0].run_id
     assert plan.scope_supplement.paths == ("omitted.txt",)
     assert plan.scope_approval_reference == "approved-exact-omitted-file"
     assert "omitted.txt" in plan.permissions.read_paths
@@ -1010,8 +1133,10 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
         return stage_complete(**kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(models, "complete", with_manager)
-    config = config.model_copy(update={"live_model_execution": True})
-    interrupted = _OutOfScopeInterruptedFactory()
+    interrupted = _OutOfScopeInterruptedFactory(tmp_path, monkeypatch)
+    config = config.model_copy(
+        update={"live_model_execution": True, "codex_executable": interrupted.executable}
+    )
     host = TeamHost(
         config=config,
         environment=environment,
@@ -1041,6 +1166,16 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
     ).checkpoint
     assert blocked.stage.value == "BLOCKED"
 
+    # A Run container without any sealed route is not execution evidence. Keep
+    # these historical containers while the actual public discovery, exact scope
+    # approvals and independent delivery roles run against the genuine facts.
+    sidecar = (
+        host.projects()[0].root / "repositories" / blocked.children[0].checkpoint.repository_id
+    )
+    empty_routes = tuple(sidecar / "runs/model-routes" / f"run_unsealed_{i:02d}" for i in range(3))
+    for directory in empty_routes:
+        directory.mkdir()
+
     (projects[0] / "main-update.txt").write_text("new baseline\n", encoding="utf-8")
     _git("add", "main-update.txt", cwd=projects[0])
     _git("commit", "-m", "Advance main while requirement is blocked", cwd=projects[0])
@@ -1067,10 +1202,12 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
     assert proposed.recovery_plan_file is not None
     _, plan = host.recovery_entry().open_plan(Path(proposed.recovery_plan_file))
     assert plan.target_base_revision == current_head
+    assert plan.workspace_snapshot is not None
+    assert plan.workspace_snapshot.run_id == interrupted.requests[0].run_id
+    assert all(directory.is_dir() and not tuple(directory.iterdir()) for directory in empty_routes)
 
     original_execute = NativeRecoveryEntry.execute
-    original_complete = models.complete
-    gap_enabled = knowledge_wait
+    interrupted.configure_knowledge_gap(knowledge_role, enabled=knowledge_wait)
     recovery_coder_calls: list[AgentRequest] = []
     original_coder_run = _SeededCompleteRecoveryAdapter.run
 
@@ -1082,8 +1219,10 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
         from ai_software_engineer.domain import ChangedFile, ChangeType
         from tests.domain.factories import make_coder_progress_artifact
 
+        assert request.work_slice is not None
         adapter._seed.authorize(request, adapter._workspace)
         recovery_coder_calls.append(request)
+        interrupted.configure_knowledge_gap("coder", enabled=True, coder_progress=True)
         template = make_coder_progress_artifact()
         artifact = template.model_copy(
             update={
@@ -1109,8 +1248,11 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
                                 lines_deleted=0,
                             ),
                         ),
-                        "completed_step_ids": (),
-                        "remaining_step_ids": ("finish_change",),
+                        "completed_step_ids": request.work_slice.completed_step_ids,
+                        "remaining_step_ids": (
+                            *request.work_slice.selected_step_ids,
+                            *request.work_slice.later_step_ids,
+                        ),
                         "tests_run": (),
                         "next_actions": ("Confirm test prerequisites.",),
                     }
@@ -1130,33 +1272,6 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
 
     monkeypatch.setattr(_SeededCompleteRecoveryAdapter, "run", progress_before_gap)
 
-    def complete(**kwargs: object) -> StructuredModelResult:
-        payload = kwargs["input_payload"]
-        schema = kwargs["output_schema"]
-        assert isinstance(payload, Mapping) and isinstance(schema, Mapping)
-        bound = payload.get("binding", {})
-        if (
-            gap_enabled
-            and isinstance(bound, Mapping)
-            and str(bound.get("task_id", "")).startswith("task_recovery_")
-            and bound.get("role") == knowledge_role
-            and (knowledge_role != "coder" or bool(recovery_coder_calls))
-        ):
-            if schema["title"] == "KnowledgeIntent":
-                return StructuredModelResult(payload={"queries": ["独立验收前提"]}, duration_ms=0)
-            if schema["title"] == "KnowledgeAssessment":
-                return StructuredModelResult(
-                    payload={"status": "GAP", "gap_question": "请确认测试前提。"}, duration_ms=0
-                )
-        return original_complete(**kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(models, "complete", complete)
-    if knowledge_wait:
-        monkeypatch.setattr(
-            "ai_software_engineer.manager.production_backend.ConfiguredStructuredClientFactory.for_project",
-            lambda *args, **kwargs: models,
-        )
-
     def execute_interrupted(
         recovery: NativeRecoveryEntry,
         path: Path,
@@ -1167,7 +1282,7 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
             delegate = (
                 _SeededCompleteRecoveryFactory(seed)
                 if complete_recovery
-                else _SeededInterruptedRecoveryFactory(seed)
+                else _SeededNativeInterruptedRecoveryFactory(seed)
             )
             return _KnowledgeFixtureFactory(delegate) if knowledge_wait else delegate
 
@@ -1215,8 +1330,32 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
         )
         snapshot = ProductionTeamReader(config, environment).snapshot("project_test")
         view = next(r for r in snapshot.requests if r.id == blocked.delivery_id)
-        assert view.stage == "WAITING_HUMAN"
-        assert view.blocker is not None and "知识" in view.blocker
+        # Before Continue attaches the gap, GET preserves the delivery stage and
+        # projects the released queue wait separately; it must not attach facts.
+        assert view.stage == "DELIVERING"
+        assert view.execution is not None
+        assert view.execution.state == "WAITING"
+        assert view.execution.responsibility == "engineering"
+        assert view.execution.reason_code == "WAITING_HUMAN"
+        assert not view.execution.action_required
+        assert view.blocker is not None and "前提" in view.blocker
+        task_view = next(task for task in snapshot.tasks if task.task_id == plan.new_task_id)
+        assert task_view.status == "IMPLEMENTING" and not task_view.terminal
+        waiting_roles = tuple(
+            step for step in task_view.role_queue if step.status is not WorkItemStatus.CLOSED
+        )
+        assert len(waiting_roles) == 1
+        waiting_role = waiting_roles[0]
+        assert waiting_role.role is AgentRole.CODER and waiting_role.attempt == 2
+        assert waiting_role.status is WorkItemStatus.WAITING_HUMAN
+        assert waiting_role.lease_liveness == "UNKNOWN"
+        pending_wait = recovery.pending_knowledge_wait(Path(proposed.recovery_plan_file))
+        assert pending_wait is not None and isinstance(pending_wait.delivery, KnowledgeGap)
+        pending_gap = pending_wait.delivery
+        assert pending_gap.binding.task_id == plan.new_task_id
+        assert pending_gap.binding.role.value == "coder"
+        assert pending_gap.binding.source_revision == current_head
+        assert (waiting_role.wait_reason or "").startswith(f"KNOWLEDGE_GAP:{pending_gap.gap_id}:")
         host = TeamHost(
             config=config,
             environment=environment,
@@ -1288,7 +1427,7 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
                 approval_reference="fixture-confirmed-prerequisite",
             ),
         )
-        gap_enabled = False
+        interrupted.configure_knowledge_gap(knowledge_role)
         host = TeamHost(
             config=config,
             environment=environment,
