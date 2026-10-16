@@ -80,6 +80,68 @@ After reviewed controlled deployment, reread public facts, prepare a new proposa
 idempotency key, review its exact same-base/full-draft/progress proof, record delegated PAUSE
 then a separate exact RESUME. Retain failed proposal and all old UNKNOWN/history records.
 
+## Actual deployment
+
+Implementation4f9776c298b2169d7d3eae322208d4c3006c1d60 was fast-forwarded and pushed to main.
+Exact controlled-stop request console_shutdown_ebf880c2c9c0e2dd2f46c35ce274f87e bound the old
+instance/PID17458, requested07:31:30.131948Z and READY07:31:30.165144Z (0.033196 seconds).
+Old service/supervisor17458/17576 are absent. No force retirement or inspection workaround.
+New service PID44594/instance console_instance_02246ab4074cb499ca665fddba5ae288 is normal,
+delivery_ready=true and contract10; main/origin match. All205 fully listed historical files
+(original195 plus ten native current-Task records) retain exact SHA.
+
+Independent reports:
+- Predeployment /tmp/ase-k1-third-fix-predeploy-independent-20261016.json,
+  SHA0ab2479b65010edd26281e8fa6dfd348f4e0fe68c9c808ad8c1c6ade3af0b13b.
+- Controlled stop /tmp/ase-k1-third-fix-controlled-stop-independent-20261016.json,
+  SHAf362f664df705fbb366458fd7fb6e3e4f256de80418c6345d2bba4e204c38957.
+- Deployed /tmp/ase-k1-third-fix-postdeploy-independent-20261016.json,
+  SHA890edca1095d012b12c627d210e7bf0fa90fa730f82696000543138e646e0036.
+
+Fresh public summary retains the exact Task revision8/attempt6/source and waiting WorkItem.
+New-key public proposal operation_12edc3bec90380ca9f36f1c452af00bc succeeds at07:35:38.778944Z.
+Exact plan ac2a0d5078523fc01d3750b6cd88bc453172d12c2ed6c55c8a30bbbfcaa30cd5 is nonconflicted,
+same source/base774e0a, preserve_draft, no native-rule change and ordinary work6 to7.
+Independent typed/store/actual-file audit rechecks all24 retained paths and187550 patch bytes,
+all2817 inventory entries twice, canonical incoming admission, returned knowledge, scope,
+original start/stop and both accepted progress receipts. Steps01/02 remain active; no ACTIVE
+claim or changed historical byte. Audit /tmp/ase-k1-run6-fixed-plan-independent-audit-20261016.json
+SHAa6cedddc80e09e772d2f1ee0a0930e1ec453a058f0d6721bdd38dcce4ce8befa reports PASS.
+Delegated exact PAUSE operation_a3d807e022f16bff20adcb6ff4a9756a succeeds at07:46:58.642770Z.
+Binding8afedc9cb5d80683699d82a1e3658dc97f8d69babc43f6073d104e28caaf50ed (sequence3,
+authority6798a685329a8a246de6997b4d21f354197c78a31dd998c5dc47750cbfabd8e3) preserves the same
+source/base and complete draft. Fresh public facts still show Task revision8 and exactly one
+new paused WorkItem work_8afedc9cb5d80683699d82a1e3658dc97f8d69babc43f6073d104e28caaf50ed;
+no Coder call is authorized by PAUSE. Independent paused audit
+/tmp/ase-k1-run6-fixed-paused-independent-audit-20261016.json SHA
+70a43400b00d3c3faf8d7baefb9a532438858ecedcba64dbe77a6a0520bdc061 reports
+PASS_FOR_EXACT_RESUME: ordinary attempts/work_attempt7, unchanged revision8 and retry failures,
+old work CLOSED, new exact work paused/no claim, active lease count0, unchanged24-file draft,
+inventory and205 historical files, accepted01/02 progress retained, starts/outcomes6/4.
+The durable engineering authority is present. Its Evaluation SUPPLY_EVIDENCE event is written
+by the later RuntimeSession entry and is intentionally pending before RESUME; do not fabricate it.
+Separate exact RESUME operation_b8c1477d955f46278008dfda8b380302 is submitted; real native
+claim/Context/main execution and independent QA/Review delivery remain to be observed.
+
+At07:57:55Z, independent resumed observation verifies real new lease5a37f… ACTIVE with a
+fresh heartbeat, exact new WorkItem RUNNING/dispatch1/attempt7 and Task revision8/attempt7.
+Knowledge intent has RETURNED and assessment is running; no new main Coder start exists yet.
+Evaluation evalevt_stopped_8afed… is now durably recorded as SUPPLY_EVIDENCE with exact
+authority URI/SHA (event SHA startsfad0ea58). Original205 file hashes and missing Run6 outcome
+remain unchanged. Report /tmp/ase-k1-run7-resume-independent-20261016.json SHA
+dc52bc29b8a773a96daefc154603d709b754cbeb69678126d2a5a62db8b99414.
+
+At08:00:17.930552Z the RESUME operation completes, while the Requirement reaches a new
+BLOCKED/INVARIANT_VIOLATION checkpointfdef672bee09b4f19beea7836b48a2376c8c707574af52ab1e4f58e826e3855c
+with KNOWLEDGE_UNCLASSIFIED. The main Coder has not started. The knowledge assessment has a
+real completed native stop (returncode0, owned_session_empty) at07:59:49.033025Z and RETURNED
+outcomeeaae0611597cf6d3d335ce4228d446d38088af7a94c6833d65f297be6fa5cd9f at07:59:49.046278Z.
+Claim5a37f… remains ACTIVE in SQL with expired heartbeat rather than a committed wait/release.
+This is a distinct knowledge validation/exception lifecycle investigation; do not infer its
+exact validation reason from the generic safe code or falsely describe this as a main Coder
+crash. No new final outcome, Task reset or SQL repair has been performed. All prior recovery
+steps and UNKNOWN history remain sealed; original K1 delivery is still unfinished.
+
 ## Rollback
 
 Controlled stop before code rollback. Retain all immutable facts and compatible readers; do
