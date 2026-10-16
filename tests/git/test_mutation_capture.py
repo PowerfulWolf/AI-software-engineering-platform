@@ -1,5 +1,6 @@
 """Real-Git regular-text mutation capture is complete, read-only and fail-closed."""
 
+import hashlib
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -17,6 +18,75 @@ from ai_software_engineer.git.ports import WorktreeRef
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from tests.git.test_capture import git
 from tests.git.test_capture import workspace as workspace
+
+
+@pytest.mark.parametrize("literal", [False, True], ids=["runtime-reference", "literal-rejected"])
+def test_capture_preserves_complete_baseline_with_runtime_url_password(
+    tmp_path: Path, literal: bool
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "--initial-branch=main")
+    git(repo, "config", "user.name", "Fixture")
+    git(repo, "config", "user.email", "fixture@example.invalid")
+    (repo / "src").mkdir()
+    before = (
+        "from urllib.parse import unquote\n\n"
+        "def parse(parsed):\n"
+        "    return Settings(password=unquote(parsed.password))\n\n"
+        "VALUE = 1\n"
+    )
+    if literal:
+        before = before.replace("unquote(parsed.password)", 'unquote("clear-text")')
+    (repo / "src/app.py").write_text(before, encoding="utf-8")
+    git(repo, "add", "src/app.py")
+    git(repo, "commit", "-m", "runtime URL credential reference")
+    manager = GitWorktreeManager(repo, tmp_path / "roles")
+    ref = manager.create(
+        WorktreeSpec(
+            task_id="task_capture_runtime_url",
+            role=AgentRole.CODER,
+            attempt=1,
+            source_revision=git(repo, "rev-parse", "HEAD"),
+        )
+    )
+    permissions = AgentPermissions(
+        read_paths=("src/**",),
+        write_paths=("src/**",),
+        commands=(),
+        network=NetworkAccess.NONE,
+    )
+    after = before.replace("VALUE = 1", "VALUE = 2")
+    source = ref.path / "src/app.py"
+    source.write_text(after, encoding="utf-8")
+    index = Path(git(ref.path, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+    before_status = git(ref.path, "status", "--porcelain")
+    index_bytes = index.read_bytes()
+
+    if literal:
+        with pytest.raises(WorktreeCaptureRejected, match="bounded regular text mutation bodies"):
+            manager.capture_mutations(ref, permissions)
+        assert source.read_text(encoding="utf-8") == after
+        assert index.read_bytes() == index_bytes
+        assert git(ref.path, "rev-parse", "HEAD") == ref.head_revision
+        return
+
+    capture = manager.capture_mutations(ref, permissions)
+
+    assert len(capture.mutations) == 1
+    mutation = capture.mutations[0]
+    assert mutation.before is not None and mutation.before.text == before
+    assert mutation.after is not None and mutation.after.text == after
+    assert mutation.before.sha256 == hashlib.sha256(before.encode()).hexdigest()
+    assert mutation.after.sha256 == hashlib.sha256(after.encode()).hexdigest()
+    assert b"password" not in capture.patch
+    stored = CapturedMutations.from_capture(capture)
+    assert CapturedMutations.model_validate(stored.to_wire()).to_capture() == capture
+    manager.verify_mutations(capture, permissions)
+    assert source.read_text(encoding="utf-8") == after
+    assert index.read_bytes() == index_bytes
+    assert git(ref.path, "status", "--porcelain") == before_status
+    assert git(ref.path, "rev-parse", "HEAD") == ref.head_revision
 
 
 @pytest.mark.parametrize(

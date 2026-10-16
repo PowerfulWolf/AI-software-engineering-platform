@@ -283,7 +283,11 @@ def _source_stdlib_imports(tree: ast.Module) -> dict[str, tuple[str, str | None,
     allowed: dict[str, tuple[str, str | None, int]] = {}
     trusted_aliases: set[int] = set()
     ambiguous: set[str] = set()
-    members = {"dataclasses": {"field"}, "secrets": {"token_bytes", "token_hex", "token_urlsafe"}}
+    members = {
+        "dataclasses": {"field"},
+        "secrets": {"token_bytes", "token_hex", "token_urlsafe"},
+        "urllib.parse": {"unquote"},
+    }
     for statement in tree.body:
         if not isinstance(statement, (ast.Import, ast.ImportFrom)):
             continue
@@ -291,7 +295,11 @@ def _source_stdlib_imports(tree: ast.Module) -> dict[str, tuple[str, str | None,
             if alias.asname is not None:
                 continue
             binding: tuple[str, str | None, int]
-            if isinstance(statement, ast.Import) and alias.name in members:
+            if (
+                isinstance(statement, ast.Import)
+                and alias.name in members
+                and "." not in alias.name
+            ):
                 import_name, binding = alias.name, (alias.name, None, statement.lineno)
             elif (
                 isinstance(statement, ast.ImportFrom)
@@ -381,11 +389,95 @@ def _source_stdlib_imports(tree: ast.Module) -> dict[str, tuple[str, str | None,
                 ambiguous.update(allowed)
         elif isinstance(node, ast.Attribute) and node.attr in dynamic_names:
             ambiguous.update(allowed)
+    decoder_names = {name for name, binding in allowed.items() if binding[0] == "urllib.parse"}
+    if decoder_names and _source_url_decoder_has_reflection(nodes):
+        ambiguous.update(decoder_names)
     return {name: binding for name, binding in allowed.items() if name not in ambiguous}
 
 
-def _source_proven_value(
+def _source_url_decoder_has_reflection(nodes: tuple[ast.AST, ...]) -> bool:
+    """Deny the new decoder proof at observed module/namespace mutation entrances."""
+    reflective_modules = {"sys", "inspect", "importlib", "builtins", "operator", "_operator"}
+    reflective_attributes = {
+        "__dict__",
+        "__globals__",
+        "__code__",
+        "__closure__",
+        "__defaults__",
+        "__kwdefaults__",
+        "__getattribute__",
+        "__getattr__",
+        "f_locals",
+        "f_globals",
+        "_getframe",
+        "currentframe",
+        "import_module",
+        "patch",
+        "setattr",
+        "delattr",
+    }
+    return any(
+        (
+            isinstance(node, ast.Import)
+            and any(
+                alias.name.split(".")[0] in reflective_modules | {"urllib"} for alias in node.names
+            )
+        )
+        or (
+            isinstance(node, ast.ImportFrom)
+            and node.module is not None
+            and (
+                node.module.split(".")[0] in reflective_modules
+                or node.module == "urllib"
+                or (
+                    node.module == "urllib.parse"
+                    and any(
+                        alias.name == "unquote" and alias.asname is not None for alias in node.names
+                    )
+                )
+                or node.module == "unittest.mock"
+                or (node.module == "unittest" and any(alias.name == "mock" for alias in node.names))
+            )
+        )
+        or (isinstance(node, ast.Attribute) and node.attr in reflective_attributes)
+        or (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in {"vars", "patch", "getattr", "setattr", "delattr"}
+        )
+        for node in nodes
+    )
+
+
+def _source_url_decoded_reference(
     value: ast.expr, field_name: str, imports: dict[str, tuple[str, str | None, int]]
+) -> bool:
+    """Only exact stdlib unquote of one same-field runtime attribute is proven."""
+    if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Name):
+        return False
+    imported = imports.get(value.func.id)
+    if (
+        imported is None
+        or imported[:2] != ("urllib.parse", "unquote")
+        or imported[2] >= value.lineno
+        or value.keywords
+        or len(value.args) != 1
+    ):
+        return False
+    argument = value.args[0]
+    return (
+        isinstance(argument, ast.Attribute)
+        and isinstance(argument.value, ast.Name)
+        and argument.attr.casefold() == field_name.casefold()
+    )
+
+
+def _source_proven_value(
+    value: ast.expr,
+    field_name: str,
+    imports: dict[str, tuple[str, str | None, int]],
+    *,
+    allow_url_decoder: bool = True,
 ) -> bool:
     """Allow references or exact stdlib constructors with no credential input."""
     if isinstance(value, ast.Constant) and value.value is None:
@@ -415,6 +507,8 @@ def _source_proven_value(
         return True
     if not isinstance(value, ast.Call):
         return False
+    if allow_url_decoder and _source_url_decoded_reference(value, field_name, imports):
+        return True
     if isinstance(value.func, ast.Name):
         imported = imports.get(value.func.id)
         member = imported[1] if imported is not None else None
@@ -456,7 +550,7 @@ def _source_assignment_facts(
     safe_starts: set[int] = set()
     extra: list[RedactionOccurrence] = []
 
-    def field_start(name: str, node: ast.expr | ast.arg) -> int | None:
+    def field_start(name: str, node: ast.expr | ast.arg | ast.keyword) -> int | None:
         if not re.fullmatch(r"(?i)(?:password|passwd|secret|token|api[_-]?key)", name):
             return None
         # AST columns count UTF-8 bytes; tokenize and regex columns count characters.
@@ -470,7 +564,9 @@ def _source_assignment_facts(
         if start is None or declared is None or not _source_type_reference(declared):
             return
         safe_starts.add(start)
-        if value is not None and not _source_proven_value(value, name, imports):
+        if value is not None and not _source_proven_value(
+            value, name, imports, allow_url_decoder=not isinstance(node, ast.arg)
+        ):
             expression = ast.get_source_segment(content, value)
             if expression is None:
                 extra.append(RedactionOccurrence("secret_assignment", 1))
@@ -488,6 +584,13 @@ def _source_assignment_facts(
             target = node.targets[0]
             start = field_start(target.id, target)
             if start is not None and _source_proven_value(node.value, target.id, imports):
+                safe_starts.add(start)
+        elif (
+            isinstance(node, ast.keyword)
+            and node.arg is not None
+            and _source_url_decoded_reference(node.value, node.arg, imports)
+        ):
+            if (start := field_start(node.arg, node)) is not None:
                 safe_starts.add(start)
         elif isinstance(node, ast.arguments):
             positional = (*node.posonlyargs, *node.args)

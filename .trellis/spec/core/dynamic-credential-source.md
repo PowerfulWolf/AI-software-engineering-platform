@@ -37,6 +37,41 @@ Good：动态生成负向安全测试输入，经 real Git capture/wire/verify �
 Base：普通字符串 `"token={credential}"` 继续检测。
 Bad：删除负向断言、允许任意 f-string、跳过 secret gate 或改写历史 stop/outcome。
 
+## URL-decoded runtime field references (2026-10-16)
+
+`source_secret_occurrences(content, source_path=...)` also recognizes the exact Python
+expression `password=unquote(parsed.password)` (and the same exact assigned credential
+field). The complete source must prove a preceding module-level
+`from urllib.parse import unquote`, without aliasing, rebinding, escape or observed
+namespace/reflection mutation. The decoder takes exactly one positional argument: an
+attribute of one runtime object name whose field equals the assigned field. No literal,
+unknown callee, chained decoder, extra/keyword argument or function-default exception.
+Inspection never executes or imports the supplied source.
+
+This is syntax classification for full original source bodies, including the Git base
+body of an unrelated edit. It does not authorize storing actual credentials. Generic
+log/URI scanning stays unchanged; original source still receives the independent strong
+key scan. Strings, comments and incomplete patch hunks cannot borrow a missing import.
+`CapturedMutations` must retain and revalidate complete before/after bytes and patch;
+Git history is not an exemption from sensitive-body validation.
+
+| Input | Result |
+| --- | --- |
+| Exact proven decoder of same-field reference in Assign/AnnAssign/call keyword | Preserve source bytes; full Git capture/wire verification allowed |
+| Direct existing `password=settings.password` | Existing source behavior unchanged |
+| Literal/unknown argument, different field, alias/rebinding/escape/reflection, missing import | Sensitive; no receipt/admission |
+| Same syntax in log/config, string/comment or unproven partial patch | Existing conservative detection |
+| Fixed credential or strong key elsewhere in the complete source | Sensitive; decoder grants no whole-file exemption |
+
+Tests: `tests/context/test_url_decoded_source.py` and the real Git BEFORE-body regression
+in `tests/git/test_mutation_capture.py`. The latter commits the decoder reference first,
+changes only an unrelated value and asserts complete exact wire/patch/index preservation.
+Keep existing source/dynamic-credential/patch and continuation refusal regressions.
+
+存量数据处置：Run5 的 local_execution_limit、真实 owned stop、UNKNOWN 历史及完整草稿不改。
+修复加载后只使用公开 HANDLE 在 Task lock/idle fence 中重新完整封存，再使用当前事实提供的
+精确恢复路径；维护 probe 的通过不是 receipt、progress、candidate 或 QA/Review 结论。
+
 ## Tests, stored data and rollback
 
 增量：`tests/context/test_dynamic_credential_source.py`、`test_source_secret_detection.py`、
