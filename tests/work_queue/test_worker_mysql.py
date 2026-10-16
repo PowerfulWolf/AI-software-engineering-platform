@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
 
 import pytest
+from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents import (
     AgentErrorCode,
@@ -20,6 +22,7 @@ from ai_software_engineer.agents import (
     AgentResult,
     AgentRunStatus,
 )
+from ai_software_engineer.agents.codex_cli import SubprocessCodexCommandRunner
 from ai_software_engineer.agents.execution import current_execution_guard
 from ai_software_engineer.agents.structured import StructuredModelResult
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
@@ -54,6 +57,12 @@ from ai_software_engineer.orchestration import (
 )
 from ai_software_engineer.orchestration.state_machine import build_event
 from ai_software_engineer.orchestration.steps import BoundedRunControl, RoleRunBoundary
+from ai_software_engineer.owned_processes import (
+    HostOwnedProcessRegistry,
+    OwnedProcessesUncertain,
+    OwnedProcessObservation,
+    owned_record_finalization,
+)
 from ai_software_engineer.runtime import (
     RuntimeConfig,
     RuntimePaths,
@@ -63,6 +72,7 @@ from ai_software_engineer.runtime import (
 )
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 from ai_software_engineer.store import MySqlTaskRepository, TaskNotFound
+from ai_software_engineer.store.mysql_repository import open_mysql_connection
 from ai_software_engineer.work_queue.dispatcher import DispatcherLoop, DispatcherTickStatus
 from ai_software_engineer.work_queue.execution_store import (
     MySqlRoleQueue,
@@ -1073,6 +1083,147 @@ def test_context_capacity_failure_waits_and_releases_real_claim_without_role_lau
         assert queue.get(item.id) == item
         assert runtime.task_repository.get(item.task_id) == current
         assert runtime.task_repository.list_events(item.task_id) == events
+
+
+@pytest.mark.parametrize("failure_boundary", ["adapter", "record_finalization", "ordinary"])
+def test_owned_uncertainty_waits_and_releases_real_claim_without_result_or_replay(
+    mysql_dsn: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_boundary: str,
+) -> None:
+    from ai_software_engineer.work_queue.invocation import (
+        DeliveryInvocationOutcome,
+        DeliveryInvocationStart,
+        DurableInvocationControl,
+    )
+
+    queue = MySqlRoleQueue(mysql_dsn)
+    registry = HostOwnedProcessRegistry()
+    records = KnowledgeRecordStore(tmp_path / "invocations")
+    calls: list[AgentRequest] = []
+    claims: list[QueueClaim] = []
+    snapshots: list[tuple[object, ...]] = []
+    finalizations = 0
+    refusal = OwnedProcessesUncertain("fixture owned execution boundary refused")
+
+    def refuse_finalization(observation: OwnedProcessObservation) -> None:
+        nonlocal finalizations
+        # The real child and EOF have stopped; only the outer application save
+        # boundary refuses, after the native runner has already returned.
+        observation._validate_stopped(output_drained=True)
+        finalizations += 1
+        raise refusal
+
+    if failure_boundary == "record_finalization":
+        monkeypatch.setattr(OwnedProcessObservation, "_complete_saved", refuse_finalization)
+
+    def snapshot() -> tuple[object, ...]:
+        return (
+            runtime.task_repository.get("task_domain_001"),
+            runtime.task_repository.current_revision("task_domain_001"),
+            runtime.task_repository.list_events("task_domain_001"),
+            supervisor.artifacts.list_for_task("task_domain_001"),
+            queue.accepted("task_domain_001"),
+        )
+
+    class RefusingAdapter(ObservedAdapter):
+        def run(self, request: AgentRequest) -> AgentResult:
+            if request.role is not AgentRole.CODER:
+                return super().run(request)
+            supervisor.guard.check()
+            assert supervisor.guard.lease is not None
+            calls.append(request)
+            claims.append(supervisor.guard.lease.claim)
+            snapshots.append(snapshot())
+            if failure_boundary == "ordinary":
+                raise RuntimeError("fixture ordinary adapter error")
+            if failure_boundary == "adapter":
+                raise refusal
+            with owned_record_finalization() as finalization:
+                result = SubprocessCodexCommandRunner().run(
+                    (sys.executable, "-c", "print('actual stopped fixture child')"),
+                    cwd=tmp_path,
+                    environment={},
+                    stdin="",
+                    timeout_seconds=3,
+                )
+                assert result.process_stop is not None
+                result.process_stop.validate_integrity()
+                assert result.returncode == 0 and not result.timed_out
+                assert result.stdout.strip() == "actual stopped fixture child"
+                assert registry.snapshot()[0].state == "finalizing"
+                finalization.confirm_saved()
+            pytest.fail("the outer finalization refusal must reach the supervisor")
+
+    adapter = RefusingAdapter(queue)
+    with runtime_fixture(tmp_path, mysql_dsn, queue, adapter) as (runtime, supervisor):
+        runtime._invocation_control = DurableInvocationControl(records, supervisor.guard)
+        with registry.operation_scope("operation_owned_worker_boundary"):
+            if failure_boundary == "ordinary":
+                with pytest.raises(RuntimeError, match="ordinary adapter error"):
+                    run_supervisor(runtime, supervisor)
+            else:
+                with pytest.raises(DeliveryWaiting) as waiting:
+                    run_supervisor(runtime, supervisor)
+        assert len(calls) == len(claims) == len(snapshots) == 1
+        assert snapshot() == snapshots[0]
+        (claim,) = claims
+        item = queue.get(claim.work_item.id)
+        current = runtime.task_repository.get(item.task_id)
+        assert current.status is TaskStatus.IMPLEMENTING
+        assert current.attempts == 1 and not current.retry_failures
+        assert supervisor.guard.lease is None
+        (start,) = records.list("invocation-starts", DeliveryInvocationStart)
+        start.validate_integrity()
+        assert start.request == calls[0] and start.lease_id == claim.lease.id
+        assert not records.list("invocation-outcomes", DeliveryInvocationOutcome)
+        with (
+            closing(open_mysql_connection(mysql_dsn)) as connection,
+            connection.cursor(DictCursor) as cursor,
+        ):
+            cursor.execute(
+                "SELECT state, ended_at FROM work_queue_claims WHERE lease_id=%s",
+                (claim.lease.id,),
+            )
+            lease_row = cursor.fetchone()
+        assert lease_row is not None
+        if failure_boundary == "ordinary":
+            assert item.status is WorkItemStatus.RUNNING
+            assert item.wait_disposition is None
+            assert lease_row["state"] == "ACTIVE" and lease_row["ended_at"] is None
+            return
+
+        assert item.status is WorkItemStatus.WAITING_DEPENDENCY
+        assert item.wait_disposition == waiting.value.disposition
+        assert item.wait_disposition.facts.classification == "EXECUTION_UNCERTAIN"
+        assert item.wait_disposition.facts.source_revision == start.request.source_revision
+        assert item.wait_disposition.responsibility.value == "engineering"
+        assert item.wait_disposition.action.value == "INVESTIGATE_EXECUTION"
+        assert lease_row["state"] == "RELEASED" and lease_row["ended_at"] is not None
+        assert not queue.list_active_leases(now=datetime.now(UTC))
+        if failure_boundary == "record_finalization":
+            assert finalizations == 1
+            assert registry.snapshot()[0].state == "uncertain"
+            with pytest.raises(OwnedProcessesUncertain):
+                registry.require_stopped()
+        with pytest.raises(DeliveryWaiting):
+            run_supervisor(runtime, supervisor)
+        assert queue.get(item.id) == item and snapshot() == snapshots[0]
+        # Even an exact trusted test resume signal cannot turn a sealed start
+        # without its outcome into authority for a second model invocation.
+        queue.make_ready(
+            item.id,
+            now=datetime.now(UTC),
+            expected_disposition_sha256=item.wait_disposition.disposition_sha256,
+        )
+        with pytest.raises(DeliveryWaiting) as replay_wait:
+            run_supervisor(runtime, supervisor)
+        assert replay_wait.value.disposition.facts.classification == "EXECUTION_UNCERTAIN"
+        assert len(calls) == 1 and snapshot() == snapshots[0]
+        assert records.list("invocation-starts", DeliveryInvocationStart) == (start,)
+        assert not records.list("invocation-outcomes", DeliveryInvocationOutcome)
+        assert not queue.list_active_leases(now=datetime.now(UTC))
 
 
 @pytest.mark.parametrize("paused_role", [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER])

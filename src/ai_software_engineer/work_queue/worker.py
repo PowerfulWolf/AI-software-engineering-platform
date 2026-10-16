@@ -43,6 +43,7 @@ from ai_software_engineer.knowledge.queue import QueueKnowledgeWaitPort
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.orchestration import RetryResult
 from ai_software_engineer.orchestration.steps import BoundedRunControl, RoleRunBoundary
+from ai_software_engineer.owned_processes import OwnedProcessesUncertain
 from ai_software_engineer.recovery.preparation_progress import record_execution_claimed
 from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.runtime import RuntimeRunResult, RuntimeSession
@@ -536,7 +537,11 @@ class QueuedDeliverySupervisor:
                     artifact_ids=(),
                 )
                 raise
-            except (ContinuationExecutionUncertain, CommandExecutionUncertain):
+            except (
+                ContinuationExecutionUncertain,
+                CommandExecutionUncertain,
+                OwnedProcessesUncertain,
+            ):
                 WorkerDeliveryFailureControl(self.guard).wait(
                     repository.get(task_id),
                     classification="EXECUTION_UNCERTAIN",

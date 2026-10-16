@@ -513,6 +513,10 @@ class SubprocessCodexCommandRunner:
                 publish(CodexInvocationResult(process.returncode, stdout, stderr, False, proof))
             elif proof is None and ownership is not None:
                 ownership.uncertain()
+            if isinstance(error, OwnedProcessesUncertain):
+                # A later proven stop may be saved, but it cannot erase the
+                # original ownership refusal or supply a final Agent result.
+                raise CodexExecutionUnconfirmed("原执行会话归属核验异常; 暂停后续执行") from error
             if not setup_completed:
                 raise CodexExecutionUnconfirmed("原执行进程初始化记录异常; 暂停后续执行") from error
             raise

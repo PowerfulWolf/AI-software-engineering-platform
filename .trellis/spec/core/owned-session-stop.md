@@ -1,5 +1,38 @@
 # Actual owned session stop and durable finalization
 
+## Native ownership uncertainty routing (2026-10-16)
+
+An active `OwnedProcessObservation.observe_session()` failure can be followed by successful
+real cleanup and observer publication of a failed capture-stop. The initial uncertainty
+must still cross `SubprocessCodexCommandRunner` as `CodexExecutionUnconfirmed`, then the
+adapter as `ContinuationExecutionUncertain`. A later empty-session proof neither supplies
+the original OS failure cause nor a final AgentResult. Do not fabricate provider failure,
+refund, continuation receipt or verdict from that proof.
+
+`QueuedDeliverySupervisor` must also fence genuine `OwnedProcessesUncertain` from outer evidence
+or record-finalization scopes into its existing EXECUTION_UNCERTAIN waiting path. Native
+normalization alone cannot cover those application boundaries. Keep the last Task checkpoint,
+release the current exact claim through `WorkerDeliveryFailureControl.wait`, and stop further
+invocations. Ordinary `RuntimeError` remains an ordinary error. Existing stop, EOF, process-birth,
+registry-finalization and save checks remain mandatory; missing/failed checks stay unknown.
+
+Required regressions use a real isolated native process with one injected active-observation
+refusal followed by real stop/EOF/proof, and a real claimed supervisor with raw owned
+uncertainty. Assert honest stop publication, typed uncertainty, owner-fenced wait/release,
+unchanged Task/artifacts/budgets and no replay of a sealed invocation-start without outcome.
+Include outer evidence-finalization failure and ordinary-error negative cases.
+
+Good: active observation refuses, actual cleanup seals only its real stop, and the current
+claim enters the existing engineering wait. Base: a normal completed native call follows
+unchanged result/artifact gates. Bad: classify the refusal as provider transient, publish a
+synthetic AgentResult, or stop only the heartbeat while leaving the claim ACTIVE.
+
+For an existing raw-error RUNNING WorkItem with expired lease, retain every original record.
+Only the public dispatcher may reclaim and create new ownership; the durable invocation guard
+must refuse a second model call when the original outcome is absent. Recording the resulting
+honest wait is separate from subsequent exact recovery authorization. Never patch SQL, invent
+an outcome/cause or classify an expired lease as proof of process stop.
+
 ## Scope and failure mode
 
 The native, structured, policy-bound command and currently registered verification/query runners

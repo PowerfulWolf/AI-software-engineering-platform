@@ -26,7 +26,11 @@ from ai_software_engineer.agents.codex_cli import (
     SubprocessCodexCommandRunner,
     _bounded,
 )
-from ai_software_engineer.owned_processes import HostOwnedProcessRegistry, OwnedProcessesUncertain
+from ai_software_engineer.owned_processes import (
+    HostOwnedProcessRegistry,
+    OwnedProcessesUncertain,
+    OwnedProcessObservation,
+)
 
 
 def test_running_native_output_memory_is_bounded_for_both_streams(tmp_path: Path) -> None:
@@ -341,6 +345,58 @@ def test_stop_callback_runs_after_eof_group_absence_and_local_resource_cleanup(
         )
     assert observed == [result]
     assert result.stdout == "out" and result.stderr == "err"
+    registry.require_stopped()
+
+
+def test_active_observation_refusal_keeps_real_stop_and_routes_typed_uncertainty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    children: list[subprocess.Popen[bytes]],
+) -> None:
+    registry = HostOwnedProcessRegistry()
+    observed: list[CodexInvocationResult] = []
+    actual_observe = OwnedProcessObservation.observe_session
+    refusal = OwnedProcessesUncertain("fixture active ownership observation refused")
+    observations = 0
+
+    def refuse_once(observation: OwnedProcessObservation) -> None:
+        nonlocal observations
+        actual_observe(observation)
+        observations += 1
+        if observations == 1:
+            assert children[0].poll() is None
+            observation.uncertain()
+            raise refusal
+
+    def save_real_stop(result: CodexInvocationResult) -> None:
+        _assert_closed(children)
+        assert result.process_stop is not None
+        result.process_stop.validate_integrity()
+        assert result.process_stop.kind == "failed"
+        assert not result.timed_out
+        assert result.execution_abort_reason is None
+        with pytest.raises(ProcessLookupError):
+            os.killpg(result.process_stop.group_id, 0)
+        assert registry.snapshot(), "actual stop must be saved before ownership is cleared"
+        observed.append(result)
+
+    monkeypatch.setattr(OwnedProcessObservation, "observe_session", refuse_once)
+    with (
+        registry.operation_scope("operation_active_observation_refused"),
+        pytest.raises(CodexExecutionUnconfirmed) as uncertain,
+    ):
+        SubprocessCodexCommandRunner().run_observed(
+            (sys.executable, "-c", "import time; time.sleep(30)"),
+            cwd=tmp_path,
+            environment={},
+            stdin="",
+            timeout_seconds=3,
+            observer=save_real_stop,
+        )
+    assert uncertain.value.__cause__ is refusal
+    assert observations == 1 and len(observed) == 1
+    assert observed[0].returncode != 0
+    _assert_closed(children)
     registry.require_stopped()
 
 

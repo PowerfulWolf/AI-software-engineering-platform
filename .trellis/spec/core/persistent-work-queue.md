@@ -104,6 +104,14 @@ work_queue_events(sequence PK, work_item_id FK, event_type, from_status,
 
 ### 3.4 Completion and artifacts
 
+- Genuine `OwnedProcessesUncertain` from native execution or outer evidence/finalization
+  must take the same owner-fenced EXECUTION_UNCERTAIN wait path as typed continuation/command
+  uncertainty. Stopping the heartbeat alone leaves a RUNNING item and unreleased claim; it
+  is not a lifecycle completion. Preserve the Task checkpoint, invocation and registry unknown,
+  release exact current ownership and refuse model replay without a sealed outcome. A generic
+  `RuntimeError` does not establish owned-process uncertainty. See owned-session-stop.md for
+  the real-runner and claimed-supervisor regression matrix.
+
 - Worker 必须先将结果 Artifact seal、持久化并读回校验，再把 `artifact_id + sha256` 传给 complete。
 - complete 在同一事务中关闭当前 WorkItem、释放 Lease、追加 COMPLETED event，并可选发布下一角色
   WorkItem。任一步失败全部回滚，禁止产生“Coder 已关闭但 QA 未入队”的裂缝。
