@@ -32,13 +32,14 @@ from ai_software_engineer.domain.native_verification import (
 )
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.execution import CommandExecutionUncertain
+from ai_software_engineer.knowledge.assessment_rejection import KnowledgeAssessmentRejected
 from ai_software_engineer.knowledge.gaps import (
     KnowledgeGap,
     KnowledgeGapRaised,
     KnowledgeGapRouting,
     KnowledgeResolution,
 )
-from ai_software_engineer.knowledge.models import KnowledgeRunBinding, digest
+from ai_software_engineer.knowledge.models import KnowledgeError, KnowledgeRunBinding, digest
 from ai_software_engineer.knowledge.queue import QueueKnowledgeWaitPort
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.orchestration import RetryResult
@@ -400,11 +401,13 @@ class QueuedDeliverySupervisor:
         locks_root: Path,
         build_step: StepBuilder,
         dispatcher: DispatcherFactory,
+        preparation_guard: Callable[[Task, QueuedRoleStep, QueueClaim], None] | None = None,
     ) -> None:
         self.queue, self.guard, self.artifacts = queue, guard, artifacts
         self.allocation_sha256, self.repository_id = allocation_sha256, repository_id
         self.records, self.locks_root = records, locks_root
         self.build_step, self.dispatcher = build_step, dispatcher
+        self.preparation_guard = preparation_guard
 
     def run(
         self,
@@ -499,6 +502,8 @@ class QueuedDeliverySupervisor:
             try:
                 existing = terminal_result()
                 with bind_execution_guard(self.guard):
+                    if existing is None and self.preparation_guard is not None:
+                        self.preparation_guard(repository.get(task_id), step, tick.claim)
                     outcome = (
                         existing
                         if existing is not None
@@ -533,6 +538,35 @@ class QueuedDeliverySupervisor:
                     classification="PLATFORM_BUG",
                     reason="已接纳的历史产物无法确定当前顺序。原任务和现场已保留。"
                     "请工程负责人核验封存记录与父链。不能按模型时间或随机编号选择产物。",
+                    source_revision=step.boundary.source_revision,
+                    artifact_ids=(),
+                )
+                raise
+            except KnowledgeAssessmentRejected as error:
+                observation = error.observation
+                WorkerDeliveryFailureControl(self.guard).wait(
+                    repository.get(task_id),
+                    classification="INVALID_OUTPUT" if observation is not None else "PLATFORM_BUG",
+                    reason=error.safe_message,
+                    source_revision=step.boundary.source_revision,
+                    artifact_ids=(
+                        "knowledge-assessment-rejection://" + observation.observation_sha256,
+                    )
+                    if observation
+                    else (),
+                )
+                raise
+            except KnowledgeGapRaised:
+                # A real knowledge gap already owns its committed queue wait.
+                raise
+            except KnowledgeError as error:
+                from ai_software_engineer.knowledge.diagnostics import knowledge_error_code
+
+                WorkerDeliveryFailureControl(self.guard).wait(
+                    repository.get(task_id),
+                    classification="PLATFORM_BUG",
+                    reason="知识准备记录无法通过平台校验, 原执行和现场保留: "
+                    + knowledge_error_code(error),
                     source_revision=step.boundary.source_revision,
                     artifact_ids=(),
                 )

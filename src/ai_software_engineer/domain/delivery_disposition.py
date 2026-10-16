@@ -188,6 +188,17 @@ def decide_delivery_disposition(facts: DeliveryFailureFacts) -> DeliveryDisposit
             "由 ASE 工程处理核验完整输入和配置容量; 输入满足冻结权限与容量后, "
             "再通过受控流程继续原需求。当前等待不要求修改业务目标或验收标准。"
         )
+    elif (
+        reason_code == "INVALID_OUTPUT"
+        and len(facts.evidence_ids) == 1
+        and facts.evidence_ids[0].startswith("knowledge-assessment-rejection://")
+    ):
+        action, condition = (
+            DeliveryNextAction.INVESTIGATE_EXECUTION,
+            "verified_execution_resolution",
+        )
+        reason = "知识评估结果未通过引用校验, 交付暂停, 原结果与完整现场保留。"
+        next_action = "工程授权者需核验原知识执行和剩余普通工作额度, 再记录精确恢复决定。"
     elif reason_code == "BUDGET_EXHAUSTED" or (
         not facts.budget_available
         and reason_code

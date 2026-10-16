@@ -139,6 +139,108 @@ function knowledgePreparation(h, role = "coder", manual = true) {
   return result;
 }
 
+function rejectedKnowledgePreparation(h, role = "coder") {
+  const result = handling(h, "NEEDS_AUTHORIZATION", [], true);
+  h.step.role = h.step.wait_disposition.facts.role = role;
+  h.step.wait_disposition.facts.classification = "INVALID_OUTPUT";
+  h.task.status = {coder: "IMPLEMENTING", qa: "QA", reviewer: "REVIEW"}[role];
+  const proof = result.investigation;
+  proof.permitted_resolutions = ["RETRY_REJECTED_KNOWLEDGE_PREPARATION"];
+  proof.original_run_id = "run_knowledge_original";
+  proof.workspace_inventory_sha256 = digest("3");
+  proof.rejected_knowledge = {
+    scope: {team_id: "team_current", project_id: h.request.project_id,
+      repository_id: "repository_current", repository_root: "/workspace/repository"},
+    requirement_id: h.task.id, task_id: proof.task_id, work_item_id: proof.work_item_id, role,
+    original_lease_id: "lease_original", original_claim_sha256: digest("1"),
+    original_attempt: 4, original_dispatch_sequence: 0, checkpoint_sequence: proof.checkpoint_sequence,
+    previous_run_id: proof.original_run_id, previous_context_manifest_id: "ctx_" + digest("2"),
+    source_revision: proof.source_revision, observation_sha256: digest("4"), context_sha256: digest("5"),
+    workspace_inventory_sha256: proof.workspace_inventory_sha256, workspace_capture_sha256: digest("6"),
+    current_lease_id: "lease_current", current_claim_sha256: digest("7"), current_dispatch_sequence: 1,
+    carry_refusal_sha256: digest("8"), carry_history_sha256s: [digest("8")], budget_source: "frozen_work_attempt",
+  };
+  h.step.wait_disposition.facts.evidence_ids = ["knowledge-assessment-rejection://" + digest("4")];
+  return result;
+}
+
+test("rejected knowledge offers an exact ordinary-work decision without timeout expansion", async () => {
+  for (const role of ["coder"]) {
+    const h = harness();
+    rejectedKnowledgePreparation(h, role);
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.match(text(box), /知识评估未通过校验/);
+    assert.match(text(box), /1 次.*冻结工作额度/);
+    assert.match(text(box), /原知识结果和历史保留/);
+    assert.doesNotMatch(text(box), /扩大.*窗口|下一次窗口|认证失败/);
+    const button = control(box, "重新进行知识准备并继续");
+    assert.ok(button, role);
+    await button.events.click();
+    const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+    assert.equal(intent.action, "RESOLVE_DELIVERY_WAIT");
+    assert.equal(intent.resolution_kind, "RETRY_REJECTED_KNOWLEDGE_PREPARATION");
+    assert.equal(intent.proof_sha256, digest("e"));
+    assert.equal(Object.hasOwn(intent, "rejected_knowledge"), false);
+    assert.equal(Object.hasOwn(intent, "operator_id"), false);
+  }
+});
+
+test("rejected knowledge does not offer Coder recovery for verifier roles", () => {
+  for (const role of ["qa", "reviewer"]) {
+    const h = harness();
+    rejectedKnowledgePreparation(h, role);
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.equal(control(box, "重新进行知识准备并继续"), undefined, role);
+  }
+});
+
+test("rejected knowledge rejects incomplete, foreign and changed retained approval facts", async () => {
+  for (const mutation of [
+    'delete proof.rejected_knowledge',
+    'proof.rejected_knowledge.scope.project_id = "project_other"',
+    'proof.rejected_knowledge.requirement_id = "requirement_other"',
+    'proof.rejected_knowledge.previous_run_id = "run_other"',
+    'proof.rejected_knowledge.current_claim_sha256 = "bad"',
+    'delete proof.rejected_knowledge.carry_history_sha256s',
+    'proof.rejected_knowledge.carry_history_sha256s.push("9".repeat(64))',
+    'proof.rejected_knowledge.workspace_inventory_sha256 = "9".repeat(64)',
+    'data.step.wait_disposition.facts.evidence_ids = []',
+    'data.step.wait_disposition.facts.classification = "PLATFORM_BUG"',
+  ]) {
+    const h = harness();
+    rejectedKnowledgePreparation(h);
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    const button = control(box, "重新进行知识准备并继续");
+    assert.ok(button, mutation);
+    h.run(mutation);
+    await button.events.click();
+    assert.equal(h.run("submitted.length"), 0, mutation);
+    assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"),
+      "重新进行知识准备并继续"), undefined, mutation);
+  }
+});
+
+test("rejected knowledge saved decisions require the same evidence and history keeps its meaning", () => {
+  const h = harness();
+  const result = rejectedKnowledgePreparation(h);
+  result.status = "RESOLVED";
+  result.resolution = {kind: "delivery_wait_resolution", resolution_kind: "RETRY_REJECTED_KNOWLEDGE_PREPARATION",
+    proof_sha256: result.investigation.proof_sha256, authorization_source: "organization_engineering_policy",
+    rejected_knowledge: structuredClone(result.investigation.rejected_knowledge)};
+  assert.ok(h.run("engineeringWaitDecision(data.request, data.step, proof)"));
+  result.resolution.rejected_knowledge.current_claim_sha256 = digest("9");
+  assert.equal(h.run("engineeringWaitDecision(data.request, data.step, proof)"), null);
+  const target = new Element("ol");
+  h.context.target = target;
+  h.run(`appendExecutionEntry(target, {id: "entry_rejected_knowledge", task_id: data.task.task_id,
+    summary: "知识准备工程决定", occurred_at: "2026-10-05T03:00:00Z", source_uri: "sidecar://events/rejection",
+    details: {kind: "delivery_wait_resolution", resolution_kind: "RETRY_REJECTED_KNOWLEDGE_PREPARATION",
+      rejected_knowledge: {role: "coder", budget_source: "frozen_work_attempt"}}}, data.task.task_id);`);
+  assert.match(text(target), /重新进行知识准备并继续/);
+  assert.match(text(target), /原知识结果和历史保留/);
+  assert.doesNotMatch(text(target), /未识别的继续方案|扩大.*窗口/);
+});
+
 function rejectedCoderOutput(h) {
   const proof = investigation(h);
   h.step.wait_disposition.facts.classification = "PLATFORM_BUG";

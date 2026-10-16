@@ -9,13 +9,16 @@ from ai_software_engineer.agents.structured_observation import StructuredNativeS
 from ai_software_engineer.domain.delivery_resolution import KnowledgePreparationRetryEvidence
 from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.task import Task
+from ai_software_engineer.knowledge.claim_identity import (
+    claim_identity_sha256 as claim_identity_sha256,
+)
 from ai_software_engineer.knowledge.invocation import (
     KnowledgeInvocationIntent,
     KnowledgeInvocationJournal,
     KnowledgeInvocationOutcome,
     invocation_lane_sha256,
 )
-from ai_software_engineer.knowledge.models import KnowledgeError, digest
+from ai_software_engineer.knowledge.models import KnowledgeError
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
@@ -23,24 +26,6 @@ from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
 
 class KnowledgeWindowExhausted(ValueError):
     """The frozen two-extension window has no safe next local execution."""
-
-
-def claim_identity_sha256(claim: QueueClaim) -> str:
-    """Heartbeat expiry and mutable queue status cannot change original ownership."""
-    item = claim.work_item
-    return digest(
-        {
-            "work_item": item.model_dump(
-                mode="json",
-                exclude={"status", "updated_at", "available_at", "wait_reason", "wait_disposition"},
-            ),
-            "assignment": claim.assignment.to_wire(),
-            "lease": claim.lease.model_dump(mode="json", exclude={"expires_at"}),
-            "model_selection": claim.model_selection.to_wire(),
-            "worker_id": claim.worker_id,
-            "claimed_at": claim.claimed_at.isoformat(),
-        }
-    )
 
 
 def read_local_limit(records_root: Path, outcome_sha256: str) -> KnowledgeInvocationOutcome:

@@ -8,6 +8,7 @@ import pytest
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge.administration import KnowledgeHumanActionEvent
 from ai_software_engineer.knowledge.agents import KnowledgeConsultation, KnowledgeModelCall
+from ai_software_engineer.knowledge.assessment_rejection import RejectedKnowledgeAssessment
 from ai_software_engineer.knowledge.delivery import DeliveryWorkflowAdmission, DeliveryWorkflowProof
 from ai_software_engineer.knowledge.evaluation import KnowledgeEvaluationReport
 from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeResolution, KnowledgeResume
@@ -27,6 +28,7 @@ from ai_software_engineer.knowledge.stages import StageWorkflowProof
 from ai_software_engineer.knowledge.workflow import WorkflowSkillEvidence
 
 MODELS: dict[str, type[DomainModel]] = {
+    "rejected-knowledge-assessment": RejectedKnowledgeAssessment,
     "knowledge-invocation-intent": KnowledgeInvocationIntent,
     "knowledge-invocation-outcome": KnowledgeInvocationOutcome,
     "knowledge-execution-record": KnowledgeExecutionRecord,

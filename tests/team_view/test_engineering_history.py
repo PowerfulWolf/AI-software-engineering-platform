@@ -21,6 +21,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryWaitInvestigation,
     EngineeringDispositionRecord,
     KnowledgePreparationRetryEvidence,
+    RejectedKnowledgePreparationEvidence,
     delivery_wait_resolution_plan_sha256,
 )
 from ai_software_engineer.domain.engineering_authority import (
@@ -284,6 +285,164 @@ def _knowledge_decision(proof: DeliveryWaitInvestigation) -> DeliveryResolution:
         resolution_sha256="0" * 64,
     )
     return decision.model_copy(update={"resolution_sha256": decision.recompute_sha256()})
+
+
+def _rejected_knowledge_proof(task: Task) -> DeliveryWaitInvestigation:
+    original = _proof(task)
+    evidence = RejectedKnowledgePreparationEvidence(
+        scope=_scope(task),
+        requirement_id="delivery_history",
+        task_id=task.id,
+        work_item_id=original.work_item_id,
+        role=AgentRole.CODER,
+        original_lease_id="lease_original",
+        original_claim_sha256="a" * 64,
+        original_attempt=1,
+        original_dispatch_sequence=0,
+        checkpoint_sequence=original.checkpoint_sequence,
+        previous_run_id="run_knowledge_history",
+        previous_context_manifest_id="ctx_" + "b" * 64,
+        source_revision=task.base_ref,
+        observation_sha256="c" * 64,
+        context_sha256="d" * 64,
+        workspace_inventory_sha256="e" * 64,
+        workspace_capture_sha256="f" * 64,
+        current_lease_id="lease_current",
+        current_claim_sha256="1" * 64,
+        current_dispatch_sequence=1,
+        carry_refusal_sha256="2" * 64,
+        carry_history_sha256s=("2" * 64,),
+    )
+    facts = DeliveryFailureFacts.model_validate(
+        {
+            **original.disposition.facts.to_wire(),
+            "classification": "INVALID_OUTPUT",
+            "evidence_ids": ["knowledge-assessment-rejection://" + evidence.observation_sha256],
+        }
+    )
+    disposition = decide_delivery_disposition(facts)
+    proof = DeliveryWaitInvestigation.model_validate(
+        {
+            **original.to_wire(),
+            "disposition": disposition.to_wire(),
+            "disposition_sha256": disposition.disposition_sha256,
+            "retry_cause": None,
+            "original_run_id": evidence.previous_run_id,
+            "workspace_inventory_sha256": evidence.workspace_inventory_sha256,
+            "rejected_knowledge": evidence.to_wire(),
+            "permitted_resolutions": ["RETRY_REJECTED_KNOWLEDGE_PREPARATION"],
+        }
+    )
+    return proof.model_copy(update={"proof_sha256": proof.recompute_sha256()})
+
+
+def _rejected_knowledge_decision(proof: DeliveryWaitInvestigation) -> DeliveryResolution:
+    decision = DeliveryResolution.model_validate(
+        {
+            **_decision(_proof(make_task())).to_wire(),
+            "task_id": proof.task_id,
+            "work_item_id": proof.work_item_id,
+            "expected_disposition_sha256": proof.disposition_sha256,
+            "expected_task_intent_sha256": proof.task_intent_sha256,
+            "expected_source_revision": proof.source_revision,
+            "expected_checkpoint_sequence": proof.checkpoint_sequence,
+            "task_revision": proof.task_revision,
+            "task_snapshot_sha256": proof.task_snapshot_sha256,
+            "step_sha256": proof.step_sha256,
+            "proof_sha256": proof.proof_sha256,
+            "resolution_kind": "RETRY_REJECTED_KNOWLEDGE_PREPARATION",
+            "retry_cause": None,
+            "rejected_knowledge": proof.rejected_knowledge.to_wire()
+            if proof.rejected_knowledge
+            else None,
+            "submitted_at": proof.inspected_at + timedelta(seconds=1),
+        }
+    )
+    return decision.model_copy(update={"resolution_sha256": decision.recompute_sha256()})
+
+
+def test_rejected_knowledge_history_keeps_semantics_and_exact_decision_without_identity(
+    tmp_path: Path,
+) -> None:
+    task = make_task().model_copy(update={"status": TaskStatus.IMPLEMENTING, "attempts": 1})
+    proof = _rejected_knowledge_proof(task)
+    decision = _rejected_knowledge_decision(proof)
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, decision, _handling(proof, decision))
+    before = _bytes(sidecar)
+    history = engineering_history(sidecar, task, _scope(task), "delivery_history")
+    assert len(history) == 3
+    for entry in history:
+        assert entry.details["rejected_knowledge"] == {
+            "role": "coder",
+            "budget_source": "frozen_work_attempt",
+        }
+    assert _bytes(sidecar) == before
+
+
+@pytest.mark.parametrize("native", ["delivery_history", "delivery_foreign"])
+def test_joint_rejected_knowledge_resolution_uses_same_native_scope_as_its_proof(
+    tmp_path: Path,
+    native: str,
+) -> None:
+    task = make_task().model_copy(update={"status": TaskStatus.IMPLEMENTING, "attempts": 1})
+    proof = _rejected_knowledge_proof(task)
+    decision = _rejected_knowledge_decision(proof)
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, decision, _handling(proof, decision))
+    before = _bytes(sidecar)
+    if native == "delivery_foreign":
+        with pytest.raises(ValueError):
+            engineering_history(
+                sidecar, task, _scope(task), native, delivery_requirement_id="delivery_multi_parent"
+            )
+    else:
+        history = engineering_history(
+            sidecar, task, _scope(task), native, delivery_requirement_id="delivery_multi_parent"
+        )
+        assert len(history) == 3
+    assert _bytes(sidecar) == before
+
+
+@pytest.mark.parametrize("changed", ["scope", "requirement", "decision_claim"])
+def test_rejected_knowledge_history_refuses_foreign_or_changed_exact_evidence(
+    tmp_path: Path,
+    changed: str,
+) -> None:
+    task = make_task().model_copy(update={"status": TaskStatus.IMPLEMENTING, "attempts": 1})
+    proof = _rejected_knowledge_proof(task)
+    evidence = proof.rejected_knowledge
+    assert evidence is not None
+    if changed in {"scope", "requirement"}:
+        evidence = RejectedKnowledgePreparationEvidence.model_validate(
+            {
+                **evidence.to_wire(),
+                **(
+                    {"scope": {**evidence.scope.to_wire(), "project_id": "project_foreign"}}
+                    if changed == "scope"
+                    else {"requirement_id": "delivery_foreign"}
+                ),
+            }
+        )
+        proof = DeliveryWaitInvestigation.model_validate(
+            {**proof.to_wire(), "rejected_knowledge": evidence.to_wire()}
+        )
+        proof = proof.model_copy(update={"proof_sha256": proof.recompute_sha256()})
+    decision = _rejected_knowledge_decision(proof)
+    if changed == "decision_claim":
+        decision = DeliveryResolution.model_validate(
+            {
+                **decision.to_wire(),
+                "rejected_knowledge": {**evidence.to_wire(), "current_claim_sha256": "9" * 64},
+            }
+        )
+        decision = decision.model_copy(update={"resolution_sha256": decision.recompute_sha256()})
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, decision)
+    before = _bytes(sidecar)
+    with pytest.raises(ValueError):
+        engineering_history(sidecar, task, _scope(task), "delivery_history")
+    assert _bytes(sidecar) == before
 
 
 def test_knowledge_retry_history_keeps_window_without_exposing_execution_identity(

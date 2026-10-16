@@ -1606,6 +1606,7 @@ const engineeringResolutionLabels = {
   REVERIFY_CANDIDATE: "重新测试当前候选",
   RETRY_VERIFIER_PREPARATION: "重试验证准备",
   RETRY_KNOWLEDGE_PREPARATION: "扩大知识准备窗口并继续",
+  RETRY_REJECTED_KNOWLEDGE_PREPARATION: "重新进行知识准备并继续",
 };
 const engineeringAuthorizationLabels = {
   engineering_operator_decision: "工程负责人明确决定",
@@ -1642,6 +1643,55 @@ function matchingKnowledgePreparationEvidence(request, step, proof) {
       evidence.source_revision !== proof.source_revision || evidence.checkpoint_sequence !== proof.checkpoint_sequence) return null;
   const task = currentRequestTasks(request).find(item => item.task_id === proof.task_id);
   if (task?.scope?.root && evidence.scope.repository_root !== task.scope.root) return null;
+  return evidence;
+}
+function rejectedKnowledgePreparationLines(evidence) {
+  if (!evidence || evidence.role !== "coder" ||
+      evidence.budget_source !== "frozen_work_attempt") return [];
+  const role = {coder: "Coder", qa: "QA", reviewer: "Reviewer"}[evidence.role];
+  return [
+    `${role} 本轮知识评估未通过校验，主角色尚未开始。`,
+    "继续使用 1 次原任务剩余的冻结工作额度，重新进行知识准备；执行时限保持。",
+    "原需求、分支、开发进度、原知识结果和历史保留；后续仍需独立 QA 和 Review。",
+  ];
+}
+function matchingRejectedKnowledgePreparationEvidence(request, step, proof) {
+  const evidence = proof?.rejected_knowledge;
+  const facts = step.wait_disposition?.facts;
+  const task = currentRequestTasks(request).find(item => item.task_id === proof?.task_id);
+  const requirementMatches = evidence?.requirement_id === request.id || task &&
+    evidence?.requirement_id === task.id && request.scopes?.some(scope => scope.delivery_id === task.id);
+  const carries = evidence?.carry_history_sha256s || [];
+  if (!task || !facts || facts.classification !== "INVALID_OUTPUT" ||
+      !rejectedKnowledgePreparationLines(evidence).length || !requirementMatches ||
+      evidence.scope?.team_id !== snapshot?.team_id || evidence.scope?.project_id !== request.project_id ||
+      evidence.task_id !== proof.task_id || evidence.work_item_id !== step.work_item_id ||
+      evidence.role !== step.role || evidence.role !== facts.role ||
+      evidence.source_revision !== proof.source_revision || evidence.checkpoint_sequence !== proof.checkpoint_sequence ||
+      evidence.previous_run_id !== proof.original_run_id ||
+      evidence.workspace_inventory_sha256 !== proof.workspace_inventory_sha256 ||
+      !/^run_[a-z0-9][a-z0-9_-]{2,63}$/.test(evidence.previous_run_id || "") ||
+      !/^ctx_[a-f0-9]{64}$/.test(evidence.previous_context_manifest_id || "") ||
+      !["original_lease_id", "current_lease_id"].every(key => typeof evidence[key] === "string" && evidence[key].trim()) ||
+      !Number.isSafeInteger(evidence.original_attempt) || evidence.original_attempt < 1 ||
+      !["checkpoint_sequence", "original_dispatch_sequence", "current_dispatch_sequence"].every(key =>
+        Number.isSafeInteger(evidence[key]) && evidence[key] >= 0) ||
+      evidence.current_dispatch_sequence < evidence.original_dispatch_sequence ||
+      !["original_claim_sha256", "observation_sha256", "context_sha256", "workspace_inventory_sha256",
+        "workspace_capture_sha256", "current_claim_sha256"].every(key => /^[a-f0-9]{64}$/.test(evidence[key] || "")) ||
+      (evidence.carry_refusal_sha256 != null && !/^[a-f0-9]{64}$/.test(evidence.carry_refusal_sha256)) ||
+      !Array.isArray(carries) || carries.length > 511 || new Set(carries).size !== carries.length ||
+      carries.some(value => !/^[a-f0-9]{64}$/.test(value)) ||
+      (evidence.carry_refusal_sha256 && carries.at(-1) !== evidence.carry_refusal_sha256) ||
+      (evidence.current_lease_id === evidence.original_lease_id && carries.length) ||
+      ((evidence.current_lease_id !== evidence.original_lease_id ||
+        evidence.current_claim_sha256 !== evidence.original_claim_sha256 ||
+        evidence.current_dispatch_sequence !== evidence.original_dispatch_sequence) && !evidence.carry_refusal_sha256) ||
+      facts.evidence_ids?.length !== 1 ||
+      facts.evidence_ids[0] !== "knowledge-assessment-rejection://" + evidence.observation_sha256 ||
+      proof.retry_cause != null || proof.invocation_start_sha256 != null || proof.invocation_outcome_sha256 != null) return null;
+  if (task.scope?.root && evidence.scope.repository_root !== task.scope.root) return null;
+  if (task.repository_id && evidence.scope.repository_id !== task.repository_id) return null;
   return evidence;
 }
 function rejectedCoderOutputLines(evidence) {
@@ -1691,6 +1741,8 @@ function matchingRejectedCoderOutputEvidence(request, step, proof) {
 }
 function engineeringWaitHandlingLabel(step) {
   const classification = step.wait_disposition?.facts.classification;
+  if (classification === "INVALID_OUTPUT" && step.wait_disposition?.facts.evidence_ids?.some(value =>
+    /^knowledge-assessment-rejection:\/\/[a-f0-9]{64}$/.test(value))) return "让平台处理知识准备";
   if (classification === "KNOWLEDGE_PREPARATION_LIMIT") return "让平台处理知识准备";
   if (["PLATFORM_BUG", "INVALID_OUTPUT"].includes(classification)) return "让平台处理产出校验";
   return "让平台处理中断";
@@ -1903,14 +1955,19 @@ function engineeringWaitDecision(request, step, proof) {
   const matchesRejected = decision => decision?.resolution_kind !== "RETRY_REJECTED_CODER_OUTPUT" ||
     matchingRejectedCoderOutputEvidence(request, step, proof) &&
     sameEngineeringWaitProofFacts({rejected_output: decision.rejected_output}, {rejected_output: proof.rejected_output});
+  const matchesRejectedKnowledge = decision => decision?.resolution_kind !== "RETRY_REJECTED_KNOWLEDGE_PREPARATION" ||
+    matchingRejectedKnowledgePreparationEvidence(request, step, proof) &&
+    sameEngineeringWaitProofFacts({rejected_knowledge: decision.rejected_knowledge},
+      {rejected_knowledge: proof.rejected_knowledge});
   if (handling?.status === "RESOLVED" && handling.resolution?.proof_sha256 === handling.investigation.proof_sha256 &&
       engineeringResolutionLabels[handling.resolution.resolution_kind] && matchesKnowledge(handling.resolution) &&
-      matchesRejected(handling.resolution)) return handling.resolution;
+      matchesRejected(handling.resolution) && matchesRejectedKnowledge(handling.resolution)) return handling.resolution;
   const operation = operations.find(item => item.status === "SUCCEEDED" &&
     operationAction(item) === "RESOLVE_DELIVERY_WAIT" && sameEngineeringWaitIntent(item.intent, bound) &&
     operationResult(item)?.engineering_wait_resolution?.proof_sha256 === proof.proof_sha256 &&
     matchesKnowledge(operationResult(item).engineering_wait_resolution) &&
-    matchesRejected(operationResult(item).engineering_wait_resolution));
+    matchesRejected(operationResult(item).engineering_wait_resolution) &&
+    matchesRejectedKnowledge(operationResult(item).engineering_wait_resolution));
   return operationResult(operation)?.engineering_wait_resolution || null;
 }
 function engineeringWaitCanResolve(request, step, proof) {
@@ -1925,6 +1982,7 @@ function engineeringWaitCanResolve(request, step, proof) {
     (proof.permitted_resolutions || []).length > 0 &&
     proof.permitted_resolutions.every(kind => Boolean(engineeringResolutionLabels[kind]) &&
       (kind !== "RETRY_KNOWLEDGE_PREPARATION" || matchingKnowledgePreparationEvidence(request, step, proof)) &&
+      (kind !== "RETRY_REJECTED_KNOWLEDGE_PREPARATION" || matchingRejectedKnowledgePreparationEvidence(request, step, proof)) &&
       (kind !== "RETRY_REJECTED_CODER_OUTPUT" || matchingRejectedCoderOutputEvidence(request, step, proof)));
 }
 async function submitEngineeringWaitOperation(intent) {
@@ -1975,15 +2033,18 @@ function engineeringActiveOperationBox(request, operation) {
       : progress?.title || "平台正在处理当前操作，完成后会更新检查结果与可用操作。", "muted"));
   return panel;
 }
-function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, handling = null, legacyRescue = false, rescueFailure = null, controlUnavailable = null, rejectedOutputValid = false} = {}) {
+function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, handling = null, legacyRescue = false, rescueFailure = null, controlUnavailable = null, rejectedOutputValid = false, rejectedKnowledgeValid = false} = {}) {
   const knowledgeWindow = !(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_KNOWLEDGE_PREPARATION")
     ? knowledgePreparationWindowLines(proof.knowledge_preparation) : [];
+  const rejectedKnowledge = !(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_REJECTED_KNOWLEDGE_PREPARATION")
+    ? rejectedKnowledgePreparationLines(proof.rejected_knowledge) : [];
   if (historical) {
     target.append(el("p", "当次调查 · " + humanizeBlockingText(proof.next_action || "调查结果未提供处理建议。")),
       el("p", "这是该次调查保存的结果；当前原因与操作以页面上方为准。", "muted"));
     if (proof.missing?.length) target.append(el("p", "当次未完成项 · " + proof.missing.map(item =>
       engineeringProofMissingGuidance[item]?.[0] || "平台返回了未识别的检查项，不能据此继续").join("；")));
     for (const line of knowledgeWindow) target.append(el("p", "当次知识准备方案 · " + line));
+    for (const line of rejectedKnowledge) target.append(el("p", "当次知识准备方案 · " + line));
     if (!(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_REJECTED_CODER_OUTPUT"))
       for (const line of rejectedCoderOutputLines(proof.rejected_output)) target.append(el("p", "当次保留进度方案 · " + line));
     return;
@@ -2018,10 +2079,12 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
   } else if (!collectionFailed) {
     const permitted = (proof.permitted_resolutions || []).map(item => engineeringResolutionLabels[item]).filter(Boolean);
     const known = permitted.length === proof.permitted_resolutions?.length &&
-      (!proof.permitted_resolutions?.includes("RETRY_REJECTED_CODER_OUTPUT") || rejectedOutputValid);
+      (!proof.permitted_resolutions?.includes("RETRY_REJECTED_CODER_OUTPUT") || rejectedOutputValid) &&
+      (!proof.permitted_resolutions?.includes("RETRY_REJECTED_KNOWLEDGE_PREPARATION") || rejectedKnowledgeValid);
     target.append(el("p", permitted.length && known ? "检查已通过，可按以下方案继续 · " + permitted.join("、")
       : "当前没有可安全执行的继续方案，需平台维护者处理。"));
     for (const line of knowledgeWindow) target.append(el("p", line));
+    if (known) for (const line of rejectedKnowledge) target.append(el("p", line));
     if (known && proof.permitted_resolutions?.includes("RETRY_REJECTED_CODER_OUTPUT"))
       for (const line of rejectedCoderOutputLines(proof.rejected_output)) target.append(el("p", line));
   }
@@ -2051,6 +2114,7 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
     facts.user = "查看下方恢复方案；批准后保持暂停，再明确继续原需求。";
   }
   const knowledge = matchingKnowledgePreparationEvidence(request, step, proof);
+  const rejectedKnowledge = matchingRejectedKnowledgePreparationEvidence(request, step, proof);
   const rejected = matchingRejectedCoderOutputEvidence(request, step, proof);
   if (rejected) {
     facts.happened = "本轮开发报告的进度序号不符合执行约定，报告未被接纳。";
@@ -2064,6 +2128,12 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
     facts.preservation = "原需求、代码分支、已有开发进度和知识记录保留；不会清空工作区或重建需求。";
     if (!missing.length)
       facts.platform = `可使用 1 次原任务剩余的冻结工作额度，将下一次知识准备窗口扩大到 ${knowledge.next_timeout_seconds} 秒，再领取原任务继续。`;
+  }
+  if (rejectedKnowledge) {
+    facts.happened = rejectedKnowledgePreparationLines(rejectedKnowledge)[0];
+    facts.preservation = "原需求、分支、开发进度、原知识结果和历史保留。";
+    facts.platform = "可使用 1 次原任务剩余的冻结工作额度，重新进行知识准备；执行时限保持。";
+    facts.user = "查看知识准备方案；需要工程授权时，确认后继续，后续仍需独立 QA 和 Review。";
   }
   if (!completedPlan && /^[a-f0-9]{64}$/.test(proof?.process_stop_sha256 || "") &&
       !missing.includes("STOP_UNRECORDED") && missing.includes("CHECKPOINT_UNAVAILABLE")) {
@@ -2272,6 +2342,8 @@ async function copyEngineeringWaitReport(request, handling) {
       : rescue ? "按恢复前提检查所列下一步处理后重新检查；旧执行结果仍保持未知。" : humanizeBlockingText(handling.recheck_when || "处理记录或执行前提更新后")),
     ...(!(proof?.missing || []).length && proof?.permitted_resolutions?.includes("RETRY_KNOWLEDGE_PREPARATION")
       ? knowledgePreparationWindowLines(proof.knowledge_preparation).map(line => "知识准备方案 · " + line) : []),
+    ...(!(proof?.missing || []).length && proof?.permitted_resolutions?.includes("RETRY_REJECTED_KNOWLEDGE_PREPARATION")
+      ? rejectedKnowledgePreparationLines(proof.rejected_knowledge).map(line => "知识准备方案 · " + line) : []),
     ...(!(proof?.missing || []).length && proof?.permitted_resolutions?.includes("RETRY_REJECTED_CODER_OUTPUT")
       ? rejectedCoderOutputLines(proof.rejected_output).map(line => "保留进度方案 · " + line) : []),
     ...(handling.resolution ? ["工程决定 · " + (engineeringResolutionLabels[handling.resolution.resolution_kind] || "当前继续方案未识别")] : []),
@@ -2341,9 +2413,10 @@ function engineeringWaitBox(request, task, step) {
   if (proof) {
     const collectionFailed = handling?.collection_failed === true;
     const rejectedOutputValid = Boolean(matchingRejectedCoderOutputEvidence(request, step, proof));
+    const rejectedKnowledgeValid = Boolean(matchingRejectedKnowledgePreparationEvidence(request, step, proof));
     const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof",
-      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || stoppedPlan?.plan_sha256 || failurePlan?.plan_sha256 || null]);
-    appendEngineeringInvestigation(result, proof, {historical: Boolean(completedPlan || providerPlan || stoppedPlan || failurePlan), collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid});
+      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, rejectedKnowledgeValid, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || stoppedPlan?.plan_sha256 || failurePlan?.plan_sha256 || null]);
+    appendEngineeringInvestigation(result, proof, {historical: Boolean(completedPlan || providerPlan || stoppedPlan || failurePlan), collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, rejectedKnowledgeValid});
     management.append(result);
   }
   if (controlUnavailable) management.append(deliveryControlUnavailableNotice(controlUnavailable));
@@ -2710,7 +2783,7 @@ function engineeringStoppedProviderRetryFacts(request, task, step) {
   const plan = engineeringCurrentProviderPlan(request, task, step);
   if (!bound || step.wait_disposition.facts.classification === "EXECUTION_BASELINE_PAUSED" ||
       !["TRANSIENT_INFRA", "NONTRANSIENT_INFRA", "PLATFORM_BUG", "EXECUTION_UNCERTAIN"].includes(step.wait_disposition.facts.classification) ||
-      proof?.knowledge_preparation || proof?.rejected_output || proof?.interruption_receipt_sha256 ||
+      proof?.knowledge_preparation || proof?.rejected_knowledge || proof?.rejected_output || proof?.interruption_receipt_sha256 ||
       proof?.permitted_resolutions?.length || proof?.missing?.includes("BUDGET_EXHAUSTED") ||
       !plan && (proof?.provider_failure_code !== "AUTHENTICATION_ERROR" ||
         !/^[a-f0-9]{64}$/.test(proof.invocation_outcome_sha256 || ""))) return null;
@@ -2819,7 +2892,7 @@ function engineeringStoppedFailureRetryFacts(request, task, step) {
   const proof = engineeringWaitProof(request, step);
   if (!bound || task.project_id !== request.project_id || task.request_id !== request.id ||
       ["DONE", "CLOSED"].includes(request.stage) || step.wait_disposition?.facts.classification !== "NONTRANSIENT_INFRA" ||
-      proof?.knowledge_preparation || proof?.rejected_output || proof?.interruption_receipt_sha256 ||
+      proof?.knowledge_preparation || proof?.rejected_knowledge || proof?.rejected_output || proof?.interruption_receipt_sha256 ||
       proof?.permitted_resolutions?.length || proof?.missing?.includes("BUDGET_EXHAUSTED") ||
       proof?.provider_failure_code && proof.provider_failure_code !== "PROVIDER_UNAVAILABLE" ||
       proof?.retry_cause || engineeringCurrentCompletedPlan(request, task, step) ||
@@ -2961,7 +3034,7 @@ function engineeringCompletedOutputRescueFacts(request, task, step) {
       proof?.provider_failure_code === "AUTHENTICATION_ERROR" ||
       engineeringBaselinePlan(request, task, step, "stopped_provider_retry") ||
       !["TRANSIENT_INFRA", "NONTRANSIENT_INFRA", "PLATFORM_BUG", "EXECUTION_UNCERTAIN", "INVALID_OUTPUT"].includes(step.wait_disposition?.facts.classification) ||
-      proof?.knowledge_preparation || proof?.rejected_output || proof?.interruption_receipt_sha256 ||
+      proof?.knowledge_preparation || proof?.rejected_knowledge || proof?.rejected_output || proof?.interruption_receipt_sha256 ||
       proof?.permitted_resolutions?.length || proof?.retry_cause && proof.retry_cause !==
         (engineeringRejectedOutputWait(step) ? "completed_output_rejected" : "completed_output_unavailable") ||
       proof?.missing?.includes("BUDGET_EXHAUSTED") || !plan && engineeringLegacyRescueFacts(request, task, step, proof)) return null;
@@ -3062,7 +3135,7 @@ function engineeringStoppedExecutionRescueFacts(request, task, step) {
       !/^[a-f0-9]{64}$/.test(proof?.process_stop_sha256 || "") ||
       missing.length !== 2 || !missing.includes("OUTCOME_UNKNOWN") || !missing.includes("CHECKPOINT_UNAVAILABLE") ||
       proof.permitted_resolutions?.length || proof.interruption_receipt_sha256 || proof.retry_cause ||
-      proof.knowledge_preparation || proof.rejected_output || proof.provider_failure_code ||
+      proof.knowledge_preparation || proof.rejected_knowledge || proof.rejected_output || proof.provider_failure_code ||
       engineeringWaitDecision(request, step, proof)) return null;
   return bound;
 }
@@ -10818,6 +10891,8 @@ function appendEngineeringExecutionDetails(target, technical, details) {
     if (permitted.length) target.append(el("p", "允许的处理方式 · " + permitted.join("、")));
     if (!missing.length && details.permitted_resolutions?.includes("RETRY_KNOWLEDGE_PREPARATION"))
       for (const line of knowledgePreparationWindowLines(details.knowledge_preparation)) target.append(el("p", line));
+    if (!missing.length && details.permitted_resolutions?.includes("RETRY_REJECTED_KNOWLEDGE_PREPARATION"))
+      for (const line of rejectedKnowledgePreparationLines(details.rejected_knowledge)) target.append(el("p", line));
     if (!missing.length && details.permitted_resolutions?.includes("RETRY_REJECTED_CODER_OUTPUT"))
       for (const line of rejectedCoderOutputLines(details.rejected_output)) target.append(el("p", line));
     target.append(el("p", "调查只记录事实，不改变验收结论。", "muted"));
@@ -10835,14 +10910,18 @@ function appendEngineeringExecutionDetails(target, technical, details) {
     if (details.user_action) target.append(el("p", "当次用户操作 · " + humanizeBlockingText(details.user_action), "muted"));
     if (details.recheck_when) target.append(el("p", "当次复查时机 · " + humanizeBlockingText(details.recheck_when), "muted"));
     if (details.resolution) appendEngineeringExecutionDetails(target, technical, details.resolution);
-    else if (["RESOLVED", "NEEDS_AUTHORIZATION"].includes(details.status))
+    else if (["RESOLVED", "NEEDS_AUTHORIZATION"].includes(details.status)) {
       for (const line of knowledgePreparationWindowLines(details.knowledge_preparation)) target.append(el("p", line));
+      for (const line of rejectedKnowledgePreparationLines(details.rejected_knowledge)) target.append(el("p", line));
+    }
   } else if (details.kind === "delivery_wait_resolution") {
     target.append(el("p", "工程决定 · " + (engineeringResolutionLabels[details.resolution_kind] ||
       "平台返回了未识别的继续方案，不能据此执行")));
     if (details.operator_id) target.append(el("p", "实际处理者 · " + details.operator_id, "muted"));
     if (details.resolution_kind === "RETRY_KNOWLEDGE_PREPARATION")
       for (const line of knowledgePreparationWindowLines(details.knowledge_preparation)) target.append(el("p", line));
+    if (details.resolution_kind === "RETRY_REJECTED_KNOWLEDGE_PREPARATION")
+      for (const line of rejectedKnowledgePreparationLines(details.rejected_knowledge)) target.append(el("p", line));
     if (details.resolution_kind === "RETRY_REJECTED_CODER_OUTPUT")
       for (const line of rejectedCoderOutputLines(details.rejected_output)) target.append(el("p", line));
     target.append(el("p", "此记录是工程决定；实际执行和验收结果以之后的角色报告为准。", "muted"));

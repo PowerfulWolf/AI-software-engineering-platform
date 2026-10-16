@@ -15,6 +15,7 @@ from pydantic import AwareDatetime, Field, StringConstraints, field_validator, m
 from ai_software_engineer.design import DesignerServiceResult
 from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.domain.artifact import CommitSha
+from ai_software_engineer.domain.delivery_resolution import RejectedKnowledgePreparationEvidence
 from ai_software_engineer.domain.identity import RepositoryId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.prerequisite_repair import (
@@ -702,6 +703,58 @@ class UnifiedProjectEntryService:
             )
         # Worker needs this same flock. Release the proof scope before normal
         # Dispatcher expiry/reclaim and its durable invocation replay refusal.
+        return self.resume(command)
+
+    def retry_rejected_knowledge_preparation(
+        self,
+        command: ResumeProjectDelivery,
+        *,
+        proof_scope: Callable[
+            [ProjectDeliveryCheckpoint],
+            AbstractContextManager[RejectedKnowledgePreparationEvidence | None],
+        ],
+    ) -> ProjectDeliveryResult:
+        """Reenter only a proven legacy no-main refusal, before fresh-owner waiting."""
+        store, current = self._current(command.delivery_id)
+        if (
+            current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or current.failed_stage is not DeliveryStage.DELIVERING
+            or current.failure_code is not DeliveryFailureCode.INVARIANT_VIOLATION
+            or current.task_id is None
+            or current.task_status is not TaskStatus.IMPLEMENTING
+            or current.task_revision is None
+            or current.candidate_revision is not None
+        ):
+            return ProjectDeliveryResult(checkpoint=current)
+        self._backend.reconcile(current)
+        with proof_scope(current) as proof:
+            if proof is None:
+                return ProjectDeliveryResult(checkpoint=current)
+            try:
+                RejectedKnowledgePreparationEvidence.model_validate(proof.to_wire())
+            except ValueError as error:
+                raise DeliveryCommandRejected("知识拒绝证明无效, 原现场保留") from error
+            if (
+                self._current(command.delivery_id)[1] != current
+                or proof.task_id != current.task_id
+                or proof.checkpoint_sequence != current.task_revision
+                or proof.scope.repository_id != current.repository_id
+                or proof.scope.repository_root != current.repository_root
+                or (
+                    proof.current_lease_id != proof.original_lease_id
+                    and proof.carry_refusal_sha256 is None
+                )
+            ):
+                raise DeliveryCommandRejected("知识拒绝证明已偏离当前需求 checkpoint, 原现场保留")
+            self._next(
+                store,
+                current,
+                stage=DeliveryStage.DELIVERING,
+                next_action=DeliveryNextAction.RUN_DELIVERY,
+                at=command.submitted_at,
+            )
+        # Expiry/reclaim and the fresh owner's actual refusal run through the
+        # existing Dispatcher only after the Task flock has been released.
         return self.resume(command)
 
     def retry_interrupted_stage(self, command: ResumeProjectDelivery) -> ProjectDeliveryResult:

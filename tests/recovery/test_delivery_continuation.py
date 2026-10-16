@@ -83,7 +83,10 @@ def test_terminal_coder_preparation_drift_offers_exact_recovery(tmp_path: Path) 
     expected = object()
     command = ResumeProjectDelivery(delivery_id=current.delivery_id)
 
-    with patch.object(controller, "_continue_coder_recovery", return_value=expected) as recover:
+    with (
+        patch.object(controller, "_continue_pre_execution_restart", return_value=None),
+        patch.object(controller, "_continue_coder_recovery", return_value=expected) as recover,
+    ):
         assert controller.resume(command) is expected
         recover.assert_called_once_with(current, command)
     entry.resume.assert_not_called()
@@ -92,6 +95,7 @@ def test_terminal_coder_preparation_drift_offers_exact_recovery(tmp_path: Path) 
 
 def test_unstarted_preparation_drift_offers_exact_rebind_before_generic_wait(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A NEW dispatched Task gets the approval gate instead of a dead-end drift wait."""
     current = SimpleNamespace(
@@ -122,14 +126,16 @@ def test_unstarted_preparation_drift_offers_exact_rebind_before_generic_wait(
         verification=Mock(),
     )
     expected = object()
-    controller._continue_pre_execution_restart = Mock(return_value=expected)
+    restart = Mock(return_value=expected)
+    monkeypatch.setattr(controller, "_continue_pre_execution_restart", restart)
 
     assert controller.resume(ResumeProjectDelivery(delivery_id=current.delivery_id)) is expected
-    controller._continue_pre_execution_restart.assert_called_once()
+    restart.assert_called_once()
 
 
 def test_terminal_candidate_completion_bypasses_stale_native_retry(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A sealed QA/Review result remains reachable after preparation drift."""
     current = SimpleNamespace(
@@ -164,7 +170,8 @@ def test_terminal_candidate_completion_bypasses_stale_native_retry(
         verification=verification,
     )
     expected = object()
-    controller._continue_completion = Mock(return_value=expected)
+    complete = Mock(return_value=expected)
+    monkeypatch.setattr(controller, "_continue_completion", complete)
 
     result = controller.resume(ResumeProjectDelivery(delivery_id=current.delivery_id))
 
@@ -173,11 +180,12 @@ def test_terminal_candidate_completion_bypasses_stale_native_retry(
         repository_root=current.repository_root,
         delivery_id=current.delivery_id,
     )
-    controller._continue_completion.assert_called_once_with(verification_plan, completion)
+    complete.assert_called_once_with(verification_plan, completion)
 
 
 def test_terminal_candidate_without_plan_bypasses_stale_native_retry(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Preparation drift must still allow a fresh plan for a retained candidate."""
     current = SimpleNamespace(
@@ -217,7 +225,7 @@ def test_terminal_candidate_without_plan_bypasses_stale_native_retry(
         verification=verification,
     )
     expected = object()
-    controller._approval_required = Mock(return_value=expected)
+    monkeypatch.setattr(controller, "_approval_required", Mock(return_value=expected))
 
     result = controller.resume(ResumeProjectDelivery(delivery_id=current.delivery_id))
 
@@ -230,7 +238,9 @@ def test_terminal_candidate_without_plan_bypasses_stale_native_retry(
 
 
 @pytest.mark.parametrize("status", [TaskStatus.QA, TaskStatus.REVIEW])
-def test_nonterminal_verifier_keeps_native_resume(status: TaskStatus) -> None:
+def test_nonterminal_verifier_keeps_native_resume(
+    status: TaskStatus, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A blocked Delivery cursor does not make its live verifier Task terminal."""
     current = SimpleNamespace(
         stage=DeliveryStage.BLOCKED,
@@ -247,6 +257,8 @@ def test_nonterminal_verifier_keeps_native_resume(status: TaskStatus) -> None:
             stage=DeliveryStage.DELIVERING, next_action=DeliveryNextAction.RUN_DELIVERY
         )
     )
+    entry.retry_rejected_knowledge_preparation.return_value = SimpleNamespace(checkpoint=current)
+    entry.retry_stopped_execution.return_value = SimpleNamespace(checkpoint=current)
     entry.retry_interrupted_stage.return_value = resumed
     verification = Mock()
     controller = DeliveryResumeController(
@@ -258,7 +270,7 @@ def test_nonterminal_verifier_keeps_native_resume(status: TaskStatus) -> None:
         verification=verification,
     )
     expected = object()
-    controller._result = Mock(return_value=expected)
+    monkeypatch.setattr(controller, "_result", Mock(return_value=expected))
     command = ResumeProjectDelivery(delivery_id=current.delivery_id)
 
     assert controller.resume(command) is expected

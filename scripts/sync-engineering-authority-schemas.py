@@ -190,6 +190,19 @@ resolution_schema["$defs"]["DeliveryResolution"]["allOf"] = [
         "else": {"properties": {"rejected_output": {"type": "null"}}},
     },
 ]
+resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
+    {
+        "if": {
+            "required": ["resolution_kind"],
+            "properties": {"resolution_kind": {"const": "RETRY_REJECTED_KNOWLEDGE_PREPARATION"}},
+        },
+        "then": {
+            "required": ["rejected_knowledge"],
+            "properties": {"rejected_knowledge": {"type": "object"}},
+        },
+        "else": {"properties": {"rejected_knowledge": {"type": "null"}}},
+    }
+)
 resolution_schema["$defs"]["DeliveryWaitHandling"]["allOf"] = [
     {
         "if": {
@@ -386,6 +399,77 @@ resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] += [
         },
     },
 ]
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] += [
+    {
+        "if": {
+            "required": ["permitted_resolutions"],
+            "properties": {
+                "permitted_resolutions": {
+                    "contains": {"const": "RETRY_REJECTED_KNOWLEDGE_PREPARATION"}
+                }
+            },
+        },
+        "then": {
+            "required": ["rejected_knowledge"],
+            "properties": {"rejected_knowledge": {"type": "object"}},
+        },
+    },
+    {
+        "if": {
+            "required": ["rejected_knowledge"],
+            "properties": {"rejected_knowledge": {"type": "object"}},
+        },
+        "then": {
+            "required": ["original_run_id", "workspace_inventory_sha256"],
+            "properties": {
+                "original_run_id": {"type": "string"},
+                "workspace_inventory_sha256": {"type": "string"},
+                **{
+                    name: {"type": "null"}
+                    for name in (
+                        "invocation_start_sha256",
+                        "invocation_outcome_sha256",
+                        "retry_cause",
+                        "interruption_receipt_sha256",
+                        "process_stop_sha256",
+                        "original_authority",
+                        "knowledge_preparation",
+                        "verification_retry",
+                        "verifier_preparation",
+                        "rejected_output",
+                    )
+                },
+                "permitted_resolutions": {
+                    "maxItems": 1,
+                    "items": {"const": "RETRY_REJECTED_KNOWLEDGE_PREPARATION"},
+                },
+                "disposition": {
+                    "properties": {
+                        "facts": {
+                            "properties": {
+                                "role": {"const": "coder"},
+                                "classification": {"const": "INVALID_OUTPUT"},
+                                "evidence_ids": {
+                                    "minItems": 1,
+                                    "maxItems": 1,
+                                    "items": {
+                                        "pattern": "^knowledge-assessment-rejection://[a-f0-9]{64}$"
+                                    },
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+        },
+    },
+]
+resolution_schema["$defs"]["RejectedKnowledgePreparationEvidence"]["properties"]["role"] = {
+    "const": "coder"
+}
+resolution_schema["$defs"]["RejectedKnowledgePreparationEvidence"]["properties"][
+    "carry_history_sha256s"
+]["uniqueItems"] = True
 resolution_schema["$defs"]["VerifierPreparationEvidence"]["allOf"] = [
     {
         "if": {"properties": {"native_execution_state": {"const": "FINISHED"}}},

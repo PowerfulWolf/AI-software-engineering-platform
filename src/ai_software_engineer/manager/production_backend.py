@@ -73,6 +73,7 @@ from ai_software_engineer.domain import (
     derive_delivery_task,
 )
 from ai_software_engineer.domain.agent import DELIVERY_ROLE_INPUTS
+from ai_software_engineer.domain.delivery_resolution import RejectedKnowledgePreparationEvidence
 from ai_software_engineer.domain.engineering_authority import (
     EngineeringPolicy,
     EngineeringScope,
@@ -1816,6 +1817,41 @@ class ProductionProjectDeliveryBackend:
                 source,
             )
 
+        def guard_rejected_knowledge(task: Task, step: QueuedRoleStep, claim: QueueClaim) -> None:
+            if (
+                task.status is not TaskStatus.IMPLEMENTING
+                or claim.work_item.role is not AgentRole.CODER
+            ):
+                return
+            from ai_software_engineer.git import GitWorktreeManager
+            from ai_software_engineer.manager.rejected_knowledge_preparation import (
+                carry_rejected_knowledge,
+            )
+
+            carry_rejected_knowledge(
+                task=task,
+                step=step,
+                claim=claim,
+                records=knowledge_records,
+                state=facts.workspace.directory("state"),
+                queue=queue,
+                artifacts=FileArtifactStore(facts.workspace.directory("artifacts"), read_only=True),
+                git=GitWorktreeManager(
+                    facts.workspace.repository_root,
+                    Path(self._config.platform_root).expanduser().resolve()
+                    / "worktrees"
+                    / dispatch.repository_id,
+                    branch_names={dispatch.task_id: dispatch.task.branch_name},
+                ),
+                scope=EngineeringScope(
+                    team_id=self._config.team_id,
+                    project_id=facts.workspace.manifest.project_id,
+                    repository_id=dispatch.repository_id,
+                    repository_root=task.repository,
+                ),
+                requirement_id=requirement_id or task.id,
+            )
+
         with RuntimeSession(
             runtime_config,
             environment=self._environment,
@@ -1867,6 +1903,7 @@ class ProductionProjectDeliveryBackend:
                 locks_root=facts.workspace.directory("state") / "queue-worker-locks",
                 build_step=approved.build_step,
                 dispatcher=approved.dispatcher,
+                preparation_guard=guard_rejected_knowledge,
             )
             return supervisor.run(
                 runtime,
@@ -2115,6 +2152,180 @@ class ProductionProjectDeliveryBackend:
         return self._facts(preparation)
 
     @contextmanager
+    def rejected_knowledge_retry_scope(
+        self, checkpoint: ProjectDeliveryCheckpoint
+    ) -> Iterator[RejectedKnowledgePreparationEvidence | None]:
+        """Revalidate one expired legacy no-main refusal while holding its Task flock."""
+        from ai_software_engineer.domain.task import task_matches_dispatch
+        from ai_software_engineer.git import GitWorktreeManager
+        from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+        from ai_software_engineer.manager.queue_capacity import production_role_queue
+        from ai_software_engineer.manager.rejected_knowledge_preparation import (
+            rejected_assessment_for_work,
+            rejected_knowledge_evidence,
+        )
+        from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
+
+        if (
+            checkpoint.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or checkpoint.failed_stage is not DeliveryStage.DELIVERING
+            or checkpoint.failure_code is not DeliveryFailureCode.INVARIANT_VIOLATION
+            or checkpoint.task_id is None
+            or checkpoint.task_status is not TaskStatus.IMPLEMENTING
+            or checkpoint.task_revision is None
+            or checkpoint.candidate_revision is not None
+            or checkpoint.dispatch_commit_id is None
+        ):
+            yield None
+            return
+        facts = self._sealed_facts_for_checkpoint(checkpoint)
+        authority = MySqlDispatchAuthority(
+            self._dsn, request_revisions=facts.product, planner_records=facts.planning
+        )
+        allocation = authority.get_allocation(checkpoint.dispatch_commit_id)
+        queue = self._role_queue or production_role_queue(self._dsn)
+        state = facts.workspace.directory("state")
+        guard = WorkerExecutionGuard()
+        scope = EngineeringScope(
+            team_id=self._config.team_id,
+            project_id=facts.workspace.manifest.project_id,
+            repository_id=allocation.repository_id,
+            repository_root=checkpoint.repository_root,
+        )
+        with (
+            guard.task_scope(state / "queue-worker-locks", checkpoint.task_id),
+            closing(MySqlTaskRepository(self._dsn)) as repository,
+        ):
+            task = repository.get(checkpoint.task_id)
+            items = queue.items_for_task(task.id)
+            pending = tuple(item for item in items if item.status is not WorkItemStatus.CLOSED)
+            if len(pending) != 1 or pending[0].status is not WorkItemStatus.RUNNING:
+                yield None
+                return
+            (item,) = pending
+            requirement_id = self._knowledge_requirement_for_allocation(
+                checkpoint,
+                facts=facts,
+                authority=authority,
+                dispatch=allocation,
+                task=task,
+            )
+            observation = rejected_assessment_for_work(
+                records_root=facts.workspace.root / "knowledge" / "runs",
+                task=task,
+                item=item,
+                scope=scope,
+                requirement_id=requirement_id,
+            )
+            if observation is None:
+                yield None
+                return
+            from ai_software_engineer.knowledge.legacy_scope import (
+                require_delivery_requirement_scope,
+            )
+
+            require_delivery_requirement_scope(
+                observation.binding,
+                requirement_id,
+                records=KnowledgeRecordStore(
+                    facts.workspace.root / "knowledge" / "runs", read_only=True
+                ),
+            )
+            if task.work_budget_exhausted or task.attempts >= task.max_attempts:
+                raise ValueError("知识拒绝接续的冻结工作额度已耗尽, 原现场保留")
+            if (
+                allocation.task_id != task.id
+                or allocation.repository_id != checkpoint.repository_id
+                or allocation.dispatch_sha256 != checkpoint.dispatch_commit_sha256
+                or not task_matches_dispatch(task, allocation.task)
+                or task.repository != checkpoint.repository_root
+                or task.repository != str(facts.workspace.repository_root)
+                or task.metadata.get("repository_id") != checkpoint.repository_id
+                or task.status is not TaskStatus.IMPLEMENTING
+                or repository.current_revision(task.id) != checkpoint.task_revision
+            ):
+                raise ValueError("知识拒绝与当前需求、任务或分配已不一致, 原现场保留")
+            admission = queue.admission(task.id)
+            step = queue.step(item.id)
+            claims = queue.claims_for_work_item(item.id)
+            if (
+                admission is None
+                or admission.allocation_sha256 != allocation.dispatch_sha256
+                or admission.repository_id != allocation.repository_id
+                or item.role is not AgentRole.CODER
+                or item.attempt != task.attempts
+                or item.checkpoint_sequence != checkpoint.task_revision
+                or step.allocation_sha256 != allocation.dispatch_sha256
+                or not claims
+                or len(claims) > 512
+            ):
+                raise ValueError("知识拒绝缺少唯一原队列和领取事实, 原现场保留")
+            current_claim = max(claims, key=lambda value: value.work_item.dispatch_sequence)
+            active = tuple(
+                lease
+                for lease in queue.list_active_leases(now=datetime.min.replace(tzinfo=UTC))
+                if lease.task_id == task.id
+            )
+            if (
+                len(active) != 1
+                or active[0].id != current_claim.lease.id
+                or active[0].expires_at > datetime.now(UTC)
+                or any(
+                    known.id != item.id
+                    and (
+                        (known.checkpoint_sequence, known.attempt)
+                        >= (item.checkpoint_sequence, item.attempt)
+                        or known.parent_work_item_id == item.id
+                    )
+                    for known in items
+                )
+            ):
+                raise ValueError("知识拒绝仍有有效领取或后继所有者, 原现场保留")
+            git = GitWorktreeManager(
+                facts.workspace.repository_root,
+                Path(self._config.platform_root).expanduser().resolve()
+                / "worktrees"
+                / allocation.repository_id,
+                branch_names={task.id: task.branch_name},
+            )
+
+            def read_proof() -> RejectedKnowledgePreparationEvidence:
+                return rejected_knowledge_evidence(
+                    observation=observation,
+                    task=task,
+                    item=item,
+                    step=step,
+                    scope=scope,
+                    state=state,
+                    route_root=model_route_root(facts.workspace.root),
+                    queue=queue,
+                    artifacts=FileArtifactStore(
+                        facts.workspace.directory("artifacts"), read_only=True
+                    ),
+                    git=git,
+                    current_claim=current_claim,
+                    require_carry=len(claims) > 1,
+                )
+
+            proof = read_proof()
+            if (
+                repository.get(task.id) != task
+                or repository.current_revision(task.id) != checkpoint.task_revision
+                or queue.items_for_task(task.id) != items
+                or queue.step(item.id) != step
+                or queue.claims_for_work_item(item.id) != claims
+                or read_proof() != proof
+                or tuple(
+                    lease
+                    for lease in queue.list_active_leases(now=datetime.min.replace(tzinfo=UTC))
+                    if lease.task_id == task.id
+                )
+                != active
+            ):
+                raise ValueError("知识拒绝调查期间事实已变化, 原现场保留")
+            yield proof
+
+    @contextmanager
     def stopped_execution_retry_scope(
         self, checkpoint: ProjectDeliveryCheckpoint
     ) -> Iterator[StoppedCoderExecutionProof | None]:
@@ -2260,6 +2471,46 @@ class ProductionProjectDeliveryBackend:
             # then exits before normal Worker acquisition of this same flock.
             yield proof
 
+    def _knowledge_requirement_for_allocation(
+        self,
+        checkpoint: ProjectDeliveryCheckpoint,
+        *,
+        facts: _ProjectFacts,
+        authority: MySqlDispatchAuthority,
+        dispatch: DeliveryAllocation,
+        task: Task,
+        knowledge_context_sources: tuple[ContextSource, ...] = (),
+    ) -> str:
+        """Derive the exact approved joint scope from the sealed allocation lineage."""
+        sources = (*self._delivery_context_sources, *knowledge_context_sources)
+        parent_ids = {
+            source.uri.split("/")[2] for source in sources if source.uri.startswith("joint://")
+        }
+        if isinstance(dispatch, RecoveryDispatchRecord):
+            from ai_software_engineer.manager.baseline_knowledge_scope import (
+                recovery_knowledge_requirement_id,
+            )
+            from ai_software_engineer.recovery.entry import open_recovery_plan
+
+            recovery_root = facts.workspace.root / "state" / f"recovery-{checkpoint.delivery_id}"
+            recovery_store, recovery_plan = open_recovery_plan(
+                self._config, recovery_root / f"plan-{dispatch.recovery_plan_sha256}.json"
+            )
+            sealed = recovery_store.get_task_record(recovery_plan.plan_sha256)
+            if (
+                sealed.task != dispatch.task
+                or sealed.record_sha256 != dispatch.recovery_task_record_sha256
+            ):
+                raise ValueError("基线调查的恢复任务与精确原计划不同")
+            retained_parent = recovery_knowledge_requirement_id(
+                self._config, recovery_plan, checkpoint, load_allocation=authority.get_allocation
+            )
+            if retained_parent is not None:
+                parent_ids.add(retained_parent)
+        if len(parent_ids) > 1:
+            raise ValueError("基线调查的获批父需求知识作用域不唯一")
+        return next(iter(parent_ids), task.id)
+
     def execution_baseline_service(
         self,
         checkpoint: ProjectDeliveryCheckpoint,
@@ -2294,34 +2545,14 @@ class ProductionProjectDeliveryBackend:
         task = repository.get(checkpoint.task_id)
         if dispatch.task_id != task.id or facts.workspace.manifest.project_id != project_id:
             raise ValueError("执行基线未绑定当前 Project 的原批准交付任务")
-        sources = (*self._delivery_context_sources, *knowledge_context_sources)
-        parent_ids = {
-            source.uri.split("/")[2] for source in sources if source.uri.startswith("joint://")
-        }
-        if isinstance(dispatch, RecoveryDispatchRecord):
-            from ai_software_engineer.manager.baseline_knowledge_scope import (
-                recovery_knowledge_requirement_id,
-            )
-            from ai_software_engineer.recovery.entry import open_recovery_plan
-
-            recovery_root = facts.workspace.root / "state" / f"recovery-{checkpoint.delivery_id}"
-            recovery_store, recovery_plan = open_recovery_plan(
-                self._config, recovery_root / f"plan-{dispatch.recovery_plan_sha256}.json"
-            )
-            sealed = recovery_store.get_task_record(recovery_plan.plan_sha256)
-            if (
-                sealed.task != dispatch.task
-                or sealed.record_sha256 != dispatch.recovery_task_record_sha256
-            ):
-                raise ValueError("基线调查的恢复任务与精确原计划不同")
-            retained_parent = recovery_knowledge_requirement_id(
-                self._config, recovery_plan, checkpoint, load_allocation=authority.get_allocation
-            )
-            if retained_parent is not None:
-                parent_ids.add(retained_parent)
-        if len(parent_ids) > 1:
-            raise ValueError("基线调查的获批父需求知识作用域不唯一")
-        knowledge_requirement_id = next(iter(parent_ids), task.id)
+        knowledge_requirement_id = self._knowledge_requirement_for_allocation(
+            checkpoint,
+            facts=facts,
+            authority=authority,
+            dispatch=dispatch,
+            task=task,
+            knowledge_context_sources=knowledge_context_sources,
+        )
         store = FileExecutionBaselineStore(
             facts.workspace.directory("state") / "execution-baselines" / task.id,
         )

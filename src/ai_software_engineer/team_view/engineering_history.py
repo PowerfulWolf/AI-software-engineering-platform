@@ -16,6 +16,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryWaitInvestigation,
     EngineeringDispositionRecord,
     KnowledgePreparationRetryEvidence,
+    RejectedKnowledgePreparationEvidence,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringAdmission, EngineeringScope
 from ai_software_engineer.domain.enums import TeamRole
@@ -209,6 +210,7 @@ def _decision_matches_proof(decision: DeliveryResolution, proof: DeliveryWaitInv
         )
         or decision.verifier_preparation != proof.verifier_preparation
         or decision.knowledge_preparation != proof.knowledge_preparation
+        or decision.rejected_knowledge != proof.rejected_knowledge
     ):
         raise ValueError("engineering decision has another exact investigation")
 
@@ -230,9 +232,35 @@ def _knowledge_details(evidence: KnowledgePreparationRetryEvidence | None) -> di
     }
 
 
+def _rejected_knowledge_details(
+    evidence: RejectedKnowledgePreparationEvidence | None,
+) -> dict[str, JsonValue]:
+    if evidence is None:
+        return {}
+    return {
+        "rejected_knowledge": {
+            "role": evidence.role.value,
+            "budget_source": evidence.budget_source,
+        }
+    }
+
+
 def _require_knowledge_scope(
-    proof: DeliveryWaitInvestigation, scope: EngineeringScope, requirement_id: str, sidecar: Path
+    proof: DeliveryWaitInvestigation,
+    scope: EngineeringScope,
+    requirement_id: str,
+    sidecar: Path,
+    *,
+    native_requirement_id: str | None = None,
 ) -> None:
+    rejected = proof.rejected_knowledge
+    if rejected is not None and (
+        rejected.scope != scope
+        or rejected.requirement_id not in {requirement_id, native_requirement_id}
+    ):
+        raise ValueError(
+            "rejected knowledge investigation is outside the current Project Requirement"
+        )
     knowledge = proof.knowledge_preparation
     if knowledge is None:
         return
@@ -317,7 +345,11 @@ def _engineering_history(
             if proof.task_intent_sha256 != intent:
                 raise ValueError("engineering investigation changed approved Task intent")
             _require_knowledge_scope(
-                proof, scope, delivery_requirement_id or requirement_id, sidecar
+                proof,
+                scope,
+                delivery_requirement_id or requirement_id,
+                sidecar,
+                native_requirement_id=requirement_id,
             )
             entries.append(
                 TimelineEntry(
@@ -342,6 +374,7 @@ def _engineering_history(
                         "work_item_id": proof.work_item_id,
                         "source_revision": proof.source_revision,
                         **_knowledge_details(proof.knowledge_preparation),
+                        **_rejected_knowledge_details(proof.rejected_knowledge),
                     },
                 )
             )
@@ -361,7 +394,11 @@ def _engineering_history(
             )
             proof.validate_integrity()
             _require_knowledge_scope(
-                proof, scope, delivery_requirement_id or requirement_id, sidecar
+                proof,
+                scope,
+                delivery_requirement_id or requirement_id,
+                sidecar,
+                native_requirement_id=requirement_id,
             )
             _decision_matches_proof(decision, proof)
             if decision.engineering_admission is not None:
@@ -404,6 +441,7 @@ def _engineering_history(
                         "work_item_id": decision.work_item_id,
                         "proof_sha256": decision.proof_sha256,
                         **_knowledge_details(decision.knowledge_preparation),
+                        **_rejected_knowledge_details(decision.rejected_knowledge),
                     },
                 )
             )
@@ -427,7 +465,11 @@ def _engineering_history(
                 raise ValueError("platform handling changed its sealed investigation")
             proof.validate_integrity()
             _require_knowledge_scope(
-                proof, scope, delivery_requirement_id or requirement_id, sidecar
+                proof,
+                scope,
+                delivery_requirement_id or requirement_id,
+                sidecar,
+                native_requirement_id=requirement_id,
             )
             if handling.resolution is not None:
                 decision = handling.resolution
@@ -474,6 +516,7 @@ def _engineering_history(
                         "proof_sha256": proof.proof_sha256,
                         "work_item_id": handling.work_item_id,
                         **_knowledge_details(proof.knowledge_preparation),
+                        **_rejected_knowledge_details(proof.rejected_knowledge),
                     },
                 )
             )

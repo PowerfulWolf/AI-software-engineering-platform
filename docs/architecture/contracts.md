@@ -1,5 +1,19 @@
 # 角色、权限与 Artifact 契约
 
+知识模型调用的 `RETURNED` 仅证明原始结果已经安全封存，不代表知识咨询已通过。
+`CLAIM_WITHOUT_READ` 必须继续拒绝本知识 Run 未实际 READ 的引用。完整、安全封存且可独立
+重验的语义拒绝使用单独 observation，沿当前真实 claim 进入 `INVALID_OUTPUT` 工程等待并
+释放资源；原 RETURNED 不改写为 FAILED。其余知识不变量错误进入 `PLATFORM_BUG` 等待，
+不能获得相同的恢复权限。封存前触发 secret guard 的调用保留未知状态，不保存敏感返回值。
+
+`RETRY_REJECTED_KNOWLEDGE_PREPARATION` 是独立的精确工程恢复决定，经现有
+Inspect/Resolve/Continue 入口重新校验原 scope、claim、Context、snapshot、READ、真实停止、
+目标 work 无主执行和完整草稿。它消费一次冻结普通工作额度，建立新 work/claim/Run；不退款、
+不扩大时间窗口、不更改产品范围或既有进度。存量需求 BLOCKED 的恢复先用独立 no-main
+proof，在 Task flock 内追加 checkpoint，再由 Dispatcher 正常回收过期领取。fresh Worker
+在任何新模型调用前记录当前 owner 的拒绝并释放，之后才能消费工程决定。
+详细接口及验证矩阵见 [知识契约](../../.trellis/spec/core/active-knowledge.md)。
+
 候选复核恢复另有内部契约：`schemas/candidate-verification.schema.json` 定义绑定原候选的
 计划、审批和调用凭据。它保留原 Task/实现报告身份；没有可信 QA PASS 时运行新 QA→Reviewer，
 Reviewer 中断且终态事件或精确的独立验证入场/制品证明已封存同一 candidate 的 QA PASS 时，

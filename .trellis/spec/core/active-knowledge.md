@@ -1,5 +1,111 @@
 # Active knowledge contract (T048)
 
+## Rejected assessment recovery contract (2026-10-16)
+
+A RETURNED knowledge invocation only proves model output publication. Exact same-run READ
+membership and redaction validation remain mandatory. CLAIM_WITHOUT_READ and
+ASSESSMENT_REQUIRES_REDACTION on a safely sealed and fully revalidatable RETURNED result
+must be precise nontransient/nonretryable INVALID_OUTPUT, with an independently revalidatable
+rejected-returned observation. Preserve original RETURNED
+bytes; do not invent FAILED outcomes or READ evidence. Claimed delivery enters a real owner-fenced
+wait and releases capacity. Generic KnowledgeError is a PLATFORM_BUG wait without semantic retry
+authority; KnowledgeGapRaised retains its distinct committed gap wait.
+The earlier invocation payload secret guard may reject before RETURNED publication. Preserve
+its intent and UNKNOWN status, do not persist unsafe response text or manufacture an outcome,
+and grant no semantic retry authority without complete safely sealed facts.
+
+Recovery uses a separate rejected-knowledge proof/resolution through existing Inspect/Resolve/
+Continue operations. It binds full original scope/claim/Context/snapshot/READ/native completion,
+fixed semantic reason, no-main/route/output/accepted facts and complete unchanged draft input.
+Main-fact exclusions bind the target original WorkItem/claim and carry successors, not the
+whole Task history. Earlier main runs and accepted progress remain valid; completed knowledge
+routes and their independent receipts are required evidence, not forbidden main execution.
+It consumes one frozen ordinary work attempt under final Task/SQL fences with new work/Run/claim,
+without provider refund, timeout expansion or weakening citation guards. A legacy blocked expired
+claim may only reenter under an exact sibling no-main proof; Dispatcher reclaim then a real
+fresh-owner carry refusal enters wait before any new knowledge/main call. Unknown/live/late/
+foreign/tampered facts refuse. No generic BLOCKED retry or expired-owner mutation is permitted.
+The first supported engineering replacement is Coder/IMPLEMENTING only. QA/Reviewer knowledge
+consultations still receive exact failure/wait facts but this action grants no verifier retry.
+A complete trusted execution-baseline `after_inventory_sha256` must match current file bytes,
+modes and ignored/untracked inventory; without that baseline only a clean checkout qualifies.
+A later accepted-progress inventory differing from the baseline needs a separately provable
+recovery path; this guard does not treat an arbitrary dirty checkout as a checkpoint.
+
+### Executable ports and durable records
+
+- `knowledge.assessment_rejection.derive_rejected_assessment(records_root, binding)
+  -> RejectedKnowledgeAssessment` reopens both RETURNED outcomes, actual execution receipts,
+  original Task/Context consultation input and structured request digests, complete READ/search
+  membership, source visibility and native session emptiness. It never writes the old records.
+- `KnowledgeAssessmentRejected(reason, observation=None)` is a nontransient INVALID_OUTPUT.
+  A missing complete observation grants no retry: the actual Worker records PLATFORM_BUG using
+  its current queued source. Generic KnowledgeError follows the same owner-fenced release.
+  A proven semantic rejection remains an engineering wait even at the last frozen work budget;
+  Inspect reports BUDGET_EXHAUSTED and offers no necessarily failing continuation.
+- `manager.rejected_knowledge_preparation.rejected_assessment_for_work` reads only the exact
+  approved Requirement/Task lanes. Empty-query consultations, valid assessments, original FAILED
+  and incomplete invocations remain under their existing gates, with no extra model invocation.
+- `ProductionProjectDeliveryBackend.rejected_knowledge_retry_scope(checkpoint)` holds the actual
+  Task flock through repeated proof and checkpoint append. Sealed recovery/joint lineage derives
+  the exact parent Requirement; `require_delivery_requirement_scope` verifies any legacy mapping.
+  A nonmatching candidate yields None so other existing recovery routes remain reachable.
+  Confirmed semantic candidates with exhausted work/identity budgets refuse before append.
+- `UnifiedProjectEntryService.retry_rejected_knowledge_preparation(command, proof_scope=...)`
+  only appends DELIVERING for an IMPLEMENTING no-candidate invariant failure; it releases the
+  flock before ordinary dispatch. It never reconciles expired SQL ownership itself.
+- `carry_rejected_knowledge(task, step, claim, records, state, queue, artifacts, git, scope,
+  requirement_id)` requires the actual Worker guard and exact canonical claim before publication.
+  A live ownership fence encloses directory/record writes. Every original/intermediate/current
+  claim has no main invocation, raw or accepted artifact, route or tool execution. Up to 512
+  strictly increasing real claims are supported; each completed intermediate carry must match
+  the same observation and precede the next claim. Unknown intermediate ownership refuses.
+  Current carry publication is idempotent across a crash before the wait transaction.
+- Existing `InspectDeliveryWait` / `HandleDeliveryWait` / `ResolveDeliveryWait` use the new
+  `RETRY_REJECTED_KNOWLEDGE_PREPARATION` enum and `rejected_knowledge` proof. Evidence includes
+  original/current claim digests, Run/Context, complete inventory/capture digests and ordered
+  `carry_history_sha256s`. Absent optional fields are omitted to preserve old wire digests.
+  Resolve recomputes under the Task lock and final MySQL fence; replay returns the same successor
+  and cannot debit work twice. The frozen timeout and provider failure facts remain unchanged.
+
+Schemas: `rejected-knowledge-assessment.schema.json`, `rejected-knowledge-carry-refusal.schema.json`
+and the engineering resolution/Console embedded graphs. Run
+`PYTHONPATH=src python scripts/sync-rejected-knowledge-schemas.py`; a second run must change no
+schema bytes. This focused generator preserves unrelated handwritten if/then guards.
+
+### Validation matrix and commands
+
+| Case | Required fact/result |
+| --- | --- |
+| Good: native semantic refusal, exact original input and independently ended execution | Original RETURNED retained; owner wait releases all Lease capacity |
+| Base: empty queries, valid consultation, stopped local-limit or incomplete earlier result | No semantic carry; original gate remains authoritative; zero extra calls |
+| Legacy positive including a joint parent | Task-lock proof precedes append; fresh real owner refuses before any new call |
+| Crash after carry but before wait, followed by another blocked public reentry | Revalidate every intermediate carry; next owner releases; zero duplicate model calls |
+| Exact decision then repeated consumption | Ordinary work +1 once; new work/claim/context; same source/progress/history |
+| Foreign parent, live owner, missing READ/stop, raw output/late main, draft drift or exhausted budget | Refuse without a new delivery/queue/model fact |
+| Decision published for a joint child | Investigation/handling/resolution all use the same parent/native scope in history |
+
+Contract tests: `tests/knowledge/test_assessment_rejection.py`,
+`tests/manager/test_rejected_knowledge_guard.py`,
+`tests/manager/test_rejected_knowledge_delivery_entry.py`,
+`tests/work_queue/test_rejected_knowledge_contract.py`.
+Run isolated native/MySQL tests serially with the identity-checked `ASE_TEST_MYSQL_DSN`:
+`tests/manager/test_rejected_knowledge_native_entry_mysql.py`,
+`tests/work_queue/test_rejected_knowledge_mysql.py`,
+`tests/work_queue/test_rejected_knowledge_replacement_mysql.py`.
+The replacement test uses the real Supervisor and independently assigned Coder/QA/Reviewer;
+fixtures are delivery-mechanism evidence, not proof that production K1 has completed.
+Read-side regressions are `tests/team_view/test_engineering_history.py` and
+`node --test tests/team_view/engineering-wait.test.cjs`.
+
+### Existing-data treatment
+
+No schema/database migration, old outcome rewrite, transient refund or terminal reset is used.
+For a precise legacy blocked case, public Continue establishes reentry, fresh ownership enters
+wait, Inspect/Handle seals the exact engineering decision, then normal Continue runs fresh
+knowledge preparation and delivery. Preserve all historical blocked/UNKNOWN/progress records
+and original checkout bytes; final delivery still requires independent QA and Review.
+
 ## Scope and signatures
 
 `KnowledgeRetrieval.search(snapshot, query, limit) -> tuple[KnowledgeHit, ...]` and

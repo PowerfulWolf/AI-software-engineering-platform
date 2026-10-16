@@ -11,7 +11,11 @@ import pytest
 from ai_software_engineer.agents.structured import StructuredModelResult
 from ai_software_engineer.artifacts import FileArtifactStore, artifact_digest, seal_artifact
 from ai_software_engineer.domain import AgentRole, QaCriterionStatus, QaReportStatus
-from ai_software_engineer.domain.artifact import QaReportArtifact
+from ai_software_engineer.domain.artifact import (
+    ImplementationReportArtifact,
+    PlanArtifact,
+    QaReportArtifact,
+)
 from ai_software_engineer.execution import CommandResult
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.manager.native_ui import (
@@ -28,7 +32,10 @@ from ai_software_engineer.manager.verification_coordination import (
     ManagerVerificationDraft,
     VerificationFailureReference,
 )
-from ai_software_engineer.manager.verification_environment import swift_sandbox_command
+from ai_software_engineer.manager.verification_environment import (
+    SwiftSandboxCapability,
+    swift_sandbox_command,
+)
 from ai_software_engineer.recovery import verification_entry as module
 from ai_software_engineer.recovery.models import (
     RecoveryRejected,
@@ -81,7 +88,7 @@ def test_manager_reads_real_candidate_scope_without_unrelated_repository_bulk(
     root, scope = source_repository(tmp_path)
     task = make_task().model_copy(update={"base_ref": scope.base_revision, "repository": str(root)})
     plan_art = make_plan_artifact()
-    plan_art = seal_artifact(
+    sealed_plan_art = seal_artifact(
         plan_art.model_copy(
             update={
                 "source_revision": scope.base_revision,
@@ -98,8 +105,10 @@ def test_manager_reads_real_candidate_scope_without_unrelated_repository_bulk(
         ),
         validated_at=_clock(),
     )
+    assert isinstance(sealed_plan_art, PlanArtifact)
+    plan_art = sealed_plan_art
     implementation = make_implementation_artifact()
-    implementation = seal_artifact(
+    sealed_implementation = seal_artifact(
         implementation.model_copy(
             update={
                 "source_revision": scope.candidate_revision,
@@ -110,8 +119,10 @@ def test_manager_reads_real_candidate_scope_without_unrelated_repository_bulk(
         ),
         validated_at=_clock(),
     )
+    assert isinstance(sealed_implementation, ImplementationReportArtifact)
+    implementation = sealed_implementation
     qa = make_qa_artifact()
-    qa = seal_artifact(
+    sealed_qa = seal_artifact(
         qa.model_copy(
             update={
                 "source_revision": scope.candidate_revision,
@@ -128,6 +139,8 @@ def test_manager_reads_real_candidate_scope_without_unrelated_repository_bulk(
         ),
         validated_at=_clock(),
     )
+    assert isinstance(sealed_qa, QaReportArtifact)
+    qa = sealed_qa
     artifacts = FileArtifactStore(tmp_path / "artifacts")
     for artifact in (plan_art, implementation, qa):
         artifacts.put(artifact)
@@ -365,6 +378,7 @@ def test_continue_routes_manager_remedy_before_old_approval(tmp_path: Path, ui: 
     from ai_software_engineer.recovery.store import RecoveryRecordMissing
 
     store.get_verification_invocation.side_effect = RecoveryRecordMissing("not admitted")
+    store.get_verification_completion.side_effect = RecoveryRecordMissing("no verdict")
     draft = ManagerVerificationDraft(
         disposition="PROPOSE_UI" if ui else "WAITING_HUMAN",
         summary="Manager owns the blocker",
@@ -516,6 +530,7 @@ def test_first_executor_failure_reaches_manager_and_reopens_without_qa_verdict(
             recorded_at=_clock(),
         )
     )
+    assert isinstance(started.capability, SwiftSandboxCapability)
     actions: tuple[Literal["build", "test"], ...] = ("build", "test")
     failed = store.put_verification_execution(
         VerificationExecutionRecord.create(

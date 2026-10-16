@@ -38,6 +38,7 @@ class DeliveryResolutionKind(StrEnum):
     RETRY_VERIFIER_PREPARATION = "RETRY_VERIFIER_PREPARATION"
     RETRY_KNOWLEDGE_PREPARATION = "RETRY_KNOWLEDGE_PREPARATION"
     RETRY_REJECTED_CODER_OUTPUT = "RETRY_REJECTED_CODER_OUTPUT"
+    RETRY_REJECTED_KNOWLEDGE_PREPARATION = "RETRY_REJECTED_KNOWLEDGE_PREPARATION"
 
 
 class DeliveryProofMissing(StrEnum):
@@ -257,6 +258,66 @@ class RejectedCoderOutputEvidence(DomainModel):
         return self
 
 
+class RejectedKnowledgePreparationEvidence(DomainModel):
+    """Current exact rejection proof; no expansion or refund of the old call."""
+
+    scope: EngineeringScope
+    requirement_id: NonEmptyStr
+    task_id: TaskId
+    work_item_id: NonEmptyStr
+    role: AgentRole
+    original_lease_id: NonEmptyStr
+    original_claim_sha256: DispositionSha256
+    original_attempt: Annotated[StrictInt, Field(ge=1)]
+    original_dispatch_sequence: Annotated[StrictInt, Field(ge=0)]
+    checkpoint_sequence: Annotated[StrictInt, Field(ge=0)]
+    previous_run_id: RunId
+    previous_context_manifest_id: ContextId
+    source_revision: NonEmptyStr
+    observation_sha256: DispositionSha256
+    context_sha256: DispositionSha256
+    workspace_inventory_sha256: DispositionSha256
+    workspace_capture_sha256: DispositionSha256
+    current_lease_id: NonEmptyStr
+    current_claim_sha256: DispositionSha256
+    current_dispatch_sequence: Annotated[StrictInt, Field(ge=0)]
+    carry_refusal_sha256: DispositionSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    carry_history_sha256s: tuple[DispositionSha256, ...] = Field(
+        default=(), max_length=511, exclude_if=lambda value: not value
+    )
+    budget_source: Literal["frozen_work_attempt"] = "frozen_work_attempt"
+
+    @model_validator(mode="after")
+    def validate_claim_generations(self) -> Self:
+        ensure_unique(self.carry_history_sha256s, "knowledge carry refusals")
+        same = self.current_lease_id == self.original_lease_id
+        if (
+            self.role is not AgentRole.CODER
+            or self.current_dispatch_sequence < self.original_dispatch_sequence
+            or (
+                same
+                and (
+                    self.current_claim_sha256 != self.original_claim_sha256
+                    or self.current_dispatch_sequence != self.original_dispatch_sequence
+                    or self.carry_refusal_sha256 is not None
+                    or self.carry_history_sha256s
+                )
+            )
+            or (not same and self.current_dispatch_sequence <= self.original_dispatch_sequence)
+            or (
+                self.carry_refusal_sha256 is not None
+                and (
+                    not self.carry_history_sha256s
+                    or self.carry_history_sha256s[-1] != self.carry_refusal_sha256
+                )
+            )
+        ):
+            raise ValueError("knowledge rejection has inconsistent exact claim generations")
+        return self
+
+
 class InspectDeliveryWait(DomainModel):
     work_item_id: NonEmptyStr
     expected_disposition_sha256: DispositionSha256
@@ -310,6 +371,9 @@ class DeliveryWaitInvestigation(DomainModel):
     rejected_output: RejectedCoderOutputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    rejected_knowledge: RejectedKnowledgePreparationEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     retry_cause: ContinuationCause | None = None
     verifier_pause: PausedInvocationProof | None = Field(
         default=None, exclude_if=lambda value: value is None
@@ -358,6 +422,38 @@ class DeliveryWaitInvestigation(DomainModel):
             ):
                 raise ValueError("verifier pause investigation changed its exact role or source")
         ensure_unique(self.missing, "missing engineering proof")
+        rejected_knowledge = self.rejected_knowledge
+        if (
+            DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION
+            in self.permitted_resolutions
+            and rejected_knowledge is None
+        ):
+            raise ValueError("rejected knowledge retry requires its exact semantic proof")
+        if rejected_knowledge is not None and (
+            rejected_knowledge.task_id != self.task_id
+            or rejected_knowledge.work_item_id != self.work_item_id
+            or rejected_knowledge.source_revision != self.source_revision
+            or rejected_knowledge.checkpoint_sequence != self.checkpoint_sequence
+            or rejected_knowledge.role is not facts.role
+            or facts.classification != "INVALID_OUTPUT"
+            or facts.evidence_ids
+            != ("knowledge-assessment-rejection://" + rejected_knowledge.observation_sha256,)
+            or self.invocation_start_sha256 is not None
+            or self.invocation_outcome_sha256 is not None
+            or self.knowledge_preparation is not None
+            or self.rejected_output is not None
+            or self.original_authority is not None
+            or self.verifier_preparation is not None
+            or self.verification_retry is not None
+            or self.retry_cause is not None
+            or self.interruption_receipt_sha256 is not None
+            or self.process_stop_sha256 is not None
+            or self.original_run_id != rejected_knowledge.previous_run_id
+            or self.workspace_inventory_sha256 != rejected_knowledge.workspace_inventory_sha256
+            or self.permitted_resolutions
+            not in ((), (DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION,))
+        ):
+            raise ValueError("rejected knowledge investigation changed its exact no-main facts")
         ensure_unique(self.permitted_resolutions, "permitted engineering resolutions")
         if self.permitted_resolutions and self.missing:
             raise ValueError("incomplete engineering proof cannot authorize a resolution")
@@ -530,6 +626,9 @@ class DeliveryResolution(DomainModel):
     rejected_output: RejectedCoderOutputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    rejected_knowledge: RejectedKnowledgePreparationEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def require_engineering_actor(self) -> Self:
@@ -615,6 +714,17 @@ class DeliveryResolution(DomainModel):
             or self.knowledge_preparation.checkpoint_sequence != self.expected_checkpoint_sequence
         ):
             raise ValueError("knowledge preparation decision changed its exact task or source")
+        if (
+            self.resolution_kind is DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION
+        ) != (self.rejected_knowledge is not None):
+            raise ValueError("only rejected knowledge retry uses sealed semantic rejection")
+        if self.rejected_knowledge is not None and (
+            self.rejected_knowledge.task_id != self.task_id
+            or self.rejected_knowledge.work_item_id != self.work_item_id
+            or self.rejected_knowledge.source_revision != self.expected_source_revision
+            or self.rejected_knowledge.checkpoint_sequence != self.expected_checkpoint_sequence
+        ):
+            raise ValueError("rejected knowledge decision changed its exact task or source")
         if (self.resolution_kind is DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT) != (
             self.rejected_output is not None
         ):
@@ -744,6 +854,7 @@ class DeliveryWaitHandling(DomainModel):
                 or decision.step_sha256 != proof.step_sha256
                 or decision.knowledge_preparation != proof.knowledge_preparation
                 or decision.rejected_output != proof.rejected_output
+                or decision.rejected_knowledge != proof.rejected_knowledge
                 or (
                     decision.task_id,
                     decision.work_item_id,

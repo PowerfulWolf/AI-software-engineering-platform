@@ -996,6 +996,8 @@ class RetryingOrchestrator(SerialOrchestrator):
             )
 
     def _knowledge_failure(self, task: Task, error: StructuredModelError) -> int | BlockedResult:
+        from ai_software_engineer.knowledge.assessment_rejection import KnowledgeAssessmentRejected
+
         if error.code is AgentErrorCode.SERVICE_PAUSED:
             from ai_software_engineer.service_pause import ServicePauseRequested
 
@@ -1006,6 +1008,29 @@ class RetryingOrchestrator(SerialOrchestrator):
             TaskStatus.QA: AgentRole.QA,
             TaskStatus.REVIEW: AgentRole.REVIEWER,
         }[current.status]
+        if (
+            isinstance(error, KnowledgeAssessmentRejected)
+            and self._delivery_failure_control is not None
+        ):
+            observation = error.observation
+            if observation is None:
+                # Only the real Worker can bind an unproven refusal to the
+                # current queued source after execution-baseline changes.
+                raise error
+            if (
+                observation.binding.task_id != current.id
+                or observation.binding.role.value != role.value
+            ):
+                raise DeliveryContractViolation("知识评估拒绝不属于当前任务和角色")
+            self._delivery_failure_control.wait(
+                current,
+                classification=RetryClassification.INVALID_OUTPUT.value,
+                reason=error.safe_message,
+                source_revision=observation.binding.source_revision,
+                artifact_ids=(
+                    "knowledge-assessment-rejection://" + observation.observation_sha256,
+                ),
+            )
         if isinstance(error, KnowledgePreparationLocalLimit):
             intent = error.outcome.intent
             if intent.binding.task_id != current.id or intent.binding.role.value != role.value:

@@ -353,7 +353,7 @@ def _validated_knowledge_invocations(
                     NativeCoderContinuation._require_stopped(execution.observation.process_stop)
             step = queue.step_for_claim(historical)
             require_step(historical.work_item, step)
-            context_sha256 = _require_context(
+            context_sha256 = require_knowledge_claim_context(
                 state, task, historical.work_item, historical, step, intent, snapshots, scope
             )
             result.append(_CompletedKnowledgeInvocation(historical, outcome, context_sha256))
@@ -401,7 +401,7 @@ def read_capacity_claim_snapshot(
     return require_claim_snapshot(first, historical, expected_sha256=marker.claim_sha256)
 
 
-def _require_context(
+def require_knowledge_claim_context(
     state: Path,
     task: Task,
     item: QueuedWorkItem,

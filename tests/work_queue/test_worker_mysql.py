@@ -36,6 +36,7 @@ from ai_software_engineer.domain.engineering_authority import (
 )
 from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy
 from ai_software_engineer.domain.workforce import TaskLease
+from ai_software_engineer.knowledge.assessment_rejection import KnowledgeAssessmentRejected
 from ai_software_engineer.knowledge.gaps import (
     KnowledgeGapRaised,
     KnowledgeGapService,
@@ -43,7 +44,7 @@ from ai_software_engineer.knowledge.gaps import (
     KnowledgeResolutionSource,
     KnowledgeResume,
 )
-from ai_software_engineer.knowledge.models import digest, text_digest
+from ai_software_engineer.knowledge.models import KnowledgeError, digest, text_digest
 from ai_software_engineer.knowledge.runtime import KnowledgeRoleClients, KnowledgeRunContextBuilder
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager import MySqlDispatchAuthority
@@ -976,14 +977,22 @@ def test_completion_rechecks_ownership_inside_transaction(
         queue.step(next_step.work_item.id)
 
 
+@pytest.mark.parametrize("failure_kind", ["artifact-order", "knowledge", "unproven-semantic"])
 def test_ambiguous_accepted_history_waits_and_releases_the_real_claim(
     mysql_dsn: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
 ) -> None:
     queue = MySqlRoleQueue(mysql_dsn)
     adapter = ObservedAdapter(queue)
-    with runtime_fixture(tmp_path, mysql_dsn, queue, adapter) as (runtime, supervisor):
+    policy = (
+        DeliveryRetryPolicy(max_work_attempts=1) if failure_kind == "unproven-semantic" else None
+    )
+    with runtime_fixture(tmp_path, mysql_dsn, queue, adapter, retry_policy=policy) as (
+        runtime,
+        supervisor,
+    ):
         original = RuntimeSession.run_step
         observations: list[QueueClaim] = []
 
@@ -995,6 +1004,10 @@ def test_ambiguous_accepted_history_waits_and_releases_the_real_claim(
             if supervisor.guard.lease is None:
                 return original(session, task_id, control)
             observations.append(supervisor.guard.lease.claim)
+            if failure_kind == "knowledge":
+                raise KnowledgeError("STORE_CORRUPT")
+            if failure_kind == "unproven-semantic":
+                raise KnowledgeAssessmentRejected("CLAIM_WITHOUT_READ")
             raise ArtifactOrderingError("accepted history has no unique publication order")
 
         monkeypatch.setattr(RuntimeSession, "run_step", refuse)

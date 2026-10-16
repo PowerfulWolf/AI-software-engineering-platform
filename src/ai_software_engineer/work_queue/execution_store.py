@@ -865,6 +865,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 DeliveryResolutionKind.RETRY_VERIFIER_PREPARATION,
                 DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION,
                 DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,
+                DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION,
             }:
                 if current.role not in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER):
                     raise QueueConflict("wait does not belong to a delivery role")
@@ -960,6 +961,86 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     )
                     if cursor.fetchone() is not None:
                         raise QueueConflict("原任务仍有活跃领取, 不能开始知识准备续跑")
+                    updated_task = Task.model_validate(
+                        {**task.to_wire(), "attempts": task.attempts + 1}
+                    )
+                elif (
+                    resolution.resolution_kind
+                    is DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION
+                ):
+                    from ai_software_engineer.knowledge.claim_identity import claim_identity_sha256
+
+                    rejected_knowledge = resolution.rejected_knowledge
+                    if (
+                        rejected_knowledge is None
+                        or current.role is not AgentRole.CODER
+                        or task.status is not TaskStatus.IMPLEMENTING
+                        or disposition.facts.classification != "INVALID_OUTPUT"
+                        or disposition.facts.evidence_ids
+                        != (
+                            "knowledge-assessment-rejection://"
+                            + rejected_knowledge.observation_sha256,
+                        )
+                        or rejected_knowledge.task_id != task.id
+                        or rejected_knowledge.work_item_id != current.id
+                        or rejected_knowledge.role is not current.role
+                        or rejected_knowledge.original_attempt != task.attempts
+                        or rejected_knowledge.original_attempt != current.attempt
+                        or rejected_knowledge.current_dispatch_sequence != current.dispatch_sequence
+                        or rejected_knowledge.checkpoint_sequence != current.checkpoint_sequence
+                        or rejected_knowledge.source_revision != step.boundary.source_revision
+                        or rejected_knowledge.scope.repository_id != current.repository_id
+                        or rejected_knowledge.scope.repository_root != task.repository
+                        or (
+                            task.engineering_policy is not None
+                            and rejected_knowledge.scope != task.engineering_policy.scope
+                        )
+                        or task.work_budget_exhausted
+                        or task.attempts >= task.max_attempts
+                    ):
+                        raise QueueConflict("知识评估拒绝恢复缺少精确原输入与剩余普通工作额度")
+                    original_rejected = self.original_claim(rejected_knowledge.original_lease_id)
+                    current_rejected = self.original_claim(rejected_knowledge.current_lease_id)
+                    if (
+                        claim_identity_sha256(original_rejected)
+                        != rejected_knowledge.original_claim_sha256
+                        or claim_identity_sha256(current_rejected)
+                        != rejected_knowledge.current_claim_sha256
+                        or original_rejected.work_item.id != current.id
+                        or current_rejected.work_item.id != current.id
+                        or original_rejected.work_item.dispatch_sequence
+                        != rejected_knowledge.original_dispatch_sequence
+                        or current_rejected.work_item.dispatch_sequence != current.dispatch_sequence
+                        or (
+                            original_rejected.lease.id != current_rejected.lease.id
+                            and rejected_knowledge.carry_refusal_sha256 is None
+                        )
+                    ):
+                        raise QueueConflict("知识评估拒绝恢复改变了原真实领取或当前接续拒绝")
+                    cursor.execute(
+                        "SELECT lease_id FROM work_queue_claims WHERE task_id=%s "
+                        "AND state='ACTIVE' FOR UPDATE",
+                        (task.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("任务仍有活跃领取, 不能恢复知识准备")
+                    cursor.execute(
+                        "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+                        "WHERE task_id=%s FOR UPDATE",
+                        (task.id,),
+                    )
+                    if any(
+                        _decode(row, AcceptedRoleArtifact).work_item_id == current.id
+                        for row in cursor.fetchall()
+                    ):
+                        raise QueueConflict("目标知识准备工作项已有接纳结果")
+                    cursor.execute(
+                        "SELECT sequence FROM work_queue_events WHERE work_item_id=%s "
+                        "AND event_type='COMPLETED' LIMIT 1",
+                        (current.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("目标知识准备工作项已完成推进")
                     updated_task = Task.model_validate(
                         {**task.to_wire(), "attempts": task.attempts + 1}
                     )
