@@ -662,7 +662,11 @@ class ExecutionBaselineService:
                 ),
                 superseded_progress_artifact_id=(
                     None
-                    if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                    if plan.purpose
+                    in {
+                        BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+                        BaselinePurpose.STOPPED_FAILURE_RETRY,
+                    }
                     else current.progress_artifact_id
                 ),
                 context_capacity_receipt_sha256=(

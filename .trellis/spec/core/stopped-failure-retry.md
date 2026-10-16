@@ -46,6 +46,28 @@ shows an approval for this proof, and polling cannot carry approval to a differe
 
 ## Validation matrix / required tests
 
+### Accepted progress in newly produced compatible retries
+
+`ExecutionBaselineService.execute()` must preserve the collector-selected current accepted
+coder-progress when constructing a new STOPPED_FAILURE_RETRY binding. Its
+superseded_progress_artifact_id is omitted, as for CONTEXT_CAPACITY_RESUME: the strict same
+Task/source/base, complete stable inventory and unchanged noncache draft checks already
+establish compatibility. Spending an ordinary work attempt does not itself revoke accepted
+completed steps. The real runner continues to obtain progress only through accepted input
+artifacts, and its next work-slice inherits completed IDs and selects unfinished steps.
+
+No Schema/model read validator changes: existing immutable bindings with a declared progress
+retirement retain that meaning and remain readable. Accumulated historical retirement is
+unchanged; a later omitted/null retirement cannot revive an old ancestor. No arbitrary raw
+artifact may become accepted. All other baseline purpose families keep their current policy.
+
+Required regression: accepted progress → exact clean native failure → service PAUSE/replay →
+RESUME → actual Coder inputs/work-slice; assert the accepted ID/paths and completed steps are
+retained, completed steps are not selected again, and budget/source/bytes remain exact. Keep
+source-changing/reapply retirement and repeated-history non-revival cases. Existing live runs
+with an old retired checkpoint may establish a new native validated successor progress;
+maintenance cannot rewrite their request, completion sets or old bindings.
+
 | Fact or request | Result |
 | --- | --- |
 | Exact stopped FAILED PROVIDER_UNAVAILABLE(false), no output, complete pre-existing draft | Same-Task/base preserve-draft plan |

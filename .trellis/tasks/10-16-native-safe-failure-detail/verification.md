@@ -62,3 +62,52 @@ binding `7b48620462dd6f1cc5369499b4239c5a89f0e022908f2513f14506d76381ea67`, sequ
 authority `3cfb3547466291f80c897d86817c5924d9ba0fd3109b386a9e9b4e91beb0d942`.
 Original Task/source/revision5 preserved; attempt3→4 is a single ordinary reservation in
 WAITING_HUMAN. A fresh explicit RESUME is prepared, not submitted before tested deployment.
+
+## Controlled production deployment
+
+After independent read-only review reported no blocking findings, commit
+`1c7a5e11e575a7cf043cb676f6a6a8737100e887` was fast-forwarded into a clean, current `main`
+and pushed to `origin/main`. The existing service completed its controlled idle shutdown;
+old PID 99829 was replaced by PID 14732. Fresh Console reads report normal mode,
+delivery_ready=true and contract10. Contract10 already existed before this deployment;
+the new commit plus actual process replacement establish that the new code was loaded.
+
+A fresh post-deployment summary preserved the exact sequence2 PAUSE. The independent public
+RESUME request bound the current checkpoint, Task intent/revision5, unique WorkItem,
+source, binding and disposition. Operation `operation_abe521ca402b857ad21aa1a55fcf0c18`
+was accepted on 2026-10-16 at 04:13 UTC. Read-only SQL confirmed same Task IMPLEMENTING,
+revision5, attempts4; the registered target HEAD remains
+`774e0a6fcc920d9a6ce3738e80b9cc43045be7eb`. The first observation is a claimed
+KNOWLEDGE_PREPARATION phase, not a Coder invocation or delivery completion. See the
+production recovery record for the eventual native result and immutable-history audit.
+
+Independent file audit `/tmp/ase-k1-diagnostic-retry-independent-audit-20261016.json`,
+SHA256 `2caf1c8de5919a26b8ea88b1da1db086d2d3f94bafed01954d864035d068bda5`,
+matches all original 195 immutable-file SHAs. Both binding links, plan/authority/proof,
+the unchanged complete patch and exact sequence2 HumanActionEvent validate. The separate
+RESUME authority was sealed at `2026-10-16T04:13:18.175574Z`; it matches Task revision5,
+WorkItem, source, inventory and current binding. This file-only audit does not itself
+assert SQL release, model execution or independent verification success.
+
+## Real recovery result
+
+Native Run `run_0d6c5798f57b4c309acaa5d8d531bc08` returned SUCCEEDED with a new
+coder-progress after1090808ms; outcome
+`55ea2730d1c75aa6b1ee50e9289cf4325cc6a4fb128a153aeb9c5e469179a3b9`.
+New sealed artifact `art_coder_05714ae8093596356e007b54dc42490b`, SHA
+`640daf6e30813ee954265873f7dffae0ff73dee44edab7598fc52de25cd89b5f`, actually completes
+steps01/02 and retains03–08. Its supersedes edge points to the original accepted progress.
+Read-only SQL verified actual acceptance event `evt_f89c355628964a32872b8fbe2d418c15`
+at `2026-10-16T04:37:14.394368Z`, followed by queue and attempt5 continuation events.
+This is accepted progress, not a candidate or independent QA/Review verdict.
+
+The next real invocation `run_411785d71edc4be4896a7f04d5f46b3b` started at
+`2026-10-16T04:41:30.508236Z`, same source, Task revision8/attempt5. Its actual immutable
+request contains the new checkpoint, completed01/02, selected03/04 and later05–08.
+The independent successor audit matches all195 original-file SHAs and the exact new inputs:
+`/tmp/ase-k1-progress-successor-independent-audit-20261016.json`, SHA
+`fb306bf6e62a9b43ccf04898a1033bb097bf624d125501384ba05585f31b46e0`.
+
+Old stderr bodies remain unavailable; a later successful execution cannot establish their
+causes. The diagnostic feature is verified through offline failing-child/store/reopen tests;
+this successful production call did not exercise a new real-error main_error presentation.

@@ -12,28 +12,38 @@ from pydantic import ValidationError
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
     AgentFailure,
+    AgentRequest,
     AgentResult,
 )
+from ai_software_engineer.domain import AgentRole, Artifact, ChangedFile, ChangeType
+from ai_software_engineer.domain.artifact import CoderProgressArtifact, PlanArtifact
 from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal
 from ai_software_engineer.domain.execution_baseline import (
     BaselineContinuationMode,
+    BaselineInputMode,
     BaselinePurpose,
     ExecutionBaselineBinding,
 )
+from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.git.baseline import GitExecutionBaselineAdapter
 from ai_software_engineer.git.mutation import capture_mutation_inventory
 from ai_software_engineer.manager.baseline_models import (
+    BaselineContinueAuthorization,
     BaselineExecutionFacts,
     BaselineExecutionReservation,
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
-from ai_software_engineer.manager.execution_baseline import ExecutionBaselineService
+from ai_software_engineer.manager.execution_baseline import (
+    ExecutionBaselineService,
+    StoredCoderExecutionInputResolver,
+)
 from ai_software_engineer.manager.stopped_failure_checkpoint import (
     StoppedFailureProof,
     require_stopped_failure_workspace,
 )
+from ai_software_engineer.orchestration import FileRunContextBuilder, RetryingOrchestrator
 from ai_software_engineer.orchestration.capture_reconciliation import CaptureStopProcessUncertain
 from ai_software_engineer.orchestration.continuation_models import (
     ContinuationRecordMissing,
@@ -41,10 +51,16 @@ from ai_software_engineer.orchestration.continuation_models import (
 )
 from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.work_queue.baseline import BaselineQueueConsumption
+from ai_software_engineer.work_queue.execution_store import RoleQueueAdmission
+from ai_software_engineer.work_queue.models import QueueArtifactReceipt
+from tests.domain.factories import make_coder_progress_artifact
 from tests.git.test_worktree import _git
 from tests.manager.test_completed_output_checkpoint import CompletedFixture, _outcome
 from tests.manager.test_completed_output_checkpoint import completed as completed_fixture
 from tests.manager.test_execution_baseline import Collector
+from tests.orchestration.test_native_continuation_v2 import V2Fixture
+from tests.orchestration.test_retry import AttemptIdentityFactory, ScriptedAdapter
+from tests.orchestration.test_runner import _clock, _definitions
 
 completed = completed_fixture
 
@@ -61,7 +77,9 @@ def proof_for(f: CompletedFixture) -> StoppedFailureProof:
     )
 
 
-def service_for(f: CompletedFixture) -> ExecutionBaselineService:
+def service_for(
+    f: CompletedFixture, *, progress: CoderProgressArtifact | None = None
+) -> ExecutionBaselineService:
     proof = proof_for(f)
     facts = BaselineExecutionFacts(
         task=f.task,
@@ -74,6 +92,7 @@ def service_for(f: CompletedFixture) -> ExecutionBaselineService:
         source_native_rules_sha256="3" * 64,
         target_native_rules_sha256="3" * 64,
         source_artifact_ids=f.native.request.input_artifact_ids,
+        progress_artifact_id=progress.artifact_id if progress is not None else None,
         continuation=f.collector._reservation(f.task, f.queue.item, (), stopped_failure=proof),
         stopped_failure=proof,
         permissions=f.native.request.permissions,
@@ -88,6 +107,260 @@ def service_for(f: CompletedFixture) -> ExecutionBaselineService:
         git=GitExecutionBaselineAdapter(f.native.git),
         facts=Collector(facts, f.native.worktree),
     )
+
+
+class _RequestCaptured(RuntimeError):
+    pass
+
+
+class _CaptureRequestAdapter(ScriptedAdapter):
+    def run(self, request: AgentRequest) -> AgentResult:
+        self.requests.append(request)
+        raise _RequestCaptured
+
+
+class TestStoppedFailureAcceptedProgress:
+    @pytest.fixture(autouse=True)
+    def prior_progress(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Seed an accepted checkpoint before the original failed invocation starts."""
+        original_accept, original_activate = V2Fixture._accept, V2Fixture.activate
+
+        def accept(native: V2Fixture, template: Artifact, *, run_id: str, source: str) -> Artifact:
+            if isinstance(template, PlanArtifact):
+                steps = tuple(
+                    template.content.steps[0].model_copy(update={"step_id": f"step0{index}"})
+                    for index in range(1, 4)
+                )
+                template = template.model_copy(
+                    update={
+                        "content": template.content.model_copy(
+                            update={
+                                "steps": steps,
+                                "execution_window": PlanExecutionWindow.for_seconds(60),
+                                "acceptance_mapping": (
+                                    template.content.acceptance_mapping[0].model_copy(
+                                        update={"step_ids": tuple(step.step_id for step in steps)}
+                                    ),
+                                ),
+                            }
+                        )
+                    }
+                )
+            return original_accept(native, template, run_id=run_id, source=source)
+
+        def activate(native: V2Fixture, attempt: int) -> AgentRequest:
+            if native.task.branch_name == "ai/feature/completed-source":
+                progress = make_coder_progress_artifact()
+                (native.worktree.path / "src/app.py").write_text("VALUE = 2\n")
+                native._accept(
+                    progress.model_copy(
+                        update={
+                            "content": progress.content.model_copy(
+                                update={
+                                    "completed_step_ids": ("step01",),
+                                    "remaining_step_ids": ("step02", "step03"),
+                                    "changed_files": (
+                                        ChangedFile(
+                                            path="src/app.py",
+                                            change=ChangeType.MODIFIED,
+                                            lines_added=1,
+                                            lines_deleted=1,
+                                        ),
+                                    ),
+                                }
+                            )
+                        }
+                    ),
+                    run_id="run_prior_accepted_coder",
+                    source=native.task.base_ref,
+                )
+            return original_activate(native, attempt)
+
+        monkeypatch.setattr(V2Fixture, "_accept", accept)
+        monkeypatch.setattr(V2Fixture, "activate", activate)
+
+    @pytest.mark.parametrize("completed", ["stopped_failure"], indirect=True)
+    def test_pause_replay_resume_retains_checkpoint_in_actual_next_coder_work_slice(
+        self, completed: CompletedFixture
+    ) -> None:
+        f = completed
+        progress = f.native.artifacts.get("art_progress_001")
+        assert isinstance(progress, CoderProgressArtifact)
+        assert f.native.request.continuation_checkpoint_id == progress.artifact_id
+        assert f.native.request.continuation_changed_paths == ("src/app.py",)
+        service = service_for(f, progress=progress)
+        assert isinstance(service.facts, Collector)
+        collector = service.facts
+        before, history = capture_mutation_inventory(f.native.worktree.path), f.sealed_bytes()
+        plan = service.propose(None, purpose=BaselinePurpose.STOPPED_FAILURE_RETRY)
+        authority = BaselineOperatorAuthorization.for_plan(
+            plan,
+            principal=LocalOperatorPrincipal.trusted_local(),
+            reference="same-source retry preserves accepted completed step01",
+            submitted_at=datetime.now(UTC),
+            confirm_stopped_failure_retry=True,
+            continuation_mode=BaselineContinuationMode.PAUSE,
+        )
+        reservations: set[str] = set()
+
+        def consume(saved_plan: ExecutionBaselinePlan, binding: ExecutionBaselineBinding) -> None:
+            assert saved_plan == plan
+            if binding.binding_sha256 in reservations:
+                return
+            reservation = saved_plan.facts.continuation
+            assert reservation is not None and reservation.retry_failure is None
+            f.native.repository.record_attempt(f.task.id, reservation.next_execution_attempt)
+            facts = collector.facts.model_copy(
+                update={
+                    "task": f.task,
+                    "task_revision": f.native.repository.current_revision(f.task.id),
+                    "checkpoint_sequence": f.native.repository.current_revision(f.task.id),
+                    "work_item_id": "work_next_paused",
+                    "stopped_failure": None,
+                    "continuation": BaselineExecutionReservation(
+                        current_attempt=reservation.next_execution_attempt,
+                        next_execution_attempt=reservation.next_execution_attempt,
+                        retry_cause="uninvoked",
+                        reservation_already_applied=True,
+                    ),
+                }
+            )
+            collector.facts = facts.model_copy(
+                update={
+                    "facts_sha256": digest(facts.model_dump(mode="json", exclude={"facts_sha256"}))
+                }
+            )
+            reservations.add(binding.binding_sha256)
+
+        service.publish_completion = consume
+        binding = service.execute(plan.plan_sha256, authority=authority)
+        assert service.execute(plan.plan_sha256, authority=authority) == binding
+        assert len(reservations) == 1 and f.task.attempts == 2 and f.task.work_attempt == 2
+        assert binding.execution_source_revision == f.native.request.source_revision
+        facts = collector.facts
+        resume = BaselineContinueAuthorization.create(
+            scope=facts.scope,
+            task_id=f.task.id,
+            task_intent_sha256=binding.task_intent_sha256,
+            task_revision=facts.task_revision,
+            checkpoint_sequence=facts.checkpoint_sequence,
+            work_item_id=facts.work_item_id,
+            execution_baseline_sha256=binding.binding_sha256,
+            expected_source_revision=binding.execution_source_revision,
+            expected_disposition_sha256="e" * 64,
+            inventory_sha256=before.sha256,
+            principal=LocalOperatorPrincipal.trusted_local(),
+            reference="separate resume of exact paused checkpoint",
+            submitted_at=datetime.now(UTC),
+        )
+        resumed: set[str] = set()
+
+        def release(
+            saved: ExecutionBaselineBinding, decision: BaselineContinueAuthorization
+        ) -> bool:
+            assert saved == binding and decision == resume
+            resumed.add(saved.binding_sha256)
+            return True
+
+        service.publish_continuation = release
+        assert service.continue_execution(binding.binding_sha256, authority=resume)
+        assert service.continue_execution(binding.binding_sha256, authority=resume)
+        assert resumed == reservations and f.task.attempts == 2
+        adapter = _CaptureRequestAdapter()
+        accepted_plan = f.native.artifacts.get("art_plan_001")
+        assert isinstance(accepted_plan, PlanArtifact)
+        f.queue.queue_admission = RoleQueueAdmission(
+            task_id=f.task.id,
+            repository_id=f.collector.scope.repository_id,
+            allocation_sha256="a" * 64,
+            legacy_artifacts=tuple(
+                QueueArtifactReceipt(artifact_id=a.artifact_id, sha256=a.integrity.sha256)
+                for a in (accepted_plan, progress)
+            ),
+        )
+        # A raw descendant on disk has no queue acceptance and cannot advance
+        # completed work, even though its source and supersedes edge are valid.
+        unaccepted = f.native._accept(
+            progress.model_copy(
+                update={
+                    "artifact_id": "art_progress_unaccepted",
+                    "supersedes": progress.artifact_id,
+                    "content": progress.content.model_copy(
+                        update={
+                            "completed_step_ids": ("step01", "step02"),
+                            "remaining_step_ids": ("step03",),
+                        }
+                    ),
+                }
+            ),
+            run_id="run_raw_unaccepted_coder",
+            source=f.native.request.source_revision,
+        )
+        definitions = _definitions()
+        definitions[AgentRole.CODER] = definitions[AgentRole.CODER].model_copy(
+            update={"permissions": f.native.request.permissions}
+        )
+        runner = RetryingOrchestrator(
+            repository=f.native.repository,
+            artifact_store=f.collector.artifacts,
+            context_builder=FileRunContextBuilder(Path(f.task.repository)),
+            agent_adapter=adapter,
+            agent_definitions=definitions,
+            identities=AttemptIdentityFactory(),
+            clock=_clock,
+            coder_execution_inputs=StoredCoderExecutionInputResolver(service.store),
+        )
+        current = runner._current_coder_input(f.task)
+        with pytest.raises(_RequestCaptured):
+            runner._run_coder_with_retries(
+                f.task, accepted_plan, None, None, None, current.active_progress, set(), [], []
+            )
+        request = adapter.requests[0]
+        assert request.continuation_checkpoint_id == progress.artifact_id
+        assert request.continuation_changed_paths == ("src/app.py",)
+        assert progress.artifact_id in request.input_artifact_ids
+        assert unaccepted.artifact_id not in request.input_artifact_ids
+        assert request.execution_baseline_sha256 == binding.binding_sha256
+        assert request.source_revision == f.native.request.source_revision
+        assert request.permissions == f.native.request.permissions
+        assert request.work_slice is not None
+        assert request.work_slice.completed_step_ids == ("step01",)
+        assert request.work_slice.selected_step_ids == ("step02",)
+        assert request.work_slice.later_step_ids == ("step03",)
+        assert request.work_slice.authorized_work_remaining == 4
+        assert binding.superseded_progress_artifact_id is None
+        assert current.active_progress == progress
+        assert capture_mutation_inventory(f.native.worktree.path) == before
+        assert all(path.read_bytes() == body for path, body in history.items())
+        assert f.task.retry_failures is None and f.task.attempts == 2
+
+
+@pytest.mark.parametrize("mode", list(BaselineInputMode))
+def test_source_changing_rebind_still_retires_incompatible_progress(
+    tmp_path: Path, mode: BaselineInputMode
+) -> None:
+    from tests.manager.test_execution_baseline import authorize, setup
+
+    f = setup(tmp_path, conflict=mode is BaselineInputMode.CODER_REAPPLY)
+    progress = make_coder_progress_artifact()
+    facts = f.collector.facts.model_copy(
+        update={
+            "progress_artifact_id": progress.artifact_id,
+            "source_artifact_ids": (*f.collector.facts.source_artifact_ids, progress.artifact_id),
+        }
+    )
+    f.collector.facts = facts.model_copy(
+        update={"facts_sha256": digest(facts.model_dump(mode="json", exclude={"facts_sha256"}))}
+    )
+    plan = f.service.propose(f.target, input_mode=mode)
+    binding = f.service.execute(plan.plan_sha256, authority=authorize(plan))
+    assert binding.execution_base_ref != binding.prior_execution_base_ref
+    assert binding.superseded_progress_artifact_id == progress.artifact_id
+    source = StoredCoderExecutionInputResolver(f.service.store).current(
+        facts.task, implementation=None, progress=None
+    )
+    assert source.active_progress is None
+    assert progress.artifact_id in source.superseded_artifact_ids
 
 
 @pytest.mark.parametrize("completed", ["stopped_failure"], indirect=True)
