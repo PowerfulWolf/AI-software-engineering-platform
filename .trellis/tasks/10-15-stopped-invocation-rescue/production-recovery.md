@@ -204,3 +204,77 @@ a costly path, but is not a measured per-stage timing allocation or permission t
 current/READY facts. No service restart, target main update or gate change was made while this
 exact operation was running. All 120 pre-deployment immutable history file hashes were checked
 again at 02:23Z and remained identical. Record later seed/claim/native results below.
+
+## Recovery Task claimed and native capture started (2026-10-16)
+
+Public preparation recorded SEED_VERIFIED at 02:29:53.964872Z and EXECUTION_CLAIMED at
+02:29:59.374186Z. The source Task remains BLOCKED; the distinct recovery Task was materialized
+as IMPLEMENTING revision 2, attempt 1. Public summary at 02:32:27Z showed a valid renewed
+Coder lease in knowledge preparation, with the requirement projected as DELIVERING.
+
+- Seed record: `9a6ae099cbb3d292856743f504f3cdbea07e0508bf627405d6de0a53c8eac16e`.
+- Exact target capture: `478767143d263fd7377576bab18caf5d8a77bd281af4d130c667b797f9516c6d`.
+- WorkItem: `work_cfae997d04a77d9ed7903da084538c99720a5ccf365a21cf009035c0d327637a`.
+- Lease: `lease_53e1542fb4fa0fcab02d4cce`.
+- Run: `run_ee31bf7c305c4ae6a26cf0774e1ef21c`.
+- Context: `ctx_876df8c3e22a6ace9d813f0418295a4638db97b7eee3d8290e35aaefdf2f7b51`.
+- Durable invocation start: 02:33:08.411148Z,
+  `c810034c4cc12b3b20a0b8857efc8c4cc04f73e8f25e0efb7136b17f4b270775`.
+- Recovery invocation admission:
+  `6883e500a3e64b188614f9cd41b76266daa3f0836b119c0a7b63d5232ae346bd`.
+- Verified native capture start: 02:34:47.216471Z,
+  `f2ff50178717b4dd4bda7d166bb406ad4ba47cf7bc8792eaf4905185e6749147`.
+
+No result, candidate, QA or Review verdict had been sealed at this observation. Native start
+is execution lineage, not business completion. Main `7b32798` contains the final verified fixture
+and earlier preparation records; this section records subsequent execution observations.
+The registered target remains at its exact approved
+`774e0a6` while this operation executes. No restart or target baseline update was performed.
+
+Independent read-only audit used native store getters and integrity validators for the plan,
+authorization, Task, seed and invocation. The seed's 16 paths/file hashes and complete 107,474-byte
+patch match the approved plan exactly; reconstructing each file from immutable Git objects and
+patch hunks reproduced every body SHA without reading the active worktree. All 112 Context
+segments have correct hashes and are untruncated; required origin inputs equal the plan-derived
+sources. Direct seed mode (`input_mode=None`) keeps the complete patch in its sealed seed,
+rather than requiring a coder-reapply patch segment. All 120 old history hashes remained equal.
+
+## Bounded offline plan decoding measurement
+
+An independent read-only three-round sample used only the saved plan copy, Python 3.12.13,
+and a temporary private store with the same valid scope/envelope. Raw JSON was 841,630 bytes
+(SHA `d128d9fb53b6e7bcbe1a6401d8e5ec7f03f7e31b6ed6a6f901470d4a2fa403ad`),
+canonical envelope 619,533 bytes, with 2810 inventory entries and 16 captured files. No DB,
+Git, inventory scan or active worktree was accessed. The temporary store was removed afterward.
+
+| Operation | Median CPU | Median wall |
+| --- | --- | --- |
+| `RecoveryPlan.model_validate_json` | 43.676 ms | 43.712 ms |
+| `plan.validate_integrity()` | 43.770 ms | 43.928 ms |
+| `plan.model_copy(deep=True)` | 8.377 ms | 8.394 ms |
+| Existing `FileRecoveryStore.get_plan` | 90.954 ms | 92.155 ms |
+
+These measurements overlap and must not be summed. Decode reuse can save tens of milliseconds
+per call, but this sample does not establish it as the main cause of the 24-minute preparation.
+Actual call counts and lower-perturbation stage timings are needed before prioritizing an
+optimization. Any future reuse must preserve fresh full bytes, original duplicate-key/envelope/
+Schema/scope validation and every mutable SQL/process/approval/HEAD/capture/inventory/lock check.
+No performance code or running production operation was changed on the basis of this sample.
+
+## First recovery checkpoint accepted and continued
+
+Run `run_ee31bf7c305c4ae6a26cf0774e1ef21c` sealed SUCCEEDED with outcome
+`a1ece2b37e4bc125836c78c4020b198c67bf0bb7b36d079bd5e5d4230231af32` and
+`coder-progress` artifact `art_coder_9ba1d839cca8e89500601668f03c3368`.
+It declares only `design_step_step_01_contract_compatibility` complete and all seven later
+steps remaining. The artifact retains all 16 changed files, records focused contract checks,
+and explicitly defers source binding and later implementation/independent verification.
+This is not a candidate or QA/Review conclusion.
+
+Public summary at 02:47:45.534379Z confirmed native acceptance and automatic checkpoint
+continuation: the Task is IMPLEMENTING revision 5, attempt-1 WorkItem CLOSED, and a separate
+Coder attempt-2 WorkItem `work_60848576ad1b9a8663fea3ccd816cb9556aea7b5a8317afc9338818fcac7dd53`
+is RUNNING with a valid renewed lease in KNOWLEDGE_PREPARATION. The failed read request at
+02:46Z was not executed because automatic approval review had no model capacity; its later
+normal reviewed retry succeeded. Neither the running delivery nor its state was modified
+to work around that tool approval failure.

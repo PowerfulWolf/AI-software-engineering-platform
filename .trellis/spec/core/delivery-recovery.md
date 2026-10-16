@@ -47,6 +47,35 @@ preserve every file byte and verify unique candidate plus unchanged final inspec
 Rollback only this reader at an idle boundary; old code may again reject the same legitimate
 history, but cannot be made compatible by deleting or rewriting historical facts.
 
+### Public recovery fixture composition
+
+`tests/recovery/test_resume.py` must exercise the configured native path when its source requires
+`RecoveryWorkspaceSnapshot`. A scripted failed `AgentResult` has no owned-process capture/stop
+and cannot substitute for that source. Configure the Host's private offline executable too:
+claimed knowledge preparation creates its own structured client before the role adapter. Read
+its actual output schema with `schema.get("title")`; the Coder union wrapper has no title.
+Knowledge responses must still traverse observed process/admission and normal Schema checks.
+
+Factories wrapping `ConfiguredDeliveryRouteAdapterFactory` must preserve their delegate and all
+configured `with_*` seams, including guard, baseline, interruption and initial seed admission.
+Otherwise a later Host clone can discard the offline executable or execution capability. A
+progress fixture must partition the actual `request.work_slice`: retain its prior completed IDs,
+declare every selected/later ID remaining unless truly completed, and keep the real slice gate.
+
+| Fixture boundary | Required assertions |
+| --- | --- |
+| Initial or seeded interrupted Coder | Real native capture/owned stop, exact Run/claim/snapshot, preserved complete draft |
+| Knowledge gap before parent attachment | GET preserves DELIVERING, separately projects exact WAITING_HUMAN queue/execution and lease_liveness=UNKNOWN; pending reader binds actual Task/role/source/gap |
+| Fresh Host Continue after the gap | Persisted WAITING_HUMAN and exact gap; unchanged original invocation and no duplicate Coder |
+| Approved resolution and completion | Exact approval, normal candidate, distinct QA/Reviewer, same-candidate reports and DONE |
+
+Good: replace only external model responses with the private executable while keeping native
+proof and public approval gates. Base: offline record/Schema tests remain useful without claiming
+full recovery. Bad: manufacture stop facts, drop factory configuration, hardcode foreign step IDs,
+or require a read-only GET to attach the parent wait. Current facts, source history and permission
+checks remain production behavior; fix an obsolete fixture rather than accepting absent proof.
+Released scheduling ownership or UNKNOWN lease liveness is not proof of process termination.
+
 ## 新恢复计划冻结目标执行授权（2026-10-10）
 
 ### Scope / Trigger
