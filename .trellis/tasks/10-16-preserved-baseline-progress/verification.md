@@ -354,6 +354,26 @@ validate_reapply_context gate passed. Report
 `/tmp/ase-k1-attempt2-reapply-context-independent-20261019.json`, SHA-256
 `763ea645742fb78635482b8926f99032ad78ce2a9f2685964c7da8985526817f`.
 
+At05:25:18 UTC the next independent audit confirmed accepted checkpoint2,
+art_coder_2f4054d8be15982abcf91f1aa8537e24, SHA-256
+5f0bb57a17d65c027e6cdc48d877d87e37057c3b6081401c85aeb7ec88aa8e0d. It preserves
+nine exact changed paths and reports two completed/six remaining
+steps. Run2 returned SUCCEEDED on the actual codex/gpt-6.1-sol route at05:21:51, with
+capture-stop a198f0be, owned process-stop3553543d (kind=completed, output present)
+and outcome41b1938e.
+All three continuation StateEvents at revisions6/7/8 reference the exact sealed artifact.
+The run2 lease is RELEASED; Task is IMPLEMENTING/revision8/attempts3 with a new active
+run3 claim and fresh heartbeat. Retry failures remain zero and frozen budgets unchanged.
+
+Run3 run_9b48cb6b66c9482b8dd524f1db70c45c has durable start1d493cf9 at05:24:17 and
+capture-startc1b2d230 at05:24:19. Its exact progress2, nine paths, parent/supersedes and
+full required Coder-only recovery.patch remain validated at source150f546 in the same
+worktree; the complete patch is225678 bytes/SHA26710e71 and untruncated. No independent
+OS start observation or outcome for run3 was established by this audit. Report
+`/tmp/ase-k1-progress2-continuation-independent-20261019.json`, SHA-256
+`102d60eda2cd3dd8c859149aeca97d43ff60b29c6806272af13dec8d39638b24`.
+This remains noncandidate progress; there is no production QA/Review verdict or DONE.
+
 ## Storage and rollback
 
 存量数据处置：the reviewed deployment and exact public Handle above restored the original
