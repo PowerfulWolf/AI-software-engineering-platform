@@ -28,3 +28,27 @@ Independent audit provides measurements and a separate reviewer validates correc
 All workers share the checkout and preserve each other's changes. Main is not edited during
 active delivery. Rollback uses controlled safe stop before reverting platform code; no data
 rollback or deletion is required.
+
+## Follow-up scope — 2026-10-19
+
+Goal: reuse only the existing JointJournal exact-complete-byte decoder between the two
+observations of one synchronous `detail()` call. Each observation still creates its own
+history snapshot, enumerates/reads/hashes every original file, validates current ownership
+and retirement, and opens a new SQL snapshot. Public history/current deep copies remain.
+No Plan/Start optimization, cross-request cache, database connection or production operation.
+
+Allowed paths: `src/ai_software_engineer/team_view/reader.py`, the necessary cache-release
+method in `multi_directory/store.py`, corresponding file/fake unit tests, this task's
+documents and `.trellis/spec/core/team-summary-detail.md`. `run6_owned_uncertainty` owns
+these edits; other maintainers' files and existing changes must remain intact.
+
+- Good: unchanged full history decodes once per record across two observations, with
+  two full reads and identical typed results; next detail starts cold.
+- Base: empty history and cache eviction still return complete original results.
+- Bad: changed bytes/predecessor/path/retirement or final SQL authority still refuses;
+  successful and exceptional exits clear the shared decoder even with a retained traceback.
+
+Acceptance uses actual decode/full-read counts, corruption and lifetime tests before/after
+implementation. No portable timing threshold and no claimed production latency reduction.
+Rollback removes only call-local reuse and restores repeated decoding. Existing data needs
+no migration. Do not deploy or restart while K1 is active; parent owns later controlled loading.

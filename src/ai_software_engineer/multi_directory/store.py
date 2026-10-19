@@ -9,6 +9,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from traceback import clear_frames
 
 from pydantic import TypeAdapter
 
@@ -68,6 +69,10 @@ class JointJournal:
             if path.parent == directory:
                 del self._verified[path]
 
+    def clear_verified_reads(self) -> None:
+        """Release private decoder models without touching possibly changed paths."""
+        self._verified.clear()
+
     def current(self, delivery_id: str) -> JointCheckpoint | None:
         latest: JointCheckpoint | None = None
         for checkpoint in self._validated_history(delivery_id):
@@ -75,7 +80,15 @@ class JointJournal:
         return latest.model_copy(deep=True) if latest is not None else None
 
     def history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]:
-        return tuple(item.model_copy(deep=True) for item in self._validated_history(delivery_id))
+        try:
+            return tuple(
+                item.model_copy(deep=True) for item in self._validated_history(delivery_id)
+            )
+        except BaseException as error:
+            # Completed iterator/validator frames can retain private decoder models.
+            # Preserve error types and traceback locations while releasing their locals.
+            clear_frames(error.__traceback__)
+            raise
 
     def _validated_history(self, delivery_id: str) -> Iterator[JointCheckpoint]:
         """Yield private facts; public readers exhaust the chain and copy their returns."""

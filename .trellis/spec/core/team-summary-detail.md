@@ -54,6 +54,46 @@ sidecar 的 Project/repository binding、原 request/preparation、Product check
 
 ## Read lifecycle and performance boundary
 
+### Detail-owned joint decoder reuse (2026-10-19)
+
+`detail(query)` may explicitly pass a private synchronous journal owner into its body and
+final `_read_snapshot(..., joint_reads=...)` calls. The owner holds at most one read-only
+`JointJournal` at a time; a changed root clears the prior decoder. Each observation creates
+a new `_JointHistorySnapshot` and independently enumerates original files, rejects symlinks,
+reads complete bytes and recomputes SHA. Only the existing journal decoder may reuse an
+unchanged payload and exact predecessor-bytes identity. Changed bytes/edges, filenames,
+chain, Team/Project, native ownership, retirement and current SQL/authority facts retain
+their original checks and refusals. The second SQL snapshot remains independently fresh.
+
+`JointJournal.clear_verified_reads() -> None` only clears private decoded records and must
+not access the filesystem or perform validation. The detail-owned `finally` calls it and
+discards the journal on success, stale/not-found, read/validation error or cancellation,
+so an exception retained by its caller cannot retain models through this new shared cache.
+`history()` also clears completed iterator/genexpr/validator traceback frame locals on
+failure, while preserving the same exception type, arguments and traceback locations.
+Clearing only the owner dictionary is insufficient: a warm iterator's `previous/cached`
+and the tuple generator's prior `item` can otherwise retain the original private model.
+Tests must keep the actual source-read exception and its cause/traceback alive and check
+weak references to the first observation's private models, including a later-path read
+failure and a changed-predecessor/unchanged-successor chain failure. The original byte,
+integrity and successor validation algorithm remains unchanged.
+Public `history/current` keep defensive deep copies. Full/summary and later independent
+detail calls do not share this owner; no reader-instance/global/ContextVar cache is added.
+The existing 512-entry decoder bound is a record count, not a serialized-byte or RSS bound.
+
+Good: a record's decode/integrity/successor checks run once across unchanged observations,
+while original complete-byte reads run twice and typed output is identical. Base: empty
+history or evicted decoder entries still yield all records. Bad: a resealed ancestor with
+an unchanged successor, same-size/mtime corruption, missing record, renamed file, symlink,
+new tail or changed current authority must not borrow a stale source or permission.
+
+File/fake tests in `tests/team_view/test_detail_joint_decoder_scope.py` must count actual
+decoder/full reads, assert independent snapshots/SQL,
+mutation and chain/path refusal after the body, request isolation, public copy isolation
+and explicit release with retained exceptions. No MySQL or portable wall-time threshold
+is required. Existing data is unchanged; rollback restores duplicate decoding. Production
+measurements and deployment belong to a later controlled idle window.
+
 详情返回完整选中资源，不装配未返回的 ProjectView 统计。Task 详情与其 source fence 仅装配
 选中 native Task（含全部历史）或选中 candidate verification（含真实 source Task 核验）。
 原 joint/native ownership history 与 reservation SQL envelope 仍完整核验；其他卡片的工程、

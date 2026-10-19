@@ -203,13 +203,32 @@ class _NativeRequirementOwner:
 
 
 @dataclass(slots=True)
+class _DetailJournalReads:
+    """Own one bounded exact-byte decoder only for a synchronous detail call."""
+
+    _journal: JointJournal | None = None
+
+    def journal(self, root: Path) -> JointJournal:
+        if self._journal is not None and self._journal.root != root.absolute():
+            self.clear()
+        if self._journal is None:
+            self._journal = JointJournal(root, read_only=True)
+        return self._journal
+
+    def clear(self) -> None:
+        if self._journal is not None:
+            self._journal.clear_verified_reads()
+            self._journal = None
+
+
+@dataclass(slots=True)
 class _JointHistorySnapshot:
     """Capture each complete verified prefix once during one Team read.
 
     Retirement validation, ownership and display counts consume the same prefix.
-    The cache is private to the read call; the next snapshot opens a fresh Journal
-    and checks every byte, path and predecessor again. Callers only inspect these
-    captured models, so reusing them avoids repeated full-history deep copies.
+    The cache is private to one observation. A detail's next observation may reuse
+    only the journal's exact-byte decoder; every byte, path and predecessor is
+    checked again. Callers only inspect these captured, publicly copied models.
     """
 
     _journal: JointJournal
@@ -405,13 +424,18 @@ class ProductionTeamReader:
             raise TeamReadError("当前团队摘要暂时无法完整核验。") from error
 
     def detail(self, query: TeamDetailQuery) -> TeamDetail:
+        joint_reads = _DetailJournalReads()
         try:
             with recovery_record_read_scope(), source_inspection_scope():
-                result = self._read_snapshot(query.project_id, detail_query=query)
+                result = self._read_snapshot(
+                    query.project_id, detail_query=query, joint_reads=joint_reads
+                )
                 assert isinstance(result, (RequestDetail, TaskDetail))
                 # Reopen all current source and SQL facts after the complete selected
                 # body was read. A body never pins permission across observations.
-                current = self._read_snapshot(query.project_id, source_query=query)
+                current = self._read_snapshot(
+                    query.project_id, source_query=query, joint_reads=joint_reads
+                )
                 assert isinstance(current, TeamDetailSource)
                 if current != query.source():
                     raise TeamDetailStale("所选详情的版本或归属已更新, 请刷新后重新打开。")
@@ -420,6 +444,8 @@ class ProductionTeamReader:
             raise
         except Exception as error:
             raise TeamReadError("所选详情暂时无法完整核验。") from error
+        finally:
+            joint_reads.clear()
 
     @staticmethod
     def _require_detail_source(summary: TeamSummary, query: TeamDetailQuery) -> TeamDetailSource:
@@ -438,6 +464,7 @@ class ProductionTeamReader:
         summary_only: bool = False,
         detail_query: TeamDetailQuery | None = None,
         source_query: TeamDetailQuery | None = None,
+        joint_reads: _DetailJournalReads | None = None,
     ) -> TeamSnapshot | TeamSummary | TeamDetail | TeamDetailSource:
         full_snapshot = not summary_only and detail_query is None and source_query is None
         if detail_query is not None and source_query is not None:
@@ -469,7 +496,11 @@ class ProductionTeamReader:
             for path in _files(workforce_workspace.directory("agents"), "*.json")
         )
         journal = (
-            _JointHistorySnapshot(JointJournal(selected.requirements_root, read_only=True))
+            _JointHistorySnapshot(
+                joint_reads.journal(selected.requirements_root)
+                if joint_reads is not None
+                else JointJournal(selected.requirements_root, read_only=True)
+            )
             if selected is not None
             else None
         )

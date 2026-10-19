@@ -59,7 +59,12 @@ from ai_software_engineer.team_view.read_models import (
     TeamDetailStale,
     TeamSummary,
 )
-from ai_software_engineer.team_view.reader import ProductionTeamReader, _Native, _TaskReadSnapshot
+from ai_software_engineer.team_view.reader import (
+    ProductionTeamReader,
+    _DetailJournalReads,
+    _Native,
+    _TaskReadSnapshot,
+)
 from tests.manager.test_production_backend import _ScriptedStructuredClient
 from tests.product.test_store import _spec
 from tests.team_view.test_baseline_snapshot import _fixture, _read_snapshot_fixture
@@ -632,6 +637,7 @@ def test_detail_rechecks_source_after_complete_body_read(
         summary_only: bool = False,
         detail_query: TeamDetailQuery | None = None,
         source_query: TeamDetailQuery | None = None,
+        joint_reads: _DetailJournalReads | None = None,
     ) -> TeamSummary | TeamDetail | object:
         nonlocal calls
         result = original(
@@ -639,6 +645,7 @@ def test_detail_rechecks_source_after_complete_body_read(
             summary_only=summary_only,
             detail_query=detail_query,
             source_query=source_query,
+            joint_reads=joint_reads,
         )
         calls += 1
         if calls == 1:

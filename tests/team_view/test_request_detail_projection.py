@@ -198,6 +198,7 @@ def test_source_fence_rechecks_complete_bytes_retirement_and_real_ownership(
         summary_only: bool = False,
         detail_query: TeamDetailQuery | None = None,
         source_query: TeamDetailQuery | None = None,
+        joint_reads: read_module._DetailJournalReads | None = None,
     ) -> TeamSnapshot | TeamSummary | TeamDetail | TeamDetailSource:
         nonlocal observations
         result = original(
@@ -205,6 +206,7 @@ def test_source_fence_rechecks_complete_bytes_retirement_and_real_ownership(
             summary_only=summary_only,
             detail_query=detail_query,
             source_query=source_query,
+            joint_reads=joint_reads,
         )
         observations += 1
         if observations == 1:

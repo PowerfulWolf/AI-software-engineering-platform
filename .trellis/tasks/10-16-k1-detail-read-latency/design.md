@@ -60,3 +60,27 @@ unchanged by the reader. No production writes, database reset or service operati
 No migration or K1 recreation is necessary. Root owns controlled deployment and real
 read-only measurement. Revert this selective read assembly while idle to restore the
 prior repeated projection cost without changing durable data or execution authority.
+
+## Detail-local exact-byte decoder follow-up — 2026-10-19
+
+The private `_read_snapshot` signature gains optional `joint_reads: _DetailJournalReads`;
+the public reader signatures and all wire models stay unchanged. Only `detail()` creates
+this explicit owner, passing it to both observations and clearing it in `finally`.
+The owner holds at most one read-only Journal (existing 512 decoded-record bound), clears
+before replacing a root, and never stores observation histories or permission decisions.
+Each `_read_snapshot` still builds a new `_JointHistorySnapshot` and fresh SQL transaction.
+
+The existing JointJournal decoder continues rereading complete original files and hashing
+all bytes; reuse requires exact own/predecessor byte identities. Every public history
+record is still deep-copied. Summary/full and later detail calls create independent Journals.
+`clear_verified_reads()` clears models without touching possibly corrupt paths. On history
+failure, completed iterator/genexpr/validator traceback locals are released while exception
+types, arguments and traceback positions survive. This closes the observed retained-error
+path from warmed `cached/previous/item` references; dictionary clearing alone was insufficient.
+
+Tests use real temporary journals and public `detail`, with SQL composition replaced only by
+the existing fake fixture when applicable. They measure decode, complete-read, successor and
+copy counts, post-body path/chain changes, new-tail detection, independent requests, retained
+error/cancellation cleanup, changed-root cleanup and 513-record completeness. Existing native,
+retirement, current authority and independently fresh SQL regressions remain required.
+No DSN, production fact, process control, Plan/Start projection or deployment belongs here.
