@@ -13,6 +13,9 @@ from ai_software_engineer.evaluation import (
 from ai_software_engineer.knowledge.audit import KnowledgeHumanActionRecorder
 from ai_software_engineer.manager.baseline_models import BaselineOperatorAuthorization
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+from ai_software_engineer.manager.workspace_admission_contract import (
+    WorkspaceAdmissionAdapterContractStore,
+)
 
 
 class EngineeringHumanActionRecorder:
@@ -21,6 +24,7 @@ class EngineeringHumanActionRecorder:
 
     def record(self, task: Task, case_id: EvaluationCaseId, events: EvaluationEventStore) -> None:
         self.knowledge.record(task, case_id, events)
+        self._record_workspace_admission_declarations(task, case_id, events)
         root = self.baseline_root / task.id
         if not root.exists():
             return
@@ -126,3 +130,35 @@ class EngineeringHumanActionRecorder:
                 ),
             )
             events.append(event)
+
+    def _record_workspace_admission_declarations(
+        self, task: Task, case_id: EvaluationCaseId, events: EvaluationEventStore
+    ) -> None:
+        store = WorkspaceAdmissionAdapterContractStore(self.baseline_root.parent, task.id)
+        for record in store.list_for_task():
+            declaration = record.declaration
+            if declaration.scope.repository_root != task.repository or (
+                task.engineering_policy is not None
+                and declaration.scope != task.engineering_policy.scope
+            ):
+                raise ValueError("工作区适配器部署声明不属于当前仓库")
+            assert store.records is not None
+            events.append(
+                HumanActionEvent(
+                    event_id="evalevt_wsadmission_" + record.contract_sha256[:32],
+                    case_id=case_id,
+                    task_id=task.id,
+                    occurred_at=record.submitted_at,
+                    action=HumanAction.SUPPLY_EVIDENCE,
+                    evidence_uri=(
+                        store.root / store.records._name("adapter-declarations", declaration.run_id)
+                    )
+                    .absolute()
+                    .as_uri(),
+                    note=(
+                        "工程人员现在补充原工作区准入拒绝时的历史平台部署声明; "
+                        "原调用没有自动版本回执, 原失败结果和缺失事实均保留。"
+                        "本声明独立于完整可信准入证明, 不证明native进程停止或交付通过。"
+                    ),
+                )
+            )

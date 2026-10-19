@@ -3577,6 +3577,17 @@
             }
           ],
           "default": null
+        },
+        "rejected_workspace_admission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedWorkspaceAdmissionEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -3950,6 +3961,35 @@
         {
           "if": {
             "required": [
+              "resolution_kind"
+            ],
+            "properties": {
+              "resolution_kind": {
+                "const": "RETRY_REJECTED_WORKSPACE_ADMISSION"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "rejected_workspace_admission": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "rejected_workspace_admission"
+            ]
+          },
+          "else": {
+            "properties": {
+              "rejected_workspace_admission": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
               "verifier_preparation"
             ],
             "properties": {
@@ -3985,7 +4025,8 @@
         "RETRY_VERIFIER_PREPARATION",
         "RETRY_KNOWLEDGE_PREPARATION",
         "RETRY_REJECTED_CODER_OUTPUT",
-        "RETRY_REJECTED_KNOWLEDGE_PREPARATION"
+        "RETRY_REJECTED_KNOWLEDGE_PREPARATION",
+        "RETRY_REJECTED_WORKSPACE_ADMISSION"
       ],
       "title": "DeliveryResolutionKind",
       "type": "string"
@@ -4659,6 +4700,17 @@
             }
           ],
           "default": null
+        },
+        "rejected_workspace_admission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedWorkspaceAdmissionEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -5143,6 +5195,115 @@
                     "properties": {
                       "role": {
                         "const": "coder"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "permitted_resolutions"
+            ],
+            "properties": {
+              "permitted_resolutions": {
+                "contains": {
+                  "const": "RETRY_REJECTED_WORKSPACE_ADMISSION"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "rejected_workspace_admission"
+            ],
+            "properties": {
+              "rejected_workspace_admission": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "rejected_workspace_admission"
+            ],
+            "properties": {
+              "rejected_workspace_admission": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "invocation_start_sha256",
+              "invocation_outcome_sha256",
+              "workspace_inventory_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "invocation_start_sha256": {
+                "type": "string"
+              },
+              "invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "workspace_inventory_sha256": {
+                "type": "string"
+              },
+              "retry_cause": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "process_stop_sha256": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
+              },
+              "rejected_knowledge": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "maxItems": 1,
+                "items": {
+                  "const": "RETRY_REJECTED_WORKSPACE_ADMISSION"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "role": {
+                        "const": "coder"
+                      },
+                      "classification": {
+                        "enum": [
+                          "NONTRANSIENT_INFRA",
+                          "PLATFORM_BUG",
+                          "INVALID_OUTPUT"
+                        ]
                       }
                     }
                   }
@@ -7219,6 +7380,17 @@
           "default": "HANDLE_DELIVERY_WAIT",
           "title": "Action",
           "type": "string"
+        },
+        "workspace_admission_adapter_contract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceAdmissionAdapterContract"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -12270,6 +12442,312 @@
       ],
       "title": "RejectedKnowledgePreparationEvidence",
       "type": "object"
+    },
+    "RejectedWorkspaceAdmissionEvidence": {
+      "additionalProperties": false,
+      "description": "Positive trusted adapter refusal before provider execution, never a native stop.",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "role": {
+          "const": "coder",
+          "title": "Role",
+          "type": "string"
+        },
+        "checkpoint_sequence": {
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "attempt": {
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "dispatch_sequence": {
+          "minimum": 0,
+          "title": "Dispatch Sequence",
+          "type": "integer"
+        },
+        "lease_id": {
+          "minLength": 1,
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Claim Sha256",
+          "type": "string"
+        },
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "invocation_start_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Start Sha256",
+          "type": "string"
+        },
+        "invocation_outcome_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Outcome Sha256",
+          "type": "string"
+        },
+        "route_attempt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Route Attempt Sha256",
+          "type": "string"
+        },
+        "context_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Context Sha256",
+          "type": "string"
+        },
+        "baseline_binding_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Baseline Binding Sha256",
+          "type": "string"
+        },
+        "baseline_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Baseline Plan Sha256",
+          "type": "string"
+        },
+        "progress_artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Progress Artifact Id",
+          "type": "string"
+        },
+        "progress_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Progress Sha256",
+          "type": "string"
+        },
+        "workspace_inventory_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Workspace Inventory Sha256",
+          "type": "string"
+        },
+        "workspace_capture_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Workspace Capture Sha256",
+          "type": "string"
+        },
+        "adapter_contract_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Adapter Contract Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "const": "PRESERVED_PROGRESS_CAPTURE_MISMATCH",
+          "default": "PRESERVED_PROGRESS_CAPTURE_MISMATCH",
+          "title": "Reason",
+          "type": "string"
+        },
+        "observation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Observation Sha256",
+          "type": "string"
+        },
+        "budget_source": {
+          "const": "frozen_work_attempt",
+          "default": "frozen_work_attempt",
+          "title": "Budget Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "requirement_id",
+        "task_id",
+        "work_item_id",
+        "role",
+        "checkpoint_sequence",
+        "attempt",
+        "dispatch_sequence",
+        "lease_id",
+        "claim_sha256",
+        "run_id",
+        "context_manifest_id",
+        "source_revision",
+        "invocation_start_sha256",
+        "invocation_outcome_sha256",
+        "route_attempt_sha256",
+        "context_sha256",
+        "baseline_binding_sha256",
+        "baseline_plan_sha256",
+        "progress_artifact_id",
+        "progress_sha256",
+        "workspace_inventory_sha256",
+        "workspace_capture_sha256",
+        "adapter_contract_sha256",
+        "observation_sha256"
+      ],
+      "title": "RejectedWorkspaceAdmissionEvidence",
+      "type": "object"
+    },
+    "WorkspaceAdmissionAdapterContract": {
+      "additionalProperties": false,
+      "description": "Operator input; principal and time come only from trusted composition.",
+      "properties": {
+        "kind": {
+          "const": "historical_workspace_admission_deployment",
+          "default": "historical_workspace_admission_deployment",
+          "title": "Kind",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "requirement_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "task_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "work_item_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "lease_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Claim Sha256",
+          "type": "string"
+        },
+        "run_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "source_revision": {
+          "$ref": "#/$defs/PlatformRevision"
+        },
+        "invocation_start_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Start Sha256",
+          "type": "string"
+        },
+        "invocation_outcome_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Outcome Sha256",
+          "type": "string"
+        },
+        "route_attempt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Route Attempt Sha256",
+          "type": "string"
+        },
+        "platform_revision": {
+          "$ref": "#/$defs/PlatformRevision"
+        },
+        "adapter_sources": {
+          "items": {
+            "$ref": "#/$defs/WorkspaceAdmissionAdapterSource"
+          },
+          "maxItems": 7,
+          "minItems": 7,
+          "title": "Adapter Sources",
+          "type": "array"
+        },
+        "deployment_evidence_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "deployment_evidence_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Deployment Evidence Sha256",
+          "type": "string"
+        },
+        "service_instance_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "service_process_birth": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "deployment_observed_at": {
+          "format": "date-time",
+          "title": "Deployment Observed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "requirement_id",
+        "task_id",
+        "work_item_id",
+        "lease_id",
+        "claim_sha256",
+        "run_id",
+        "source_revision",
+        "invocation_start_sha256",
+        "invocation_outcome_sha256",
+        "route_attempt_sha256",
+        "platform_revision",
+        "adapter_sources",
+        "deployment_evidence_id",
+        "deployment_evidence_sha256",
+        "service_instance_id",
+        "service_process_birth",
+        "deployment_observed_at"
+      ],
+      "title": "WorkspaceAdmissionAdapterContract",
+      "type": "object"
+    },
+    "WorkspaceAdmissionAdapterSource": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "pattern": "^src/ai_software_engineer/[a-z_/]+\\.py$",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "WorkspaceAdmissionAdapterSource",
+      "type": "object"
+    },
+    "PlatformRevision": {
+      "pattern": "^[a-f0-9]{40}$",
+      "type": "string"
+    },
+    "ContractIdentity": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
     }
   },
   "additionalProperties": false,

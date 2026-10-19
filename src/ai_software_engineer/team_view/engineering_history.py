@@ -17,6 +17,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     EngineeringDispositionRecord,
     KnowledgePreparationRetryEvidence,
     RejectedKnowledgePreparationEvidence,
+    RejectedWorkspaceAdmissionEvidence,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringAdmission, EngineeringScope
 from ai_software_engineer.domain.enums import TeamRole
@@ -211,6 +212,7 @@ def _decision_matches_proof(decision: DeliveryResolution, proof: DeliveryWaitInv
         or decision.verifier_preparation != proof.verifier_preparation
         or decision.knowledge_preparation != proof.knowledge_preparation
         or decision.rejected_knowledge != proof.rejected_knowledge
+        or decision.rejected_workspace_admission != proof.rejected_workspace_admission
     ):
         raise ValueError("engineering decision has another exact investigation")
 
@@ -245,6 +247,20 @@ def _rejected_knowledge_details(
     }
 
 
+def _workspace_admission_details(
+    evidence: RejectedWorkspaceAdmissionEvidence | None,
+) -> dict[str, JsonValue]:
+    if evidence is None:
+        return {}
+    return {
+        "rejected_workspace_admission": {
+            "role": evidence.role.value,
+            "reason": evidence.reason,
+            "budget_source": evidence.budget_source,
+        }
+    }
+
+
 def _require_knowledge_scope(
     proof: DeliveryWaitInvestigation,
     scope: EngineeringScope,
@@ -253,6 +269,14 @@ def _require_knowledge_scope(
     *,
     native_requirement_id: str | None = None,
 ) -> None:
+    workspace = proof.rejected_workspace_admission
+    if workspace is not None and (
+        workspace.scope != scope
+        or workspace.requirement_id not in {requirement_id, native_requirement_id}
+    ):
+        raise ValueError(
+            "workspace admission investigation is outside the current Project Requirement"
+        )
     rejected = proof.rejected_knowledge
     if rejected is not None and (
         rejected.scope != scope
@@ -375,6 +399,7 @@ def _engineering_history(
                         "source_revision": proof.source_revision,
                         **_knowledge_details(proof.knowledge_preparation),
                         **_rejected_knowledge_details(proof.rejected_knowledge),
+                        **_workspace_admission_details(proof.rejected_workspace_admission),
                     },
                 )
             )
@@ -442,6 +467,7 @@ def _engineering_history(
                         "proof_sha256": decision.proof_sha256,
                         **_knowledge_details(decision.knowledge_preparation),
                         **_rejected_knowledge_details(decision.rejected_knowledge),
+                        **_workspace_admission_details(decision.rejected_workspace_admission),
                     },
                 )
             )
@@ -517,6 +543,7 @@ def _engineering_history(
                         "work_item_id": handling.work_item_id,
                         **_knowledge_details(proof.knowledge_preparation),
                         **_rejected_knowledge_details(proof.rejected_knowledge),
+                        **_workspace_admission_details(proof.rejected_workspace_admission),
                     },
                 )
             )

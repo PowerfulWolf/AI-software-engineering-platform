@@ -1,5 +1,15 @@
 # 角色、权限与 Artifact 契约
 
+主角色 invocation start 不证明 provider 已启动。已接纳 progress 与同基线获批完整草稿
+可按精确 Plan 身份共同准入；后续新 progress 仍执行自身完整 inventory 契约。
+旧可信 adapter 的独占 pre-provider 准入拒绝，仅在完整 start/outcome/唯一 route、原 claim、
+Context、基线和草稿被独立重验并排除所有执行反证后，生成当前只读的
+`RejectedWorkspaceAdmissionEvidence`。公开 `RETRY_REJECTED_WORKSPACE_ADMISSION` 处理
+精确证据与工程批准后消耗一次普通工作额度，创建新 WorkItem/claim/Context/Run。
+原 FAILED 结果及 UNKNOWN 历史不改写，不补造 native stop，不重置预算、不改变产品范围，
+候选仍需独立 QA/Review。完整字段、反例和存量恢复见
+[`rejected-workspace-admission.md`](../../.trellis/spec/core/rejected-workspace-admission.md)。
+
 知识模型调用的 `RETURNED` 仅证明原始结果已经安全封存，不代表知识咨询已通过。
 `CLAIM_WITHOUT_READ` 必须继续拒绝本知识 Run 未实际 READ 的引用。完整、安全封存且可独立
 重验的语义拒绝使用单独 observation，沿当前真实 claim 进入 `INVALID_OUTPUT` 工程等待并

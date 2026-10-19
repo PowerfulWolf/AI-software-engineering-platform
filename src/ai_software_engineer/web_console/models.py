@@ -31,6 +31,9 @@ from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairRequest
 from ai_software_engineer.domain.task import TaskId
+from ai_software_engineer.domain.workspace_admission_contract import (
+    WorkspaceAdmissionAdapterContract,
+)
 from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
 from ai_software_engineer.manager.baseline_production import (
     BaselineContinueCommand,
@@ -241,6 +244,9 @@ class InspectDeliveryWaitIntent(_DeliveryWaitIntent):
 
 class HandleDeliveryWaitIntent(_DeliveryWaitIntent):
     action: Literal[ConsoleAction.HANDLE_DELIVERY_WAIT] = ConsoleAction.HANDLE_DELIVERY_WAIT
+    workspace_admission_adapter_contract: WorkspaceAdmissionAdapterContract | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class ResolveDeliveryWaitIntent(_DeliveryWaitIntent):

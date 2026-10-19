@@ -38,6 +38,9 @@
 
 ## Files
 
+- [Rejected workspace admission](rejected-workspace-admission.md): exact Plan-frozen progress
+  plus approved full draft, positively evidenced pre-provider refusal and ordinary-work recovery.
+
 - [First real Coder admission](first-real-coder-admission.md): durable invocation selection after knowledge-only attempts, exact seed/claim authority and typed pre-provider refusal.
 
 - [Preserved continuation input](preserved-continuation-input.md): complete same-worktree validation, bounded current-file reading, unchanged required historical reapply patch and final capacity gate.

@@ -707,6 +707,10 @@ class WaitQueue:
         assert lease_id == self.original.lease.id
         return self.original
 
+    def claims_for_work_item(self, work_item_id: str) -> tuple[QueueClaim, ...]:
+        assert work_item_id == self.item.id
+        return (self.original,)
+
     def accepted(self, task_id: str) -> tuple[AcceptedRoleArtifact, ...]:
         assert task_id == self.item.task_id
         return self.accepted_artifacts

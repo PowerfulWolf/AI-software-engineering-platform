@@ -6,10 +6,14 @@ from runpy import run_path
 from typing import Any
 
 from ai_software_engineer.domain.delivery_disposition import DeliveryFailureFacts
+from ai_software_engineer.domain.workspace_admission_contract import (
+    WorkspaceAdmissionAdapterContractRecord,
+)
 from ai_software_engineer.knowledge.assessment_rejection import RejectedKnowledgeAssessment
 from ai_software_engineer.manager.rejected_knowledge_preparation import (
     RejectedKnowledgeCarryRefusal,
 )
+from ai_software_engineer.web_console.models import HandleDeliveryWaitIntent
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = ROOT / "schemas"
@@ -19,7 +23,9 @@ NAMES = (
     "DeliveryWaitInvestigation",
     "DeliveryWaitHandling",
     "RejectedKnowledgePreparationEvidence",
+    "RejectedWorkspaceAdmissionEvidence",
     "DeliveryFailureFacts",
+    "HandleDeliveryWaitIntent",
 )
 
 
@@ -56,7 +62,10 @@ def main() -> None:
     # Owns the manually authored if/then gates; do not rebuild those from Pydantic.
     run_path(str(ROOT / "scripts/sync-engineering-authority-schemas.py"))
     canonical = json.loads((SCHEMAS / "engineering-wait-resolution.schema.json").read_text())
-    nodes = {name: canonical["$defs"][name] for name in NAMES}
+    handle = HandleDeliveryWaitIntent.model_json_schema()
+    all_nodes = {**canonical["$defs"], **handle.pop("$defs", {})}
+    all_nodes["HandleDeliveryWaitIntent"] = handle
+    nodes = {name: all_nodes[name] for name in NAMES}
     facts = DeliveryFailureFacts.model_json_schema()
     nodes["DeliveryFailureFacts"] = {key: value for key, value in facts.items() if key != "$defs"}
     for path, content in original_bytes.items():
@@ -76,7 +85,7 @@ def main() -> None:
                 if not missing:
                     break
                 for name in missing:
-                    definitions[name] = canonical["$defs"][name]
+                    definitions[name] = all_nodes[name]
         if updated == original:
             path.write_text(content)
         else:
@@ -86,6 +95,7 @@ def main() -> None:
     for name, model in (
         ("rejected-knowledge-assessment", RejectedKnowledgeAssessment),
         ("rejected-knowledge-carry-refusal", RejectedKnowledgeCarryRefusal),
+        ("workspace-admission-adapter-contract", WorkspaceAdmissionAdapterContractRecord),
     ):
         wire = model.model_json_schema()
         wire["$schema"] = "https://json-schema.org/draft/2020-12/schema"

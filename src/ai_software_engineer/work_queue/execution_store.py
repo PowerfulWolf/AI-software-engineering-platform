@@ -866,6 +866,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION,
                 DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,
                 DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION,
+                DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION,
             }:
                 if current.role not in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER):
                     raise QueueConflict("wait does not belong to a delivery role")
@@ -961,6 +962,74 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     )
                     if cursor.fetchone() is not None:
                         raise QueueConflict("原任务仍有活跃领取, 不能开始知识准备续跑")
+                    updated_task = Task.model_validate(
+                        {**task.to_wire(), "attempts": task.attempts + 1}
+                    )
+                elif (
+                    resolution.resolution_kind
+                    is DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION
+                ):
+                    from ai_software_engineer.knowledge.claim_identity import claim_identity_sha256
+
+                    workspace = resolution.rejected_workspace_admission
+                    if workspace is None:
+                        raise QueueConflict("工作区准入恢复缺少可信拒绝证明")
+                    workspace.validate_integrity()
+                    if (
+                        current.role is not AgentRole.CODER
+                        or task.status is not TaskStatus.IMPLEMENTING
+                        or disposition.facts.classification
+                        not in {"NONTRANSIENT_INFRA", "PLATFORM_BUG", "INVALID_OUTPUT"}
+                        or workspace.task_id != task.id
+                        or workspace.work_item_id != current.id
+                        or workspace.role is not current.role
+                        or workspace.attempt != task.attempts
+                        or workspace.attempt != current.attempt
+                        or workspace.dispatch_sequence != current.dispatch_sequence
+                        or workspace.checkpoint_sequence != current.checkpoint_sequence
+                        or workspace.source_revision != step.boundary.source_revision
+                        or workspace.scope.repository_id != current.repository_id
+                        or workspace.scope.repository_root != task.repository
+                        or (
+                            task.engineering_policy is not None
+                            and workspace.scope != task.engineering_policy.scope
+                        )
+                        or task.work_budget_exhausted
+                        or task.attempts >= task.max_attempts
+                    ):
+                        raise QueueConflict("工作区准入恢复改变了原输入或没有剩余普通工作额度")
+                    workspace_claim = self.original_claim(workspace.lease_id)
+                    if (
+                        claim_identity_sha256(workspace_claim) != workspace.claim_sha256
+                        or workspace_claim.work_item.id != current.id
+                        or workspace_claim.work_item.dispatch_sequence != current.dispatch_sequence
+                        or workspace_claim.work_item.attempt != current.attempt
+                    ):
+                        raise QueueConflict("工作区准入恢复改变了原真实领取身份")
+                    cursor.execute(
+                        "SELECT lease_id FROM work_queue_claims WHERE task_id=%s "
+                        "AND state='ACTIVE' FOR UPDATE",
+                        (task.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("任务仍有活跃领取, 不能恢复工作区准入")
+                    cursor.execute(
+                        "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+                        "WHERE task_id=%s FOR UPDATE",
+                        (task.id,),
+                    )
+                    if any(
+                        _decode(row, AcceptedRoleArtifact).work_item_id == current.id
+                        for row in cursor.fetchall()
+                    ):
+                        raise QueueConflict("目标工作区准入工作项已有接纳结果")
+                    cursor.execute(
+                        "SELECT sequence FROM work_queue_events WHERE work_item_id=%s "
+                        "AND event_type='COMPLETED' LIMIT 1",
+                        (current.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("目标工作区准入工作项已完成推进")
                     updated_task = Task.model_validate(
                         {**task.to_wire(), "attempts": task.attempts + 1}
                     )

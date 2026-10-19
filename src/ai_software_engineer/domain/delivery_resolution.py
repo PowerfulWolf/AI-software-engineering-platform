@@ -28,6 +28,9 @@ from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_u
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.domain.workforce import ModelSelection, RoleAssignment, TaskLease
+from ai_software_engineer.domain.workspace_admission_contract import (
+    WorkspaceAdmissionAdapterContract,
+)
 
 
 class DeliveryResolutionKind(StrEnum):
@@ -39,6 +42,7 @@ class DeliveryResolutionKind(StrEnum):
     RETRY_KNOWLEDGE_PREPARATION = "RETRY_KNOWLEDGE_PREPARATION"
     RETRY_REJECTED_CODER_OUTPUT = "RETRY_REJECTED_CODER_OUTPUT"
     RETRY_REJECTED_KNOWLEDGE_PREPARATION = "RETRY_REJECTED_KNOWLEDGE_PREPARATION"
+    RETRY_REJECTED_WORKSPACE_ADMISSION = "RETRY_REJECTED_WORKSPACE_ADMISSION"
 
 
 class DeliveryProofMissing(StrEnum):
@@ -318,6 +322,46 @@ class RejectedKnowledgePreparationEvidence(DomainModel):
         return self
 
 
+class RejectedWorkspaceAdmissionEvidence(DomainModel):
+    """Positive trusted adapter refusal before provider execution, never a native stop."""
+
+    scope: EngineeringScope
+    requirement_id: NonEmptyStr
+    task_id: TaskId
+    work_item_id: NonEmptyStr
+    role: Literal[AgentRole.CODER]
+    checkpoint_sequence: Annotated[StrictInt, Field(ge=0)]
+    attempt: Annotated[StrictInt, Field(ge=1)]
+    dispatch_sequence: Annotated[StrictInt, Field(ge=0)]
+    lease_id: NonEmptyStr
+    claim_sha256: DispositionSha256
+    run_id: RunId
+    context_manifest_id: ContextId
+    source_revision: FullGitRevision
+    invocation_start_sha256: DispositionSha256
+    invocation_outcome_sha256: DispositionSha256
+    route_attempt_sha256: DispositionSha256
+    context_sha256: DispositionSha256
+    baseline_binding_sha256: DispositionSha256
+    baseline_plan_sha256: DispositionSha256
+    progress_artifact_id: ArtifactId
+    progress_sha256: DispositionSha256
+    workspace_inventory_sha256: DispositionSha256
+    workspace_capture_sha256: DispositionSha256
+    adapter_contract_sha256: DispositionSha256
+    reason: Literal["PRESERVED_PROGRESS_CAPTURE_MISMATCH"] = "PRESERVED_PROGRESS_CAPTURE_MISMATCH"
+    observation_sha256: DispositionSha256
+    budget_source: Literal["frozen_work_attempt"] = "frozen_work_attempt"
+
+    def recompute_sha256(self) -> str:
+        return _digest(self.model_dump(mode="json", exclude={"observation_sha256"}))
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+        if self.observation_sha256 != self.recompute_sha256():
+            raise ValueError("workspace admission observation digest mismatch")
+
+
 class InspectDeliveryWait(DomainModel):
     work_item_id: NonEmptyStr
     expected_disposition_sha256: DispositionSha256
@@ -333,7 +377,11 @@ class ResolveDeliveryWait(InspectDeliveryWait):
 
 
 class HandleDeliveryWait(InspectDeliveryWait):
-    """Request one bounded platform handling, never assert execution facts."""
+    """Request bounded handling; any human deployment declaration is separately audited."""
+
+    workspace_admission_adapter_contract: WorkspaceAdmissionAdapterContract | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class DeliveryWaitInvestigation(DomainModel):
@@ -372,6 +420,9 @@ class DeliveryWaitInvestigation(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     rejected_knowledge: RejectedKnowledgePreparationEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    rejected_workspace_admission: RejectedWorkspaceAdmissionEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     retry_cause: ContinuationCause | None = None
@@ -454,6 +505,39 @@ class DeliveryWaitInvestigation(DomainModel):
             not in ((), (DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION,))
         ):
             raise ValueError("rejected knowledge investigation changed its exact no-main facts")
+        workspace = self.rejected_workspace_admission
+        if (
+            DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION in self.permitted_resolutions
+            and workspace is None
+        ):
+            raise ValueError("workspace admission retry requires exact trusted adapter refusal")
+        if workspace is not None:
+            workspace.validate_integrity()
+            if (
+                workspace.task_id != self.task_id
+                or workspace.work_item_id != self.work_item_id
+                or workspace.source_revision != self.source_revision
+                or workspace.checkpoint_sequence != self.checkpoint_sequence
+                or facts.role is not AgentRole.CODER
+                or facts.classification
+                not in {"NONTRANSIENT_INFRA", "PLATFORM_BUG", "INVALID_OUTPUT"}
+                or workspace.run_id != self.original_run_id
+                or workspace.invocation_start_sha256 != self.invocation_start_sha256
+                or workspace.invocation_outcome_sha256 != self.invocation_outcome_sha256
+                or workspace.workspace_inventory_sha256 != self.workspace_inventory_sha256
+                or self.retry_cause is not None
+                or self.interruption_receipt_sha256 is not None
+                or self.process_stop_sha256 is not None
+                or self.original_authority is not None
+                or self.verification_retry is not None
+                or self.verifier_preparation is not None
+                or self.knowledge_preparation is not None
+                or self.rejected_output is not None
+                or self.rejected_knowledge is not None
+                or self.permitted_resolutions
+                not in ((), (DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION,))
+            ):
+                raise ValueError("workspace admission proof changed its exact pre-provider refusal")
         ensure_unique(self.permitted_resolutions, "permitted engineering resolutions")
         if self.permitted_resolutions and self.missing:
             raise ValueError("incomplete engineering proof cannot authorize a resolution")
@@ -629,6 +713,9 @@ class DeliveryResolution(DomainModel):
     rejected_knowledge: RejectedKnowledgePreparationEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    rejected_workspace_admission: RejectedWorkspaceAdmissionEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def require_engineering_actor(self) -> Self:
@@ -725,6 +812,20 @@ class DeliveryResolution(DomainModel):
             or self.rejected_knowledge.checkpoint_sequence != self.expected_checkpoint_sequence
         ):
             raise ValueError("rejected knowledge decision changed its exact task or source")
+        if (self.resolution_kind is DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION) != (
+            self.rejected_workspace_admission is not None
+        ):
+            raise ValueError("only workspace admission retry uses trusted adapter refusal")
+        workspace = self.rejected_workspace_admission
+        if workspace is not None:
+            workspace.validate_integrity()
+            if (
+                workspace.task_id != self.task_id
+                or workspace.work_item_id != self.work_item_id
+                or workspace.source_revision != self.expected_source_revision
+                or workspace.checkpoint_sequence != self.expected_checkpoint_sequence
+            ):
+                raise ValueError("workspace admission decision changed its exact task or source")
         if (self.resolution_kind is DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT) != (
             self.rejected_output is not None
         ):
@@ -855,6 +956,7 @@ class DeliveryWaitHandling(DomainModel):
                 or decision.knowledge_preparation != proof.knowledge_preparation
                 or decision.rejected_output != proof.rejected_output
                 or decision.rejected_knowledge != proof.rejected_knowledge
+                or decision.rejected_workspace_admission != proof.rejected_workspace_admission
                 or (
                     decision.task_id,
                     decision.work_item_id,
@@ -910,7 +1012,9 @@ def delivery_wait_handling_record_key(
 ) -> str:
     return _digest(
         {
-            "binding": command.to_wire(),
+            "binding": command.model_dump(
+                mode="json", include=set(InspectDeliveryWait.model_fields)
+            ),
             "facts": proof.model_dump(
                 mode="json",
                 exclude={

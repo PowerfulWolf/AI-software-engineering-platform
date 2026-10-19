@@ -457,6 +457,10 @@ class ManagerConsoleAdapter:
                     "expected_checkpoint_sequence": intent.expected_checkpoint_sequence,
                 }
                 if isinstance(intent, HandleDeliveryWaitIntent):
+                    if intent.workspace_admission_adapter_contract is not None:
+                        bound["workspace_admission_adapter_contract"] = (
+                            intent.workspace_admission_adapter_contract.to_wire()
+                        )
                     handling = self._host.handle_delivery_wait(
                         HandleDeliveryWait.model_validate(bound),
                         project_id=intent.project_id,

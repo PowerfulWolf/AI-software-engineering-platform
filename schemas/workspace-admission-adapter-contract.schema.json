@@ -1,0 +1,259 @@
+{
+  "$defs": {
+    "ContractIdentity": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+    },
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
+      "type": "object"
+    },
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
+    },
+    "PlatformRevision": {
+      "pattern": "^[a-f0-9]{40}$",
+      "type": "string"
+    },
+    "WorkspaceAdmissionAdapterContract": {
+      "additionalProperties": false,
+      "description": "Operator input; principal and time come only from trusted composition.",
+      "properties": {
+        "kind": {
+          "const": "historical_workspace_admission_deployment",
+          "default": "historical_workspace_admission_deployment",
+          "title": "Kind",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "requirement_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "task_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "work_item_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "lease_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Claim Sha256",
+          "type": "string"
+        },
+        "run_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "source_revision": {
+          "$ref": "#/$defs/PlatformRevision"
+        },
+        "invocation_start_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Start Sha256",
+          "type": "string"
+        },
+        "invocation_outcome_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Outcome Sha256",
+          "type": "string"
+        },
+        "route_attempt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Route Attempt Sha256",
+          "type": "string"
+        },
+        "platform_revision": {
+          "$ref": "#/$defs/PlatformRevision"
+        },
+        "adapter_sources": {
+          "items": {
+            "$ref": "#/$defs/WorkspaceAdmissionAdapterSource"
+          },
+          "maxItems": 7,
+          "minItems": 7,
+          "title": "Adapter Sources",
+          "type": "array"
+        },
+        "deployment_evidence_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "deployment_evidence_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Deployment Evidence Sha256",
+          "type": "string"
+        },
+        "service_instance_id": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "service_process_birth": {
+          "$ref": "#/$defs/ContractIdentity"
+        },
+        "deployment_observed_at": {
+          "format": "date-time",
+          "title": "Deployment Observed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "requirement_id",
+        "task_id",
+        "work_item_id",
+        "lease_id",
+        "claim_sha256",
+        "run_id",
+        "source_revision",
+        "invocation_start_sha256",
+        "invocation_outcome_sha256",
+        "route_attempt_sha256",
+        "platform_revision",
+        "adapter_sources",
+        "deployment_evidence_id",
+        "deployment_evidence_sha256",
+        "service_instance_id",
+        "service_process_birth",
+        "deployment_observed_at"
+      ],
+      "title": "WorkspaceAdmissionAdapterContract",
+      "type": "object"
+    },
+    "WorkspaceAdmissionAdapterSource": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "pattern": "^src/ai_software_engineer/[a-z_/]+\\.py$",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "WorkspaceAdmissionAdapterSource",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "workspace_admission_deployment_declaration",
+      "default": "workspace_admission_deployment_declaration",
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "declaration": {
+      "$ref": "#/$defs/WorkspaceAdmissionAdapterContract"
+    },
+    "operator_principal": {
+      "$ref": "#/$defs/LocalOperatorPrincipal"
+    },
+    "submitted_at": {
+      "format": "date-time",
+      "title": "Submitted At",
+      "type": "string"
+    },
+    "attribution": {
+      "const": "current_operator_supplied_historical_deployment_evidence",
+      "default": "current_operator_supplied_historical_deployment_evidence",
+      "title": "Attribution",
+      "type": "string"
+    },
+    "contract_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Contract Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "declaration",
+    "operator_principal",
+    "submitted_at",
+    "contract_sha256"
+  ],
+  "title": "WorkspaceAdmissionAdapterContractRecord",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/workspace-admission-adapter-contract.schema.json"
+}

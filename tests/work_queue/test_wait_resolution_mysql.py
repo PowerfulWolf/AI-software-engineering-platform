@@ -180,8 +180,10 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
     original = make_task()
     variant = getattr(request, "param", AgentRole.CODER)
     role = variant[0] if isinstance(variant, tuple) else variant
-    classification: Literal["PLATFORM_BUG", "EXECUTION_UNCERTAIN"] = (
-        "PLATFORM_BUG"
+    classification: Literal["PLATFORM_BUG", "EXECUTION_UNCERTAIN", "NONTRANSIENT_INFRA"] = (
+        "NONTRANSIENT_INFRA"
+        if isinstance(variant, tuple) and variant[1] == "NONTRANSIENT_INFRA"
+        else "PLATFORM_BUG"
         if isinstance(variant, tuple) and variant[1] == "PLATFORM_BUG"
         else "EXECUTION_UNCERTAIN"
     )

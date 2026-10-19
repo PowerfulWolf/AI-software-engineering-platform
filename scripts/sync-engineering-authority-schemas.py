@@ -203,6 +203,19 @@ resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
         "else": {"properties": {"rejected_knowledge": {"type": "null"}}},
     }
 )
+resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
+    {
+        "if": {
+            "required": ["resolution_kind"],
+            "properties": {"resolution_kind": {"const": "RETRY_REJECTED_WORKSPACE_ADMISSION"}},
+        },
+        "then": {
+            "required": ["rejected_workspace_admission"],
+            "properties": {"rejected_workspace_admission": {"type": "object"}},
+        },
+        "else": {"properties": {"rejected_workspace_admission": {"type": "null"}}},
+    }
+)
 resolution_schema["$defs"]["DeliveryWaitHandling"]["allOf"] = [
     {
         "if": {
@@ -607,6 +620,77 @@ resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"].append(
         },
     }
 )
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] += [
+    {
+        "if": {
+            "required": ["permitted_resolutions"],
+            "properties": {
+                "permitted_resolutions": {
+                    "contains": {"const": "RETRY_REJECTED_WORKSPACE_ADMISSION"}
+                }
+            },
+        },
+        "then": {
+            "required": ["rejected_workspace_admission"],
+            "properties": {"rejected_workspace_admission": {"type": "object"}},
+        },
+    },
+    {
+        "if": {
+            "required": ["rejected_workspace_admission"],
+            "properties": {"rejected_workspace_admission": {"type": "object"}},
+        },
+        "then": {
+            "required": [
+                "original_run_id",
+                "invocation_start_sha256",
+                "invocation_outcome_sha256",
+                "workspace_inventory_sha256",
+            ],
+            "properties": {
+                **{
+                    name: {"type": "string"}
+                    for name in (
+                        "original_run_id",
+                        "invocation_start_sha256",
+                        "invocation_outcome_sha256",
+                        "workspace_inventory_sha256",
+                    )
+                },
+                **{
+                    name: {"type": "null"}
+                    for name in (
+                        "retry_cause",
+                        "interruption_receipt_sha256",
+                        "process_stop_sha256",
+                        "original_authority",
+                        "knowledge_preparation",
+                        "verification_retry",
+                        "verifier_preparation",
+                        "rejected_output",
+                        "rejected_knowledge",
+                    )
+                },
+                "permitted_resolutions": {
+                    "maxItems": 1,
+                    "items": {"const": "RETRY_REJECTED_WORKSPACE_ADMISSION"},
+                },
+                "disposition": {
+                    "properties": {
+                        "facts": {
+                            "properties": {
+                                "role": {"const": "coder"},
+                                "classification": {
+                                    "enum": ["NONTRANSIENT_INFRA", "PLATFORM_BUG", "INVALID_OUTPUT"]
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+        },
+    },
+]
 (
     Path(__file__).resolve().parents[1] / "schemas/engineering-wait-resolution.schema.json"
 ).write_text(json.dumps(resolution_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

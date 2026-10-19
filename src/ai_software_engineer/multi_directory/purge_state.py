@@ -224,6 +224,9 @@ def validate_declared_scopes(wire: WirePayload, expected: StateDeletionScope) ->
             "resolution",
             "engineering_admission",
             "rejected_output",
+            "rejected_workspace_admission",
+            "rejected_knowledge",
+            "declaration",
             "knowledge_preparation",
             "identity",
             "facts",
@@ -272,6 +275,9 @@ def task_state_directories(sidecar: Path, expected: StateDeletionScope) -> tuple
     )
     from ai_software_engineer.manager.baseline_production import BaselineQuiescenceProof
     from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+    from ai_software_engineer.manager.workspace_admission_contract import (
+        WorkspaceAdmissionAdapterContractStore,
+    )
     from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 
     selected = []
@@ -302,7 +308,21 @@ def task_state_directories(sidecar: Path, expected: StateDeletionScope) -> tuple
                 validated[path.name] = start
             for path in continuation.glob("capture-stop-*.json"):
                 validated[path.name] = records.capture_stop(path.stem.removeprefix("capture-stop-"))
-            if {path.name for path in continuation.iterdir()} != set(validated):
+            supported_names = set(validated)
+            declarations = WorkspaceAdmissionAdapterContractStore(sidecar / "state", task_id)
+            _reject_symlinks(declarations.root)
+            if declarations.root.exists():
+                testimony = declarations.list_for_task()
+                names = {
+                    KnowledgeRecordStore._name("adapter-declarations", item.declaration.run_id)
+                    for item in testimony
+                }
+                if {path.name for path in declarations.root.iterdir()} != names:
+                    raise ValueError("unsupported workspace admission declaration record")
+                for declaration in testimony:
+                    validate_declared_scopes(declaration.to_wire(), expected)
+                supported_names.add(declarations.root.name)
+            if {path.name for path in continuation.iterdir()} != supported_names:
                 raise ValueError("unsupported continuation record")
             for record in validated.values():
                 validate_declared_scopes(record.to_wire(), expected)

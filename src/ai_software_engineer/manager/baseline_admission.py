@@ -8,9 +8,12 @@ from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.artifacts.ordering import latest_accepted_artifact
 from ai_software_engineer.domain.artifact import CoderProgressArtifact, ImplementationReportArtifact
 from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.execution_baseline import BaselineInputMode, CoderExecutionInput
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import GitWorktreeManager, WorktreeSpec
 from ai_software_engineer.git.mutation import capture_mutation_inventory
+from ai_software_engineer.git.mutation_capture import WorktreeMutationCapture
+from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.orchestration.retry import _active_progress
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
@@ -83,13 +86,14 @@ class BaselineInitialWorkspaceAdmission:
         )
         if str(worktree.path) != binding.worktree_path or workspace_root != worktree.path:
             raise ValueError("执行基线草稿不在原需求的同一隔离分支和工作区")
+        retained_paths = self.inputs.retained_source_paths(
+            task, workspace_root=workspace_root, permissions=request.permissions
+        )
         capture = self.git.capture_mutations(
             worktree,
             request.permissions,
             denied_paths=plan.facts.denied_paths,
-            retained_source_paths=self.inputs.retained_source_paths(
-                task, workspace_root=workspace_root, permissions=request.permissions
-            ),
+            retained_source_paths=retained_paths,
         )
         if source.active_progress is not None:
             checkpoint = source.active_progress
@@ -97,8 +101,18 @@ class BaselineInitialWorkspaceAdmission:
             if (
                 request.continuation_checkpoint_id != checkpoint.artifact_id
                 or request.continuation_changed_paths != paths
-                or capture.changed_paths != paths
             ):
+                raise ValueError("执行基线后的继续草稿不匹配已接纳的精确 checkpoint")
+            if checkpoint.artifact_id == plan.facts.progress_artifact_id:
+                require_preserved_progress_capture(
+                    request=request,
+                    source=source,
+                    plan=plan,
+                    capture=capture,
+                    git=self.git,
+                    retained_source_paths=retained_paths,
+                )
+            elif capture.changed_paths != paths:
                 raise ValueError("执行基线后的继续草稿不匹配已接纳的精确 checkpoint")
         elif request.continuation_checkpoint_id is not None:
             raise ValueError("旧 progress 不能在新执行基线中复活")
@@ -108,3 +122,53 @@ class BaselineInitialWorkspaceAdmission:
         elif capture.changed_paths:
             raise ValueError("后续候选返工必须从已接纳的干净输入开始")
         self.guard.check()
+
+
+def require_preserved_progress_capture(
+    *,
+    request: AgentRequest,
+    source: CoderExecutionInput,
+    plan: ExecutionBaselinePlan,
+    capture: WorktreeMutationCapture,
+    git: GitWorktreeManager,
+    retained_source_paths: tuple[str, ...],
+) -> None:
+    """Revalidate the exact complete approved draft around its retained old checkpoint.
+
+    The original progress declares accepted work. The baseline separately seals
+    the complete retained draft, including lawful unfinished paths; neither fact
+    changes the other. This exception cannot admit a new checkpoint or drift.
+    """
+    binding, checkpoint = source.baseline, source.active_progress
+    if (
+        binding is None
+        or checkpoint is None
+        or checkpoint.artifact_id != plan.facts.progress_artifact_id
+        or checkpoint.artifact_id not in plan.facts.source_artifact_ids
+        or checkpoint.artifact_id not in binding.source_artifact_ids
+        or checkpoint.artifact_id not in request.input_artifact_ids
+        or checkpoint.source_revision != source.source_revision
+        or binding.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+        or plan.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+        or request.continuation_checkpoint_id != checkpoint.artifact_id
+        or request.continuation_changed_paths
+        != tuple(sorted(change.path for change in checkpoint.content.changed_files))
+        or source.source_revision != binding.execution_source_revision
+        or request.source_revision != source.source_revision
+        or request.execution_baseline_sha256 != binding.binding_sha256
+        or request.execution_base_ref != binding.execution_base_ref
+        or request.permissions != plan.facts.permissions
+        or capture != plan.dirty_capture.to_capture()
+        or capture_mutation_inventory(capture.worktree.path).sha256
+        != binding.after_inventory_sha256
+    ):
+        raise ValueError("原进度与完整批准的执行基线草稿不一致, 禁止开始 Coder")
+    complete = git.capture_mutations(
+        capture.worktree,
+        request.permissions,
+        denied_paths=plan.facts.denied_paths,
+        base_revision=plan.complete_capture.base_revision,
+        retained_source_paths=retained_source_paths,
+    )
+    if complete != plan.complete_capture.to_capture():
+        raise ValueError("完整批准草稿的内容、路径或索引已变化, 禁止开始 Coder")

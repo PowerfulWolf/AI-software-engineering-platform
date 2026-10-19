@@ -37,6 +37,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     OriginalInvocationAuthority,
     RejectedCoderOutputEvidence,
     RejectedKnowledgePreparationEvidence,
+    RejectedWorkspaceAdmissionEvidence,
     ResolveDeliveryWait,
     VerificationRetryEvidence,
     VerifierPreparationEvidence,
@@ -89,6 +90,9 @@ from ai_software_engineer.manager.rejected_output_checkpoint import (
     read_rejected_checkpoint,
     verify_rejected_workspace,
 )
+from ai_software_engineer.manager.rejected_workspace_admission import (
+    rejected_workspace_admission_evidence,
+)
 from ai_software_engineer.manager.stopped_budget_settlement import StoppedBudgetSettlementService
 from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationCheckpoint,
@@ -96,6 +100,10 @@ from ai_software_engineer.manager.verifier_preparation import (
     observe_verifier_preparation,
 )
 from ai_software_engineer.manager.wait_fact_collection import WaitWorkspaceCaptureRejected
+from ai_software_engineer.manager.workspace_admission_contract import (
+    WorkspaceAdmissionAdapterContractStore,
+    seal_workspace_admission_adapter_contract,
+)
 from ai_software_engineer.orchestration.capture_reconciliation import CaptureStopProcessUncertain
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
@@ -284,11 +292,14 @@ class DeliveryWaitService:
                 replay = self.budget_settlement.replay(command, replay_guard)
                 if replay is not None:
                     return replay
-        binding_key = digest(command.to_wire())
+        binding_key = digest(
+            command.model_dump(mode="json", include=set(InspectDeliveryWait.model_fields))
+        )
         resolved = self.records.find("wait-handling-resolutions", binding_key, DeliveryWaitHandling)
         if resolved is not None:
             resolved.validate_integrity()
             self._require_handling_binding(resolved, command)
+            self._require_replayed_workspace_contract(command)
             assert resolved.resolution is not None
             self._consume_verified_replay(resolved.resolution)
             return resolved
@@ -301,6 +312,7 @@ class DeliveryWaitService:
         )
         if existing is not None:
             existing.validate_integrity()
+            self._require_replayed_workspace_contract(command)
             proof = self.records.get(
                 "wait-investigations", existing.proof_sha256, DeliveryWaitInvestigation
             )
@@ -312,9 +324,18 @@ class DeliveryWaitService:
             if published is not None:
                 published.validate_integrity()
                 self._require_handling_binding(published, command)
-                if published.resolution != existing:
+                if published.resolution == existing:
+                    return self.records.put("wait-handling-resolutions", binding_key, published)
+                if (
+                    published.resolution is not None
+                    or published.status != "NEEDS_AUTHORIZATION"
+                    or not published.manual_resolution_allowed
+                    or published.investigation != proof
+                ):
                     raise DeliveryWaitRejected("已封存平台处理记录不符合原工程决定")
-                return self.records.put("wait-handling-resolutions", binding_key, published)
+                # Preserve the original authorization request. The independently sealed
+                # manual resolution is also a history entry; its replay handling is
+                # published only under the existing exact-resolution alias below.
             record = self._handling_record(
                 proof,
                 existing,
@@ -324,7 +345,8 @@ class DeliveryWaitService:
                 "无需重复处理本次等待。",
                 at=existing.submitted_at,
             )
-            record = self.records.put("wait-handlings", record.record_key, record)
+            if published is None:
+                record = self.records.put("wait-handlings", record.record_key, record)
             return self.records.put("wait-handling-resolutions", binding_key, record)
         item, step, task = self._current(command)
         guard = WorkerExecutionGuard()
@@ -334,7 +356,25 @@ class DeliveryWaitService:
             with guard.task_scope(self.sidecar_state / "queue-worker-locks", task.id):
                 # This seam can recover sealed original facts. It cannot grant new
                 # commands, invoke a model, consume queue state or invent a stop.
-                if self.fact_collector is not None:
+                if command.workspace_admission_adapter_contract is not None:
+                    seal_workspace_admission_adapter_contract(
+                        state=self.sidecar_state,
+                        declaration=command.workspace_admission_adapter_contract,
+                        principal=self.principal,
+                        task=task,
+                        item=item,
+                        step=step,
+                        scope=self.scope,
+                        route_root=model_route_root(self.sidecar_state.parent),
+                        queue=self.queue,
+                        requirement_id=self.knowledge_requirement_id or task.id,
+                        at=self.clock(),
+                    )
+                start, outcome = self._invocation(item, step)
+                workspace_refusal = self._workspace_admission_evidence(
+                    item, step, task, start, outcome, self._receipt(task, start)
+                )
+                if self.fact_collector is not None and workspace_refusal is None:
                     try:
                         self.fact_collector(task, step, guard)
                     except CaptureStopProcessUncertain:
@@ -441,7 +481,9 @@ class DeliveryWaitService:
                 resolution = self._resolve(
                     ResolveDeliveryWait.model_validate(
                         {
-                            **command.to_wire(),
+                            **command.model_dump(
+                                mode="json", exclude={"workspace_admission_adapter_contract"}
+                            ),
                             "resolution_kind": proof.permitted_resolutions[0],
                             "proof_sha256": proof.proof_sha256,
                             "submitted_at": self.clock(),
@@ -633,11 +675,39 @@ class DeliveryWaitService:
             "事实没有变化时无需重新调查。",
         )
 
+    def _require_replayed_workspace_contract(self, command: HandleDeliveryWait) -> None:
+        declaration = command.workspace_admission_adapter_contract
+        if declaration is None:
+            return
+        self.principal.require_duty(OperatorDuty.ENGINEERING)
+        # Resolve the trusted item before opening its own ledger, never a caller's Task path.
+        item = self.queue.get(command.work_item_id)
+        if (
+            declaration.scope != self.scope
+            or declaration.task_id != item.task_id
+            or declaration.work_item_id != item.id
+            or declaration.requirement_id != (self.knowledge_requirement_id or item.task_id)
+            or declaration.source_revision != command.expected_source_revision
+        ):
+            raise DeliveryWaitRejected("已处理等待的部署声明与原任务或范围不一致")
+        sealed = WorkspaceAdmissionAdapterContractStore(
+            self.sidecar_state, item.task_id, read_only=True
+        ).for_run(declaration.run_id)
+        if (
+            sealed is None
+            or sealed.declaration != declaration
+            or sealed.operator_principal != self.principal
+        ):
+            raise DeliveryWaitRejected("已处理等待的部署声明缺失或已变化, 不可使用旧成功结果")
+
     def _consume_verified_replay(self, resolution: DeliveryResolution) -> None:
         """A sealed unconsumed decision must reopen its exact current file proof."""
         if (
             resolution.resolution_kind
-            is not DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION
+            not in {
+                DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION,
+                DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION,
+            }
             or self.queue.get(resolution.work_item_id).status is WorkItemStatus.CLOSED
         ):
             # SQL idempotency verifies the already consumed successor without
@@ -798,6 +868,12 @@ class DeliveryWaitService:
                         is DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION
                         else None
                     ),
+                    rejected_workspace_admission=(
+                        proof.rejected_workspace_admission
+                        if command.resolution_kind
+                        is DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION
+                        else None
+                    ),
                     rejected_knowledge=(
                         proof.rejected_knowledge
                         if command.resolution_kind
@@ -874,6 +950,59 @@ class DeliveryWaitService:
                 "开发进度已保留并主动暂停; 可先更新源码和规范, 再明确批准继续原需求"
             )
 
+    def _workspace_admission_evidence(
+        self,
+        item: QueuedWorkItem,
+        step: QueuedRoleStep,
+        task: Task,
+        start: DeliveryInvocationStart | None,
+        outcome: DeliveryInvocationOutcome | None,
+        receipt: ExecutionInterruptionReceipt | None,
+    ) -> RejectedWorkspaceAdmissionEvidence | None:
+        disposition = item.wait_disposition
+        if (
+            disposition is not None
+            and item.role is AgentRole.CODER
+            and task.status is TaskStatus.IMPLEMENTING
+            and outcome is not None
+            and start is not None
+            and receipt is None
+            and outcome.result.status is AgentRunStatus.FAILED
+            and outcome.result.artifact is None
+            and outcome.result.error is not None
+            and outcome.result.error.code is AgentErrorCode.WORK_INTERRUPTED
+            and not outcome.result.error.transient
+            and disposition.facts.classification
+            in {"NONTRANSIENT_INFRA", "PLATFORM_BUG", "INVALID_OUTPUT"}
+            and self.artifacts is not None
+        ):
+            try:
+                return rejected_workspace_admission_evidence(
+                    task=task,
+                    item=item,
+                    step=step,
+                    scope=self.scope,
+                    requirement_id=self.knowledge_requirement_id or task.id,
+                    state=self.sidecar_state,
+                    route_root=model_route_root(self.sidecar_state.parent),
+                    queue=self.queue,
+                    artifacts=self.artifacts,
+                    git=self.git,
+                )
+            except (
+                ValueError,
+                QueueError,
+                OSError,
+                ArtifactStoreError,
+                ContextStoreError,
+                ContinuationRejected,
+                ModelRouteAttemptStoreError,
+                GitWorkspaceError,
+            ):
+                # Generic failures still require their actual stop/checkpoint proof.
+                return None
+        return None
+
     def _collect(
         self,
         item: QueuedWorkItem,
@@ -919,6 +1048,23 @@ class DeliveryWaitService:
                 missing=tuple(missing),
                 permitted=permitted if not missing else (),
             )
+        workspace = self._workspace_admission_evidence(item, step, task, start, outcome, receipt)
+        if workspace is not None:
+            workspace.validate_integrity()
+            if task.work_budget_exhausted or task.attempts >= task.max_attempts:
+                missing.append(DeliveryProofMissing.BUDGET_EXHAUSTED)
+            else:
+                permitted = (DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION,)
+            return self._proof(
+                item,
+                step,
+                task,
+                start=start,
+                outcome=outcome,
+                rejected_workspace_admission=workspace,
+                missing=tuple(missing),
+                permitted=permitted,
+            )
         rejected_outcome = outcome is not None and (
             item.wait_disposition.facts.classification in RESULT_REPLAY_REJECTED_CLASSIFICATIONS
             or (
@@ -942,6 +1088,7 @@ class DeliveryWaitService:
         verifier_preparation = None
         knowledge_preparation = None
         rejected_knowledge = None
+        rejected_workspace_admission = None
         rejected_output = None
         original_authority = None
         inventory: WorkspaceMutationInventory | None = None
@@ -1251,6 +1398,7 @@ class DeliveryWaitService:
             verifier_preparation=verifier_preparation,
             knowledge_preparation=knowledge_preparation,
             rejected_knowledge=rejected_knowledge,
+            rejected_workspace_admission=rejected_workspace_admission,
             rejected_output=rejected_output,
             observed_stop=observed_stop,
         )
@@ -1729,6 +1877,7 @@ class DeliveryWaitService:
         verifier_preparation: VerifierPreparationEvidence | None = None,
         knowledge_preparation: KnowledgePreparationRetryEvidence | None = None,
         rejected_knowledge: RejectedKnowledgePreparationEvidence | None = None,
+        rejected_workspace_admission: RejectedWorkspaceAdmissionEvidence | None = None,
         rejected_output: RejectedCoderOutputEvidence | None = None,
         observed_stop: ExecutionCaptureStop | None = None,
     ) -> DeliveryWaitInvestigation:
@@ -1788,6 +1937,8 @@ class DeliveryWaitService:
             workspace_inventory_sha256=(
                 inventory.sha256
                 if inventory
+                else rejected_workspace_admission.workspace_inventory_sha256
+                if rejected_workspace_admission
                 else rejected_knowledge.workspace_inventory_sha256
                 if rejected_knowledge
                 else None
@@ -1806,6 +1957,7 @@ class DeliveryWaitService:
             verifier_preparation=verifier_preparation,
             knowledge_preparation=knowledge_preparation,
             rejected_knowledge=rejected_knowledge,
+            rejected_workspace_admission=rejected_workspace_admission,
             rejected_output=rejected_output,
             verifier_pause=outcome.service_pause
             if outcome and item.role in {AgentRole.QA, AgentRole.REVIEWER}
@@ -1841,6 +1993,11 @@ class DeliveryWaitService:
                 else "知识评估已封存但引用未通过校验, 主角色尚未开始; 完整合法草稿已保留。"
                 "可使用一次原授权工作额度重新领取原需求, 原结果与历史保留。"
                 if permitted == (DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION,)
+                else "平台工作区准入在模型启动前拒绝了已批准的保留草稿与开发进度组合。"
+                "已独立核验原拒绝、完整现场和修复后准入; "
+                "可使用一次原授权普通工作额度重新领取原需求。"
+                "原失败和全部历史保留, 不退款或改写原结果。"
+                if permitted == (DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION,)
                 else "知识准备已达到冻结扩窗上限, 不再重复执行; "
                 "工程负责人需检查知识输入与执行器耗时, 保留原需求和全部历史。"
                 if DeliveryProofMissing.KNOWLEDGE_WINDOW_EXHAUSTED in missing

@@ -91,3 +91,42 @@ code resume. Public engineering decisions remain auditable HumanAction/admission
 
 Production execution and final independent review results will be appended before delivery is
 reported complete. Production K1 has not yet completed under this patch.
+
+
+## Production deployment and actual replacement
+
+Reviewed platform fix12caa6e was committed, fast-forwarded to main and pushed to origin.
+The old Host44594 was stopped through the controlled service lifecycle: active operations and
+writes saved, executors/index ended, safe shutdown confirmed. New Host92159 started in normal
+mode with delivery_ready=true and operation contract10. Public summary successfully returned
+real K1 and the service accepted the fresh operation below.
+
+Independent started audit at2026-10-16T09:25:31Z:
+`/tmp/ase-k1-deployment-recovery-started-independent-20261016.json`, SHA
+`29fb42864f587ee22588cfdf27246c1e8c992b53c133c4652b7ce6baf7a1ea78`.
+All87 original selected records and the24 complete draft files/2817-file inventory remained
+byte-identical; Task/revision8/work7, accepted01/02, original6 starts/4 outcomes and UNKNOWN
+history survived. Independent pre-stop actual session report SHA
+`e4fbabdde1bc08c4954d15956bef70b6142075d93a5511b8d7dd288461aab365` confirms the real original
+Run6 and both knowledge native sessions are currently empty without rewriting their outcomes.
+
+Fresh public CONTINUE operation03477bd86e23e0b99e0006eac67c5878 used current parent
+checkpointfdef672b. Exact proof admitted reentry, original lease expired through Dispatcher,
+and fresh leaseb5e97fc5 recorded real carry/refusal e55a2061 before releasing at09:29:25Z.
+The existing production resume handler then automatically handled the exact wait once under
+organization_engineering_policy: RESOLVED at09:30:06.624457Z,
+RETRY_REJECTED_KNOWLEDGE_PREPARATION, admission#2 SHAf273022e. ResolutionSHA
+`9f38c2a549e6ff9c0dab1d49b5e6a36949287f814dbfa2754d77bd88094f993a` binds newwork9f38...
+attempt8 and newlease0648fb82. New knowledge rune1028d5c / context36a6d8ec retain original
+source774e0a and parent scope. This is actual production recovery, not fixture acceptance.
+Main Coder and independent production QA/Review have not yet completed as of this update.
+
+Actual frontend detail remains slow: a successful public request took13.04s; independent
+read-only complete detail profile took11.571s wall/10.898s CPU, with DB read only0.37s.
+Repeated task/engineering-history/journal validations dominate CPU and occupy the global
+singleflight read gate, causing other query modes to receive TEAM_READ_IN_PROGRESS503.
+This is not evidence of data loss or a proved deadlock. Profile report
+`/tmp/ase-k1-request-detail-read-profile-independent-20261016.json`, SHA
+`227768eefa0976ffd5091c106542ec233cae0ddae165efe2034f3b92bbd36192`.
+A separate scoped read-performance maintenance task is investigating call-local reuse while
+preserving complete integrity and final fresh authority checks. No active K1 code is changed.

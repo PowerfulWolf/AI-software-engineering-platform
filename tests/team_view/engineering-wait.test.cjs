@@ -2531,3 +2531,75 @@ test("completed output plan accepts canonical omitted artifact and explicit null
     assert.equal(h.run('engineeringBaselinePlan(data.request, data.task, data.step, "completed_output_rescue")'), null);
   }
 });
+
+function rejectedWorkspaceAdmission(h, role = "coder") {
+  const result = handling(h, "NEEDS_AUTHORIZATION", [], true);
+  h.step.role = h.step.wait_disposition.facts.role = role;
+  h.step.wait_disposition.facts.classification = "NONTRANSIENT_INFRA";
+  h.task.status = {coder: "IMPLEMENTING", qa: "QA", reviewer: "REVIEW"}[role];
+  const proof = result.investigation;
+  Object.assign(proof, {permitted_resolutions: ["RETRY_REJECTED_WORKSPACE_ADMISSION"],
+    original_run_id: "run_refused", invocation_start_sha256: digest("1"),
+    invocation_outcome_sha256: digest("2"), workspace_inventory_sha256: digest("3")});
+  proof.rejected_workspace_admission = {
+    scope: {team_id: "team_current", project_id: h.request.project_id,
+      repository_id: "repository_current", repository_root: "/workspace/repository"},
+    requirement_id: h.task.id, task_id: proof.task_id, work_item_id: proof.work_item_id, role,
+    checkpoint_sequence: proof.checkpoint_sequence, attempt: 8, dispatch_sequence: 0,
+    lease_id: "lease_refused", claim_sha256: digest("4"), run_id: proof.original_run_id,
+    context_manifest_id: "ctx_" + digest("5"), source_revision: proof.source_revision,
+    invocation_start_sha256: proof.invocation_start_sha256, invocation_outcome_sha256: proof.invocation_outcome_sha256,
+    route_attempt_sha256: digest("6"), context_sha256: digest("7"), baseline_binding_sha256: digest("8"),
+    baseline_plan_sha256: digest("9"), progress_artifact_id: "art_progress", progress_sha256: digest("a"),
+    workspace_inventory_sha256: proof.workspace_inventory_sha256, workspace_capture_sha256: digest("b"),
+    adapter_contract_sha256: digest("c"), observation_sha256: digest("d"),
+    reason: "PRESERVED_PROGRESS_CAPTURE_MISMATCH", budget_source: "frozen_work_attempt",
+  };
+  return result;
+}
+
+test("workspace refusal offers ordinary-work recovery while preserving the failed call", async () => {
+  const h = harness();
+  rejectedWorkspaceAdmission(h);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.match(text(box), /模型启动前/);
+  assert.match(text(box), /1 次.*冻结工作额度/);
+  assert.match(text(box), /原失败历史保留/);
+  assert.doesNotMatch(text(box), /已核验原执行停止/);
+  const button = control(box, "修复工作区准入后继续原开发");
+  assert.ok(button);
+  await button.events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.equal(intent.resolution_kind, "RETRY_REJECTED_WORKSPACE_ADMISSION");
+  assert.equal(Object.hasOwn(intent, "rejected_workspace_admission"), false);
+});
+
+test("workspace refusal rejects stale retained controls, missing proof and verifier roles", async () => {
+  for (const mutation of [
+    'delete proof.rejected_workspace_admission',
+    'proof.rejected_workspace_admission.scope.project_id = "project_other"',
+    'proof.rejected_workspace_admission.requirement_id = "delivery_other"',
+    'proof.rejected_workspace_admission.invocation_outcome_sha256 = "a".repeat(64)',
+    'proof.rejected_workspace_admission.workspace_inventory_sha256 = "a".repeat(64)',
+    'proof.rejected_workspace_admission.adapter_contract_sha256 = "bad"',
+    'proof.rejected_workspace_admission.budget_source = "provider_refund"',
+    'proof.process_stop_sha256 = "a".repeat(64)',
+  ]) {
+    const h = harness();
+    rejectedWorkspaceAdmission(h);
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    const button = control(box, "修复工作区准入后继续原开发");
+    assert.ok(button, mutation);
+    h.run(mutation);
+    await button.events.click();
+    assert.equal(h.run("submitted.length"), 0, mutation);
+    assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"),
+      "修复工作区准入后继续原开发"), undefined, mutation);
+  }
+  for (const role of ["qa", "reviewer"]) {
+    const h = harness();
+    rejectedWorkspaceAdmission(h, role);
+    assert.equal(control(h.run("engineeringWaitBox(data.request, data.task, data.step)"),
+      "修复工作区准入后继续原开发"), undefined, role);
+  }
+});

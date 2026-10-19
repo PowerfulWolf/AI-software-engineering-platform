@@ -14,6 +14,7 @@ from ai_software_engineer.agents.models import (
     AgentResult,
     AgentRunStatus,
 )
+from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.domain import AgentRole, Task, WorkItemStatus
 from ai_software_engineer.domain.continuation import (
     InterruptionContinuationPolicy,
@@ -34,6 +35,7 @@ from ai_software_engineer.manager.baseline_production import (
     BaselineProposeCommand,
     ProductionBaselineFactCollector,
 )
+from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.manager.legacy_containment import (
     LegacyExecutionContainment,
     LocalBootObservation,
@@ -110,7 +112,8 @@ def legacy_fixture(
     collector.permissions = receipt.request.permissions
     collector.purpose = BaselinePurpose.LEGACY_WORKSPACE_RESCUE
     collector.route_root = None
-    collector.inputs = None  # type: ignore[assignment]
+    collector.inputs = StoredCoderExecutionInputResolver(None)
+    collector.capacity_artifacts = FileArtifactStore(tmp_path / "artifacts")
     item = item.model_copy(
         update={
             "status": WorkItemStatus.WAITING_HUMAN,
