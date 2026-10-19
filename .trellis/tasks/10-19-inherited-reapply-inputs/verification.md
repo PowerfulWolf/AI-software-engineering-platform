@@ -121,3 +121,107 @@ before dispatch. Recovery execution and actual K1 acceptance will be recorded se
 
 Rollback requires an idle service and inherited-input-compatible readers after any new Plan
 publication. Do not revert to silently ignoring the field or erase new recovery history.
+
+## Controlled deployment and public recovery preparation
+
+The reviewed fix was committed as `fa3589a2251ed19a54bdd8848bad82ab4d7c61ae`, fast-forwarded
+to main and pushed to origin/main. The registered clean target clone was also fast-forwarded
+from `150f54683275c26ef9f4145b2d231399ac8d6220` to the same main revision. No original K1
+worktree was edited by maintainers.
+
+Official service stop completed with READY at 07:24:19Z, request
+`console_shutdown_73069a964fa9e4a2bd214b4782d143e5`, old PID20973 and instance
+`console_instance_4e6250fc6b8fe63ad68ca626a0b3ab37`. Startup established PID49236 and instance
+`console_instance_167b0d3b4d5ee5c717190869e1b66168` at 07:25:57Z. Public Console readiness
+was true in normal mode, operation contract version10. There was no forced kill or direct SQL.
+
+Public Continue Operation `operation_1f918160d764c2e713176b8b53178d3f` prepared the one-path
+scope supplement `732cbb92908ccdd4a25f447e18187a5c0c24fb1bd0ed57d77007f26636de1d92`.
+Under the user's existing engineering delegation, a separate public Continue Operation
+`operation_f238e26b74162aead20bcc02dc193c47` approved exactly
+`src/ai_software_engineer/work_queue/mysql.py` and prepared the new Plan
+`711a755e5852a52346876a7b073763114b16a280251a038ae760ac6bd6d31285`.
+The parent remained BLOCKED at checkpoint
+`57639c402dabaa227aaf9ceb011eff15d1c23b9559e843cd8daaf2ff53640ea2`.
+
+The sealed public approval envelope shows all15 current files, the separate complete225678-byte
+old input, exact target main and branch `ai/feature/project-delivery-learning-loop-recovery-3`.
+No Plan execution was approved at this preparation boundary. Separate independent Plan review
+and exact approval are still required before actual Coder execution.
+
+At 07:33:49Z the independent complete Plan review passed in16.55s: strict seed, all15 files,
+one exact225678-byte inherited input, fresh stop/claim/inventory, both clean main checkouts and
+unchanged frozen limits. Report `/tmp/ase-k1-plan-711a-independent-review-20261019.json`, SHA-256
+`cc2b809d9d5f33b1c100ddd8f79fbcd6ca009cbfd56812ef25bd3511aa2c75cf`.
+Only after that result, root submitted the exact Plan through a separate public Continue,
+Operation `operation_754139de753f05a1be4b45537508add7`, under the existing engineering
+delegation. Its initial queued receipt is an operation admission, not Coder/candidate success.
+
+At07:39:21Z an independent SELECT-only observation found authorization and sealed Task, but
+no dispatch, SQL Task, seed, queue claim or main invocation yet. Report
+`/tmp/ase-k1-newtask-observation-20261019.json`, SHA-256
+`5847f712466a4a5dceb093d90d7ce688586a6bf3380de7eaab6dab870c489bc7`.
+Root's07:43:17Z follow-up confirmed the same preparation boundary; it did not re-submit
+approval or terminate the active operation. Service CPU observation was58.7%; a one-second
+native sample showed nested Pydantic serialization/validation, not a Python-level call stack.
+
+Independent static analysis identified a remaining performance limitation: after sealed Task
+and before first dispatch the existing composition invokes six builder paths, each with four
+full Native facts inspections (24 total); each modern facts inspection reads the source twice.
+For this two-generation history that can repeat48 inherited reconstructions and192 original
+claim proofs. The16.55s independent single gate suggests minutes of work, but multiplying it
+is not a measured live duration or ETA. No new recursive acquisition was found: the inherited
+reader is SELECT-only/MVCC; worker file locks reject busy ownership without blocking. Full
+dispatch validation does hold existing authority/revision fences. The current service's exact
+Python function remains unknown. Preserve its authorized operation while observing stage facts.
+Future optimization must reduce repeated pure immutable decoding/copy/serialization within a
+bounded synchronous observation without caching or skipping fresh authorization/SQL/stop gates.
+At07:47:46Z a SELECT-only `information_schema.PROCESSLIST` snapshot, filtered to DATABASE()
+and exposing only command/time/state, showed only the diagnostic connection executing. This
+observed no service long query or SQL lock wait at that instant; it does not prove all prior
+instants were wait-free. Report `/tmp/ase-k1-preparation-sql-states-20261019.json`.
+
+The remaining nested pure work includes `BaselineQueueConsumption` decoding, baseline Plan
+integrity validators recursively round-tripping full facts/captures, predecessor/binding
+validation, record digests and immutable-file cache `model_copy(deep=True)` hits. In particular,
+the large622f historical baseline is revalidated for both original and failed main calls.
+These are code-level cost candidates corroborated by the native sample, not a precise live
+Python stack or permission to skip any freshness gate.
+
+At07:50:04Z the new seed file was observed. Independent observation at07:52:00Z confirmed
+new `task_recovery_711a755e5852a52346876a7b07376311` IMPLEMENTING/attempt1/revision2, real
+dispatch, seed `06eab92e64d0dcee9d7c9cfa7568f51225917612390486b4e34ed5f995693942`, RUNNING
+Coder work item and ACTIVE lease `lease_7a1afb29b9a4d61026d31ad8` with fresh heartbeat.
+Durable main start `run_340fa5985d7b4cb68bbb217b6e9f02b8` was sealed at07:51:06Z, using Context
+`ctx_e6bf6b64a44fbbd1790d02175db89a08af7eb7302924745dc9a6c078432bf007`. The read-only
+authority/Context/rendered provider-section checks exactly matched all225678 bytes and the
+original body SHA. Anonymous provider stdin was not externally captured. At that instant
+the process observer did not find a match, so it correctly reported spawn UNKNOWN.
+Independent report `/tmp/ase-k1-newtask-observation-20261019-v2.json`, SHA-256
+`f9f3be8d40383032eafaa76a0a2f8921d4b8bf53f0b739a334ce1cae61554704`.
+
+At07:54:30Z root's subsequent one-time process observation found live Codex exec PID18348,
+parent49236, with exact new worktree and output-schema argument. It emitted no full argv or
+prompt. Report `/tmp/ase-k1-native-process-observation-20261019-01.json`. This proves current
+process presence, not final stop/candidate/verdict. The original source Task and failure remain
+unchanged. Actual accepted progress, candidate and independent QA/Review are still outstanding.
+
+### First actual accepted progress
+
+At08:02:54Z the platform accepted `art_coder_e22f5a85329a3b238a049211e92ae746`, SHA-256
+`fa1900111f00f4d6ba8c71443ae9fa23770101d0b28de19f4f9f225ad8eb7d86`, from main Run340fa598.
+Independent review verified SUCCEEDED outcome, exact artifact binding and native completed
+stop/returncode0 at08:02:53.742744Z, including the bound owned-session-empty proof. The formal
+CONTINUE_REQUIRED event at08:02:54.781532Z references this artifact. It then transitioned
+CONTINUE_REQUIRED→QUEUED→IMPLEMENTING; lease1 was released and a fresh lease2 acquired.
+
+This checkpoint reports `step_01_contract_compatibility` complete (updating the contract-baseline
+digest reference for the new main), with the current15 draft files retained. Seven implementation
+and independent-delivery steps remain. It is accepted continuation data, not a candidate or QA.
+At08:06:16Z the second Coder work item was RUNNING/attempt2 with fresh heartbeats but no second
+durable main start/Context yet. Root did not issue another Continue or approval.
+
+Independent report `/tmp/ase-k1-newtask-observation-20261019-v3.json`, SHA-256
+`a1b1b494980dc33261340538060ddad1e2fd901d4d5238d312a2f941738082a4`.
+Lightweight SELECT-only snapshots through08:07:10Z confirm Task IMPLEMENTING/attempt2/revision5
+at basefa3589a, no candidate or independent verdicts, and the fresh active second lease.
