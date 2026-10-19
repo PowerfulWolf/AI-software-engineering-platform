@@ -902,6 +902,7 @@ def _summarize(
             if recovery_plan.plan_sha256 != result.recovery_plan_sha256:
                 raise ValueError("Coder recovery plan identity mismatch")
             snapshot = recovery_plan.workspace_snapshot
+            inherited_inputs = recovery_plan.inherited_reapply_inputs or ()
             approval = ConsoleApprovalRequest(
                 kind="coder_recovery",
                 plan_sha256=recovery_plan.plan_sha256,
@@ -929,6 +930,16 @@ def _summarize(
                     *(
                         (f"保留改动 {len(recovery_plan.capture.files)} 个文件",)
                         if recovery_plan.context_capacity_input is None
+                        else ()
+                    ),
+                    *(
+                        (
+                            "同时保留更早恢复中的完整补丁输入 "
+                            f"{len(inherited_inputs)} 份、"
+                            f"{sum(item.patch_bytes for item in inherited_inputs)} "
+                            "字节；Coder 必须结合本轮草稿继续适配尚未完成的工作。",  # noqa: RUF001
+                        )
+                        if inherited_inputs
                         else ()
                     ),
                     *(
@@ -999,6 +1010,13 @@ def _summarize(
                     f"原批准基线 {recovery_plan.source.base_revision}",
                     f"草稿执行基线 {recovery_plan.source.effective_base_revision}",
                     f"目标基线 {recovery_plan.target_base_revision}",
+                    *(
+                        f"历史补丁方案 {item.origin_plan_sha256}; "
+                        f"任务 {item.origin_task_id}; 上下文 {item.origin_context_manifest_id}; "
+                        f"URI {item.patch_uri}; {item.patch_bytes} 字节; "
+                        f"正文 SHA-256 {item.patch_sha256}"
+                        for item in inherited_inputs
+                    ),
                     *(
                         (f"目标分支 {recovery_plan.target_branch_name}",)
                         if recovery_plan.target_branch_name is not None

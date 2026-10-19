@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal, Protocol, TypeVar, cast, runtime_checkable
 
 from ai_software_engineer.agents import (
+    AgentRequest,
     CodexCliStructuredModelClient,
     FallbackStructuredModelClient,
     ResponsesStructuredModelClient,
@@ -1090,6 +1091,7 @@ class ProductionProjectDeliveryBackend:
                 _require_seed_recovery_route,
                 open_recovery_plan,
             )
+            from ai_software_engineer.recovery.inherited_input import require_plan_inherited_inputs
             from ai_software_engineer.recovery.store import FileRecoveryStore
 
             recovery_root = facts.workspace.root / "state" / f"recovery-{checkpoint.delivery_id}"
@@ -1097,6 +1099,7 @@ class ProductionProjectDeliveryBackend:
                 self._config, recovery_root / f"plan-{dispatch.recovery_plan_sha256}.json"
             )
             recovery_plan.require_execution_supported()
+            require_plan_inherited_inputs(self._config, self._environment, recovery_plan)
             sealed = recovery_store.get_task_record(recovery_plan.plan_sha256)
             if (
                 sealed.task != dispatch.task
@@ -1128,6 +1131,47 @@ class ProductionProjectDeliveryBackend:
             requirement_id=checkpoint.delivery_id,
         )
         return result
+
+    def _recovery_input_validator(
+        self, dispatch: RecoveryDispatchRecord, sidecar: Path, resolver: StoredContextResolver
+    ) -> Callable[[AgentRequest], None]:
+        from ai_software_engineer.recovery.admission import reject_invalid_admission
+        from ai_software_engineer.recovery.context import validate_reapply_context
+        from ai_software_engineer.recovery.entry import open_recovery_plan
+        from ai_software_engineer.recovery.inherited_input import require_plan_inherited_inputs
+
+        @reject_invalid_admission
+        def validate(request: AgentRequest) -> None:
+            if request.role is not AgentRole.CODER:
+                return
+            delivery_id = dispatch.task.metadata.get("recovery_of_delivery_id")
+            if not isinstance(delivery_id, str):
+                raise ValueError("recovery input allocation has no Requirement binding")
+            store, plan = open_recovery_plan(
+                self._config,
+                sidecar
+                / "state"
+                / f"recovery-{delivery_id}"
+                / f"plan-{dispatch.recovery_plan_sha256}.json",
+            )
+            sealed = store.get_task_record(plan.plan_sha256)
+            if (
+                sealed.task != dispatch.task
+                or sealed.record_sha256 != dispatch.recovery_task_record_sha256
+            ):
+                raise ValueError("recovery input allocation changed")
+            require_plan_inherited_inputs(self._config, self._environment, plan)
+            context = resolver.get_context(request.context_manifest_id)
+            if (context.task_id, context.role, context.attempt, context.source_revision) != (
+                request.task_id,
+                request.role,
+                request.attempt,
+                request.source_revision,
+            ):
+                raise ValueError("recovery input Context changed its request binding")
+            validate_reapply_context(plan, context)
+
+        return validate
 
     def run_prepared_allocation(
         self,
@@ -1196,7 +1240,6 @@ class ProductionProjectDeliveryBackend:
         )
         interruption_control = None
         active_runtime: RuntimeSession | None = None
-        from ai_software_engineer.agents.models import AgentRequest
         from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
         from ai_software_engineer.manager.execution_baseline import (
             StoredCoderExecutionInputResolver,
@@ -1615,6 +1658,11 @@ class ProductionProjectDeliveryBackend:
             route_adapters=selected_adapters,
             route_scope=route_scope,
             route_validator=approved.validate_routes,
+            recovery_input_validator=(
+                self._recovery_input_validator(dispatch, facts.workspace.root, resolver)
+                if isinstance(dispatch, RecoveryDispatchRecord)
+                else None
+            ),
         )
         primary = self._config.routes_for(TeamRole.CODER)[0]
         delivery_sources = (*self._delivery_context_sources, *extra_context)

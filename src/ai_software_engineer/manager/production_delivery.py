@@ -10,8 +10,11 @@ from typing import TYPE_CHECKING, Protocol
 
 from ai_software_engineer.agents import (
     AgentAdapter,
+    AgentErrorCode,
+    AgentFailure,
     AgentRequest,
     AgentResult,
+    AgentRunStatus,
     CodexCliAgentAdapter,
     ContextPromptBuilder,
     FallbackAgentAdapter,
@@ -362,6 +365,7 @@ class DispatchDeliveryAgentAdapter:
         route_adapters: DeliveryRouteAdapterFactory | None = None,
         route_scope: tuple[ProviderRouteConfig, ...] | None = None,
         route_validator: Callable[[AgentRole, tuple[ProviderRouteConfig, ...]], None] | None = None,
+        recovery_input_validator: Callable[[AgentRequest], None] | None = None,
     ) -> None:
         if isinstance(dispatch, VerificationReservation):
             if plan_adapter is not None:
@@ -400,6 +404,7 @@ class DispatchDeliveryAgentAdapter:
         self._route_adapters = route_adapters or ConfiguredDeliveryRouteAdapterFactory()
         self._route_scope = route_scope
         self._route_validator = route_validator
+        self._recovery_input_validator = recovery_input_validator
         self._coder: RoleWorktreeBinding | None = None
         self._verifiers: dict[tuple[AgentRole, int], RoleWorktreeBinding] = {}
         self._adapters: dict[tuple[AgentRole, int, str], AgentAdapter] = {}
@@ -412,6 +417,8 @@ class DispatchDeliveryAgentAdapter:
         self._require_request_task(request)
         if request.role is AgentRole.ORCHESTRATOR:
             return
+        if self._recovery_input_validator is not None:
+            self._recovery_input_validator(request)
         binding = self._binding(request)
         configured = self._routes_for_request(request)
         key = (request.role, binding.worktree.attempt, role_verification_digest(request.to_wire()))
@@ -493,6 +500,28 @@ class DispatchDeliveryAgentAdapter:
             if self._plan_adapter is None:
                 raise ProductionConfigError("candidate verification cannot invoke Orchestrator")
             return self._plan_adapter.run(request)
+        if self._recovery_input_validator is not None:
+            from ai_software_engineer.agents.workspace_admission import WorkspaceAdmissionRejected
+
+            try:
+                self._recovery_input_validator(request)
+            except WorkspaceAdmissionRejected:
+                # A definitive pre-provider rejection is still a durable result.
+                # Do not strand an already recorded start as an unknown call.
+                return AgentResult(
+                    run_id=request.run_id,
+                    task_id=request.task_id,
+                    role=request.role,
+                    attempt=request.attempt,
+                    source_revision=request.source_revision,
+                    context_manifest_id=request.context_manifest_id,
+                    status=AgentRunStatus.FAILED,
+                    error=AgentFailure(
+                        code=AgentErrorCode.WORK_INTERRUPTED,
+                        message="完整恢复输入准入校验未通过。未调用模型。原成果和草稿已保留。",
+                        transient=False,
+                    ),
+                )
         binding = self._binding(request)
         configured = self._routes_for_request(request)
         key = (request.role, binding.worktree.attempt, role_verification_digest(request.to_wire()))

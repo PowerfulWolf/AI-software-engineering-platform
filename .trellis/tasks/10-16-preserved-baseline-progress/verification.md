@@ -374,6 +374,46 @@ OS start observation or outcome for run3 was established by this audit. Report
 `102d60eda2cd3dd8c859149aeca97d43ff60b29c6806272af13dec8d39638b24`.
 This remains noncandidate progress; there is no production QA/Review verdict or DONE.
 
+## Third invocation stopped with a real policy rejection (2026-10-19)
+
+At05:59:23 UTC independent inspection confirmed run3 reached its30-minute local execution
+limit and sealed a real runner-owned stop at05:54:19 UTC: return code-15, no output and a
+complete verified owned_session_empty proof. During subsequent full-draft validation,
+WorkspacePolicy rejected src/ai_software_engineer/work_queue/mysql.py. Final outcome
+79dafaa68dd353a7db6446d431e3807d48d007c2f513f6cb9569fe08f39eecb9 and actual route
+a07032feaf5ad99a0c0d49875c7a2ad88e77c178277a787a129e37d9f6ff3f58 agree on
+FAILED/POLICY_VIOLATION/nontransient. Preserve the TIMEOUT stop and later policy rejection
+as separate facts. There is no accepted checkpoint3 or candidate.
+
+Task3d26 is BLOCKED/revision9/attempts3. Its WorkItem is CLOSED and Lease RELEASED at
+05:54:20. Native sequence20 and parent sequence68 are BLOCKED, parent checkpoint
+57639c402dabaa227aaf9ceb011eff15d1c23b9559e843cd8daaf2ff53640ea2.
+Operation638f sequence3 is SUCCEEDED only as an operation; its result_stage is BLOCKED.
+Progress2 remains intact. Independent failure report
+`/tmp/ase-k1-run3-failure-policy-independent-20261019.json`, SHA-256
+`b520c6cf5a7c9df24f80300becc54fb8ae88681f54b39d61fb0cfe2a59abf67e`.
+
+Independent full policy comparison verified all37 allowed write paths are identical across
+parent affected paths/native Design, frozen Task, source/target RecoveryPlan and Run3 request.
+Exactly one of the15 current dirty Git paths is disallowed: work_queue/mysql.py. The other
+14 are lawful. This path and the already-authorized tests/mysql_safety.py are the only new
+paths relative to the original31-file capture. The original225678-byte patch remains exact,
+SHA26710e71e0bf31c26b61b35daa749c4575671fbc7d9e2f4aff8f23c4a9c1cfb7.
+Coder moved position_scope/table initialization from the authorized execution_store.py into
+the queue base class. Evidence supports an implementation scope change, not lost permission
+propagation; it does not prove this additional path is the only possible implementation.
+Full before/after file hashes and policy results are in
+`/tmp/ase-k1-run3-complete-scope-independent-20261019.json`, SHA-256
+`d0a6a3f1d8c331f6095f20c4ffab2bc33242566af66f6bee3dbbad7f0fdeabab`.
+
+Before any new Plan execution, a separate platform defect was identified: ordinary chained
+recovery captures this latest15-file draft but omits the older complete required reapply
+patch. Capturing the latest draft cannot establish that its missing original content is
+implemented. Fix/test/independent acceptance is tracked in
+`.trellis/tasks/10-19-inherited-reapply-inputs/`. Preserve both draft generations, both
+accepted progress artifacts, all stopped/failed histories and frozen counters. No scope
+approval, new recovery Plan execution, SQL edit or real draft edit occurred in this audit.
+
 ## Storage and rollback
 
 存量数据处置：the reviewed deployment and exact public Handle above restored the original

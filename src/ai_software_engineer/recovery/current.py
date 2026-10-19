@@ -180,6 +180,15 @@ class NativeRecoveryFactsVerifier:
             )
         if original.source != source or original.denied_paths != plan.denied_paths:
             raise ValueError("original source or policy changed")
+        from ai_software_engineer.recovery.inherited_input import read_inherited_reapply_inputs
+
+        if (
+            read_inherited_reapply_inputs(
+                self._config, self._environment, original.source, original.task
+            )
+            != plan.inherited_reapply_inputs
+        ):
+            raise ValueError("recovery Plan lost or changed complete inherited inputs")
         return original
 
     def _target_preflight(

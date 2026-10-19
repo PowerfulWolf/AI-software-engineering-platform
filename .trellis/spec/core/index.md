@@ -38,6 +38,9 @@
 
 ## Files
 
+- [Inherited reapply inputs](inherited-reapply-inputs.md): authenticated transitive complete
+  patch inputs, exact Plan binding and unchanged current-capture/role/approval boundaries.
+
 - [Rejected workspace admission](rejected-workspace-admission.md): exact Plan-frozen progress
   plus approved full draft, positively evidenced pre-provider refusal and ordinary-work recovery.
 

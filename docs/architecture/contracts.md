@@ -869,6 +869,18 @@ Coder-only 的 `recovery.patch` ContextSource 交付完整旧补丁，让 Coder 
 省略字段保持历史哈希和严格 Git seed 行为，不自动 fallback。此模式的 seed receipt 记录空的初始
 改动捕获，不表示补丁已经应用；非空捕获拒绝。准入要求补丁 URI、正文、SHA 完全一致且未截断。
 
+连续恢复使用可选 `RecoveryPlan.inherited_reapply_inputs` 保存旧的完整重应用输入。None 从所有
+canonical wire 中省略，历史批准 digest 不变；兼容读取仍需沿原 Task metadata、批准、sealed Task、
+dispatch、seed、真实 invocation 与 Context 重建祖先，不能把缺字段解释为旧输入已完成。只读 SQL
+校验原 queue admission、角色 step、唯一 CLAIMED 事件及可用的完整 claim snapshot，并核对历史
+baseline/父链；租约已释放或到期不构成执行停止证明。缺失或损坏事实拒绝准入，损坏 claim payload
+须转 typed recovery rejection，最终 provider gate 留下明确失败结果。旧完整补丁与当前 partial draft
+分开，使用 required、Coder-only 的 `recovery.inherited_patch.<origin-plan-sha>`；保留原 URI、正文、
+UTF-8 字节数和 SHA，strict seed 延续也不丢失历史输入。祖先和输入各最多八项，完整继承输入总量
+不超过现有 capture 上限，并服从最终模型容量。提案、执行事实复核、后续 Context 和 provider 前均
+重新校验；这些输入不扩大权限，也不产生候选或 verdict。详见
+`.trellis/spec/core/inherited-reapply-inputs.md`。
+
 恢复计划把权限分成两个用途：`permissions` 精确验证旧 Coder 现场，`target_permissions` 封存新
 Coder 的当前权限。新权限只能按精确 token 收紧 read/write/command，network 必须不变，且两者都
 不能改状态或 merge。旧记录省略新字段并保持原 SHA；如果平台权限已经收紧，旧批准会安全失效，

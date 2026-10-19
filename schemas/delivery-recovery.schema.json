@@ -677,6 +677,23 @@
             }
           ],
           "default": null
+        },
+        "inherited_reapply_inputs": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/InheritedReapplyInput"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inherited Reapply Inputs"
         }
       },
       "required": [
@@ -2017,6 +2034,60 @@
         "bytes"
       ],
       "title": "RetainedExecutionPatch",
+      "type": "object"
+    },
+    "InheritedReapplyInput": {
+      "additionalProperties": false,
+      "description": "One complete previously approved input, separate from the current draft.",
+      "properties": {
+        "origin_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Origin Plan Sha256",
+          "type": "string"
+        },
+        "origin_task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Origin Task Id",
+          "type": "string"
+        },
+        "origin_context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Origin Context Manifest Id",
+          "type": "string"
+        },
+        "patch_uri": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Patch Uri",
+          "type": "string"
+        },
+        "patch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Patch Sha256",
+          "type": "string"
+        },
+        "patch_bytes": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Patch Bytes",
+          "type": "integer"
+        },
+        "patch": {
+          "maxLength": 1000000,
+          "title": "Patch",
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin_plan_sha256",
+        "origin_task_id",
+        "origin_context_manifest_id",
+        "patch_uri",
+        "patch_sha256",
+        "patch_bytes",
+        "patch"
+      ],
+      "title": "InheritedReapplyInput",
       "type": "object"
     }
   },

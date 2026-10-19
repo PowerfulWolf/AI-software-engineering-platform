@@ -1,5 +1,12 @@
 # Explicit delivery recovery — T044
 
+## Complete chained reapply inputs (2026-10-19)
+
+See [inherited-reapply-inputs.md](inherited-reapply-inputs.md). A new current draft capture
+cannot replace required complete patches from approved recovery ancestors. New Plans freeze
+authenticated inherited inputs separately and enforce them through Context/provider admission;
+old failures, accepted progress, budgets and original input identities remain unchanged.
+
 ## Empty model-route containers during terminal discovery (2026-10-15)
 
 ### Scope and signatures

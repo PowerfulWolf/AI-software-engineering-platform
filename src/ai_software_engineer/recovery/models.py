@@ -472,6 +472,40 @@ class ContextCapacityRecoveryInput(DomainModel):
         return self
 
 
+MAX_INHERITED_REAPPLY_INPUTS = 8
+
+
+class InheritedReapplyInput(DomainModel):
+    """One complete previously approved input, separate from the current draft."""
+
+    origin_plan_sha256: StageSha256
+    origin_task_id: TaskId
+    origin_context_manifest_id: ContextId
+    patch_uri: SafeText
+    patch_sha256: StageSha256
+    patch_bytes: Annotated[StrictInt, Field(ge=0, le=MAX_CAPTURE_BYTES)]
+    patch: Annotated[str, StringConstraints(max_length=MAX_CAPTURE_BYTES)]
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> Self:
+        body = self.patch.encode("utf-8")
+        prefix = f"recovery://{self.origin_plan_sha256}/patch/"
+        if (
+            self.origin_task_id != "task_recovery_" + self.origin_plan_sha256[:32]
+            or not self.patch_uri.startswith(prefix)
+            or len(self.patch_uri.removeprefix(prefix)) != 64
+            or any(c not in "0123456789abcdef" for c in self.patch_uri.removeprefix(prefix))
+            or self.patch_bytes != len(body)
+            or len(body) > MAX_CAPTURE_BYTES
+            or self.patch_sha256 != hashlib.sha256(body).hexdigest()
+            or "\0" in self.patch
+            or "GIT binary patch" in self.patch
+            or patch_secret_occurrences(self.patch)
+        ):
+            raise ValueError("inherited reapply input must bind one complete safe original patch")
+        return self
+
+
 class RecoveryPlan(DomainModel):
     kind: Literal["recovery_plan"] = "recovery_plan"
     schema_version: Literal["v0.1"] = "v0.1"
@@ -490,6 +524,12 @@ class RecoveryPlan(DomainModel):
     capture: CapturedChanges
     context_capacity_input: ContextCapacityRecoveryInput | None = Field(
         default=None, exclude_if=lambda value: value is None
+    )
+    inherited_reapply_inputs: tuple[InheritedReapplyInput, ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_INHERITED_REAPPLY_INPUTS,
+        exclude_if=lambda value: value is None,
     )
     workspace_snapshot: RecoveryWorkspaceSnapshot | None = Field(
         default=None, exclude_if=lambda value: value is None
@@ -516,6 +556,19 @@ class RecoveryPlan(DomainModel):
     denied_paths: tuple[str, ...]
     created_at: AwareDatetime
     plan_sha256: StageSha256
+
+    @model_validator(mode="after")
+    def validate_inherited_inputs(self) -> Self:
+        inputs = self.inherited_reapply_inputs or ()
+        identities = tuple((item.origin_plan_sha256, item.patch_sha256) for item in inputs)
+        if (
+            len(set(identities)) != len(identities)
+            or len({item.origin_plan_sha256 for item in inputs}) != len(inputs)
+            or sum(item.patch_bytes for item in inputs) > MAX_CAPTURE_BYTES
+            or any(item.origin_task_id == self.new_task_id for item in inputs)
+        ):
+            raise ValueError("inherited reapply inputs must be unique, bounded and acyclic")
+        return self
 
     @model_validator(mode="after")
     def validate_context_capacity(self) -> Self:

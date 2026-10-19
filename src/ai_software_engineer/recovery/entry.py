@@ -80,6 +80,7 @@ from ai_software_engineer.recovery.context_capacity import (
 from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
 from ai_software_engineer.recovery.models import (
     CapturedChanges,
+    InheritedReapplyInput,
     RecoveryApprovalCommand,
     RecoveryAuthorization,
     RecoveryInputMode,
@@ -431,6 +432,7 @@ class NativeRecoveryEntry:
             source=original.source,
             capture=captured,
             context_capacity_input=original.capacity_input,
+            inherited_reapply_inputs=self._inherited_inputs(original),
             workspace_snapshot=workspace_snapshot,
             target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(repository_root)),
             target_preparation_sha256=prepared.preparation_sha256,
@@ -454,6 +456,15 @@ class NativeRecoveryEntry:
         return plan, Path(
             prepared.repository_workspace_root
         ) / "state" / f"recovery-{delivery_id}" / f"plan-{plan.plan_sha256}.json"
+
+    def _inherited_inputs(
+        self, original: NativeRecoverySource
+    ) -> tuple[InheritedReapplyInput, ...] | None:
+        from ai_software_engineer.recovery.inherited_input import read_inherited_reapply_inputs
+
+        return read_inherited_reapply_inputs(
+            self.config, self.environment, original.source, original.task
+        )
 
     def scope_supplement(
         self, checkpoint: ProjectDeliveryCheckpoint, *, request: RecoveryScopeRequest | None = None
