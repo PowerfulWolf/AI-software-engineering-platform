@@ -225,3 +225,54 @@ Independent report `/tmp/ase-k1-newtask-observation-20261019-v3.json`, SHA-256
 `a1b1b494980dc33261340538060ddad1e2fd901d4d5238d312a2f941738082a4`.
 Lightweight SELECT-only snapshots through08:07:10Z confirm Task IMPLEMENTING/attempt2/revision5
 at basefa3589a, no candidate or independent verdicts, and the fresh active second lease.
+
+### Ordinary continuation retains the complete inherited input
+
+Run2 `run_3cada850478740a2801918f65971ce6c` has a separate Context
+`ctx_98abadacd31f5adfc9622ec3b12fd0be1e0f51042d47717566dc51e3189efe46` and durable main start
+at08:07:48.129507Z. Independent targeted observation at08:13:37–38Z authenticated its exact
+work item and original claim. Both the sealed Context and deterministically rendered provider
+section preserve the complete225678-byte old patch with body SHA-256
+`26710e71e0bf31c26b61b35daa749c4575671fbc7d9e2f4aff8f23c4a9c1cfb7`, required, Coder-only
+and untruncated. Thus the fix covers ordinary progress continuation as well as first entry.
+This check did not externally capture provider stdin or revalidate the previous Run's stop.
+
+One exact process observation found the new worktree's Codex exec PID47070/parent49236.
+At08:17:15Z a separate SELECT-only snapshot still showed IMPLEMENTING/attempt2/revision5,
+ACTIVE lease `lease_cbfc833aa152adf24b789990` with08:17:09Z heartbeat and no Run2 outcome.
+Run2's selected slice is source contracts, with steps3–8 deferred. There is no candidate,
+QA/Review acceptance or actual K1 DONE at this observation boundary.
+
+Independent report `/tmp/ase-k1-newtask-observation-20261019-v4.json`, SHA-256
+`bcaf31f9a810156b69eca74ece4e61a7e240e0cb70be5735a1ba83deb4a05b8f`.
+Root snapshot `/tmp/ase-k1-stage-snapshot-20261019-08.json`, SHA-256
+`777c11ec1a95f92f28cf94b2b45beea503efbc42936461f550cebefdda139a0c`.
+
+### Second actual accepted progress and evidence limitation
+
+Run2 returned SUCCEEDED with outcome SHA-256
+`165f6dc26c418d4e2462981c70cb659fb96c81d9c7457eee26ea7d82449da1ac`. Its sealed
+`art_coder_8ce2ede263356b5f083d6f9335e1e4f1`, SHA-256
+`a7ef740b985a35d634e1b7df7e5a344556ab2ed0dc9a936d13ad9ca6a145731d`, is coder-progress,
+not an implementation report or candidate. Independent completion review verified normal native
+stop/returncode0 at08:29:42.104209Z with exact owned-session-empty proof/start/claim binding.
+The formal08:29:44.888737Z CONTINUE_REQUIRED event accepts this artifact and automatically
+continues through QUEUED to attempt3 IMPLEMENTING/revision8. Run2's lease was released at
+08:29:45.058261Z; fresh lease `lease_c61e52c79c667876c6f3548b` was acquired normally.
+
+Progress now reports steps1–2 complete and3–8 remaining. The second slice strengthens accepted
+source validation and shares the read-only accepted-history helper with Team View. These are
+Coder progress claims and remain subject to candidate-bound independent QA and Review.
+
+The four pytest/Mypy/Ruff PASS declarations carry command URI/SHA references, but the independent
+observer found no corresponding sidecar machine CommandEvidence/TestEvidence. This observation
+certifies sealed declarations, not actual command execution or successful independent tests.
+The platform recording/admission contract is being checked separately; do not count the model's
+test declarations as independently verified execution or reuse them as QA verdicts.
+
+Completion report `/tmp/ase-k1-run2-completion-observation-20261019.json`, SHA-256
+`b8279b01964f18596705535b02c9c4eedbf472f84c2677baf4b352c111a9309c`.
+At08:35:33Z root's exact-key read observed attempt3's durable main start at08:33:43.921878Z:
+Run `run_34c0ce10e5c742f58e621e932844862b`, Context
+`ctx_863aba87c2b30fabf25f7a631d30c786e63ec431bbb94a4c52126b4f3738ebdf`.
+It had no outcome. No additional Continue/approval or production SQL modification was issued.
