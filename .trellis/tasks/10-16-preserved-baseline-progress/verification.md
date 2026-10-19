@@ -259,6 +259,64 @@ SHA/revision/attempts were unchanged. Dispatch reservations are not live Worker 
 Report `/tmp/ase-k1-reapply-sql-snapshot-poststop-independent-20261019.json`, SHA-256
 `1abf45f625bf87f23867c77897d911cbf53f0e7f9db4e992a0c8ef087a84e010`.
 
+At04:23:18.670322 UTC public Continue Operation638f6e63c683eedeacd8969ae9fc63c9
+was submitted against checkpoint5361e9f5 with no new approval fields. It reused the exact
+existing APPROVED authorization for Plan3d26; no duplicate POST or service restart followed.
+At04:31:11 the independent observer found clean coder_reapply seed
+2901a9d4efee536e99ae9f18e2438b20d23d0350ba81b0fd88f4409481ac6564 bound to150f546,
+with zero seeded files/patch bytes. The original complete patch remains a required Coder
+context input rather than an automatically applied dirty seed.
+
+At04:33:00.072597 UTC a SELECT-only consistent snapshot established the new SQL Task at
+IMPLEMENTING/revision2/attempts1, with NEW→PLANNING→IMPLEMENTING events at source150f546.
+The exact existing dispatch1c23e473 and sealed Task46b06ae3 were reused. Actual Coder
+WorkItem work_7a5bbd5f86f7ea01640de392e333d961ebbe416e7e89977742d5ea9a1df7f886
+was RUNNING with active claim lease_b93f5b0ea66dfd0ac784f96d, acquired04:31:00.950142,
+assignment_a294254058484088b177152a and Agent agent_team_coder. These Worker claim IDs
+are distinct from the preserved dispatch reservation IDs. The old Task remained exactly
+BLOCKED/revision9/attempts9 with unchanged SHA cda925e5. Report
+`/tmp/ase-k1-reapply-sql-snapshot-seeded-independent-20261019.json`, SHA-256
+`b7354c671ab31a8df24085102aca1fe433774302f1efad2e4eb24b828e688e3c`.
+This snapshot proves scheduling/execution admission facts; it alone does not prove a
+provider process started, a candidate was produced or independent QA/Review accepted K1.
+
+Independent admission/context/process review at04:40:46 UTC confirmed recovery invocation
+9921628d1ff3c49942e01c37952d10cab45917b2397dfc022835b582978581a8 for
+run_9607117567fc4913932c13cb8226c4c8 and Context
+ctx_6a14fc1c5c7254447e2780dbbefcf10a8c62ff146529ba9844fc388f17e0e28d. Main invocation
+start d900d594 was sealed with started_at04:34:13.096218; capture-start0d5e6697 has
+started_at04:35:53.582809. Independent OS inspection additionally found actual native
+PID96686, direct child of Console20973, born04:35:53 in the exact new Coder worktree;
+its code-mode-host child3856 had the same cwd. No command arguments/environment were read.
+Capture-start alone is pre-spawn; the independent descendant/cwd observation establishes
+actual process launch, without being an immutable runner-owned stop proof.
+
+The exact Context, claim and source150f546 agree. validate_reapply_context passed and the
+unique Coder-only required recovery.patch contains all225678 bytes, SHA-256
+26710e71e0bf31c26b61b35daa749c4575671fbc7d9e2f4aff8f23c4a9c1cfb7, matching the approved
+old patch without truncation. Context uses157860 of256000 input tokens. Configured/claimed
+route is codex/gpt-6.1-sol/xhigh/codex_cli/proxy; a completed actual route record was not yet
+present. Main outcome and capture-stop were also absent at this review, and all old31
+captured files remained unchanged. This is real Coder launch with the complete approved
+input, not candidate delivery or QA/Review acceptance. Report
+`/tmp/ase-k1-reapply-main-start-context-independent-20261019.json`, SHA-256
+`78497ae8dbdb82cab7459a07b0b2d40ff497a8be9dd0164c2c230382183c24a3`.
+
+At04:47:40 UTC a bounded read-only Git status observation found five new dirty paths,
+all under tests/learning_collection. No file contents, full workspace snapshot or current
+facts gate were read for this observation. It establishes that the new worktree contains
+actual draft changes, without making them an accepted progress artifact or candidate.
+Report `/tmp/ase-k1-reapply-dirty-observation-independent-20261019.json`, SHA-256
+`0da1d0e4c2a1585103c383da20b2ff4d6001ebd26bf6495252f0324dbd3d269e`.
+
+At04:50:52 UTC one independent public summary/fresh-detail read pair returned HTTP200
+and passed typed validation. Both show K1 DELIVERING, execution RUNNING/ROLE_RUNNING,
+blocker=null and Coder executing. The summary binds the actual new Task3d26 at
+IMPLEMENTING and WorkItem7a5b at RUNNING. Thus the read side presents the active recovery
+rather than treating the old Task's preserved BLOCKED history as the current execution.
+Report `/tmp/ase-k1-reapply-console-read-independent-20261019.json`, SHA-256
+`268f9ee537cd1b5fbfdda28833dea3b3603148b838bcece192e96467fa6d7a35`.
+
 ## Storage and rollback
 
 存量数据处置：the reviewed deployment and exact public Handle above restored the original

@@ -65,6 +65,7 @@ declare every selected/later ID remaining unless truly completed, and keep the r
 | Fixture boundary | Required assertions |
 | --- | --- |
 | Initial or seeded interrupted Coder | Real native capture/owned stop, exact Run/claim/snapshot, preserved complete draft |
+| Committed allocation and clean worktree, missing seed/invocation | Reconstructed Host Continue reuses exact existing approval/Task/dispatch/resources; original full current gates and single first invocation remain |
 | Knowledge gap before parent attachment | GET preserves DELIVERING, separately projects exact WAITING_HUMAN queue/execution and lease_liveness=UNKNOWN; pending reader binds actual Task/role/source/gap |
 | Fresh Host Continue after the gap | Persisted WAITING_HUMAN and exact gap; unchanged original invocation and no duplicate Coder |
 | Approved resolution and completion | Exact approval, normal candidate, distinct QA/Reviewer, same-candidate reports and DONE |
@@ -75,6 +76,30 @@ full recovery. Bad: manufacture stop facts, drop factory configuration, hardcode
 or require a read-only GET to attach the parent wait. Current facts, source history and permission
 checks remain production behavior; fix an obsolete fixture rather than accepting absent proof.
 Released scheduling ownership or UNKNOWN lease liveness is not proof of process termination.
+
+`NativeRecoveryEntry._execute` commits allocation and creates/reopens the managed Coder
+worktree before `RecoverySeedService.seed`; SQL Task/queue creation occurs later in
+`run_prepared_allocation`. A sealed NEW Task input file or committed Dispatch reservation
+does not establish a SQL Task, live Worker claim or provider invocation. An interruption
+at this preparation boundary can legitimately leave the first two facts without the latter.
+
+When the exact approved Plan remains current and has no invocation, public Continue may
+reuse that approval without a new approved_plan_sha256/reference. All source/target,
+sealing and transaction fences still rerun; allocation replay must return the identical
+dispatch/assignment/lease identities and coordinator recover the same branch/path. A
+coder_reapply target without a seed must be clean; the original complete patch remains
+required, untruncated Coder context. Dirty unreceipted work or current-facts drift must not
+start a provider. Existing invocation follows normal adoption/interruption rules and
+cannot authorize another first call.
+
+`tests/recovery/test_preseed_reentry.py` verifies this public chain with a one-use exception
+after actual allocation/worktree creation, new Host composition, single seed/invocation,
+same candidate through independent fake Coder/QA/Review, unchanged original failure facts,
+and dirty-target/changed-target negative cases. Use the existing exclusive native fixture
+gate before any reset; missing SQL Task means repository.list_events raises TaskNotFound,
+so an assertion about absent event rows uses a bounded SELECT count in the isolated fixture.
+No production source/Schema/data migration is introduced by this test coverage. Fixture
+DONE is independent of real K1 acceptance. Rollback removes only coverage/documentation.
 
 ## 新恢复计划冻结目标执行授权（2026-10-10）
 

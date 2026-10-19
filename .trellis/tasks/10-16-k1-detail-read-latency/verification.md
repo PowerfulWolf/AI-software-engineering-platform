@@ -194,3 +194,35 @@ Both typed resource responses correctly show K1 BLOCKED at checkpoint5361e9f5 af
 actual Coder scope violation. HTTP/read validation PASS is not business acceptance.
 The remaining Plan/Start-copy hotspot was researched only; no additional copy optimization
 or permission cache was introduced. Existing durable facts require no migration.
+
+## Exact baseline snapshot micro-measurement — 2026-10-19 04:30 UTC
+
+Independent read-only measurement copied only the three known Plan/Start pairs belonging
+to old K1 Task task_recovery_622f711324450abfffedc2a8d696e2de into a private temporary
+snapshot. All six original complete-byte SHA values and inode/size/mtime remained the same
+before copying, after copying and after measurement. No Host, NativeFacts, database, API,
+provider or production process profiling was used; no source or persistent fact changed.
+
+One serial round over six records measured these totals (wall / own-process CPU seconds):
+complete snapshot read+SHA0.007214/0.006884; fixed decode+integrity1.079015/1.078634;
+pure model_copy(deep=True)0.098011/0.097970; actual read-scope miss1.204162/1.203202;
+actual hit return0.100479/0.100438. Single hits were16–18ms; fixed decodes122–284ms.
+The complete measurement took about3.21s. Raising only the measurement process's nice
+value was refused by the sandbox; the observer retained nice0 and did not escalate or
+repeat timings. No Joint history record was measured.
+
+These warm-page, one-sample micro-costs distinguish actual decoding from defensive return
+copying. They cannot determine production ten-minute preparation cost, imply a latency
+share, or justify weakening fresh gates/public private-copy behavior. No optimization is
+implemented from this measurement. Report
+`/private/tmp/ase-k1-baseline-record-cost-snapshot-20261019-255917ebca/measurement.json`,
+SHA-256 `cd52ee05f2b4defd42be76a6b246b3353f26716db9a6021f33e738d5ae06f03a`.
+
+At04:50:52 UTC one independent public read pair, without retries, measured summary
+HTTP200 in2.143s and its fresh locator's detail HTTP200 in3.848s. Typed validation passed;
+both correctly show the real recovered K1 as DELIVERING with Coder ROLE_RUNNING and no
+blocker. The summary binds new Task3d26/IMPLEMENTING and WorkItem7a5b/RUNNING. Report
+`/tmp/ase-k1-reapply-console-read-independent-20261019.json`, SHA-256
+`268f9ee537cd1b5fbfdda28833dea3b3603148b838bcece192e96467fa6d7a35`.
+These single-sample API measurements establish current read correctness and measured
+latency; they do not establish frontend render latency or complete refresh-performance repair.
