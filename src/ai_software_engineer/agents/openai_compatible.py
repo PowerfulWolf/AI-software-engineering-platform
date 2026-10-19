@@ -37,6 +37,7 @@ from ai_software_engineer.agents.ports import (
     AgentError,
     AgentRequestConflict,
 )
+from ai_software_engineer.agents.verification_output import TrustedVerificationOutputContract
 from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.context.models import ContextBundle, ContextId
 from ai_software_engineer.context.ports import ContextStore
@@ -62,6 +63,9 @@ class PromptPayload(DomainModel):
     messages: tuple[PromptMessage, ...] = Field(min_length=1)
     # At most six current captures plus one exact-approved predecessor's six captures.
     images: tuple[PromptImage, ...] = Field(default=(), max_length=12)
+    verification_output_contract: TrustedVerificationOutputContract | None = Field(
+        default=None, exclude=True
+    )
 
     def to_messages(self, *, include_images: bool = True) -> list[WirePayload]:
         messages = [message.to_wire() for message in self.messages]

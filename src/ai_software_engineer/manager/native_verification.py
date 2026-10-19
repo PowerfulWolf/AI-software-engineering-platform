@@ -13,6 +13,10 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from ai_software_engineer.agents import AgentRequest
 from ai_software_engineer.agents.execution import ExecutionGuard
+from ai_software_engineer.agents.verification_output import (
+    TrustedVerificationOutputContract,
+    verification_output_contract,
+)
 from ai_software_engineer.artifacts import artifact_digest
 from ai_software_engineer.domain import (
     AgentRole,
@@ -62,6 +66,7 @@ from ai_software_engineer.manager.python_verification_runner import MAX_PYTEST_S
 from ai_software_engineer.manager.verification_process import bounded_verification_command
 from ai_software_engineer.recovery.store import RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_execution import VerificationEvidence
+from ai_software_engineer.recovery.verification_records import VerificationExecutionRecord
 from ai_software_engineer.work_queue.models import QueueClaim
 
 _PYTHON_CAPABILITY = "codex_sandbox_pytest_mysql_v1"
@@ -568,6 +573,7 @@ class RegisteredNativePythonVerifier:
         return NativePythonVerificationEvidence(
             store=store,
             request=request,
+            task=task,
             facts=facts,
             workspace_root=workspace_root,
             guard=guard,
@@ -680,6 +686,8 @@ class _RegisteredNativeVerificationEvidence:
             )
         else:
             evidence = provider.evidence_for(request, workspace_root, self._guard)
+            if evidence.output_contract is None:
+                raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED)
         # Read and validate exact current facts again before caching a ready result.
         current = self._read_inputs(request, workspace_root)
         if (
@@ -701,6 +709,35 @@ class _RegisteredNativeVerificationEvidence:
             self._registry._prepared_routes[route_key] = ordinary
         return evidence
 
+    def validate_output_current(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None,
+        contract: TrustedVerificationOutputContract,
+    ) -> None:
+        if workspace_root != self._root or execution_guard is not self._guard:
+            raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED)
+        self._guard.check()
+        current = self._read_inputs(request, workspace_root)
+        prepared = self._registry._prepared.get(
+            (role_verification_digest(request.to_wire()), False)
+        )
+        if (
+            prepared is None
+            or prepared.provider is None
+            or prepared.request != request
+            or prepared.root != workspace_root
+            or prepared.guard is not self._guard
+            or prepared.inputs.task != current.task
+            or prepared.inputs.plan_artifact != current.plan_artifact
+            or prepared.inputs.implementation != current.implementation
+            or prepared.inputs.claim != current.claim
+            or prepared.evidence.output_contract != contract
+        ):
+            raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED)
+        prepared.provider.validate_output_current(request, workspace_root, self._guard, contract)
+
 
 class NativePythonVerificationEvidence:
     """Execute at most once in the existing role Run, preserving its original claim."""
@@ -710,12 +747,14 @@ class NativePythonVerificationEvidence:
         *,
         store: NativeRoleVerificationStore,
         request: AgentRequest,
+        task: Task,
         facts: NativeRoleVerificationFacts,
         workspace_root: Path,
         guard: ExecutionGuard,
         clock: Callable[[], datetime] = _now,
     ) -> None:
         self._store, self._request, self._facts = store, request, facts
+        self._task = task
         self._root, self._guard, self._clock = workspace_root, guard, clock
 
     def validate_current(
@@ -741,6 +780,7 @@ class NativePythonVerificationEvidence:
             or request.role is not plan.role
             or request.run_id != plan.run_id
             or request.task_id != plan.task_id
+            or task_intent_sha256(self._task) != plan.task_intent_sha256
             or workspace_root.resolve(strict=True) != workspace_root
         ):
             raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED)
@@ -754,6 +794,50 @@ class NativePythonVerificationEvidence:
             )
             _require_clean_native_candidate(workspace_root, plan.candidate_revision)
         except (OSError, ValueError):
+            raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED) from None
+
+    def _output_contract(
+        self, request: AgentRequest, receipt: VerificationExecutionRecord
+    ) -> TrustedVerificationOutputContract:
+        binding = self._store.binding
+        plan = binding.plan
+        covered = {
+            criterion
+            for selection in binding.capability.selections
+            for criterion in selection.criterion_ids
+        }
+        return verification_output_contract(
+            request,
+            receipt_uri=f"native-role-verification://{plan.task_id}/{plan.run_id}/{receipt.record_sha256}",
+            receipt_sha256=receipt.record_sha256,
+            authority_sha256=binding.admission.admission_sha256,
+            claim_sha256=role_verification_digest(plan.claim.to_wire()),
+            receipt_covered_required_criterion_ids=tuple(
+                sorted(
+                    item.id
+                    for item in self._task.acceptance_criteria
+                    if item.required and item.id in covered
+                )
+            ),
+            command_returncodes=tuple(result.returncode for result in receipt.results),
+        )
+
+    def validate_output_current(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None,
+        contract: TrustedVerificationOutputContract,
+    ) -> None:
+        self.validate_current(request, workspace_root, execution_guard)
+        try:
+            receipt = self._store.get_verification_execution(completed=True)
+            if (
+                receipt.effective_failure_code is not None
+                or self._output_contract(request, receipt) != contract
+            ):
+                raise ValueError("controlled verification receipt changed")
+        except (RecoveryRecordMissing, OSError, ValueError):
             raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED) from None
 
     def evidence_for(
@@ -837,6 +921,7 @@ class NativePythonVerificationEvidence:
             )
             raise NativeVerificationWaiting(reason, record_sha256=receipt.record_sha256)
         return VerificationEvidence(
+            output_contract=self._output_contract(request, receipt),
             text=(
                 "以下是本任务、本角色、本轮真实 claim 下执行的精确增量验证证据。"
                 "不是 QA/Review 结论。"
@@ -856,5 +941,5 @@ class NativePythonVerificationEvidence:
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
-            )
+            ),
         )

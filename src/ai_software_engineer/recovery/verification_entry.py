@@ -115,6 +115,7 @@ from ai_software_engineer.recovery.verification_native import (
     NativeCandidateSource,
     NativeCandidateSourceReader,
 )
+from ai_software_engineer.recovery.verification_output import VerificationOutputInputs
 from ai_software_engineer.recovery.verification_qa import (
     select_retained_qa,
     validate_retained_qa_artifacts,
@@ -1328,6 +1329,41 @@ class CandidateVerificationEntry:
                 "selected adapter cannot enforce the approved verification capability"
             )
 
+        sidecar = Path(source.stages.preparation.repository_workspace_root)
+        artifacts, contexts = (
+            FileArtifactStore(sidecar / "artifacts"),
+            FileContextStore(sidecar / "contexts"),
+        )
+        if plan.executor_capability is not None:
+            from ai_software_engineer.recovery.python_mysql_execution import (
+                BoundPythonMysqlVerificationEvidence,
+            )
+            from ai_software_engineer.recovery.verification_execution import (
+                BoundSwiftVerificationEvidence,
+            )
+
+            assert isinstance(selected_factory, ConfiguredDeliveryRouteAdapterFactory)
+            output_plan = artifacts.get(plan.inputs.plan_id)
+            if not isinstance(output_plan, PlanArtifact):
+                raise RecoveryRejected("verification requires its exact typed Plan artifact")
+            selected_factory = selected_factory.with_verification_evidence(
+                (
+                    BoundPythonMysqlVerificationEvidence
+                    if isinstance(plan.executor_capability, PythonMysqlSandboxCapability)
+                    else BoundSwiftVerificationEvidence
+                )(
+                    store=store,
+                    plan=plan,
+                    facts=NativeVerificationFacts(self.config, self.environment, store=store),
+                    output_inputs=VerificationOutputInputs(
+                        task=source.runtime.task, plan_artifact=output_plan
+                    ),
+                    worktree_root=Path(self.config.platform_root)
+                    / "worktrees"
+                    / plan.scope.repository_id,
+                )
+            )
+
         def build(snapshot: DispatchWorkforceSnapshot) -> VerificationReservation:
             value = _verification_allocation(
                 source,
@@ -1350,34 +1386,6 @@ class CandidateVerificationEntry:
             ).validate(plan),
             build=build,
         )
-        sidecar = Path(source.stages.preparation.repository_workspace_root)
-        artifacts, contexts = (
-            FileArtifactStore(sidecar / "artifacts"),
-            FileContextStore(sidecar / "contexts"),
-        )
-        if plan.executor_capability is not None:
-            from ai_software_engineer.recovery.python_mysql_execution import (
-                BoundPythonMysqlVerificationEvidence,
-            )
-            from ai_software_engineer.recovery.verification_execution import (
-                BoundSwiftVerificationEvidence,
-            )
-
-            assert isinstance(selected_factory, ConfiguredDeliveryRouteAdapterFactory)
-            selected_factory = selected_factory.with_verification_evidence(
-                (
-                    BoundPythonMysqlVerificationEvidence
-                    if isinstance(plan.executor_capability, PythonMysqlSandboxCapability)
-                    else BoundSwiftVerificationEvidence
-                )(
-                    store=store,
-                    plan=plan,
-                    facts=NativeVerificationFacts(self.config, self.environment, store=store),
-                    worktree_root=Path(self.config.platform_root)
-                    / "worktrees"
-                    / plan.scope.repository_id,
-                )
-            )
         adapter = DispatchDeliveryAgentAdapter(
             dispatch=reservation,
             definitions=definitions,

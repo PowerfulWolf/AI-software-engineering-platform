@@ -326,6 +326,15 @@ Coder 的写权限由 policy 限定，QA 只能写 `tests/**`，Reviewer 始终�
 artifact/state/verdict/report 路径以及 shell interpreter 都必须 fail closed。工具成功不等于
 QA PASS/Review APPROVE，所有结果必须由应用层显式交给 EvidenceStore 后才能进入交付链。
 
+原生受控 QA/Review 还必须在输出接纳前，将报告的当前测试与必需覆盖引用绑定到本次真实
+执行收据的 URI/SHA、精确 request/role/candidate/claim，并只读重验当前事实。内部
+`TrustedVerificationOutputContract` 随准备输入传递，不进入模型 wire、持久化 Artifact 或
+历史摘要；缺少或伪造引用不能靠模型自身 evidence 数组成员关系获得信任。只校验实际收据
+覆盖的 criterion，不把源码检查归给无关测试；混合成功/失败收据可支持如实 QA FAIL，不能
+支持整体 QA PASS 或 Review APPROVE。机器命令成功仍不决定角色 verdict。详见
+[原生验证输出契约](../../.trellis/spec/core/native-verification-output.md)。原生 Coder 当前
+通用工具路径缺少逐命令 durable 捕获，旧测试声明不能当作已认证机器事实或倒填为新收据。
+
 Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使用批准后冻结的
 `ai/feature/<业务短名>` 或 `ai/bugfix/<问题短名>`；QA/Reviewer detached 到 candidate SHA；
 dirty workspace 不允许清理。历史无命名字段的 Task 保持原分支。

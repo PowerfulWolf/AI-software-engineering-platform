@@ -57,6 +57,13 @@ from ai_software_engineer.agents.ports import (
     AgentError,
     AgentRequestConflict,
 )
+from ai_software_engineer.agents.verification_output import (
+    TrustedVerificationOutputContract,
+    VerificationOutputCurrentValidator,
+    VerificationOutputRejected,
+    VerificationOutputRule,
+    validate_verification_output,
+)
 from ai_software_engineer.agents.workspace_admission import (
     InitialWorkspaceAdmission as InitialWorkspaceAdmission,
 )
@@ -225,6 +232,7 @@ class _PreparedNativeInput:
     schema_content: str
     output_path: Path
     environment: Mapping[str, str]
+    verification_output_contract: TrustedVerificationOutputContract | None
 
     @property
     def budget_content(self) -> str:
@@ -1041,6 +1049,14 @@ class CodexCliAgentAdapter:
         artifact = _normalize_producer(artifact, request, self._agent_id, self._agent_version)
         try:
             with execution_scope(self._execution_guard):
+                contract = prepared.verification_output_contract
+                if contract is not None:
+                    if not isinstance(self._prompt_builder, VerificationOutputCurrentValidator):
+                        raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+                    self._prompt_builder.validate_output_current(
+                        request, self._workspace_root, self._execution_guard, contract
+                    )
+                    validate_verification_output(request, artifact, contract)
                 artifact = self._finalize_coder_candidate(request, initial_head, artifact)
                 self._validate_git_result(request, initial_head, artifact)
         except WorkspacePolicyError:
@@ -1051,6 +1067,10 @@ class CodexCliAgentAdapter:
                 raw_output,
                 validation_rule=error.code.value,
                 slice_rejection_code=error.code,
+            ) from error
+        except VerificationOutputRejected as error:
+            raise _CodexOutputContractError(
+                "VERIFICATION_RECEIPT", raw_output, validation_rule=error.rule.value
             ) from error
         except ValueError as error:
             raise _CodexOutputContractError("GIT_CONTRACT", raw_output) from error
@@ -1176,6 +1196,7 @@ class CodexCliAgentAdapter:
                 schema_content=schema_content,
                 output_path=output_path,
                 environment=invocation_environment,
+                verification_output_contract=prompt.verification_output_contract,
             )
         except BaseException:
             resources.close()

@@ -38,6 +38,9 @@
 
 ## Files
 
+- [Native verification output](native-verification-output.md): trusted current execution receipt
+  binding at native QA/Review output acceptance, with unchanged independent verdicts and history.
+
 - [Inherited reapply inputs](inherited-reapply-inputs.md): authenticated transitive complete
   patch inputs, exact Plan binding and unchanged current-capture/role/approval boundaries.
 

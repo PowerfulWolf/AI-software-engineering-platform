@@ -344,6 +344,16 @@ def test_controlled_execution_independent_receipts_replay_and_denials(
         source = root / plan.execution_task_id / f"{request.role.value}-attempt-01"
         source.mkdir(parents=True)
         result = service.evidence_for(request, source)
+        contract = result.output_contract
+        assert contract is not None
+        assert (
+            contract.receipt_uri
+            == f"verification-execution://{plan.plan_sha256}/{request.role.value}"
+        )
+        assert contract.command_returncodes == (0, 0)
+        before_check = len(calls), ui_execution.call_count
+        service.validate_output_current(request, source, None, contract)
+        assert (len(calls), ui_execution.call_count) == before_check
         assert "not a QA or Review verdict" in result.text
         assert len(result.images) == (1 if with_ui and with_capture else 0)
         assert png_evidence().data_base64 not in result.text

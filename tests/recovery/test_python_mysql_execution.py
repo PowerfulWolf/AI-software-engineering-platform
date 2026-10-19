@@ -99,6 +99,16 @@ def test_independent_role_receipts_are_admitted_durable_secret_free_and_not_repl
         source = root / plan.execution_task_id / f"{request.role.value}-attempt-01"
         source.mkdir(parents=True)
         evidence = provider.evidence_for(request, source)
+        contract = evidence.output_contract
+        assert contract is not None
+        assert (
+            contract.receipt_uri
+            == f"verification-execution://{plan.plan_sha256}/{request.role.value}"
+        )
+        assert contract.command_returncodes == (0,)
+        before_check = len(executed)
+        provider.validate_output_current(request, source, None, contract)
+        assert len(executed) == before_check
         assert "not a QA/Review verdict" in evidence.text
         assert (
             Resource.password not in evidence.text and Resource.secrets[1][:32] not in evidence.text

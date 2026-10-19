@@ -23,6 +23,12 @@ from ai_software_engineer.agents.openai_compatible import (
     PromptMessage,
     PromptPayload,
 )
+from ai_software_engineer.agents.verification_output import (
+    TrustedVerificationOutputContract,
+    VerificationOutputCurrentValidator,
+    VerificationOutputRejected,
+    VerificationOutputRule,
+)
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.visual_evidence import PromptImage
@@ -46,6 +52,10 @@ from ai_software_engineer.owned_processes import owned_record_finalization
 from ai_software_engineer.recovery.models import RecoveryRejected, VerificationExecutionBlocked
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_admission import VerificationFacts
+from ai_software_engineer.recovery.verification_output import (
+    VerificationOutputInputs,
+    receipt_output_contract,
+)
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationPlan,
     VerificationExecutionFailure,
@@ -59,6 +69,7 @@ from ai_software_engineer.service_pause import ServicePauseRequested
 class VerificationEvidence(DomainModel):
     text: NonEmptyStr
     images: tuple[PromptImage, ...] = Field(default=(), max_length=12)
+    output_contract: TrustedVerificationOutputContract | None = Field(default=None, exclude=True)
 
 
 class VerificationEvidenceProvider(Protocol):
@@ -89,7 +100,23 @@ class VerificationEvidencePromptBuilder:
         return PromptPayload(
             messages=(*original.messages, PromptMessage(role="user", content=receipt.text)),
             images=(*original.images, *receipt.images),
+            verification_output_contract=receipt.output_contract,
         )
+
+    def validate_output_current(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None,
+        contract: TrustedVerificationOutputContract,
+    ) -> None:
+        if (
+            workspace_root != self._root
+            or execution_guard is not self._guard
+            or not isinstance(self._provider, VerificationOutputCurrentValidator)
+        ):
+            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+        self._provider.validate_output_current(request, workspace_root, execution_guard, contract)
 
 
 class BoundSwiftVerificationEvidence:
@@ -102,9 +129,44 @@ class BoundSwiftVerificationEvidence:
         plan: CandidateVerificationPlan,
         facts: VerificationFacts,
         worktree_root: Path,
+        output_inputs: VerificationOutputInputs | None = None,
     ) -> None:
         self._store, self._plan, self._facts = store, plan, facts
         self._worktree_root = worktree_root.resolve()
+        self._output_inputs = output_inputs
+        if output_inputs is not None:
+            output_inputs.validate_plan(plan)
+
+    def validate_output_current(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None,
+        contract: TrustedVerificationOutputContract,
+    ) -> None:
+        plan = self._store.get_verification_plan(self._plan.plan_sha256)
+        if plan != self._plan or request.role not in (AgentRole.QA, AgentRole.REVIEWER):
+            raise RecoveryRejected("controlled output belongs to another plan or role")
+        if execution_guard is not None:
+            execution_guard.check()
+        self._facts.validate(plan)
+        invocation = self._store.get_verification_invocation(plan.plan_sha256, request.role)
+        expected = self._worktree_root / plan.execution_task_id / f"{request.role.value}-attempt-01"
+        if (
+            invocation.request != request
+            or workspace_root != expected
+            or workspace_root.resolve(strict=True) != expected
+        ):
+            raise RecoveryRejected("controlled output request or workspace changed")
+        _require_clean_candidate(workspace_root, plan.inputs.candidate_revision)
+        receipt = self._store.get_verification_execution(
+            plan.plan_sha256, request.role, completed=True
+        )
+        if (
+            receipt.effective_failure_code is not None
+            or receipt_output_contract(plan, request, receipt, self._output_inputs) != contract
+        ):
+            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
 
     def evidence_for(
         self,
@@ -320,7 +382,11 @@ class BoundSwiftVerificationEvidence:
                 sort_keys=True,
             )
         )
-        return VerificationEvidence(text=text, images=images)
+        return VerificationEvidence(
+            text=text,
+            images=images,
+            output_contract=receipt_output_contract(plan, request, receipt, self._output_inputs),
+        )
 
 
 def _receipt_images(
