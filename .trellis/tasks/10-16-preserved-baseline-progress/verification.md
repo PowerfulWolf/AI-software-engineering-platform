@@ -124,6 +124,141 @@ already open before deployment must reload to receive the new JavaScript action 
 After reload the browser displayed the exact new action “修复工作区准入后继续原开发”
 and the previous knowledge action correctly, with fresh current-run heartbeats.
 
+## Real K1 attempt9 result and next exact recovery — 2026-10-19
+
+The restored real Coder ran to its1800-second native window. Its owned process stop was
+sealed at03:42:14.232438 UTC with `local_execution_limit` and return code-15. The final
+result is FAILED/POLICY_VIOLATION, not accepted progress or a candidate: the Coder modified
+`src/ai_software_engineer/knowledge/index.py`, which is absent from the frozen write paths.
+Outcome SHA `b84d0e3ebab8448a3a8634dd6f6c665fe48705b6a1473fdcbb41528ee8abcd0f`.
+No interruption receipt or new progress/implementation artifact was accepted. HEAD remains
+774e0a6f, the complete draft is retained, and QA/Review have not accepted production K1.
+
+Independent readonly audit `/tmp/ase-k1-attempt9-final-readonly-20261019.json`, SHA-256
+`5f24b7535cf75453cbcabd737c87b70176977089d40b8a6a0eb2c0602e54fceb`, binds the actual
+capture-start, stop observation and process-stop. At03:44:36 UTC it revalidated the exact
+owned session7361 as EMPTY. This establishes this Run's stopped session, not old UNKNOWN
+executions or a new verdict. The public Handle Operation completed successfully as an
+engineering recovery action; that does not make the subsequent Coder successful.
+
+Independent frozen-scope analysis `/private/tmp/ase-k1-run9-frozen-scope-analysis-20261019.json`,
+SHA-256 `3345e04c29e3d95f5849063ea69e5a6134fdf5fd7080a67db3431fc44bcd1566`, found no
+allowlist generation/consumption loss. Original Design machine paths35, recovery Task paths36
+and the actual request all omit knowledge/index.py; the approved24-file draft also omitted it.
+The Design/Plan prose mentions KnowledgeIndexWorker at that path without granting a write.
+The original permission failure remains valid. Reusing its existing tick injection may
+avoid editing the worker, but natural-language design text cannot grant file access.
+
+The same Requirement's public Continue Operation30435817 prepared a single-file exact scope
+supplement31f4dfdb75425310e8ebe1d58f6ef07505e5dd7516e2e1aca783d823ec48fd13.
+Under the user's existing delegated engineering-approval authorization, Operation9890e79c
+submitted that exact one-file supplement; it only permits bounded capture and preparation
+of a separate recovery plan. It does not rewrite the old Task permissions or approve execution.
+The clean registered target clone was fast-forwarded from774e0a6f to latest main
+150f54683275c26ef9f4145b2d231399ac8d6220 before preparing that target plan. The old Coder
+checkout was not edited by maintenance. Subsequent plan approval/execution must bind its own
+exact digest and complete current capture, preserve the failed Run and still use independent
+QA/Review. The scope Operation completed and returned exact recovery Plan
+1538fce23f1e9b3422082b8a0da6210135f3caa28cedd23f3ce60e900738dc52, preserving31 files
+and225678 patch bytes. The plan binds complete2820-entry workspace snapshot7a729808f1f8f736
+and successor branch `ai/feature/project-delivery-learning-loop-recovery-2`; its target is
+150f54683275c26ef9f4145b2d231399ac8d6220. Scope approval and plan approval remain separate.
+Independent review rejected strict seeding of that unapproved plan: `git apply --check`
+failed for knowledge/index.py, store/mysql_repository.py, team_view/reader.py and
+web_console/administration.py against latest main. Report
+`/tmp/ase-k1-recovery-plan1538-independent-review-20261019.json`, SHA-256
+`4e13f7cfcd1c844dac120317cdce2edfb5d1bdab36e619476391b0f4c478aa4e`.
+No approval or failed seed was submitted for1538, and maintenance did not resolve conflicts.
+
+The existing trusted `NativeRecoveryEntry.propose(..., input_mode="coder_reapply")`
+service then produced Plan3d26d670c9449b8dacbcbe393cb4c9f2a7a343caed3d841cdbc4177ffa5790b3.
+It retains the exact225678-byte patch/capture31, source failure/stop, approved one-file scope,
+target150f546 and branch recovery-2. The same scope approval reference is reused only for
+that unchanged exact supplement; the new input mode requires separate new plan approval.
+This is a real ASE proposal, not a hand-edited plan or implicit mode fallback. The current CLI
+does not expose the scope-supplement parameters together with `--coder-reapply`, so maintenance
+used the existing typed service with the normal trusted TeamHost composition. No role was invoked.
+Proposal report `/tmp/ase-k1-run9-reapply-proposed-20261019.json`, SHA-256
+`f6444779554edd8199c2f522a6c7ff8b2df6f930a4fe258e2175c26650dc1694`.
+Independent review of the new Plan passed for exact approval: only `created_at`,
+`input_mode` and `plan_sha256` differ from1538; the complete snapshot is unchanged and current
+capture/inventory were reverified. The actual clean-seed and required, exact, untruncated
+Coder-only recovery.patch contracts were checked. Report
+`/tmp/ase-k1-recovery-plan3d26-independent-review-20261019.json`, SHA-256
+`dbf7c9eea024c848236d2a43c7767fc424a02c226ea36cc5a82db3ce0c704f3e`.
+
+Public Continue Operation66f3b885 exposed this exact new Plan and its explicit clean-base
+adaptation fact before approval. Under the existing delegated engineering authorization,
+Operatione41523e24d7ca3a3e079e8b12ab777ef submitted only the new3d26 digest. At04:04 UTC,
+the independent observer verified a sealed APPROVED authorization and NEW recovery Task
+record bound to150f546; seed/invocation were not yet observed. At that observation the
+Operation was RUNNING; no seed or model invocation was established, so another Continue
+was not submitted. This is execution authorization and file Task creation, not an SQL
+Task, completed model run or K1 acceptance.
+The observer timestamp was04:04:09.831021 UTC. Exact records under the same native
+sidecar's state/recovery-delivery_c833c3235d0bb73adba67937d16ea66c directory are
+`authorization-3d26d670c9449b8dacbcbe393cb4c9f2a7a343caed3d841cdbc4177ffa5790b3.json`
+(authorization domain SHA
+`c88b8d4d28b3a55fb7de5a4e7f865291d19a1c4ff95eb537c3d7b1e57fdd4ed2`) and
+`task-3d26d670c9449b8dacbcbe393cb4c9f2a7a343caed3d841cdbc4177ffa5790b3.json`
+(Task-record domain SHA
+`46b06ae32411b800dbe0067fcfc5e463e358a23b7d018a4f3b03095e7c3a050e`). Independent
+review reverified both complete envelopes and their typed/domain digests. The authorization
+decision time04:01:36.400800 is not a claim about physical file publication time.
+
+At04:06:25 UTC an independent SELECT-only consistent SQL snapshot found no dispatch,
+SQL Task, event, queue item or claim for the new Plan-derived Task
+`task_recovery_3d26d670c9449b8dacbcbe393cb4c9f2`. The original blocked Task remained
+revision9/attempts9 with SHA cda925e5a9a09c8255f1e764ce124825e9304462d0747a578eb8447eff1571f3.
+Report `/tmp/ase-k1-reapply-sql-snapshot-independent-20261019.json`, SHA-256
+`4b64740d5dd84cd050a35d3ee4e3e793e86b72d9d46f069564a6e4331fefa23c`.
+Subsequent public reads still reported RUNNING/sequence2. Thus the sealed file Task
+record must not be described as an allocated SQL Task, claim or started Coder.
+
+Static authorization-path audit found finite nested complete checks, without evidence of
+an unbounded recursive path. Before first authorization, the current normal snapshot
+branch is expected to run5 NativeFacts inspections,10 complete source inspections and
+40 baseline-epoch checks. Only that epoch subgraph accounts for at least240 Plan and120
+Start returns; Context validation adds more. These are static counts, not production
+profile measurements. Parent journal64 records total146,028,395 bytes, and another22
+records total18,012,334 bytes. Same-byte decode reuse already exists, but fresh reads,
+hashes and defensive copies remain. Authorization is followed by more complete sealing,
+builder and allocation fences; its decision timestamp is not the start of model work.
+Report `/private/tmp/ase-k1-recovery-authorization-cpu-static-analysis-20261019.json`,
+SHA-256 `615d1521518926f0fd3794c3b33e69fd71dc1d6cb955e2b4a8277f0bf0429f25`.
+No production profiler, signal, repeated Continue or extra service restart was used to
+investigate this wait. Further optimization requires isolated measurement and preserved
+freshness gates; it is not part of the deployed150f546 change.
+
+The Operation later sealed sequence3 at04:12:08.018435 UTC: public processing SUCCEEDED,
+but the result stayed BLOCKED with `current recovery source or target facts do not match`.
+The Console then saved shutdown request c66f52b16c58ddc1e184bd0327abe703 at04:12:08.018644
+and READY at04:12:08.030432; its log records Terminated15 and normal shutdown of PID15213.
+The sender of that signal is not established. This occurred without a root-initiated stop.
+At04:17:21 a single standard read-only NativeFacts diagnostic rejected on
+MySqlConnectionError/OperationalError/ConnectionRefusedError. It does not establish the
+inner cause of the earlier04:12 rejection. Diagnostic report
+`/tmp/ase-k1-reapply-current-diagnostic-20261019.json`, SHA-256
+`8237cf75a8b451cdf58f91115e835b706a5f3f07a862ef547d380e365ead5b4a`.
+
+The local Colima instance was also stopped, its Docker socket absent. Maintenance started
+that existing instance without configuration changes; the original ase-mysql container
+returned healthy on127.0.0.1:3307 using the same ai-software-engineer-mysql-data volume,
+with OOMKilled=false. No container, database or volume was recreated/reset. The existing
+controlled service script verified the prior READY proof and started Console PID20973;
+public readiness returned normal/delivery_ready=true. Further continuation must inspect
+the exact persisted allocation, seed and invocation first and reuse existing approval when
+valid. The failed operation result and original K1 history remain unchanged.
+
+At04:21:33.295660 UTC a fresh independent SELECT-only snapshot established the exact
+RecoveryDispatch record
+`1c23e47351e20e8411903bca1783db5ec6f4a3f40a9bf82cc75eeb5d682a2300`, bound to the same
+sealed46b06ae3 Task record and separate Coder/QA/Reviewer Agent identities. SQL Task,
+events, queue items and claims for the new Task were still absent; the old blocked Task
+SHA/revision/attempts were unchanged. Dispatch reservations are not live Worker claims.
+Report `/tmp/ase-k1-reapply-sql-snapshot-poststop-independent-20261019.json`, SHA-256
+`1abf45f625bf87f23867c77897d911cbf53f0e7f9db4e992a0c8ef087a84e010`.
+
 ## Storage and rollback
 
 存量数据处置：the reviewed deployment and exact public Handle above restored the original

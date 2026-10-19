@@ -163,3 +163,34 @@ checks passed. These overlap the author's 89 cases and must not be added as uniq
 Six source/test/contract SHA values matched before and after the independent run.
 Formal report: `/private/tmp/ase-detail-joint-decoder-independent-review-20261019.json`,
 SHA-256 `611c4199d9246cf74a589030f89402d14f4e0e46179cafbd92b08275bb7955ff`.
+
+## Controlled deployment and public reads — 2026-10-19 03:46 UTC
+
+The reviewed optimization was committed, fast-forwarded and pushed to main at
+`150f54683275c26ef9f4145b2d231399ac8d6220`. Deployment followed the real completion of
+K1 Coder attempt9 and its terminal Operation; the controlled stop reported complete
+record persistence, executor/index termination and safe exit of PID83388. Only then was
+the source switched and a new Console started as PID15213. No live Coder was interrupted
+to load this read optimization.
+
+Independent reviewer `/root/workspace_refusal_recovery_wire` performed exactly three
+sequential public GETs, without retry, POST, database access or service changes:
+
+| Endpoint | HTTP / typed validation | Wall seconds | First body byte seconds |
+| --- | --- | --- | --- |
+| `/api/v1/console` | 200, normal, delivery_ready=true | 0.001405 | — |
+| selected Project Team summary | 200, PASS | 3.570812 | 3.570793 |
+| fresh exact K1 Request detail | 200, scope/checkpoint PASS | 3.820575 | 3.820522 |
+
+Detail body reading took0.000053s and JSON parsing0.000344s. Summary JSON parsing took
+0.000482s. The prior deployed detail sample was5.555748s, but current requirement facts
+and service load differ, so this is not a controlled benchmark or an improvement-rate
+claim. Summary still takes about3.57s; frontend latency is not fully resolved. The report
+binds the expected deployment revision; the HTTP port itself does not expose a revision.
+
+Report `/private/tmp/ase-k1-public-read-journal-20261019T034646-94909ac9a9.json`, SHA-256
+`496add7140981873550537cea711b97b4d94c9342d8c9c055f6c9bde692aa1eb`.
+Both typed resource responses correctly show K1 BLOCKED at checkpoint5361e9f5 after its
+actual Coder scope violation. HTTP/read validation PASS is not business acceptance.
+The remaining Plan/Start-copy hotspot was researched only; no additional copy optimization
+or permission cache was introduced. Existing durable facts require no migration.
