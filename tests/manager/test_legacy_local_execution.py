@@ -1,6 +1,9 @@
 """Current local surveys are a prerequisite, never a historical stop receipt."""
 
 import ctypes
+import logging
+import math
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
@@ -1046,3 +1049,93 @@ def test_query_permission_denial_is_incomplete_without_raw_exception(
     result = Observer().observe(worktree_root=tmp_path, boot=BOOT)
     assert result.blockers == ("PROCESS_SCAN_INCOMPLETE",)
     assert "secret" not in result.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("phase", "failure"),
+    [
+        ("process_inventory_before", "incomplete"),
+        ("process_inventory_before", "timeout"),
+        ("paths_before", "permission"),
+        ("process_inventory_after", "timeout"),
+        ("paths_after", "timeout"),
+        ("process_identity_final", "incomplete"),
+    ],
+)
+def test_incomplete_survey_logs_safe_phase_and_reason_without_process_data(
+    tmp_path: Path,
+    mac: None,
+    caplog: pytest.LogCaptureFixture,
+    phase: str,
+    failure: str,
+) -> None:
+    sensitive = f"PID=771928 argv=secret-argument cwd={tmp_path}/private-draft.py"
+    query_number = {
+        "process_inventory_before": 1,
+        "paths_before": 2,
+        "process_inventory_after": 3,
+        "paths_after": 4,
+    }
+
+    class Observer(MacFixtureObserver):
+        def __init__(self) -> None:
+            first = "101 1 501 S Thu Oct  8 08:00:00 2026 /bin/zsh"
+            second = first.replace("501 S ", "501 R ") if phase == "paths_after" else first
+            super().__init__(commands=(first, second))
+            self.query_count = 0
+            self.birth_count = 0
+
+        def _query(self, argv: tuple[str, ...]) -> bytes:
+            self.query_count += 1
+            if self.query_count == query_number.get(phase):
+                if failure == "timeout":
+                    raise subprocess.TimeoutExpired(
+                        sensitive, timeout=0.01, output=sensitive, stderr=sensitive
+                    )
+                if failure == "permission":
+                    raise PermissionError(sensitive)
+                return b"invalid process inventory containing " + sensitive.encode()
+            return super()._query(argv)
+
+        def _birth(self, pid: int) -> str:
+            self.birth_count += 1
+            if phase == "process_identity_final" and self.birth_count == 3:
+                return sensitive  # A changed final identity must fail closed.
+            return super()._birth(pid)
+
+    logger = "ai_software_engineer.manager.legacy_local_execution"
+    with caplog.at_level(logging.WARNING, logger=logger):
+        result = Observer().observe(worktree_root=tmp_path, boot=BOOT)
+    assert result.blockers == ("PROCESS_SCAN_INCOMPLETE",)
+    with pytest.raises(LegacyRescuePrerequisiteError, match="尚未完成"):
+        result.require_idle()
+
+    records = [record for record in caplog.records if record.name == logger]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelno == logging.WARNING
+    assert record.__dict__["phase"] == phase
+    assert (
+        record.__dict__["reason"]
+        == {
+            "incomplete": "_IncompleteSurvey",
+            "timeout": "TimeoutExpired",
+            "permission": "PermissionError",
+        }[failure]
+    )
+    elapsed = record.__dict__["elapsed_seconds"]
+    assert type(elapsed) in (int, float)
+    assert math.isfinite(elapsed) and elapsed >= 0
+    assert record.exc_info is None and record.stack_info is None
+    logged = repr(record.__dict__) + caplog.text
+    for private_value in ("771928", "secret-argument", "private-draft.py", str(tmp_path)):
+        assert private_value not in logged
+
+
+def test_complete_idle_survey_does_not_log_an_incomplete_warning(
+    tmp_path: Path, mac: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    logger = "ai_software_engineer.manager.legacy_local_execution"
+    with caplog.at_level(logging.WARNING, logger=logger):
+        MacFixtureObserver().observe(worktree_root=tmp_path, boot=BOOT).require_idle()
+    assert not [record for record in caplog.records if record.name == logger]

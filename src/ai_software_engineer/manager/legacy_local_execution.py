@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import logging
 import os
 import re
 import shlex
@@ -44,6 +45,7 @@ _PROC_ROOT = Path("/proc")
 _DESKTOP_CONTROL_BUNDLE = Path("/Applications/ChatGPT.app")
 _DEADLINE: ContextVar[float | None] = ContextVar("legacy_local_survey_deadline", default=None)
 _QUERY_PIDS: ContextVar[set[int] | None] = ContextVar("legacy_local_survey_queries", default=None)
+_LOGGER = logging.getLogger(__name__)
 
 
 class LegacyRescuePrerequisiteError(RuntimeError):
@@ -828,14 +830,17 @@ class TrustedLegacyLocalExecutionObserver:
             raise ValueError("本机执行调查的工作区不存在")
         uid = os.getuid()
         blockers: set[LegacyLocalExecutionBlocker] = set()
-        token = _DEADLINE.set(time.monotonic() + self.MAX_SCAN_SECONDS)
+        started = time.monotonic()
+        token = _DEADLINE.set(started + self.MAX_SCAN_SECONDS)
         query_pids: set[int] = set()
         query_token = _QUERY_PIDS.set(query_pids)
+        phase = "platform_boundary"
         try:
             if uid != os.geteuid():
                 raise _IncompleteSurvey
             if sys.platform != "darwin" and not sys.platform.startswith("linux"):
                 raise _IncompleteSurvey
+            phase = "process_inventory_before"
             before = self._processes(uid)
             before_desktop_chains = self._desktop_sandbox_chains(before, root)
             control_pids = self._operator_control_pids(before)
@@ -848,6 +853,7 @@ class TrustedLegacyLocalExecutionObserver:
             # Only the observer itself is excluded from open-file checks.
             # A control session's real source descriptors still block rescue.
             observer_pids = frozenset({os.getpid()})
+            phase = "paths_before"
             covered, path_blockers = (
                 self._mac_paths(
                     uid,
@@ -865,6 +871,7 @@ class TrustedLegacyLocalExecutionObserver:
             )
             blockers.update(path_blockers)
             before_covered = frozenset(covered)
+            phase = "process_inventory_after"
             after = self._processes(uid)
             after_desktop_chains = self._desktop_sandbox_chains(after, root)
             after_control_pids = self._operator_control_pids(after)
@@ -890,6 +897,7 @@ class TrustedLegacyLocalExecutionObserver:
                 )
             }
             if missing:
+                phase = "paths_after"
                 extra_covered, extra_blockers = (
                     self._mac_paths(
                         uid,
@@ -909,6 +917,7 @@ class TrustedLegacyLocalExecutionObserver:
                 covered.difference_update(missing)
                 covered.update(extra_covered)
                 blockers.update(extra_blockers)
+            phase = "process_identity_final"
             desktop_sandbox_pids = self._verified_desktop_sandbox_pids(
                 before_desktop_chains, after_desktop_chains, before_covered, covered
             )
@@ -946,8 +955,17 @@ class TrustedLegacyLocalExecutionObserver:
             subprocess.SubprocessError,
             _IncompleteSurvey,
             OwnedProcessesUncertain,
-        ):
+        ) as error:
             blockers.add("PROCESS_SCAN_INCOMPLETE")
+            reason = type(error).__name__
+            elapsed = round(time.monotonic() - started, 3)
+            _LOGGER.warning(
+                "Local execution survey incomplete: phase=%s reason=%s elapsed_seconds=%.3f",
+                phase,
+                reason,
+                elapsed,
+                extra={"phase": phase, "reason": reason, "elapsed_seconds": elapsed},
+            )
         finally:
             _DEADLINE.reset(token)
             _QUERY_PIDS.reset(query_token)

@@ -93,6 +93,20 @@ target-associated processes and incomplete coverage refuse preparation. Commands
 discovered processes, read environment variables or publish raw arguments. The original exact
 request/claim must still prove native local routing; unknown fallback or remote boundaries refuse.
 
+### Safe diagnosis of an incomplete current survey
+
+An incomplete survey continues to return `PROCESS_SCAN_INCOMPLETE` and refuses recovery.
+The observer emits one WARNING on its module logger with fixed `phase`, exception-class
+`reason`, and numeric `elapsed_seconds`. The phase identifies the inventory, path or final
+identity check which could not complete. Do not log the exception message/traceback, discovered
+PID, argv, environment, cwd, open-file body or retained root. The warning is operational
+diagnosis only: it is not a persisted execution fact, receipt, historical cessation proof,
+or permission to increase a deadline, skip coverage or retry a model invocation.
+
+Fixture tests inject OS/query failures at the actual observer seam and verify the original
+fail-closed blockers, bounded safe fields and no warning for a complete idle survey. No schema,
+survey digest, scanner identity, timeout or admission rule changes for this diagnostic.
+
 This survey is **not** a historical process-stop proof. A trusted human with ENGINEERING duty
 supplies the missing facts by confirming the original invocation always ran on the same local
 computer/account, was never moved or remote, and the original invocation **and all its derived

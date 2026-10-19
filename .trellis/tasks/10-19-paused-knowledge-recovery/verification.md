@@ -145,3 +145,41 @@ Append actual public operation/plan/authorization/binding IDs and before/after c
 production execution. If any current containment fact is insufficient, keep the existing
 wait and report that concrete blocker. Rollback retains every new immutable record and the
 paused successor; it never reverses counters, deletes history or dispatches the old claim.
+
+## Production deployment and current recovery attempt (2026-10-19)
+
+Maintenance commit `afcbeff0811b07f516ac87bba5c727200f200ecb` was fast-forwarded to main and
+origin/main after the old managed service PID 18292 completed the official controlled
+shutdown and actually exited. Official start launched PID 44584; public Console returned
+normal mode, delivery_ready=true and operation_contract_version=10. K1's frozen source
+`fa3589a2251ed19a54bdd8848bad82ab4d7c61ae` remains independent of this platform revision.
+
+Public proposal operation `operation_5211f88c4cec6de680c29e129d27a8a8` succeeded with exact
+plan `6d5c2615ca4a769302931cddcd8d4f59eae5830afe3be9ae66a498bb40c7f80c` and isolation proof
+`99be04d99ea8ab1035483b132e6567c76083c101723259ba412a37924805abcb`. Independent inspection
+verified the exact Task/Run5 original claim, full old context, three accepted progress artifacts,
+95,643-byte current draft patch and 225,678-byte inherited patch, unchanged same branch/worktree,
+and current idle surveys. No historical no-start or stop was asserted.
+
+The exact ENGINEERING PAUSE execute `operation_fdae634a96fc5fcd190c9e487f4e78db` failed with
+LEGACY_LOCAL_EXECUTION_ACTIVE. Exact intent retries under distinct Console keys retained that
+failure and the original plan/reference: `operation_c534b78ff8a0120c207d1e47feab23ec` and
+`operation_25f848ea0c5e5a2c061d0f8533473226` failed with LEGACY_LOCAL_SURVEY_INCOMPLETE.
+All are real public failures, not successful recovery. Read-only inspection found original
+authority `f5271e8c6ae8d480c911423eb841bcaa9efde79fa5c196ce6c96daa12804909e` and operation start
+`ef73d5332e334794be1f1b92f375f24c080fbd2f009a5f0356936b3bc602f4ed`, with no binding at that check.
+The unchanged Task remained IMPLEMENTING / attempt5 / revision11. A new operation key only
+retries the same plan; the append-only authority/start and original failures are retained.
+
+Six subsequent standalone real surveys (three per root) all returned idle. Fixed OS queries
+took approximately 0.04–0.24 seconds each, so these observations do not establish the reason
+for a later in-service incomplete survey. No filters or deadlines were relaxed. A small
+diagnostic increment records only fixed failure phase, exception class and elapsed seconds;
+it keeps the original refusal and excludes raw exception text, PID, argv, paths and traceback.
+Six new failure tests were red on the original main observer (same pre-increment source),
+then the explicit maintenance PYTHONPATH run passed **185 tests / 0.62s**. Changed-file Ruff,
+format and strict Mypy passed. The first root green attempt omitted PYTHONPATH and therefore
+still imported the old editable main observer; its six expected logging failures are not
+reported as a regression or successful validation. Public recovery remains pending until a
+fresh full current investigation succeeds; no budget reset, production SQL repair or K1
+worktree edit has been performed.
