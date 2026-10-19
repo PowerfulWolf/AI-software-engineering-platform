@@ -317,6 +317,43 @@ rather than treating the old Task's preserved BLOCKED history as the current exe
 Report `/tmp/ase-k1-reapply-console-read-independent-20261019.json`, SHA-256
 `268f9ee537cd1b5fbfdda28833dea3b3603148b838bcece192e96467fa6d7a35`.
 
+The first real Run returned successful noncandidate coder-progress
+art_coder_fdbdc83dcf3edd5de08c37475769c8b2, sealed SHA-256
+67b6816b979f780f8445519d89aeab27a0152ab2eb7ed19ccf46dd44a0bb1d35. Actual route
+completed04:51:50.878832 on codex/gpt-6.1-sol; outcome0a193db0, capture-stopb16ab9d9 and
+owned process-stopb8b1b0ac were present, with normal completed/return-code0. The native
+success path crossed the unchanged-HEAD/exact-dirty-inventory gates; this is an adapter
+acceptance fact, not a separately invented historical final-HEAD observation. The accepted
+artifact reports contract_compatibility complete and declares seven remaining steps. Coder-reported test passes
+remain Coder evidence, not independent QA acceptance.
+
+At04:54:31 UTC a SELECT-only snapshot confirmed the normal transitions
+IMPLEMENTING→CONTINUE_REQUIRED→QUEUED→IMPLEMENTING, revision5/attempts2. Attempt1's
+WorkItem was CLOSED and Lease RELEASED; a new attempt2 WorkItem/active Lease was claimed.
+Old Task revision9/attempts9/SHA were unchanged. Report
+`/tmp/ase-k1-reapply-sql-snapshot-progress1-independent-20261019.json`, SHA-256
+`6bf735329e9b7582331fd4ae62f71ed276eb069f1dc4f8018638a37f7d9edf0f`.
+
+At04:59:37 UTC an independent typed/artifact audit confirmed has_accepted_progress=True
+and exact artifact references in all three continuation StateEvents. The new invocation
+run_48ade8800986496c9ac8cf3428e33dec has start SHA
+e66461b7e26d9c91ec6d123898cbad7ae506531217abe822c15d2bf938f69b06 and a fresh claim.
+Its Context includes the exact complete sealed progress, correct parent/supersedes and
+the same five continuation paths at source150f546 in the same managed worktree. Its
+capture-start1f4668c4 is present; no separate OS-process observation or completed outcome
+was established for attempt2 at this audit. Frozen budgets remain max_attempts40,
+max_work_attempts10, each transient allowance10, with no retry failures or budget edits.
+Report `/tmp/ase-k1-progress1-continuation-independent-20261019.json`, SHA-256
+`f893293998c8b7285de2aeb8f5a06fb727f764f42196583caacfd97148d1aa42`.
+No candidate, QA/Review verdict, DONE or merge is implied by accepted progress.
+
+A file-only supplementary check also validated attempt2's complete recovery.patch:
+one nontruncated225678-byte section, exact SHA26710e71e0bf31c26b61b35daa749c4575671fbc7d9e2f4aff8f23c4a9c1cfb7,
+equal to the approved Plan's patch and still required/Coder-only. The typed
+validate_reapply_context gate passed. Report
+`/tmp/ase-k1-attempt2-reapply-context-independent-20261019.json`, SHA-256
+`763ea645742fb78635482b8926f99032ad78ce2a9f2685964c7da8985526817f`.
+
 ## Storage and rollback
 
 存量数据处置：the reviewed deployment and exact public Handle above restored the original
