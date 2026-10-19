@@ -1299,6 +1299,87 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             else:
                 if resolution.retry_failure is not None:
                     raise QueueConflict("noninvoking resolution cannot add a retry failure")
+                if resolution.knowledge_pause is not None or any(
+                    value.startswith("knowledge-pause://")
+                    for value in disposition.facts.evidence_ids
+                ):
+                    from ai_software_engineer.knowledge.claim_identity import claim_identity_sha256
+
+                    paused = resolution.knowledge_pause
+                    if (
+                        resolution.resolution_kind is not DeliveryResolutionKind.RESUME_UNINVOKED
+                        or paused is None
+                        or disposition.facts.classification != "SERVICE_PAUSED"
+                        or disposition.facts.evidence_ids
+                        != ("knowledge-pause://" + paused.outcome_sha256,)
+                        or paused.task_id != task.id
+                        or paused.work_item_id != current.id
+                        or paused.role is not current.role
+                        or paused.original_attempt != current.attempt
+                        or paused.original_attempt != task.attempts
+                        or paused.original_dispatch_sequence != current.dispatch_sequence
+                        or paused.checkpoint_sequence != current.checkpoint_sequence
+                        or paused.scope.repository_id != current.repository_id
+                        or paused.scope.repository_root != task.repository
+                        or current.repository_scopes != (task.repository,)
+                        or paused.source_revision != step.boundary.source_revision
+                        or task.status
+                        is not {
+                            AgentRole.CODER: TaskStatus.IMPLEMENTING,
+                            AgentRole.QA: TaskStatus.QA,
+                            AgentRole.REVIEWER: TaskStatus.REVIEW,
+                        }.get(current.role)
+                        or (
+                            task.engineering_policy is not None
+                            and paused.scope != task.engineering_policy.scope
+                        )
+                    ):
+                        raise QueueConflict("知识暂停继续缺少精确未调用证明或原任务绑定已变化")
+                    original_paused_claim = self.original_claim(paused.original_lease_id)
+                    if claim_identity_sha256(
+                        original_paused_claim
+                    ) != paused.original_claim_sha256 or (
+                        original_paused_claim.work_item.id,
+                        original_paused_claim.work_item.task_id,
+                        original_paused_claim.work_item.role,
+                        original_paused_claim.work_item.attempt,
+                        original_paused_claim.work_item.checkpoint_sequence,
+                        original_paused_claim.work_item.dispatch_sequence,
+                        original_paused_claim.work_item.repository_id,
+                        original_paused_claim.work_item.repository_scopes,
+                    ) != (
+                        current.id,
+                        task.id,
+                        current.role,
+                        current.attempt,
+                        current.checkpoint_sequence,
+                        current.dispatch_sequence,
+                        current.repository_id,
+                        current.repository_scopes,
+                    ):
+                        raise QueueConflict("知识暂停继续改变了原真实领取身份")
+                    cursor.execute(
+                        "SELECT lease_id FROM work_queue_claims WHERE task_id=%s "
+                        "AND state='ACTIVE' FOR UPDATE",
+                        (task.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("原任务仍有活跃领取, 不能继续知识准备")
+                    cursor.execute(
+                        "SELECT id FROM work_queue_accepted_artifacts WHERE task_id=%s "
+                        "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.work_item_id'))=%s "
+                        "LIMIT 1 FOR UPDATE",
+                        (task.id, current.id),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("主角色已有接纳产出, 不能按未调用知识暂停恢复")
+                    cursor.execute(
+                        "SELECT sequence FROM work_queue_events WHERE work_item_id=%s "
+                        "AND event_type='COMPLETED' LIMIT 1 FOR UPDATE",
+                        (current.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("知识暂停原工作项已完成推进")
                 if disposition.facts.classification == "CONTEXT_CAPACITY":
                     preparation = resolution.verifier_preparation
                     expected_stage = (

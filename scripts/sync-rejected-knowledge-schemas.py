@@ -23,6 +23,7 @@ NAMES = (
     "DeliveryWaitInvestigation",
     "DeliveryWaitHandling",
     "RejectedKnowledgePreparationEvidence",
+    "KnowledgePreparationPauseEvidence",
     "RejectedWorkspaceAdmissionEvidence",
     "DeliveryFailureFacts",
     "HandleDeliveryWaitIntent",

@@ -605,6 +605,7 @@ class TeamHost:
                     principal=self._operator_principal,
                     submitted_at=datetime.now(UTC),
                     reference=command.reference,
+                    confirm_current_knowledge_execution_isolated=command.confirm_current_knowledge_execution_isolated,
                     confirm_legacy_containment=command.confirm_legacy_containment,
                     confirm_local_execution_stopped=command.confirm_local_execution_stopped,
                     confirm_provider_prerequisites_repaired=command.confirm_provider_prerequisites_repaired,
@@ -615,6 +616,8 @@ class TeamHost:
             elif (
                 authority.principal != self._operator_principal
                 or authority.reference != command.reference
+                or authority.confirm_current_knowledge_execution_isolated
+                != command.confirm_current_knowledge_execution_isolated
                 or authority.confirm_legacy_containment != command.confirm_legacy_containment
                 or authority.confirm_local_execution_stopped
                 != command.confirm_local_execution_stopped

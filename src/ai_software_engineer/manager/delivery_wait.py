@@ -57,6 +57,9 @@ from ai_software_engineer.domain.enums import (
     TaskStatus,
     WorkItemStatus,
 )
+from ai_software_engineer.domain.knowledge_preparation_pause import (
+    KnowledgePreparationPauseEvidence,
+)
 from ai_software_engineer.domain.native_verification import NativeVerificationCapabilityDetail
 from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, DeliveryRetryFailure
 from ai_software_engineer.domain.task import Task
@@ -67,6 +70,7 @@ from ai_software_engineer.git.mutation import (
     capture_mutation_inventory,
 )
 from ai_software_engineer.knowledge.assessment_rejection import read_rejected_assessment
+from ai_software_engineer.knowledge.invocation import read_paused_preparation
 from ai_software_engineer.knowledge.legacy_scope import require_delivery_requirement_scope
 from ai_software_engineer.knowledge.models import KnowledgeError, digest
 from ai_software_engineer.knowledge.preparation_retry import (
@@ -84,6 +88,9 @@ from ai_software_engineer.manager.engineering_authority import (
     EngineeringAuthority,
     EngineeringAuthorityRejected,
     EngineeringRejectionKind,
+)
+from ai_software_engineer.manager.knowledge_preparation_pause import (
+    knowledge_preparation_pause_evidence,
 )
 from ai_software_engineer.manager.rejected_knowledge_preparation import rejected_knowledge_evidence
 from ai_software_engineer.manager.rejected_output_checkpoint import (
@@ -702,13 +709,24 @@ class DeliveryWaitService:
 
     def _consume_verified_replay(self, resolution: DeliveryResolution) -> None:
         """A sealed unconsumed decision must reopen its exact current file proof."""
+        current_item = self.queue.get(resolution.work_item_id)
+        paused = resolution.knowledge_pause
+        pause_consumed = paused is not None and (
+            current_item.dispatch_sequence > paused.original_dispatch_sequence
+            or current_item.status
+            not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+        )
         if (
-            resolution.resolution_kind
-            not in {
-                DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION,
-                DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION,
-            }
-            or self.queue.get(resolution.work_item_id).status is WorkItemStatus.CLOSED
+            (
+                paused is None
+                and resolution.resolution_kind
+                not in {
+                    DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION,
+                    DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION,
+                }
+            )
+            or current_item.status is WorkItemStatus.CLOSED
+            or pause_consumed
         ):
             # SQL idempotency verifies the already consumed successor without
             # treating legitimate later Coder edits as changes to the old decision.
@@ -866,6 +884,11 @@ class DeliveryWaitService:
                         proof.knowledge_preparation
                         if command.resolution_kind
                         is DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION
+                        else None
+                    ),
+                    knowledge_pause=(
+                        proof.knowledge_pause
+                        if command.resolution_kind is DeliveryResolutionKind.RESUME_UNINVOKED
                         else None
                     ),
                     rejected_workspace_admission=(
@@ -1087,6 +1110,7 @@ class DeliveryWaitService:
         verification_retry = None
         verifier_preparation = None
         knowledge_preparation = None
+        knowledge_pause = None
         rejected_knowledge = None
         rejected_workspace_admission = None
         rejected_output = None
@@ -1343,6 +1367,46 @@ class DeliveryWaitService:
                 GitWorkspaceError,
             ):
                 missing.append(DeliveryProofMissing.KNOWLEDGE_PREPARATION_UNAVAILABLE)
+        elif item.wait_disposition.facts.classification == "SERVICE_PAUSED" and any(
+            value.startswith("knowledge-pause://")
+            for value in item.wait_disposition.facts.evidence_ids
+        ):
+            try:
+                identities = item.wait_disposition.facts.evidence_ids
+                if len(identities) != 1 or start is not None or outcome is not None:
+                    raise ValueError("知识暂停没有唯一精确来源或主执行已开始")
+                if self.artifacts is None:
+                    raise ValueError("知识暂停恢复缺少可信 artifact reader")
+                paused = read_paused_preparation(
+                    self.sidecar_state.parent / "knowledge/runs",
+                    identities[0].removeprefix("knowledge-pause://"),
+                )
+                knowledge_pause = knowledge_preparation_pause_evidence(
+                    outcome=paused,
+                    task=task,
+                    item=item,
+                    step=step,
+                    scope=self.scope,
+                    state=self.sidecar_state,
+                    route_root=model_route_root(self.sidecar_state.parent),
+                    queue=self.queue,
+                    artifacts=self.artifacts,
+                    delivery_requirement_id=(
+                        self.knowledge_requirement_id or paused.intent.binding.requirement_id
+                    ),
+                )
+                permitted = (DeliveryResolutionKind.RESUME_UNINVOKED,)
+            except (
+                ValueError,
+                QueueError,
+                OSError,
+                KnowledgeError,
+                ArtifactStoreError,
+                ContextStoreError,
+                ContinuationRejected,
+                ModelRouteAttemptStoreError,
+            ):
+                missing.append(DeliveryProofMissing.KNOWLEDGE_PREPARATION_UNAVAILABLE)
         elif start is None:
             preparation_ids = tuple(
                 value
@@ -1397,6 +1461,7 @@ class DeliveryWaitService:
             verification_retry=verification_retry,
             verifier_preparation=verifier_preparation,
             knowledge_preparation=knowledge_preparation,
+            knowledge_pause=knowledge_pause,
             rejected_knowledge=rejected_knowledge,
             rejected_workspace_admission=rejected_workspace_admission,
             rejected_output=rejected_output,
@@ -1876,6 +1941,7 @@ class DeliveryWaitService:
         verification_retry: VerificationRetryEvidence | None = None,
         verifier_preparation: VerifierPreparationEvidence | None = None,
         knowledge_preparation: KnowledgePreparationRetryEvidence | None = None,
+        knowledge_pause: KnowledgePreparationPauseEvidence | None = None,
         rejected_knowledge: RejectedKnowledgePreparationEvidence | None = None,
         rejected_workspace_admission: RejectedWorkspaceAdmissionEvidence | None = None,
         rejected_output: RejectedCoderOutputEvidence | None = None,
@@ -1921,6 +1987,8 @@ class DeliveryWaitService:
                 if rejected_knowledge
                 else knowledge_preparation.previous_run_id
                 if knowledge_preparation
+                else knowledge_pause.previous_run_id
+                if knowledge_pause
                 else (verifier_preparation.previous_run_id if verifier_preparation else None)
             ),
             invocation_start_sha256=start.start_sha256 if start else None,
@@ -1956,6 +2024,7 @@ class DeliveryWaitService:
             verification_retry=verification_retry,
             verifier_preparation=verifier_preparation,
             knowledge_preparation=knowledge_preparation,
+            knowledge_pause=knowledge_pause,
             rejected_knowledge=rejected_knowledge,
             rejected_workspace_admission=rejected_workspace_admission,
             rejected_output=rejected_output,
@@ -1985,6 +2054,10 @@ class DeliveryWaitService:
                 if permitted == (DeliveryResolutionKind.RESUME_UNINVOKED,)
                 and verifier_preparation is not None
                 and verifier_preparation.context_capacity_receipt_sha256 is not None
+                else "知识准备在模型准入前因服务暂停被拒绝, 真实领取和完整输入已核验。"
+                "可保留同一任务、执行轮次和原工作预留重新领取; 原知识记录和草稿保留。"
+                if permitted == (DeliveryResolutionKind.RESUME_UNINVOKED,)
+                and knowledge_pause is not None
                 else f"知识准备原执行已结束, 主角色尚未开始。可使用一次剩余工作额度, "
                 f"把下次准备窗口扩大到 {knowledge_preparation.next_timeout_seconds} 秒, "
                 "重新领取原任务继续; 原知识记录和执行历史保留。"

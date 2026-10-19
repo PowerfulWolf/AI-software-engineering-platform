@@ -88,6 +88,7 @@ def read_failed_knowledge_claims(
     queue: KnowledgeProofQueue,
     require_step: Callable[[QueuedWorkItem, QueuedRoleStep], None],
     no_start_reader: CapacityInputReader,
+    isolated_lease_ids: frozenset[str] = frozenset(),
 ) -> tuple[KnowledgeOnlyClaimProof, ...]:
     """Cover only exact failed read-only preparations; unknown claims stay unknown."""
     if not claims:
@@ -110,7 +111,13 @@ def read_failed_knowledge_claims(
         return ()
     grouped: dict[str, list[KnowledgeInvocationOutcome]] = {}
     for value in _validated_knowledge_invocations(
-        state=state, task=task, scope=scope, lanes=lanes, queue=queue, require_step=require_step
+        state=state,
+        task=task,
+        scope=scope,
+        lanes=lanes,
+        queue=queue,
+        require_step=require_step,
+        isolated_lease_ids=isolated_lease_ids,
     ):
         historical, outcome = value.historical, value.outcome
         if historical.lease.id not in by_lease:
@@ -167,6 +174,7 @@ def read_replay_guarded_claims(
     require_step: Callable[[QueuedWorkItem, QueuedRoleStep], None],
     no_start_reader: CapacityInputReader,
     fence: PriorInvocationFence,
+    isolated_lease_ids: frozenset[str] = frozenset(),
 ) -> tuple[ReplayGuardedClaimObservation, ...]:
     """Observe complete returned preparation behind an earlier mandatory call fence.
 
@@ -183,7 +191,13 @@ def read_replay_guarded_claims(
     )
     grouped: dict[str, list[_CompletedKnowledgeInvocation]] = {}
     for value in _validated_knowledge_invocations(
-        state=state, task=task, scope=scope, lanes=lanes, queue=queue, require_step=require_step
+        state=state,
+        task=task,
+        scope=scope,
+        lanes=lanes,
+        queue=queue,
+        require_step=require_step,
+        isolated_lease_ids=isolated_lease_ids,
     ):
         historical = value.historical
         if historical.lease.id not in by_lease:
@@ -323,12 +337,15 @@ def _validated_knowledge_invocations(
     lanes: tuple[_KnowledgeLane, ...],
     queue: KnowledgeProofQueue,
     require_step: Callable[[QueuedWorkItem, QueuedRoleStep], None],
+    isolated_lease_ids: frozenset[str] = frozenset(),
 ) -> tuple[_CompletedKnowledgeInvocation, ...]:
     result: list[_CompletedKnowledgeInvocation] = []
     snapshots = KnowledgeRecordStore(state.parent / "knowledge" / "runs", read_only=True)
     for lane in lanes:
         records, lane_id = lane.records, lane.lane_id
         for intent in lane.intents:
+            if intent.claim is not None and intent.claim.lease.id in isolated_lease_ids:
+                continue
             intent.validate_integrity()
             if invocation_lane_sha256(intent.binding) != lane_id:
                 raise ValueError("知识准备原调用不属于精确组织、项目和需求")
@@ -370,6 +387,7 @@ def read_capacity_claim_snapshot(
     requirement_id: str,
     queue: KnowledgeProofQueue,
     require_step: Callable[[QueuedWorkItem, QueuedRoleStep], None],
+    isolated_lease_ids: frozenset[str] = frozenset(),
 ) -> QueueClaim:
     """Recover exact legacy raw claim bytes; successful knowledge grants no failure authority."""
     marker.validate_integrity()
@@ -385,7 +403,13 @@ def read_capacity_claim_snapshot(
         requirement_id=requirement_id,
     )
     completed = _validated_knowledge_invocations(
-        state=state, task=task, scope=scope, lanes=lanes, queue=queue, require_step=require_step
+        state=state,
+        task=task,
+        scope=scope,
+        lanes=lanes,
+        queue=queue,
+        require_step=require_step,
+        isolated_lease_ids=isolated_lease_ids,
     )
     selected = tuple(
         value.outcome for value in completed if value.historical.lease.id == historical.lease.id

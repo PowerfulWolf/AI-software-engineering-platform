@@ -1,0 +1,264 @@
+{
+  "$defs": {
+    "CodexConnectionMode": {
+      "enum": [
+        "direct",
+        "proxy"
+      ],
+      "type": "string"
+    },
+    "ProviderRouteKind": {
+      "enum": [
+        "codex_cli",
+        "responses"
+      ],
+      "type": "string"
+    },
+    "ReasoningEffort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
+    },
+    "StructuredCallIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "invocation_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "route_index": {
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Route Index",
+          "type": "integer"
+        },
+        "provider": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/$defs/ReasoningEffort"
+        },
+        "route_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderRouteKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "connection_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexConnectionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TeamRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "phase": {
+          "enum": [
+            "stage_reply",
+            "knowledge_intent",
+            "knowledge_assessment"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "invocation_id",
+        "route_index",
+        "provider",
+        "model",
+        "reasoning_effort",
+        "phase",
+        "request_sha256"
+      ],
+      "title": "StructuredCallIdentity",
+      "type": "object"
+    },
+    "TeamRole": {
+      "description": "Long-lived roles that a Team-owned AgentProfile may declare.",
+      "enum": [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "TeamRole",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A refusal is neither an admission nor proof that a started process stopped.",
+  "properties": {
+    "kind": {
+      "const": "structured_pre_admission_pause",
+      "default": "structured_pre_admission_pause",
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "origin": {
+      "enum": [
+        "fallback_before_route",
+        "native_client_entry",
+        "responses_client_entry",
+        "responses_before_transport_admission"
+      ],
+      "title": "Origin",
+      "type": "string"
+    },
+    "request_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Request Sha256",
+      "type": "string"
+    },
+    "timeout_seconds": {
+      "maximum": 86400,
+      "minimum": 1,
+      "title": "Timeout Seconds",
+      "type": "integer"
+    },
+    "phase": {
+      "enum": [
+        "stage_reply",
+        "knowledge_intent",
+        "knowledge_assessment"
+      ],
+      "title": "Phase",
+      "type": "string"
+    },
+    "role": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TeamRole"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "invocation_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{32}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Invocation Id"
+    },
+    "selected_call": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StructuredCallIdentity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "operation_id": {
+      "minLength": 1,
+      "title": "Operation Id",
+      "type": "string"
+    },
+    "pause_request_id": {
+      "minLength": 1,
+      "title": "Pause Request Id",
+      "type": "string"
+    },
+    "pause_instance_id": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pause Instance Id"
+    },
+    "pause_requested_at": {
+      "format": "date-time",
+      "title": "Pause Requested At",
+      "type": "string"
+    },
+    "refused_at": {
+      "format": "date-time",
+      "title": "Refused At",
+      "type": "string"
+    },
+    "receipt_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Receipt Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "origin",
+    "request_sha256",
+    "timeout_seconds",
+    "phase",
+    "operation_id",
+    "pause_request_id",
+    "pause_requested_at",
+    "refused_at",
+    "receipt_sha256"
+  ],
+  "title": "StructuredPreAdmissionPauseReceipt",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/structured-pre-admission-pause.schema.json"
+}

@@ -691,6 +691,107 @@ resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] += [
         },
     },
 ]
+# A refusal is a positive pre-admission observation, never an empty execution list.
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"].append(
+    {
+        "if": {
+            "required": ["permitted_resolutions", "disposition"],
+            "properties": {
+                "permitted_resolutions": {"contains": {"const": "RESUME_UNINVOKED"}},
+                "disposition": {
+                    "properties": {
+                        "facts": {
+                            "properties": {
+                                "evidence_ids": {"contains": {"pattern": "^knowledge-pause://"}},
+                            }
+                        }
+                    }
+                },
+            },
+        },
+        "then": {
+            "required": ["knowledge_pause"],
+            "properties": {"knowledge_pause": {"type": "object"}},
+        },
+    }
+)
+resolution_schema["$defs"]["KnowledgePreparationPauseEvidence"]["allOf"] = [
+    {
+        "properties": {"execution_record_sha256s": {"uniqueItems": True}},
+        "if": {"properties": {"proof_mode": {"const": "pre_admission_refusal"}}},
+        "then": {
+            "required": ["pre_admission_pause_sha256"],
+            "properties": {
+                "pre_admission_pause_sha256": {"type": "string"},
+                "execution_record_sha256s": {"maxItems": 0},
+            },
+        },
+        "else": {
+            "properties": {
+                "pre_admission_pause_sha256": {"type": "null"},
+                "execution_record_sha256s": {"minItems": 2, "maxItems": 2},
+            }
+        },
+    }
+]
+for proof_name in ("DeliveryResolution", "DeliveryWaitInvestigation"):
+    excluded_pause_fields = (
+        "retry_cause",
+        "original_authority",
+        "verifier_pause",
+        "verification_retry",
+        "verifier_preparation",
+        "knowledge_preparation",
+        "rejected_output",
+        "rejected_knowledge",
+        "rejected_workspace_admission",
+        *(
+            ("retry_failure",)
+            if proof_name == "DeliveryResolution"
+            else (
+                "invocation_start_sha256",
+                "invocation_outcome_sha256",
+                "interruption_receipt_sha256",
+                "process_stop_sha256",
+            )
+        ),
+    )
+    properties = {name: {"type": "null"} for name in excluded_pause_fields}
+    if proof_name == "DeliveryResolution":
+        properties["resolution_kind"] = {"const": "RESUME_UNINVOKED"}
+    else:
+        properties.update(
+            {
+                "permitted_resolutions": {
+                    "maxItems": 1,
+                    "items": {"const": "RESUME_UNINVOKED"},
+                },
+                "disposition": {
+                    "properties": {
+                        "facts": {
+                            "properties": {
+                                "classification": {"const": "SERVICE_PAUSED"},
+                                "evidence_ids": {
+                                    "minItems": 1,
+                                    "maxItems": 1,
+                                    "items": {"pattern": "^knowledge-pause://[a-f0-9]{64}$"},
+                                },
+                            }
+                        }
+                    }
+                },
+            }
+        )
+    resolution_schema["$defs"][proof_name]["allOf"].append(
+        {
+            "if": {
+                "required": ["knowledge_pause"],
+                "properties": {"knowledge_pause": {"type": "object"}},
+            },
+            "then": {"properties": properties},
+        }
+    )
+
 (
     Path(__file__).resolve().parents[1] / "schemas/engineering-wait-resolution.schema.json"
 ).write_text(json.dumps(resolution_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

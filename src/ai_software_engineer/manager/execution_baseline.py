@@ -44,6 +44,7 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
     require_context_capacity_binding,
+    require_knowledge_isolation_binding,
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.completed_output_checkpoint import (
@@ -51,6 +52,7 @@ from ai_software_engineer.manager.completed_output_checkpoint import (
     require_completed_output_workspace,
 )
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
+from ai_software_engineer.manager.knowledge_isolation import KnowledgePreparationIsolationProof
 from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
 from ai_software_engineer.manager.stopped_execution_checkpoint import (
@@ -85,6 +87,8 @@ class BaselineFactCollector(Protocol):
 
     def bind_legacy_observation(self, containment: LegacyExecutionContainment) -> None: ...
 
+    def bind_knowledge_isolation(self, proof: KnowledgePreparationIsolationProof) -> None: ...
+
 
 class ExecutionBaselineService:
     def __init__(
@@ -117,6 +121,7 @@ class ExecutionBaselineService:
             BaselinePurpose.STOPPED_FAILURE_RETRY,
             BaselinePurpose.STOPPED_EXECUTION_RESCUE,
             BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+            BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
         }:
             if target_base_ref is not None or input_mode is not BaselineInputMode.PRESERVE_DRAFT:
                 raise ValueError(
@@ -201,6 +206,10 @@ class ExecutionBaselineService:
                 if facts.stopped_failure is None:
                     raise ValueError("原执行不符合已停止的原执行失败恢复条件, 原现场保留")
                 target_base_ref = expected_base
+            elif purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION:
+                if facts.knowledge_isolation is None:
+                    raise ValueError("当前知识隔离缺少完整可信调查")
+                target_base_ref = expected_base
             elif purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
                 if facts.context_capacity_receipt_sha256 is None:
                     raise ValueError("当前没有精确的调用前容量停止记录, 原进度保留")
@@ -271,6 +280,7 @@ class ExecutionBaselineService:
                 BaselinePurpose.STOPPED_FAILURE_RETRY,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                 BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+                BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
             }:
                 preview = BaselineGitPreview(
                     worktree.head_revision,
@@ -394,6 +404,10 @@ class ExecutionBaselineService:
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("未知结果停止恢复需要精确人工工程确认, 不能自动审批")
             authority.require_plan_confirmation(plan)
+        if plan.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION:
+            if not isinstance(authority, BaselineOperatorAuthorization):
+                raise ValueError("当前知识隔离需要精确 ENGINEERING 决定, 不得自动批准")
+            authority.require_plan_confirmation(plan)
         if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("容量恢复需要精确人工工程确认, 不能自动审批")
@@ -461,6 +475,8 @@ class ExecutionBaselineService:
                 return prior_completion
             if plan.facts.legacy_containment is not None:
                 self.facts.bind_legacy_observation(plan.facts.legacy_containment)
+            if plan.facts.knowledge_isolation is not None:
+                self.facts.bind_knowledge_isolation(plan.facts.knowledge_isolation)
             current = self.facts.collect(plan.target_base_ref)
             self._require_facts(current)
             expected_previous = existing[-1] if existing else None
@@ -522,6 +538,7 @@ class ExecutionBaselineService:
                 BaselinePurpose.STOPPED_FAILURE_RETRY,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                 BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+                BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
             }:
                 self.git.manager.verify_mutations(
                     plan.dirty_capture.to_capture(),
@@ -620,6 +637,11 @@ class ExecutionBaselineService:
                     if current.legacy_containment is not None
                     else None
                 ),
+                knowledge_isolation_sha256=(
+                    current.knowledge_isolation.proof_sha256
+                    if current.knowledge_isolation
+                    else None
+                ),
                 stopped_execution_sha256=current.stopped_execution.proof_sha256
                 if current.stopped_execution
                 else None,
@@ -657,7 +679,11 @@ class ExecutionBaselineService:
                 input_mode=plan.input_mode,
                 superseded_implementation_artifact_id=(
                     None
-                    if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                    if plan.purpose
+                    in {
+                        BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+                        BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
+                    }
                     else current.implementation_artifact_id
                 ),
                 superseded_progress_artifact_id=(
@@ -665,6 +691,7 @@ class ExecutionBaselineService:
                     if plan.purpose
                     in {
                         BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+                        BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
                         BaselinePurpose.STOPPED_FAILURE_RETRY,
                         BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                     }
@@ -697,6 +724,7 @@ class ExecutionBaselineService:
                 after_inventory_sha256=after_inventory,
                 completed_at=datetime.now(UTC),
             )
+            require_knowledge_isolation_binding(plan, binding)
             require_context_capacity_binding(plan, binding)
             completed = self.store.put_binding(binding)
             if self.publish_completion is not None:

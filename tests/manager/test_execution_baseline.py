@@ -33,6 +33,7 @@ from ai_software_engineer.manager.baseline_models import (
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.execution_baseline import ExecutionBaselineService
+from ai_software_engineer.manager.knowledge_isolation import KnowledgePreparationIsolationProof
 from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
 from ai_software_engineer.recovery.models import digest
 from tests.domain.factories import make_task
@@ -58,6 +59,9 @@ class Collector:
 
     def execution_scope(self) -> nullcontext[None]:
         return nullcontext()
+
+    def bind_knowledge_isolation(self, proof: KnowledgePreparationIsolationProof) -> None:
+        assert self.facts.knowledge_isolation == proof
 
     def bind_legacy_observation(self, containment: LegacyExecutionContainment) -> None:
         assert self.facts.legacy_containment == containment

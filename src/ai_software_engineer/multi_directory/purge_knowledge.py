@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+from ai_software_engineer.agents.structured_pause import StructuredPreAdmissionPauseReceipt
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge.administration import KnowledgeHumanActionEvent
 from ai_software_engineer.knowledge.agents import (
@@ -67,6 +68,7 @@ _MODELS: Mapping[str, type[DomainModel]] = {
     "delivery-admissions": DeliveryWorkflowAdmission,
     "delivery-proofs": DeliveryWorkflowProof,
     "knowledge-local-limit-intents": KnowledgeInvocationIntent,
+    "knowledge-pause-intents": KnowledgeInvocationIntent,
 }
 
 
@@ -276,6 +278,7 @@ def select_knowledge(
                     "knowledge-invocation-intents": KnowledgeInvocationIntent,
                     "knowledge-invocation-outcomes": KnowledgeInvocationOutcome,
                     "knowledge-execution-records": KnowledgeExecutionRecord,
+                    "structured-admission-pauses": StructuredPreAdmissionPauseReceipt,
                 }
                 model = models.get(namespace)
                 if model is None:
@@ -304,12 +307,23 @@ def select_knowledge(
                     if record.intent_sha256 not in intents:
                         raise ValueError("knowledge execution has another intent")
                     key = record.record_sha256
+                elif isinstance(record, StructuredPreAdmissionPauseReceipt):
+                    if not any(
+                        record.request_sha256 == intent.request_sha256
+                        and record.role is intent.binding.role
+                        and record.phase == "knowledge_" + intent.phase
+                        and record.timeout_seconds == intent.timeout_seconds
+                        and record.refused_at >= intent.created_at
+                        for intent in intents.values()
+                    ):
+                        raise ValueError("knowledge pause receipt has no exact intent")
+                    key = record.receipt_sha256
                 else:
                     raise ValueError("unknown invocation contract")
                 select(path, namespace, key)
             selected.add(lane)
     for path, namespace, record in records:
-        if namespace == "knowledge-local-limit-intents" and isinstance(
+        if namespace in {"knowledge-local-limit-intents", "knowledge-pause-intents"} and isinstance(
             record, KnowledgeInvocationIntent
         ):
             for outcome_id, outcome in outcomes.items():

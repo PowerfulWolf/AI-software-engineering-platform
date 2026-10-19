@@ -20,6 +20,7 @@ from ai_software_engineer.manager.completed_output_checkpoint import (
     CompletedCoderOutputUnavailableProof,
 )
 from ai_software_engineer.manager.knowledge_invocation_proof import ReplayGuardedClaimObservation
+from ai_software_engineer.manager.knowledge_isolation import KnowledgePreparationIsolationProof
 from ai_software_engineer.manager.stopped_execution_checkpoint import StoppedCoderExecutionProof
 from ai_software_engineer.manager.stopped_failure_checkpoint import StoppedFailureProof
 from ai_software_engineer.manager.stopped_provider_checkpoint import StoppedProviderFailureProof
@@ -55,6 +56,7 @@ MODELS = (
     StoppedCoderExecutionProof,
     ReplayGuardedClaimObservation,
     DeliveryWaitInvestigation,
+    KnowledgePreparationIsolationProof,
 )
 UPDATED = {
     "ExecutionBaselineBinding",
@@ -87,6 +89,7 @@ UPDATED = {
     "BaselineInvocationProof",
     "ReplayGuardedClaimObservation",
     "DeliveryWaitInvestigation",
+    "KnowledgePreparationIsolationProof",
 }
 
 
@@ -111,6 +114,7 @@ def main() -> None:
         ("stopped-failure", StoppedFailureProof),
         ("stopped-coder-execution", StoppedCoderExecutionProof),
         ("replay-guarded-claim-observation", ReplayGuardedClaimObservation),
+        ("knowledge-preparation-isolation", KnowledgePreparationIsolationProof),
     )
     standalone_names = {f"{filename}.schema.json" for filename, _ in standalone}
     for filename, model in standalone:
@@ -151,6 +155,7 @@ def main() -> None:
                 (ExecuteExecutionBaselineIntent, "approved_native_rule_change_sha256"),
                 (ExecuteExecutionBaselineIntent, "confirm_provider_prerequisites_repaired"),
                 (ExecuteExecutionBaselineIntent, "confirm_stopped_failure_retry"),
+                (ExecuteExecutionBaselineIntent, "confirm_current_knowledge_execution_isolated"),
             ):
                 source = intent_model.model_json_schema()
                 definitions[intent_model.__name__]["properties"][field] = source["properties"][
@@ -404,6 +409,12 @@ def stopped_guards(node: dict[str, object]) -> None:
 
 
 def guards(node: dict[str, object]) -> None:
+    if node.get("title") in {"KnowledgePreparationPauseEvidence", "DeliveryResolution"}:
+        canonical = json.loads((ROOT / "engineering-wait-resolution.schema.json").read_text())
+        inherited = canonical["$defs"][node["title"]].get("allOf", [])
+        existing = node.get("allOf", [])
+        assert isinstance(existing, list)
+        node["allOf"] = [*existing, *(guard for guard in inherited if guard not in existing)]
     title = node.get("title")
 
     if title == "ProposeExecutionBaselineIntent":
@@ -419,6 +430,7 @@ def guards(node: dict[str, object]) -> None:
                                 "stopped_failure_retry",
                                 "stopped_execution_rescue",
                                 "context_capacity_resume",
+                                "knowledge_preparation_isolation",
                             ]
                         }
                     },
@@ -1058,6 +1070,7 @@ def guards(node: dict[str, object]) -> None:
 
     stopped_guards(node)
     stopped_failure_guards(node)
+    knowledge_isolation_guards(node)
 
     # Runtime-only capacity recovery is an independent purpose. These local
     # wire gates supplement the complete plan/binding/queue association in code.
@@ -1353,6 +1366,172 @@ def stopped_failure_guards(node: dict[str, object]) -> None:
     assert isinstance(existing, list)
     if extra:
         node["allOf"] = [*existing, *(guard for guard in extra if guard not in existing)]
+
+
+def knowledge_isolation_guards(node: dict[str, object]) -> None:
+    """A current engineering containment decision retains unknown historical transport."""
+    title = node.get("title")
+    guards_to_add = []
+    if title == "BaselineExecutionReservation":
+        guards_to_add.append(
+            {
+                "if": {"properties": {"retry_cause": {"const": "knowledge_isolation"}}},
+                "then": {
+                    "required": ["knowledge_isolation_sha256"],
+                    "properties": {
+                        "knowledge_isolation_sha256": {"type": "string"},
+                        "reservation_already_applied": {"const": False},
+                        **{
+                            name: {"type": "null"}
+                            for name in (
+                                "original_run_id",
+                                "current_invocation_start_sha256",
+                                "current_invocation_outcome_sha256",
+                                "retry_failure",
+                                "interruption_receipt_sha256",
+                                "containment_sha256",
+                                "stopped_execution_sha256",
+                                "completed_output_sha256",
+                                "stopped_provider_failure_sha256",
+                                "stopped_failure_sha256",
+                            )
+                        },
+                    },
+                },
+                "else": {"properties": {"knowledge_isolation_sha256": {"type": "null"}}},
+            }
+        )
+    elif title == "BaselineExecutionFacts":
+        guards_to_add.append(
+            {
+                "if": {
+                    "required": ["continuation"],
+                    "properties": {
+                        "continuation": {
+                            "type": "object",
+                            "required": ["retry_cause"],
+                            "properties": {"retry_cause": {"const": "knowledge_isolation"}},
+                        }
+                    },
+                },
+                "then": {
+                    "required": ["knowledge_isolation"],
+                    "properties": {"knowledge_isolation": {"type": "object"}},
+                },
+            }
+        )
+        guards_to_add.append(
+            {
+                "if": {
+                    "required": ["knowledge_isolation"],
+                    "properties": {"knowledge_isolation": {"type": "object"}},
+                },
+                "then": {
+                    "required": ["continuation"],
+                    "properties": {
+                        "continuation": {
+                            "type": "object",
+                            "properties": {
+                                "retry_cause": {"const": "knowledge_isolation"},
+                            },
+                        },
+                        **{
+                            name: {"type": "null"}
+                            for name in (
+                                "legacy_containment",
+                                "stopped_execution",
+                                "completed_output",
+                                "stopped_provider_failure",
+                                "stopped_failure",
+                                "context_capacity_receipt_sha256",
+                                "native_rule_change",
+                                "implementation_artifact_id",
+                            )
+                        },
+                    },
+                },
+            }
+        )
+    elif title in {"BaselineOperatorAuthorization", "ExecuteExecutionBaselineIntent"}:
+        guards_to_add.append(
+            {
+                "if": {
+                    "required": ["confirm_current_knowledge_execution_isolated"],
+                    "properties": {"confirm_current_knowledge_execution_isolated": {"const": True}},
+                },
+                "then": {
+                    "required": ["continuation_mode"],
+                    "properties": {
+                        "continuation_mode": {"const": "pause"},
+                        **{
+                            name: {"type": "null"}
+                            for name in (
+                                "confirm_legacy_containment",
+                                "confirm_local_execution_stopped",
+                                "confirm_provider_prerequisites_repaired",
+                                "confirm_stopped_failure_retry",
+                                "approved_native_rule_change_sha256",
+                            )
+                        },
+                    }
+                },
+            }
+        )
+    elif title in {"ExecutionBaselinePlan", "ExecutionBaselineBinding"}:
+        shared = {"input_mode": {"const": "preserve_draft"}}
+        if title == "ExecutionBaselinePlan":
+            shared.update(
+                {
+                    "conflicted": {"const": False},
+                    "facts": {
+                        "required": ["knowledge_isolation"],
+                        "properties": {
+                            "knowledge_isolation": {"type": "object"},
+                        },
+                    },
+                }
+            )
+            required = ["input_mode", "facts"]
+            otherwise = {"facts": {"properties": {"knowledge_isolation": {"type": "null"}}}}
+        else:
+            shared.update(
+                {
+                    "authority_source": {"const": "engineering_operator_decision"},
+                    "continuation_mode": {"const": "pause"},
+                    "knowledge_isolation_sha256": {"type": "string"},
+                    "superseded_progress_artifact_id": {"type": "null"},
+                    "superseded_implementation_artifact_id": {"type": "null"},
+                    **{
+                        name: {"type": "null"}
+                        for name in (
+                            "legacy_containment_sha256",
+                            "stopped_execution_sha256",
+                            "completed_output_sha256",
+                            "stopped_provider_failure_sha256",
+                            "stopped_failure_sha256",
+                            "context_capacity_receipt_sha256",
+                            "service_pause_outcome_sha256",
+                        )
+                    },
+                }
+            )
+            required = ["input_mode", "knowledge_isolation_sha256", "continuation_mode"]
+            otherwise = {"knowledge_isolation_sha256": {"type": "null"}}
+        guards_to_add.append(
+            {
+                "if": {"properties": {"purpose": {"const": "knowledge_preparation_isolation"}}},
+                "then": {"required": required, "properties": shared},
+                "else": {"properties": otherwise},
+            }
+        )
+    existing = node.get("allOf", [])
+    assert isinstance(existing, list)
+    if guards_to_add:
+        conditions = [guard["if"] for guard in guards_to_add]
+        # These generated gates replace prior variants of this new proof family;
+        # unrelated policy gates keep their complete existing bytes and order.
+        retained = [guard for guard in existing if guard.get("if") not in conditions]
+        node["allOf"] = [*retained, *guards_to_add]
 
 
 if __name__ == "__main__":

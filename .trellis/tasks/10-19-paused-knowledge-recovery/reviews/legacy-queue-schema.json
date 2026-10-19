@@ -1,0 +1,514 @@
+{
+  "additional_root_corrections_reviewed": [
+    "Propose intent adds the new fixed-current-base purpose without changing prior purpose policy.",
+    "Explicit isolation confirmation requires a present PAUSE field, including omitted-field negative.",
+    "New binding disallows all seven unrelated recovery proof SHA families.",
+    "Exact new-family generated if conditions replace stale variants; unrelated policy guards retained.",
+    "Broad eligible-claim filtering was replaced by exact independently proved isolation exclusions; appended foreign claims remain rejected."
+  ],
+  "baseline_revision": "e309f0ba7418569010b942cc4374f7fe243090a5",
+  "checked_invariants": [
+    "Old knowledge transport remains UNKNOWN; no old no-start/stop receipt is backfilled.",
+    "Exact ENGINEERING plan confirmation is exclusive and creates PAUSE; distinct public RESUME is required.",
+    "Same Requirement/Task/base/source/branch/worktree and complete dirty/inherited patches/progress are retained.",
+    "Legacy isolation consumes one ordinary attempt, creates a new WorkItem/claim, and never refunds unknown work.",
+    "Prospective positive admission refusal retains same attempt and original WorkItem with dispatch+1, new claim/Run/Context.",
+    "Task lock, queue authority, SQL current-row/claim/generation/budget and active-owner fences remain required.",
+    "Historical isolation reopens full binding/plan/authorization/original journal/context/claim bytes before affecting other proof consumers.",
+    "Store-only BaselineOperatorAuthorization has no published schema; its typed/exact-plan/store checks were reviewed without claiming schema coverage.",
+    "No candidate or QA/Review result can be granted by these proof/authority families."
+  ],
+  "files": [
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/.trellis/spec/core/knowledge-preparation-isolation.md",
+      "sha256": "326df9db564b1f6aa93575ebbd3dec018d594c00d40537fb81df6e22d382d614"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/.trellis/spec/core/knowledge-preparation-pause.md",
+      "sha256": "9c0aa20d670699a60b287663a67fc5aeca3ec595ad876a9efe76aef5aa7ebf54"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/.trellis/tasks/10-19-paused-knowledge-recovery/contract-draft.md",
+      "sha256": "3759de7a9be4cd8e3468ffd8b456326fb24e176e07bee27e1230ba6bc56011c8"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/.trellis/tasks/10-19-paused-knowledge-recovery/design.md",
+      "sha256": "4f8adfbde8d53e146bfbe6213dacdd97f3d58d3266fad73fc6806b906ee00ab7"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/.trellis/tasks/10-19-paused-knowledge-recovery/implement.md",
+      "sha256": "eaf881945ff98a0739ff11dd0cb122ddd28786a985a7023d1f6b0cecfc52958b"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/.trellis/tasks/10-19-paused-knowledge-recovery/legacy-isolation-design.md",
+      "sha256": "c4da95d1a670d6c490cfe9645fc776e53ce8ec24d5a890106393b026bbb37adc"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/.trellis/tasks/10-19-paused-knowledge-recovery/prd.md",
+      "sha256": "18498bef32403af28a27ffb2774f53b5ce1797a66a3bc98917da707252988cc1"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/console-deletion-cleanup.schema.json",
+      "sha256": "cda4ecccb6d3b03032d38b38f5697321b320e9b8638408c706e13c8df0321fe3"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/console-operation.schema.json",
+      "sha256": "ebd1b7e6066de3ea468f3d9d72422db14f6f0f7886e8780aa1d0eb5cfcdc6e85"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/engineering-wait-resolution.schema.json",
+      "sha256": "14b9b74b3109bbec71497059f87f601406a2bcb6a44ae7d372e5222e80190850"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/execution-baseline-plan.schema.json",
+      "sha256": "f616ce818b1b9c6b09dc93a1e3f77574b702b46a5c9897e5df81841ea47fce64"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/execution-baseline-queue-consumption.schema.json",
+      "sha256": "20636c83f2935a972096e1c77769434e635b8228e3537385d937ce121c1cd8df"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/execution-baseline-queue-release.schema.json",
+      "sha256": "c50d0692c5c604435bb2f6d6368e248bb8eeedabf8f560c493cf9da249e1f7d7"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/execution-baseline.schema.json",
+      "sha256": "f226af4bf8bd8f4167f57cd059911ca88df3022c27150d33eacdaa5b0c473b9f"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/knowledge-invocation-outcome.schema.json",
+      "sha256": "9e2e00f0a4af91126c8a7724c333d6aee1f9dc87ea943f98549186fe1518fafe"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/knowledge-preparation-isolation.schema.json",
+      "sha256": "4f4fa596f2128ad07e23c3c27b45728c9ffe8922f2442285425204ce8938a550"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/stopped-failure-budget-settlement.schema.json",
+      "sha256": "c69aeb361b510267ec277ad5e88861b8789078f99766b753d70fbaf414b4288c"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/schemas/structured-pre-admission-pause.schema.json",
+      "sha256": "c08a3c693d35c74cf4d2798f2a88f7999e437cddad7412f6ff0e9cd5db2d4308"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/scripts/generate-repair-schemas.py",
+      "sha256": "836c74ca549b6a7a82efa6d8d4752ec14439817b049e3237d7a4bc398c5921a2"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/scripts/sync-engineering-authority-schemas.py",
+      "sha256": "18f1a5a349f66c34fd995bd5c5b20d5b0f3443bc7c64c229cb7b68efea2e6301"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/scripts/sync-legacy-rescue-schemas.py",
+      "sha256": "9909c06ac2d375b1ccb2edd10408fddf540074238f1dd0045c7b5c34a81a099a"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/scripts/sync-paused-knowledge-schemas.py",
+      "sha256": "daf904c17a84f3198ad81f359bf14e75e36395167e024c8035b0a46bcccb9d55"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/scripts/sync-rejected-knowledge-schemas.py",
+      "sha256": "51b5a2510d26258f81a48b611b0227799db24135f7d2dd3c2a1a91f098a330ed"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/agents/structured.py",
+      "sha256": "b1d526febbd13624aee2c78e65737f64f2a4e2783eb37dde260e24df37918361"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/agents/structured_observation.py",
+      "sha256": "05a6c16233bcc368d89470084ca8b522477f44322c407f834156e55dd567e3f5"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/agents/structured_pause.py",
+      "sha256": "3fa5c83c1c0f0d1b214fefb8eb5e77a3d75ae306ea236c7ffa2e3353eadf17c7"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/domain/delivery_resolution.py",
+      "sha256": "680a2d9f9ed14a3d849f2784b7ca7386575b66e449e0bfd318920920586cb3ea"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/domain/execution_baseline.py",
+      "sha256": "153398f8c1c5dd1f8a478a98d1735ff61cbd10fc0b010f1c6dc43cc61e870c7d"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/domain/knowledge_preparation_pause.py",
+      "sha256": "ead82f5242bcab24725f4bc9ef2009dabb3debdcc41050062e5cf62ecb74f775"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/knowledge/invocation.py",
+      "sha256": "b63b6d7c8a33bc9a2578e2e26801197d3d348ed7fffbb022b75c62f25499aa84"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/baseline_models.py",
+      "sha256": "5c1c801fc7f8483dd6d14e5b6522d4f9c88aa97aff5464e9dcc72d6b79d763ae"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/baseline_production.py",
+      "sha256": "fd8a989b00c7b5e1ec0abd245fed99ad14a24b9f3d8c068ad05ac427d2116c28"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/baseline_store.py",
+      "sha256": "599649b42521bb22f9795b65b93b84039c05246e8c7077cdbbc16f1dea2a796e"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/delivery_wait.py",
+      "sha256": "3487e6bddf1eea8b3091209be07a312a2841f0a5d4b97552d7eecff11143ae65"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/execution_baseline.py",
+      "sha256": "d6409cade6511faf830b13c13cff9e00d5d162908dee6c6c9779ecf77b87f192"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/knowledge_invocation_proof.py",
+      "sha256": "bc244356a35c87ca256f63589504ae3fc10ac9a0bcb02ee77a8d5a9d5f8a6abe"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/knowledge_isolation.py",
+      "sha256": "4153811fc0beb41cbc56a8563953f6ddef474e5e4bec3dddac08fe352e96c875"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/knowledge_preparation_pause.py",
+      "sha256": "a0293916078b62c9d451422a83225c0a12025c68ae6d01230dd813ccb03015c1"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/legacy_audit.py",
+      "sha256": "8db714fcb0a76ead8094b23d57d43400be42a0dd1df41dc9b74fbcf5ede2195b"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/production_host.py",
+      "sha256": "be010d1aae6fb08242f6f994f413ddb41d578aab8c01737e36178d9b9cebfde1"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/multi_directory/purge_knowledge.py",
+      "sha256": "3398c5fce414723611a1401dfd53817275ca38163dcd860f1a22c1f604ac1a3c"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/orchestration/retry.py",
+      "sha256": "3b1d2dd44340c7804f583ccbd732029383e8a6fa5496f0fffa741a67afb587d3"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/service_pause.py",
+      "sha256": "02896b96e294e54890e25d074ad2627e31e5894298b7ffff5ebc7f7ca3724d07"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/work_queue/baseline.py",
+      "sha256": "6d4cd3257dd74d09486815a94e1b2e3b9762ce360ac4fa70667da672e1ef7cde"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/work_queue/execution_store.py",
+      "sha256": "eea7a4d5358839d49c8838a605df3a850b8cb23577d756ac0acfe4562e2cc9df"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/contracts/test_repair_schema_generation.py",
+      "sha256": "75b76f722e853634c2c6f8a6d12ddb511800a9eb7a2c7fe31212c9d382f8d53f"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/domain/test_knowledge_preparation_pause_schema.py",
+      "sha256": "514ff65f2dd664f4180c69e7b9bcbf75353d356d3aca455e5f287bbe40f581ae"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/knowledge/test_invocation_pause.py",
+      "sha256": "dac9ea77e760fb4a0f0415946d009fc10d49a4dbb6b9fdb56fb2e3c1d0e0ca7d"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_baseline_knowledge_claim_proof.py",
+      "sha256": "cc5b820cb317d48236d669c4c60f3baa0d948b2cd1ae670cf0f68a10349563ca"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_capacity_legacy_claim_snapshot.py",
+      "sha256": "fb9a3c3210e7051b48b22e5a2c522f8403279146c4f4010dff6ef6d91f32b127"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_execution_baseline.py",
+      "sha256": "51346f9cf26ca170238c5c296939186f1ca89e7b369a92fc882c8f90c8f0ab98"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_knowledge_isolation.py",
+      "sha256": "914c29f108cbfee17be95c71ef4fa4c8a66bc569e0a9e3a6b444e3840e64bdaa"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_knowledge_isolation_public.py",
+      "sha256": "e6030b9bd81b5fa31700af0b6fe260dff5b598a0adc3b9c1b94a843744c6faf2"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_knowledge_isolation_store.py",
+      "sha256": "65359c270003c5cee254b02d9c30c5a781df601690f32a8357548b0ad7f513c6"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_knowledge_pause_public.py",
+      "sha256": "967dae7e6c4f62d9c279ceea1b85040f3d4c067350f0cad7834fcc35f807aa07"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_knowledge_pause_purge.py",
+      "sha256": "48edbd47a6313b76c99e765857603cce65481603bc5d89965282ef4459686eca"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_knowledge_preparation_pause_consumer.py",
+      "sha256": "a22acab8f439877de576757a6a088227f18f40ee23f92a20d7fd7c7e62c1c07c"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_paused_knowledge_recovery.py",
+      "sha256": "51d5890fc83a6846575aa604b280eee9a349881370b8edb5d3b19c4ef493f6ac"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_replay_guarded_claim_observation.py",
+      "sha256": "b5b1fd5e00944f2a9f788b8136eb5fe1c97464470d9f7027888c77fd30ce45e6"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/work_queue/test_knowledge_pause_mysql.py",
+      "sha256": "04a724dfd4da1b3eb09544d62536b0f937891ba28611041e43f7c997a687d39b"
+    }
+  ],
+  "independent_validation": [
+    {
+      "command": "pytest -q tests/manager/test_knowledge_isolation.py tests/manager/test_knowledge_isolation_store.py tests/contracts/test_repair_schema_generation.py tests/manager/test_knowledge_preparation_pause_consumer.py tests/manager/test_knowledge_pause_purge.py",
+      "result": "58 passed, 1 failed in 38.36s at an intermediate published Schema variant; sole generation-consistency failure fixed and retested below."
+    },
+    {
+      "command": "pytest -q tests/contracts/test_repair_schema_generation.py",
+      "result": "30 passed in 5.66s after final canonical regeneration; two fresh regeneration outputs repeatable."
+    },
+    {
+      "command": "pytest -q -m 'not mysql' -k 'not test_real_native_failed_preparation_is_verified_with_complete_local_stop' tests/manager/test_knowledge_isolation.py tests/manager/test_knowledge_isolation_store.py tests/manager/test_baseline_knowledge_claim_proof.py tests/manager/test_replay_guarded_claim_observation.py tests/manager/test_capacity_legacy_claim_snapshot.py",
+      "result": "82 passed, 2 deselected in 29.99s on final source; covers exact isolation exclusions, scope/alias negatives, immutable store/context and foreign facts."
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    },
+    {
+      "check": "All generated Schema Draft202012 structures, local refs and old guard semantics",
+      "result": {
+        "other_prior_guard_changes": [],
+        "prior_defs_allOf_guards_checked": 413,
+        "prior_guards_exactly_retained": 411,
+        "prior_guards_extended_for_new_purpose": [
+          {
+            "model": "ProposeExecutionBaselineIntent",
+            "only_change": "new purpose added to fixed-base enum; prior purpose conditions unchanged",
+            "schema": "schemas/console-deletion-cleanup.schema.json"
+          },
+          {
+            "model": "ProposeExecutionBaselineIntent",
+            "only_change": "new purpose added to fixed-base enum; prior purpose conditions unchanged",
+            "schema": "schemas/console-operation.schema.json"
+          }
+        ],
+        "schemas_checked": 176,
+        "unresolved_local_refs": []
+      }
+    },
+    {
+      "check": "Full valid Console proposal/execute/binding plus forbidden target, omitted PAUSE, all seven other proof SHA negatives",
+      "result": [
+        {
+          "case": "ProposeExecutionBaselineIntent complete valid wire",
+          "schemas_valid": {
+            "console-deletion-cleanup": true,
+            "console-operation": true
+          }
+        },
+        {
+          "case": "ExecuteExecutionBaselineIntent complete valid wire",
+          "schemas_valid": {
+            "console-deletion-cleanup": true,
+            "console-operation": true
+          }
+        },
+        {
+          "case": "BaselineOperatorAuthorization complete valid wire",
+          "note": "This typed store-only record is not published as a standalone or embedded JSON schema; no schema-validation claim is made.",
+          "schemas_valid": {}
+        },
+        {
+          "case": "ExecutionBaselineBinding complete valid wire",
+          "schemas_valid": {
+            "console-deletion-cleanup": true,
+            "console-operation": true
+          }
+        },
+        {
+          "case": "ProposeExecutionBaselineIntent forbidden target or missing pause",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true
+          }
+        },
+        {
+          "case": "ExecuteExecutionBaselineIntent forbidden target or missing pause",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true
+          }
+        },
+        {
+          "case": "isolation binding rejects legacy_containment_sha256",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true,
+            "execution-baseline-plan": true,
+            "execution-baseline-queue-consumption": true
+          }
+        },
+        {
+          "case": "isolation binding rejects stopped_execution_sha256",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true,
+            "execution-baseline-plan": true,
+            "execution-baseline-queue-consumption": true
+          }
+        },
+        {
+          "case": "isolation binding rejects completed_output_sha256",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true,
+            "execution-baseline-plan": true,
+            "execution-baseline-queue-consumption": true
+          }
+        },
+        {
+          "case": "isolation binding rejects stopped_provider_failure_sha256",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true,
+            "execution-baseline-plan": true,
+            "execution-baseline-queue-consumption": true
+          }
+        },
+        {
+          "case": "isolation binding rejects stopped_failure_sha256",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true,
+            "execution-baseline-plan": true,
+            "execution-baseline-queue-consumption": true
+          }
+        },
+        {
+          "case": "isolation binding rejects context_capacity_receipt_sha256",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true,
+            "execution-baseline-plan": true,
+            "execution-baseline-queue-consumption": true
+          }
+        },
+        {
+          "case": "isolation binding rejects service_pause_outcome_sha256",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true,
+            "execution-baseline-plan": true,
+            "execution-baseline-queue-consumption": true
+          }
+        }
+      ]
+    },
+    {
+      "check": "Full valid facts/reservation missing/null proof and actual interruption field negatives",
+      "result": [
+        {
+          "case": "isolation-facts-proof-null",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true,
+            "execution-baseline-plan": true,
+            "execution-baseline-queue-consumption": true
+          }
+        },
+        {
+          "case": "isolation-facts-proof-omitted",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true,
+            "execution-baseline-plan": true,
+            "execution-baseline-queue-consumption": true
+          }
+        },
+        {
+          "case": "reservation-forbidden-real-interruption-field",
+          "model_rejected": true,
+          "schemas_rejected": {
+            "console-deletion-cleanup": true,
+            "console-operation": true,
+            "execution-baseline-plan": true,
+            "execution-baseline-queue-consumption": true
+          }
+        }
+      ]
+    }
+  ],
+  "kind": "independent_maintenance_legacy_queue_schema_review",
+  "overall": "PASS for the exact bound maintenance snapshot and stated verification scope; no unresolved P1/P2 findings",
+  "prior_forward_report": {
+    "path": "/tmp/ase-paused-knowledge-forward-independent-review-20261019.json",
+    "sha256": "ccb8da1fa66bcac2466e9c347158e617c40a2c1c730463195ee8369e3b83563b"
+  },
+  "resolved_independent_findings": [
+    {
+      "id": "P2-reservation-schema-real-field",
+      "problem": "New isolation reservation schema used receipt_sha256 instead of interruption_receipt_sha256.",
+      "resolution": "Canonical generator now forbids the actual field; independent full valid fixture negatives reject in all four embedding schemas.",
+      "status": "RESOLVED"
+    },
+    {
+      "id": "P2-facts-schema-reverse-proof",
+      "problem": "Isolation reservation could be accepted in schemas without the complete knowledge_isolation proof.",
+      "resolution": "Bidirectional guard now rejects both omitted and null proof; independently tested full valid fixture bytes in all four embeddings.",
+      "status": "RESOLVED"
+    },
+    {
+      "id": "P2-legacy-native-requirement-scope",
+      "problem": "Legacy reader did not authenticate native parent Requirement scope.",
+      "resolution": "Shared require_delivery_requirement_scope added; real joint positive and Task-scope Coder negative pass.",
+      "status": "RESOLVED"
+    },
+    {
+      "id": "P2-legacy-same-lease-alias",
+      "problem": "Selecting intents only by WorkItem ID could ignore an alias or pending preparation on the exact same lease.",
+      "resolution": "Complete eligible lane scan checks same-lease membership; both same-item and alias pending negatives pass.",
+      "status": "RESOLVED"
+    },
+    {
+      "id": "P2-durable-binding-proof",
+      "problem": "Shared baseline store could reopen a recomputed binding referencing another positive isolation proof.",
+      "resolution": "Exact binding helper enforced in durable authority/reopen/context readers; all three hostile cases and complete UNKNOWN patch context pass.",
+      "status": "RESOLVED"
+    },
+    {
+      "id": "P2-legacy-readers-isolated-history",
+      "problem": "Replay-guarded and old capacity-snapshot readers could still reject a separately verified isolated UNKNOWN preparation.",
+      "resolution": "All three normal proof consumers receive only exact current/historical independently verified isolation lease IDs; local callback avoids ambient mutable skip state; foreign/unproved/claimless still undergo old validation.",
+      "status": "RESOLVED"
+    }
+  ],
+  "reviewed_at": "2026-10-19T10:36:27.595290+00:00",
+  "run5_provenance_report": {
+    "path": "/tmp/ase-k1-run5-host-link-readonly-audit-20261019.json",
+    "sha256": "a2a2eeab2a54d7a5f3a154c7372cffd1c83d3b329083ee15c2a0d0a18b330c82"
+  },
+  "schema_version": "v0.1",
+  "scope": "Read-only independent source review of prospective knowledge pause consumers/replay/purge, current engineering isolation facts/authority/store/context/history, queue consumption and canonical generated Schema contracts. This is maintenance review evidence, not a real K1 Coder/QA/Review verdict.",
+  "verification_boundaries": [
+    "No production Host or production database was constructed/read/modified by this review; no production data or workspace mutation was made.",
+    "One earlier broad test selection accidentally included an existing mysql test; sandbox denied the socket before connection. Corrected final selection explicitly excludes mysql.",
+    "One real native subprocess stop test could not establish owned output EOF inside this sandbox and was excluded from final independent run; the implementer separately reported it and enhanced public legacy integration passing in the authorized controlled external window.",
+    "Public MySQL same-Task delivery is owned and executed by other agents; reported integration success is separate from this reviewer's independent non-MySQL validation.",
+    "This report does not authorize deployment, merge, execute a real recovery, or write any real role verdict. Root retains actual K1 public recovery and subsequent independent QA/Review responsibilities."
+  ],
+  "workspace": "/private/tmp/ase-fix-legacy-ignored"
+}

@@ -405,6 +405,17 @@
           ],
           "default": null
         },
+        "knowledge_isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgePreparationIsolationProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "legacy_containment": {
           "anyOf": [
             {
@@ -863,6 +874,87 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "knowledge_isolation"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "knowledge_isolation"
+            ],
+            "properties": {
+              "knowledge_isolation": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "knowledge_isolation"
+            ],
+            "properties": {
+              "knowledge_isolation": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "properties": {
+                  "retry_cause": {
+                    "const": "knowledge_isolation"
+                  }
+                }
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "stopped_execution": {
+                "type": "null"
+              },
+              "completed_output": {
+                "type": "null"
+              },
+              "stopped_provider_failure": {
+                "type": "null"
+              },
+              "stopped_failure": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "native_rule_change": {
+                "type": "null"
+              },
+              "implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -885,6 +977,7 @@
         "retry_cause": {
           "enum": [
             "uninvoked",
+            "knowledge_isolation",
             "local_execution_limit",
             "provider_transient",
             "service_pause",
@@ -897,6 +990,19 @@
           ],
           "title": "Retry Cause",
           "type": "string"
+        },
+        "knowledge_isolation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Isolation Sha256"
         },
         "stopped_execution_sha256": {
           "anyOf": [
@@ -1325,6 +1431,65 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "retry_cause": {
+                "const": "knowledge_isolation"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "knowledge_isolation_sha256"
+            ],
+            "properties": {
+              "knowledge_isolation_sha256": {
+                "type": "string"
+              },
+              "reservation_already_applied": {
+                "const": false
+              },
+              "original_run_id": {
+                "type": "null"
+              },
+              "current_invocation_start_sha256": {
+                "type": "null"
+              },
+              "current_invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "containment_sha256": {
+                "type": "null"
+              },
+              "stopped_execution_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_failure_sha256": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "knowledge_isolation_sha256": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -1344,7 +1509,8 @@
         "stopped_provider_retry",
         "stopped_failure_retry",
         "stopped_execution_rescue",
-        "context_capacity_resume"
+        "context_capacity_resume",
+        "knowledge_preparation_isolation"
       ],
       "title": "BaselinePurpose",
       "type": "string"
@@ -3160,6 +3326,17 @@
             }
           ],
           "default": null
+        },
+        "knowledge_pause": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgePreparationPauseEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -3580,6 +3757,55 @@
           },
           "then": {
             "properties": {
+              "resolution_kind": {
+                "const": "RESUME_UNINVOKED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "knowledge_pause"
+            ],
+            "properties": {
+              "knowledge_pause": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "retry_cause": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "verifier_pause": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
+              },
+              "rejected_knowledge": {
+                "type": "null"
+              },
+              "rejected_workspace_admission": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
               "resolution_kind": {
                 "const": "RESUME_UNINVOKED"
               }
@@ -4192,10 +4418,43 @@
           ],
           "default": null
         },
+        "knowledge_pause": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgePreparationPauseEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "rejected_output": {
           "anyOf": [
             {
               "$ref": "#/$defs/RejectedCoderOutputEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rejected_knowledge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedKnowledgePreparationEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rejected_workspace_admission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedWorkspaceAdmissionEvidence"
             },
             {
               "type": "null"
@@ -4261,28 +4520,6 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Proof Sha256",
           "type": "string"
-        },
-        "rejected_knowledge": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RejectedKnowledgePreparationEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "rejected_workspace_admission": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RejectedWorkspaceAdmissionEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         }
       },
       "required": [
@@ -4883,6 +5120,123 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "permitted_resolutions",
+              "disposition"
+            ],
+            "properties": {
+              "permitted_resolutions": {
+                "contains": {
+                  "const": "RESUME_UNINVOKED"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "evidence_ids": {
+                        "contains": {
+                          "pattern": "^knowledge-pause://"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "knowledge_pause": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "knowledge_pause"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "knowledge_pause"
+            ],
+            "properties": {
+              "knowledge_pause": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "retry_cause": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "verifier_pause": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
+              },
+              "rejected_knowledge": {
+                "type": "null"
+              },
+              "rejected_workspace_admission": {
+                "type": "null"
+              },
+              "invocation_start_sha256": {
+                "type": "null"
+              },
+              "invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "process_stop_sha256": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "maxItems": 1,
+                "items": {
+                  "const": "RESUME_UNINVOKED"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "classification": {
+                        "const": "SERVICE_PAUSED"
+                      },
+                      "evidence_ids": {
+                        "minItems": 1,
+                        "maxItems": 1,
+                        "items": {
+                          "pattern": "^knowledge-pause://[a-f0-9]{64}$"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       ]
     },
@@ -5333,6 +5687,19 @@
           ],
           "default": null,
           "title": "Confirm Stopped Failure Retry"
+        },
+        "confirm_current_knowledge_execution_isolated": {
+          "anyOf": [
+            {
+              "const": true,
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confirm Current Knowledge Execution Isolated"
         }
       },
       "required": [
@@ -5416,6 +5783,43 @@
                 "type": "null"
               },
               "confirm_local_execution_stopped": {
+                "type": "null"
+              },
+              "approved_native_rule_change_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "confirm_current_knowledge_execution_isolated"
+            ],
+            "properties": {
+              "confirm_current_knowledge_execution_isolated": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation_mode"
+            ],
+            "properties": {
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "confirm_legacy_containment": {
+                "type": "null"
+              },
+              "confirm_local_execution_stopped": {
+                "type": "null"
+              },
+              "confirm_provider_prerequisites_repaired": {
+                "type": "null"
+              },
+              "confirm_stopped_failure_retry": {
                 "type": "null"
               },
               "approved_native_rule_change_sha256": {
@@ -5540,6 +5944,19 @@
           ],
           "default": null,
           "title": "Context Capacity Receipt Sha256"
+        },
+        "knowledge_isolation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Isolation Sha256"
         },
         "service_pause_outcome_sha256": {
           "anyOf": [
@@ -6055,6 +6472,70 @@
         },
         {
           "if": {
+            "properties": {
+              "purpose": {
+                "const": "knowledge_preparation_isolation"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "input_mode",
+              "knowledge_isolation_sha256",
+              "continuation_mode"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "knowledge_isolation_sha256": {
+                "type": "string"
+              },
+              "superseded_progress_artifact_id": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "stopped_execution_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_failure_sha256": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "service_pause_outcome_sha256": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "knowledge_isolation_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
             "required": [
               "purpose"
             ],
@@ -6467,6 +6948,50 @@
               "facts": {
                 "properties": {
                   "stopped_failure": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "purpose": {
+                "const": "knowledge_preparation_isolation"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "input_mode",
+              "facts"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "conflicted": {
+                "const": false
+              },
+              "facts": {
+                "required": [
+                  "knowledge_isolation"
+                ],
+                "properties": {
+                  "knowledge_isolation": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "facts": {
+                "properties": {
+                  "knowledge_isolation": {
                     "type": "null"
                   }
                 }
@@ -8164,7 +8689,8 @@
                   "stopped_provider_retry",
                   "stopped_failure_retry",
                   "stopped_execution_rescue",
-                  "context_capacity_resume"
+                  "context_capacity_resume",
+                  "knowledge_preparation_isolation"
                 ]
               }
             }
@@ -13123,6 +13649,1387 @@
       "maxLength": 200,
       "minLength": 1,
       "type": "string"
+    },
+    "KnowledgePreparationPauseEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "delivery_requirement_id": {
+          "minLength": 1,
+          "title": "Delivery Requirement Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "original_lease_id": {
+          "minLength": 1,
+          "title": "Original Lease Id",
+          "type": "string"
+        },
+        "original_claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Original Claim Sha256",
+          "type": "string"
+        },
+        "original_attempt": {
+          "minimum": 1,
+          "title": "Original Attempt",
+          "type": "integer"
+        },
+        "original_dispatch_sequence": {
+          "minimum": 0,
+          "title": "Original Dispatch Sequence",
+          "type": "integer"
+        },
+        "checkpoint_sequence": {
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "previous_run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Previous Run Id",
+          "type": "string"
+        },
+        "previous_context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Previous Context Manifest Id",
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "intent",
+            "assessment"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Intent Sha256",
+          "type": "string"
+        },
+        "outcome_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Outcome Sha256",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "proof_mode": {
+          "enum": [
+            "pre_admission_refusal",
+            "native_admission_closed"
+          ],
+          "title": "Proof Mode",
+          "type": "string"
+        },
+        "pre_admission_pause_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pre Admission Pause Sha256"
+        },
+        "execution_record_sha256s": {
+          "items": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "title": "Execution Record Sha256S",
+          "type": "array"
+        }
+      },
+      "required": [
+        "scope",
+        "requirement_id",
+        "delivery_requirement_id",
+        "task_id",
+        "role",
+        "work_item_id",
+        "original_lease_id",
+        "original_claim_sha256",
+        "original_attempt",
+        "original_dispatch_sequence",
+        "checkpoint_sequence",
+        "previous_run_id",
+        "previous_context_manifest_id",
+        "source_revision",
+        "snapshot_sha256",
+        "phase",
+        "intent_sha256",
+        "outcome_sha256",
+        "request_sha256",
+        "proof_mode",
+        "execution_record_sha256s"
+      ],
+      "title": "KnowledgePreparationPauseEvidence",
+      "type": "object",
+      "allOf": [
+        {
+          "properties": {
+            "execution_record_sha256s": {
+              "uniqueItems": true
+            }
+          },
+          "if": {
+            "properties": {
+              "proof_mode": {
+                "const": "pre_admission_refusal"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "pre_admission_pause_sha256"
+            ],
+            "properties": {
+              "pre_admission_pause_sha256": {
+                "type": "string"
+              },
+              "execution_record_sha256s": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "pre_admission_pause_sha256": {
+                "type": "null"
+              },
+              "execution_record_sha256s": {
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    "KnowledgePreparationIsolationProof": {
+      "additionalProperties": false,
+      "description": "An exact present observation, never an original no-start or stop receipt.",
+      "properties": {
+        "kind": {
+          "const": "knowledge_preparation_isolation_v1",
+          "default": "knowledge_preparation_isolation_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "knowledge_requirement_id": {
+          "minLength": 1,
+          "title": "Knowledge Requirement Id",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "checkpoint_sequence": {
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "original_claim": {
+          "$ref": "#/$defs/QueueClaim"
+        },
+        "original_step": {
+          "$ref": "#/$defs/QueuedRoleStep"
+        },
+        "outcome": {
+          "$ref": "#/$defs/KnowledgeInvocationOutcome"
+        },
+        "context_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Context Sha256",
+          "type": "string"
+        },
+        "boot": {
+          "$ref": "#/$defs/LocalBootObservation"
+        },
+        "repository_surveys": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/LegacyLocalExecutionSurvey"
+            },
+            {
+              "$ref": "#/$defs/LegacyLocalExecutionSurvey"
+            }
+          ],
+          "title": "Repository Surveys",
+          "type": "array"
+        },
+        "worktree_surveys": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/LegacyLocalExecutionSurvey"
+            },
+            {
+              "$ref": "#/$defs/LegacyLocalExecutionSurvey"
+            }
+          ],
+          "title": "Worktree Surveys",
+          "type": "array"
+        },
+        "historical_execution_status": {
+          "const": "UNKNOWN",
+          "default": "UNKNOWN",
+          "title": "Historical Execution Status",
+          "type": "string"
+        },
+        "ordinary_work_consumption": {
+          "const": 1,
+          "default": 1,
+          "title": "Ordinary Work Consumption",
+          "type": "integer"
+        },
+        "no_transient_refund": {
+          "const": true,
+          "default": true,
+          "title": "No Transient Refund",
+          "type": "boolean"
+        },
+        "proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "requirement_id",
+        "knowledge_requirement_id",
+        "dispatch_sha256",
+        "task_id",
+        "task_intent_sha256",
+        "task_revision",
+        "work_item_id",
+        "checkpoint_sequence",
+        "original_claim",
+        "original_step",
+        "outcome",
+        "context_sha256",
+        "boot",
+        "repository_surveys",
+        "worktree_surveys",
+        "proof_sha256"
+      ],
+      "title": "KnowledgePreparationIsolationProof",
+      "type": "object"
+    },
+    "QueuedRoleStep": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "queued_role_step",
+          "default": "queued_role_step",
+          "title": "Kind",
+          "type": "string"
+        },
+        "work_item": {
+          "$ref": "#/$defs/QueuedWorkItem"
+        },
+        "boundary": {
+          "$ref": "#/$defs/RoleRunBoundary"
+        },
+        "allocation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Allocation Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item",
+        "boundary",
+        "allocation_sha256"
+      ],
+      "title": "QueuedRoleStep",
+      "type": "object"
+    },
+    "KnowledgeInvocationOutcome": {
+      "additionalProperties": false,
+      "description": "A returned model value is data, never a knowledge or delivery verdict.",
+      "properties": {
+        "kind": {
+          "const": "knowledge_invocation_outcome",
+          "default": "knowledge_invocation_outcome",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "intent": {
+          "$ref": "#/$defs/KnowledgeInvocationIntent"
+        },
+        "state": {
+          "enum": [
+            "RETURNED",
+            "FAILED"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeInvocationResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeInvocationFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "executions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/KnowledgeExecutionRecord"
+          },
+          "maxItems": 32,
+          "title": "Executions",
+          "type": "array"
+        },
+        "pre_admission_pause": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StructuredPreAdmissionPauseReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "outcome_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Outcome Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent",
+        "state",
+        "completed_at",
+        "outcome_sha256"
+      ],
+      "title": "KnowledgeInvocationOutcome",
+      "type": "object"
+    },
+    "StructuredPreAdmissionPauseReceipt": {
+      "additionalProperties": false,
+      "description": "A refusal is neither an admission nor proof that a started process stopped.",
+      "properties": {
+        "kind": {
+          "const": "structured_pre_admission_pause",
+          "default": "structured_pre_admission_pause",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "fallback_before_route",
+            "native_client_entry",
+            "responses_client_entry",
+            "responses_before_transport_admission"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "phase": {
+          "enum": [
+            "stage_reply",
+            "knowledge_intent",
+            "knowledge_assessment"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TeamRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "invocation_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{32}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Invocation Id"
+        },
+        "selected_call": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StructuredCallIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "operation_id": {
+          "minLength": 1,
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "pause_request_id": {
+          "minLength": 1,
+          "title": "Pause Request Id",
+          "type": "string"
+        },
+        "pause_instance_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pause Instance Id"
+        },
+        "pause_requested_at": {
+          "format": "date-time",
+          "title": "Pause Requested At",
+          "type": "string"
+        },
+        "refused_at": {
+          "format": "date-time",
+          "title": "Refused At",
+          "type": "string"
+        },
+        "receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Receipt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "request_sha256",
+        "timeout_seconds",
+        "phase",
+        "operation_id",
+        "pause_request_id",
+        "pause_requested_at",
+        "refused_at",
+        "receipt_sha256"
+      ],
+      "title": "StructuredPreAdmissionPauseReceipt",
+      "type": "object"
+    },
+    "KnowledgeInvocationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/WirePayload"
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "http_status": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Http Status"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Id"
+        }
+      },
+      "required": [
+        "payload",
+        "duration_ms"
+      ],
+      "title": "KnowledgeInvocationResult",
+      "type": "object"
+    },
+    "RoleRunBoundary": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "checkpoint_sequence": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "role",
+        "attempt",
+        "checkpoint_sequence",
+        "source_revision"
+      ],
+      "title": "RoleRunBoundary",
+      "type": "object"
+    },
+    "KnowledgeInvocationIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "knowledge_invocation_intent",
+          "default": "knowledge_invocation_intent",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "binding": {
+          "$ref": "#/$defs/KnowledgeRunBinding"
+        },
+        "phase": {
+          "enum": [
+            "intent",
+            "assessment"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 86400,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "claim": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueueClaim"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Intent Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding",
+        "phase",
+        "request_sha256",
+        "timeout_seconds",
+        "created_at",
+        "intent_sha256"
+      ],
+      "title": "KnowledgeInvocationIntent",
+      "type": "object"
+    },
+    "KnowledgeExecutionRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "knowledge_execution_record",
+          "default": "knowledge_execution_record",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Intent Sha256",
+          "type": "string"
+        },
+        "observation": {
+          "discriminator": {
+            "mapping": {
+              "structured_execution_admission": "#/$defs/StructuredExecutionAdmission",
+              "structured_http_round_trip": "#/$defs/StructuredHttpRoundTripReceipt",
+              "structured_native_not_started": "#/$defs/StructuredNativeNotStartedReceipt",
+              "structured_native_stop": "#/$defs/StructuredNativeStopReceipt"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StructuredExecutionAdmission"
+            },
+            {
+              "$ref": "#/$defs/StructuredNativeStopReceipt"
+            },
+            {
+              "$ref": "#/$defs/StructuredNativeNotStartedReceipt"
+            },
+            {
+              "$ref": "#/$defs/StructuredHttpRoundTripReceipt"
+            }
+          ],
+          "title": "Observation"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_sha256",
+        "observation",
+        "record_sha256"
+      ],
+      "title": "KnowledgeExecutionRecord",
+      "type": "object"
+    },
+    "KnowledgeInvocationFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/AgentErrorCode"
+        },
+        "safe_message": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Safe Message",
+          "type": "string"
+        },
+        "transient": {
+          "title": "Transient",
+          "type": "boolean"
+        },
+        "timeout_kind": {
+          "anyOf": [
+            {
+              "const": "local_execution_limit",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout Kind"
+        },
+        "http_status": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Http Status"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Id"
+        }
+      },
+      "required": [
+        "code",
+        "safe_message",
+        "transient"
+      ],
+      "title": "KnowledgeInvocationFailure",
+      "type": "object"
+    },
+    "StructuredNativeNotStartedReceipt": {
+      "additionalProperties": false,
+      "description": "The owned runner failed before creating a process; this is not a stop.",
+      "properties": {
+        "kind": {
+          "const": "structured_native_not_started",
+          "default": "structured_native_not_started",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "admission": {
+          "$ref": "#/$defs/StructuredExecutionAdmission"
+        },
+        "failure_kind": {
+          "enum": [
+            "input_preparation_failed",
+            "process_spawn_failed",
+            "service_pause_admission_closed"
+          ],
+          "title": "Failure Kind",
+          "type": "string"
+        },
+        "failed_at": {
+          "format": "date-time",
+          "title": "Failed At",
+          "type": "string"
+        },
+        "receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Receipt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "admission",
+        "failure_kind",
+        "failed_at",
+        "receipt_sha256"
+      ],
+      "title": "StructuredNativeNotStartedReceipt",
+      "type": "object"
+    },
+    "WirePayload": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "type": "object"
+    },
+    "StructuredHttpRoundTripReceipt": {
+      "additionalProperties": false,
+      "description": "The local synchronous transport returned; remote work may still be running.",
+      "properties": {
+        "kind": {
+          "const": "structured_http_round_trip",
+          "default": "structured_http_round_trip",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "admission": {
+          "$ref": "#/$defs/StructuredExecutionAdmission"
+        },
+        "outcome": {
+          "enum": [
+            "returned",
+            "transport_error"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "http_status": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Http Status"
+        },
+        "response_body_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Body Sha256"
+        },
+        "error_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "timeout",
+                "os_error"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Kind"
+        },
+        "receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Receipt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "admission",
+        "outcome",
+        "completed_at",
+        "receipt_sha256"
+      ],
+      "title": "StructuredHttpRoundTripReceipt",
+      "type": "object"
+    },
+    "StructuredNativeStopReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "structured_native_stop",
+          "default": "structured_native_stop",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "admission": {
+          "$ref": "#/$defs/StructuredExecutionAdmission"
+        },
+        "process_stop": {
+          "$ref": "#/$defs/NativeProcessStop"
+        },
+        "stdout_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stdout Sha256",
+          "type": "string"
+        },
+        "stderr_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stderr Sha256",
+          "type": "string"
+        },
+        "receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Receipt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "admission",
+        "process_stop",
+        "stdout_sha256",
+        "stderr_sha256",
+        "receipt_sha256"
+      ],
+      "title": "StructuredNativeStopReceipt",
+      "type": "object"
+    },
+    "KnowledgeRunBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "role": {
+          "$ref": "#/$defs/TeamRole"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "repository_ids": {
+          "items": {
+            "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Repository Ids",
+          "type": "array"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "role",
+        "team_id",
+        "project_id",
+        "requirement_id",
+        "repository_ids",
+        "source_revision",
+        "context_manifest_id",
+        "snapshot_sha256"
+      ],
+      "title": "KnowledgeRunBinding",
+      "type": "object"
+    },
+    "StructuredCallIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "invocation_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "route_index": {
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Route Index",
+          "type": "integer"
+        },
+        "provider": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/$defs/ReasoningEffort"
+        },
+        "route_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderRouteKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "connection_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexConnectionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TeamRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "phase": {
+          "enum": [
+            "stage_reply",
+            "knowledge_intent",
+            "knowledge_assessment"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "invocation_id",
+        "route_index",
+        "provider",
+        "model",
+        "reasoning_effort",
+        "phase",
+        "request_sha256"
+      ],
+      "title": "StructuredCallIdentity",
+      "type": "object"
+    },
+    "TeamRole": {
+      "description": "Long-lived roles that a Team-owned AgentProfile may declare.",
+      "enum": [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "TeamRole",
+      "type": "string"
+    },
+    "StructuredExecutionAdmission": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "structured_execution_admission",
+          "default": "structured_execution_admission",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "observation_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "call": {
+          "$ref": "#/$defs/StructuredCallIdentity"
+        },
+        "execution_kind": {
+          "enum": [
+            "native",
+            "http"
+          ],
+          "title": "Execution Kind",
+          "type": "string"
+        },
+        "transport_request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Transport Request Sha256",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "number"
+        },
+        "admitted_at": {
+          "format": "date-time",
+          "title": "Admitted At",
+          "type": "string"
+        },
+        "admission_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Admission Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "observation_id",
+        "call",
+        "execution_kind",
+        "transport_request_sha256",
+        "timeout_seconds",
+        "admitted_at",
+        "admission_sha256"
+      ],
+      "title": "StructuredExecutionAdmission",
+      "type": "object"
     }
   },
   "additionalProperties": false,

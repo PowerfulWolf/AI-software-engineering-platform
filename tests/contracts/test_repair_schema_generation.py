@@ -111,6 +111,114 @@ def test_regeneration_preserves_every_published_allof_without_requiring_a_previo
     ("model", "valid", "invalid"),
     [
         (
+            "ProposeExecutionBaselineIntent",
+            {"purpose": "knowledge_preparation_isolation", "input_mode": "preserve_draft"},
+            {
+                "purpose": "knowledge_preparation_isolation",
+                "input_mode": "preserve_draft",
+                "target_base_ref": "a",
+            },
+        ),
+        (
+            "ExecuteExecutionBaselineIntent",
+            {
+                "confirm_current_knowledge_execution_isolated": True,
+                "continuation_mode": "pause",
+            },
+            {"confirm_current_knowledge_execution_isolated": True},
+        ),
+        (
+            "ExecutionBaselineBinding",
+            {
+                "purpose": "knowledge_preparation_isolation",
+                "input_mode": "preserve_draft",
+                "authority_source": "engineering_operator_decision",
+                "continuation_mode": "pause",
+                "knowledge_isolation_sha256": "a",
+            },
+            {
+                "purpose": "knowledge_preparation_isolation",
+                "input_mode": "preserve_draft",
+                "authority_source": "engineering_operator_decision",
+                "continuation_mode": "pause",
+                "knowledge_isolation_sha256": "a",
+                "service_pause_outcome_sha256": "b",
+            },
+        ),
+        (
+            "BaselineExecutionReservation",
+            {
+                "retry_cause": "knowledge_isolation",
+                "knowledge_isolation_sha256": "a",
+                "reservation_already_applied": False,
+            },
+            {
+                "retry_cause": "knowledge_isolation",
+                "knowledge_isolation_sha256": "a",
+                "original_run_id": "run_fabricated",
+            },
+        ),
+        (
+            "BaselineExecutionReservation",
+            {
+                "retry_cause": "knowledge_isolation",
+                "knowledge_isolation_sha256": "a",
+                "reservation_already_applied": False,
+            },
+            {
+                "retry_cause": "knowledge_isolation",
+                "knowledge_isolation_sha256": "a",
+                "interruption_receipt_sha256": "b",
+            },
+        ),
+        (
+            "BaselineExecutionFacts",
+            {
+                "knowledge_isolation": {},
+                "continuation": {"retry_cause": "knowledge_isolation"},
+            },
+            {
+                "knowledge_isolation": None,
+                "continuation": {"retry_cause": "knowledge_isolation"},
+            },
+        ),
+        (
+            "BaselineExecutionFacts",
+            {
+                "knowledge_isolation": {},
+                "continuation": {"retry_cause": "knowledge_isolation"},
+            },
+            {"continuation": {"retry_cause": "knowledge_isolation"}},
+        ),
+        (
+            "ExecutionBaselineBinding",
+            {
+                "purpose": "knowledge_preparation_isolation",
+                "input_mode": "preserve_draft",
+                "authority_source": "engineering_operator_decision",
+                "continuation_mode": "pause",
+                "knowledge_isolation_sha256": "a",
+            },
+            {
+                "purpose": "knowledge_preparation_isolation",
+                "input_mode": "preserve_draft",
+                "authority_source": "organization_engineering_policy",
+                "continuation_mode": "resume",
+                "knowledge_isolation_sha256": "a",
+            },
+        ),
+        (
+            "ExecuteExecutionBaselineIntent",
+            {
+                "confirm_current_knowledge_execution_isolated": True,
+                "continuation_mode": "pause",
+            },
+            {
+                "confirm_current_knowledge_execution_isolated": True,
+                "continuation_mode": "resume",
+            },
+        ),
+        (
             "BaselineExecutionReservation",
             {
                 "retry_cause": "completed_output_unavailable",

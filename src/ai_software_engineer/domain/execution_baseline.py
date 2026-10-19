@@ -38,6 +38,7 @@ class BaselinePurpose(StrEnum):
     STOPPED_FAILURE_RETRY = "stopped_failure_retry"
     STOPPED_EXECUTION_RESCUE = "stopped_execution_rescue"
     CONTEXT_CAPACITY_RESUME = "context_capacity_resume"
+    KNOWLEDGE_PREPARATION_ISOLATION = "knowledge_preparation_isolation"
 
 
 class BaselineContinuationMode(StrEnum):
@@ -91,6 +92,9 @@ class ExecutionBaselineBinding(DomainModel):
     context_capacity_receipt_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    knowledge_isolation_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     service_pause_outcome_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -132,13 +136,42 @@ class ExecutionBaselineBinding(DomainModel):
 
     @model_validator(mode="after")
     def validate_binding(self) -> Self:
+        if (self.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION) != (
+            self.knowledge_isolation_sha256 is not None
+        ):
+            raise ValueError("当前知识隔离摘要只能属于精确隔离绑定")
         ensure_unique(self.source_artifact_ids, "baseline source artifact IDs")
         ensure_unique(
             self.resolved_interruption_receipt_sha256s, "resolved baseline interruption receipts"
         )
         if (self.sequence == 1) != (self.previous_binding_sha256 is None):
             raise ValueError("baseline binding must extend the exact previous record")
-        if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+        if self.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION:
+            if (
+                self.knowledge_isolation_sha256 is None
+                or self.execution_base_ref != self.prior_execution_base_ref
+                or self.execution_source_revision != self.prior_source_revision
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.continuation_mode is not BaselineContinuationMode.PAUSE
+                or self.authority_source != "engineering_operator_decision"
+                or self.superseded_implementation_artifact_id is not None
+                or self.superseded_progress_artifact_id is not None
+                or self.before_inventory_sha256 != self.after_inventory_sha256
+                or any(
+                    value is not None
+                    for value in (
+                        self.legacy_containment_sha256,
+                        self.stopped_execution_sha256,
+                        self.completed_output_sha256,
+                        self.stopped_provider_failure_sha256,
+                        self.stopped_failure_sha256,
+                        self.context_capacity_receipt_sha256,
+                        self.service_pause_outcome_sha256,
+                    )
+                )
+            ):
+                raise ValueError("当前知识隔离必须原基线、完整进度、人工确认并暂停")
+        elif self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
             if (
                 self.execution_base_ref != self.prior_execution_base_ref
                 or self.execution_source_revision != self.prior_source_revision

@@ -34,6 +34,7 @@ class EngineeringHumanActionRecorder:
                 BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                 BaselinePurpose.STOPPED_FAILURE_RETRY,
+                BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
             }:
                 continue
             binding.require_task(task)
@@ -43,6 +44,39 @@ class EngineeringHumanActionRecorder:
             plan = store.plan(binding.plan_sha256)
             authority.validate_integrity()
             authority.require_plan_confirmation(plan)
+            if binding.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION:
+                from ai_software_engineer.manager.baseline_models import (
+                    require_knowledge_isolation_binding,
+                )
+
+                require_knowledge_isolation_binding(plan, binding)
+                if (
+                    authority.authorization_sha256 != binding.authority_sha256
+                    or authority.task_id != binding.task_id
+                    or authority.task_intent_sha256 != binding.task_intent_sha256
+                    or authority.facts_sha256 != binding.facts_sha256
+                ):
+                    raise ValueError("当前知识隔离缺少精确真实工程决定")
+                events.append(
+                    HumanActionEvent(
+                        event_id="evalevt_knowledge_isolation_" + binding.binding_sha256[:32],
+                        case_id=case_id,
+                        task_id=task.id,
+                        occurred_at=authority.submitted_at,
+                        action=HumanAction.SUPPLY_EVIDENCE,
+                        evidence_uri=(
+                            store.root
+                            / store.records._name("baseline-authorities", binding.plan_sha256)
+                        )
+                        .absolute()
+                        .as_uri(),
+                        note=(
+                            "ENGINEERING 主体根据当前双重本机检查批准精确知识执行隔离; "
+                            "旧知识传输历史保留 UNKNOWN, 保留完整进度并消耗一次普通工作额度。"
+                        ),
+                    )
+                )
+                continue
             if binding.purpose is BaselinePurpose.STOPPED_FAILURE_RETRY:
                 plan.validate_integrity()
                 failure = plan.facts.stopped_failure

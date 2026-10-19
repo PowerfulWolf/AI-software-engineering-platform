@@ -26,6 +26,7 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineOperatorAuthorization,
     ExecutionBaselinePlan,
     require_context_capacity_binding,
+    require_knowledge_isolation_binding,
 )
 from ai_software_engineer.manager.baseline_native_rules import load_native_rule_epoch
 from ai_software_engineer.manager.completed_output_checkpoint import CompletedCoderOutputReason
@@ -223,6 +224,7 @@ class FileExecutionBaselineStore:
         self, binding: ExecutionBaselineBinding, plan: ExecutionBaselinePlan
     ) -> None:
         require_context_capacity_binding(plan, binding)
+        require_knowledge_isolation_binding(plan, binding)
         if binding.purpose != plan.purpose:
             raise ValueError("工程绑定与批准方案的处置目的不同")
         stopped = plan.facts.stopped_execution
@@ -324,12 +326,20 @@ class FileExecutionBaselineStore:
     def required_context(self, binding: ExecutionBaselineBinding) -> str:
         binding.validate_integrity()
         plan = self.plan(binding.plan_sha256)
+        require_knowledge_isolation_binding(plan, binding)
         patch = self._required_patch(binding, plan)
         return (
             (
                 "平台按人工工程决定保留了完整当前草稿, 代码基线和需求分支保持。"
                 "原调用结果仍是未知; 这些草稿是新执行的工程输入, 不是原调用进度或候选通过证明。\n"
                 if binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                else (
+                    "平台按精确人工工程决定确认当前知识执行已隔离, 原代码基线和完整进度保持。"
+                    "旧知识传输历史仍为 UNKNOWN; 当前隔离不证明历史未启动或已停止。"
+                    "本次消费一次普通工作额度且不退款, 保留草稿仅作为新执行输入。"
+                    "新 Run 必须独立领取并重新产出, 候选、独立 QA 和 Review 仍须正常完成。\n"
+                )
+                if binding.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION
                 else (
                     "原执行已真实停止, 原结果及原因仍未知且原历史不变。"
                     "完整合法草稿仅作为新执行输入; "

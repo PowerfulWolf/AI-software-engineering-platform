@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
@@ -12,6 +13,7 @@ from ai_software_engineer.agents.continuation import ContinuationExecutionUncert
 from ai_software_engineer.agents.execution import current_execution_guard, execution_scope
 from ai_software_engineer.agents.models import AgentErrorCode, AgentUsage
 from ai_software_engineer.agents.structured import (
+    StructuredAdmissionPaused,
     StructuredModelClient,
     StructuredModelError,
     StructuredModelResult,
@@ -26,6 +28,7 @@ from ai_software_engineer.agents.structured_observation import (
     bind_structured_execution_observer,
     structured_request_digest,
 )
+from ai_software_engineer.agents.structured_pause import StructuredPreAdmissionPauseReceipt
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, WirePayload
 from ai_software_engineer.knowledge.models import (
@@ -43,6 +46,8 @@ _MAX_LANE_INTENTS = 512
 _INTENTS = "knowledge-invocation-intents"
 _OUTCOMES = "knowledge-invocation-outcomes"
 _OBSERVATIONS = "knowledge-execution-records"
+_PAUSE_RECEIPTS = "structured-admission-pauses"
+_PAUSE_INTENTS = "knowledge-pause-intents"
 
 
 class KnowledgeInvocationUncertain(ContinuationExecutionUncertain):
@@ -77,6 +82,27 @@ class KnowledgePreparationLocalLimit(StructuredModelError):
 
     def with_context(self, context: str) -> KnowledgePreparationLocalLimit:
         return KnowledgePreparationLocalLimit(
+            self.outcome, safe_message=f"{context}: {self.safe_message}"
+        )
+
+
+class KnowledgePreparationPaused(StructuredModelError):
+    """A positively evidenced prospective refusal, never a legacy absence inference."""
+
+    def __init__(
+        self, outcome: KnowledgeInvocationOutcome, *, safe_message: str | None = None
+    ) -> None:
+        knowledge_pause_proof_mode(outcome)
+        self.outcome = outcome
+        assert outcome.failure is not None
+        super().__init__(
+            AgentErrorCode.SERVICE_PAUSED,
+            safe_message or outcome.failure.safe_message,
+            transient=False,
+        )
+
+    def with_context(self, context: str) -> KnowledgePreparationPaused:
+        return KnowledgePreparationPaused(
             self.outcome, safe_message=f"{context}: {self.safe_message}"
         )
 
@@ -258,6 +284,9 @@ class KnowledgeInvocationOutcome(DomainModel):
     result: KnowledgeInvocationResult | None = None
     failure: KnowledgeInvocationFailure | None = None
     executions: Annotated[tuple[KnowledgeExecutionRecord, ...], Field(max_length=32)] = ()
+    pre_admission_pause: StructuredPreAdmissionPauseReceipt | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     completed_at: AwareDatetime
     outcome_sha256: Digest
 
@@ -290,6 +319,16 @@ class KnowledgeInvocationOutcome(DomainModel):
                 completed.add(admission.observation_id)
         if set(admissions) != completed:
             raise ValueError("knowledge outcome cannot hide an unfinished route")
+        if self.pre_admission_pause is not None:
+            _require_pause_receipt(self.intent, self.pre_admission_pause)
+            if (
+                self.pre_admission_pause.refused_at > self.completed_at
+                or self.state != "FAILED"
+                or self.failure is None
+                or self.failure.code is not AgentErrorCode.SERVICE_PAUSED
+                or self.failure.transient
+            ):
+                raise ValueError("knowledge pause receipt requires its exact nontransient failure")
         return self
 
     @classmethod
@@ -318,6 +357,70 @@ def _require_admission(
         or admission.admitted_at < intent.created_at
     ):
         raise KnowledgeError("INVOCATION_ADMISSION_CHANGED")
+
+
+def _require_pause_receipt(
+    intent: KnowledgeInvocationIntent, receipt: StructuredPreAdmissionPauseReceipt
+) -> None:
+    receipt.validate_integrity()
+    if (
+        receipt.request_sha256 != intent.request_sha256
+        or receipt.role is not intent.binding.role
+        or receipt.phase != "knowledge_" + intent.phase
+        or receipt.timeout_seconds != intent.timeout_seconds
+        or receipt.refused_at < intent.created_at
+    ):
+        raise KnowledgeError("INVOCATION_PAUSE_CHANGED")
+
+
+def knowledge_pause_proof_mode(
+    outcome: KnowledgeInvocationOutcome,
+) -> Literal["pre_admission_refusal", "native_admission_closed"]:
+    """Validate positive no-start facts; an empty execution list is never sufficient."""
+    outcome.validate_integrity()
+    failure = outcome.failure
+    if (
+        outcome.state != "FAILED"
+        or failure is None
+        or failure.code is not AgentErrorCode.SERVICE_PAUSED
+        or failure.transient
+        or failure.timeout_kind is not None
+        or outcome.intent.claim is None
+    ):
+        raise KnowledgeError("KNOWLEDGE_PAUSE_FAILURE_REQUIRED")
+    if outcome.pre_admission_pause is not None:
+        if outcome.executions:
+            raise KnowledgeError("KNOWLEDGE_PAUSE_PRIOR_EXECUTION")
+        return "pre_admission_refusal"
+    if len(outcome.executions) == 2:
+        admission, receipt = (record.observation for record in outcome.executions)
+        if (
+            isinstance(admission, StructuredExecutionAdmission)
+            and isinstance(receipt, StructuredNativeNotStartedReceipt)
+            and receipt.admission == admission
+            and receipt.failure_kind == "service_pause_admission_closed"
+        ):
+            return "native_admission_closed"
+    raise KnowledgeError("KNOWLEDGE_PAUSE_POSITIVE_REFUSAL_REQUIRED")
+
+
+def read_paused_preparation(records_root: Path, outcome_sha256: str) -> KnowledgeInvocationOutcome:
+    """Reopen the independent prospective index, original intent and complete receipts."""
+    records = KnowledgeRecordStore(records_root, read_only=True)
+    intent = records.get(_PAUSE_INTENTS, outcome_sha256, KnowledgeInvocationIntent)
+    intent.validate_integrity()
+    lane = KnowledgeRecordStore(
+        records_root / "invocations" / invocation_lane_sha256(intent.binding), read_only=True
+    )
+    key = intent.binding.run_id + ":" + intent.phase
+    if lane.get(_INTENTS, key, KnowledgeInvocationIntent) != intent:
+        raise KnowledgeError("KNOWLEDGE_PAUSE_INTENT_CHANGED")
+    outcome = lane.get(_OUTCOMES, key, KnowledgeInvocationOutcome)
+    KnowledgeInvocationJournal._require_outcome(lane, intent, outcome)
+    if outcome.outcome_sha256 != outcome_sha256:
+        raise KnowledgeError("KNOWLEDGE_PAUSE_OUTCOME_CHANGED")
+    knowledge_pause_proof_mode(outcome)
+    return outcome
 
 
 class _KnowledgeExecutionObserver:
@@ -479,9 +582,29 @@ class KnowledgeInvocationJournal:
                 )
         except StructuredModelError as error:
             observer.require_complete()
+            receipt = error.receipt if isinstance(error, StructuredAdmissionPaused) else None
+            if receipt is not None:
+                _require_pause_receipt(intent, receipt)
+                with execution_scope(current_execution_guard()):
+                    records.put(_PAUSE_RECEIPTS, receipt.receipt_sha256, receipt)
             failed = self._finish(
-                records, key, intent, observer, failure=KnowledgeInvocationFailure.from_error(error)
+                records,
+                key,
+                intent,
+                observer,
+                failure=KnowledgeInvocationFailure.from_error(error),
+                pre_admission_pause=receipt,
             )
+            if error.code is AgentErrorCode.SERVICE_PAUSED:
+                try:
+                    knowledge_pause_proof_mode(failed)
+                except KnowledgeError:
+                    # Preserve actual started/mixed routes and legacy failures;
+                    # they do not acquire whole-call no-start authority.
+                    pass
+                else:
+                    self._publish_pause(failed)
+                    raise KnowledgePreparationPaused(failed) from error
             if error.expandable_timeout:
                 self._publish_local_limit(failed)
                 raise KnowledgePreparationLocalLimit(failed) from error
@@ -509,6 +632,7 @@ class KnowledgeInvocationJournal:
         *,
         result: KnowledgeInvocationResult | None = None,
         failure: KnowledgeInvocationFailure | None = None,
+        pre_admission_pause: StructuredPreAdmissionPauseReceipt | None = None,
     ) -> KnowledgeInvocationOutcome:
         outcome = KnowledgeInvocationOutcome.create(
             intent=intent,
@@ -516,6 +640,7 @@ class KnowledgeInvocationJournal:
             result=result,
             failure=failure,
             executions=tuple(observer.executions),
+            pre_admission_pause=pre_admission_pause,
             completed_at=datetime.now(UTC),
         )
         with execution_scope(current_execution_guard()):
@@ -534,6 +659,22 @@ class KnowledgeInvocationJournal:
         for record in outcome.executions:
             if records.get(_OBSERVATIONS, record.record_sha256, KnowledgeExecutionRecord) != record:
                 raise KnowledgeInvocationUncertain("原知识调用的执行观察无法重新核实。")
+        receipt = outcome.pre_admission_pause
+        if receipt is not None and (
+            records.get(_PAUSE_RECEIPTS, receipt.receipt_sha256, StructuredPreAdmissionPauseReceipt)
+            != receipt
+        ):
+            raise KnowledgeInvocationUncertain("原知识调用的暂停拒绝事实无法重新核实。")
+
+    def _publish_pause(self, outcome: KnowledgeInvocationOutcome) -> None:
+        knowledge_pause_proof_mode(outcome)
+        with execution_scope(current_execution_guard()):
+            self.records.put(_PAUSE_INTENTS, outcome.outcome_sha256, outcome.intent)
+        if self.read_paused_preparation(outcome.outcome_sha256) != outcome:
+            raise KnowledgeInvocationUncertain("知识暂停记录与独立封存事实不一致。")
+
+    def read_paused_preparation(self, outcome_sha256: str) -> KnowledgeInvocationOutcome:
+        return read_paused_preparation(self.records.root, outcome_sha256)
 
     def _publish_local_limit(self, outcome: KnowledgeInvocationOutcome) -> None:
         """Index already sealed facts so exact engineering reads need no lane scan."""
@@ -550,6 +691,12 @@ class KnowledgeInvocationJournal:
             raise KnowledgeInvocationUncertain("原知识调用已记录, 结果尚未完整保存; 禁止重复调用。")
         self._require_outcome(records, intent, outcome)
         if outcome.failure is not None:
+            if self.records.find(_PAUSE_INTENTS, outcome.outcome_sha256, KnowledgeInvocationIntent):
+                raise KnowledgePreparationPaused(
+                    self.read_paused_preparation(outcome.outcome_sha256)
+                )
+            if outcome.pre_admission_pause is not None:
+                raise KnowledgeInvocationUncertain("原知识暂停索引未完整封存, 禁止重新调用。")
             if outcome.failure.timeout_kind == "local_execution_limit":
                 self._publish_local_limit(outcome)
                 raise KnowledgePreparationLocalLimit(outcome)

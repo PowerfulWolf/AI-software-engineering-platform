@@ -26,11 +26,13 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
     ExecutionBaselinePlan,
     require_context_capacity_binding,
+    require_knowledge_isolation_binding,
 )
 from ai_software_engineer.manager.completed_output_checkpoint import CompletedCoderOutputReason
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.store.mysql_repository import _decode_task, _encode, open_mysql_connection
+from ai_software_engineer.work_queue.claim_snapshot import require_claim_snapshot
 from ai_software_engineer.work_queue.execution_store import (
     QueuedRoleStep,
     _decode,
@@ -66,6 +68,11 @@ class BaselineQueueConsumption(DomainModel):
         self.plan.validate_integrity()
         self.binding.require_task(self.plan.facts.task)
         require_context_capacity_binding(self.plan, self.binding)
+        require_knowledge_isolation_binding(self.plan, self.binding)
+        if self.plan.facts.knowledge_isolation is not None and (
+            self.next_work_item_id == self.work_item_id
+        ):
+            raise ValueError("knowledge isolation must consume a new ordinary work identity")
         if self.plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME and (
             self.next_work_item_id != self.work_item_id
         ):
@@ -369,6 +376,7 @@ def consume_baseline(
     """Publish Git completion into scheduling once, without changing approved intent/events."""
     plan.validate_integrity()
     binding.require_task(plan.facts.task)
+    require_knowledge_isolation_binding(plan, binding)
     now = queue._clock()
     with _consumption_cursor(queue, cursor) as cursor:
         queue._lock_authority(cursor)
@@ -395,6 +403,28 @@ def consume_baseline(
         task = _decode_task(binding.task_id, str(row["payload_json"]))
         binding.require_task(task)
         reservation = plan.facts.continuation
+        isolation = plan.facts.knowledge_isolation
+        if isolation is not None:
+            original = isolation.original_claim
+            try:
+                require_claim_snapshot(original, queue.original_claim(original.lease.id))
+            except ValueError as error:
+                raise QueueConflict("knowledge isolation original ownership changed") from error
+            if (
+                current.wait_disposition is None
+                or current.wait_disposition.facts.classification != "SERVICE_PAUSED"
+                or current.id != original.work_item.id
+                or current.task_id != original.work_item.task_id
+                or current.repository_id != original.work_item.repository_id
+                or current.repository_scopes != original.work_item.repository_scopes
+                or current.role is not AgentRole.CODER
+                or current.attempt != original.work_item.attempt
+                or current.dispatch_sequence != original.work_item.dispatch_sequence
+                or current.checkpoint_sequence != original.work_item.checkpoint_sequence
+                or isolation.original_step.boundary != step.boundary
+                or isolation.original_step.allocation_sha256 != step.allocation_sha256
+            ):
+                raise QueueConflict("knowledge isolation does not match the exact paused work")
         if (
             current.wait_disposition is not None
             and current.wait_disposition.facts.classification == "EXECUTION_BASELINE_PAUSED"
@@ -562,7 +592,9 @@ def consume_baseline(
             settled,
             from_status=current.status,
             event_type=(
-                "LEGACY_EXECUTION_RESCUED"
+                "KNOWLEDGE_PREPARATION_ISOLATED"
+                if isolation is not None
+                else "LEGACY_EXECUTION_RESCUED"
                 if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
                 else "EXECUTION_BASELINE_REBOUND"
             ),
@@ -576,6 +608,7 @@ def consume_baseline(
                 **(
                     {"original_outcome": "UNKNOWN", "purpose": plan.purpose.value}
                     if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                    or isolation is not None
                     else {}
                 ),
                 "reservation": reservation.to_wire(),

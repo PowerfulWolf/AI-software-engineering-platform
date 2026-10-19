@@ -71,11 +71,42 @@ active Run4 heartbeat09:17:53Z and no new candidate/publication. Its SHA-256 is
 `/tmp/ase-k1-stage-snapshot-20261019-18.json`. No duplicate Continue or service signal was sent.
 
 ## Deployment and rollback
-The new admission repair has not yet been loaded into the active service. Keep main runtime
-source and target clone frozen while the current role runs. At a verified controlled idle
-boundary, merge the reviewed commit, restart through the official script and verify Console
-readiness before continuing the original Requirement's ordinary public flow. Do not deploy by
-editing an active worktree or mixing old and new lazy imports in an executing Host.
+Reviewed repair `e309f0ba7418569010b942cc4374f7fe243090a5` was committed, independently
+bound and pushed. A bounded foreground exact-Run4 observer saw its natural completed stop at
+09:32:37.636722Z, output present and owned-session-empty proof; no original role was signaled
+to force this boundary. The subsequent official stop established READY and actual service exit.
+Its trigger observation is `/tmp/ase-k1-run4-stop-maintenance-trigger-20261019.json`, SHA-256
+`e60b036eb13ce7b36f90f42f406dd3fc8c4a6b479d7113b30406be58931ba092`.
+This was a foreground single-event observer, not a scheduled task or recurring automation.
+
+SELECT-only snapshot19 at09:33:55Z, SHA-256
+`3ee433346477788329c21119353862cd97fd496322fa5f93f5b20588e7934322`, confirms Run4
+SUCCEEDED and formal progress `art_coder_2dd86c54a6f2a7a6ef5ba7b020b9c6f8`, artifact SHA-256
+`3d342b359fd2d5d924d84c13657cd7996e394ac4ee8a215b4696b2bc840ed7f6`, accepted in
+CONTINUE_REQUIRED/QUEUED before attempt5 reservation. The progress cumulatively completes
+steps1–3 of8; there is no candidate or independent QA/Review. Run4 lease is RELEASED.
+Next WorkItem `work_210001bf077c1479ae8b9381fe384beda4762e392a960f4db0d6760cd3a93ddd`
+was claimed and released into WAITING_DEPENDENCY; it has no main-role InvocationStart. Its
+knowledge preparation did record FAILED/SERVICE_PAUSED with no execution observations, so that
+empty list must not be relabeled as trustworthy historical no-start evidence.
+
+After official stop, main was fast-forwarded and pushed to e309f0b; the new service started as
+PID18292. Public Console readiness is true, mode normal and operation contract version10.
+The K1 Task's approved source stays fa3589a. A read-only target-clone HEAD observation instead
+showed08f45c1 (prior audit-only documentation); no target checkout/rebase was performed.
+Public Continue `operation_a35a30f58f12a088d935fe2129474212` completed its evaluation but left
+the original Requirement in DELIVERING, current parent checkpoint
+`77eaff6f2a6004df8e71d2c94f3973785406c2b611e951d513d0e1c84bf4fbdf`.
+The missing trustworthy knowledge admission-pause receipt/recovery seam is separately tracked in
+`../10-19-paused-knowledge-recovery/prd.md`; no SQL repair, old-fact rewrite or new Requirement.
+
+Independent static preparation confirms the native Supervisor is the preferred candidate
+QA/Review path. The approved Plan's33 unique pytest nodes fit the current shared64-node bound;
+the obsolete32-node phrase in verification-environment documentation was corrected. Mixed
+Node/browser and live A-to-B requirements may need actual capabilities not supplied by isolated
+Python/MySQL. This is conditional static analysis, not an observed candidate verification wait
+or approval for future execution. Do not relabel fixtures as browser/live acceptance or force a
+nonterminal Task into standalone terminal verification. Use actual candidate preparation facts.
 
 Rollback uses the same controlled idle boundary and retains all old/new execution records,
 approvals, claims and drafts. Reverting the guard cannot grant an admitted verification replay.

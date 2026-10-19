@@ -24,6 +24,9 @@ from ai_software_engineer.domain.engineering_authority import (
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus
 from ai_software_engineer.domain.execution_baseline import FullGitRevision
 from ai_software_engineer.domain.identity import ContextId, RunId
+from ai_software_engineer.domain.knowledge_preparation_pause import (
+    KnowledgePreparationPauseEvidence,
+)
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure
 from ai_software_engineer.domain.task import TaskId
@@ -416,6 +419,9 @@ class DeliveryWaitInvestigation(DomainModel):
     knowledge_preparation: KnowledgePreparationRetryEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    knowledge_pause: KnowledgePreparationPauseEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     rejected_output: RejectedCoderOutputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -473,6 +479,43 @@ class DeliveryWaitInvestigation(DomainModel):
             ):
                 raise ValueError("verifier pause investigation changed its exact role or source")
         ensure_unique(self.missing, "missing engineering proof")
+        paused = self.knowledge_pause
+        if (
+            DeliveryResolutionKind.RESUME_UNINVOKED in self.permitted_resolutions
+            and any(value.startswith("knowledge-pause://") for value in facts.evidence_ids)
+            and paused is None
+        ):
+            raise ValueError("knowledge pause resume requires its positive independent proof")
+        if paused is not None and (
+            paused.task_id != self.task_id
+            or paused.work_item_id != self.work_item_id
+            or paused.source_revision != self.source_revision
+            or paused.checkpoint_sequence != self.checkpoint_sequence
+            or paused.role is not facts.role
+            or facts.classification != "SERVICE_PAUSED"
+            or facts.evidence_ids != ("knowledge-pause://" + paused.outcome_sha256,)
+            or self.original_run_id != paused.previous_run_id
+            or self.permitted_resolutions not in ((), (DeliveryResolutionKind.RESUME_UNINVOKED,))
+            or any(
+                value is not None
+                for value in (
+                    self.invocation_start_sha256,
+                    self.invocation_outcome_sha256,
+                    self.original_authority,
+                    self.verification_retry,
+                    self.verifier_preparation,
+                    self.knowledge_preparation,
+                    self.rejected_output,
+                    self.rejected_knowledge,
+                    self.rejected_workspace_admission,
+                    self.verifier_pause,
+                    self.retry_cause,
+                    self.interruption_receipt_sha256,
+                    self.process_stop_sha256,
+                )
+            )
+        ):
+            raise ValueError("knowledge pause investigation changed its exact uninvoked facts")
         rejected_knowledge = self.rejected_knowledge
         if (
             DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION
@@ -707,6 +750,9 @@ class DeliveryResolution(DomainModel):
     knowledge_preparation: KnowledgePreparationRetryEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    knowledge_pause: KnowledgePreparationPauseEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     rejected_output: RejectedCoderOutputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -719,6 +765,30 @@ class DeliveryResolution(DomainModel):
 
     @model_validator(mode="after")
     def require_engineering_actor(self) -> Self:
+        paused = self.knowledge_pause
+        if paused is not None and (
+            self.resolution_kind is not DeliveryResolutionKind.RESUME_UNINVOKED
+            or paused.task_id != self.task_id
+            or paused.work_item_id != self.work_item_id
+            or paused.source_revision != self.expected_source_revision
+            or paused.checkpoint_sequence != self.expected_checkpoint_sequence
+            or any(
+                value is not None
+                for value in (
+                    self.retry_failure,
+                    self.retry_cause,
+                    self.original_authority,
+                    self.verifier_pause,
+                    self.verification_retry,
+                    self.verifier_preparation,
+                    self.knowledge_preparation,
+                    self.rejected_output,
+                    self.rejected_knowledge,
+                    self.rejected_workspace_admission,
+                )
+            )
+        ):
+            raise ValueError("knowledge pause decision changed its exact uninvoked facts")
         if self.authorization_source == "engineering_operator_decision":
             if self.operator_principal is None or self.engineering_admission is not None:
                 raise ValueError("operator decision requires only its real engineering actor")
@@ -956,6 +1026,7 @@ class DeliveryWaitHandling(DomainModel):
                 or decision.knowledge_preparation != proof.knowledge_preparation
                 or decision.rejected_output != proof.rejected_output
                 or decision.rejected_knowledge != proof.rejected_knowledge
+                or decision.knowledge_pause != proof.knowledge_pause
                 or decision.rejected_workspace_admission != proof.rejected_workspace_admission
                 or (
                     decision.task_id,

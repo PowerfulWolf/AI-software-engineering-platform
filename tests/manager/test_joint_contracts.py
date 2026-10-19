@@ -662,6 +662,12 @@ def test_joint_checkpoint_rejects_disposition_or_unknown_child_actions(
 def test_schema_sync_scripts_preserve_distinct_next_action_contracts(tmp_path: Path) -> None:
     """Rescue additions cannot overwrite an unrelated model's same-named enum."""
     repository = Path(__file__).parents[2]
+    # Temporary scripts must import this checkout even when Python's editable
+    # installation points at a different checkout. Keep all other host env absent.
+    environment = {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(repository.resolve() / "src"),
+    }
     scripts = tmp_path / "scripts"
     schemas = tmp_path / "schemas"
     scripts.mkdir()
@@ -679,7 +685,7 @@ def test_schema_sync_scripts_preserve_distinct_next_action_contracts(tmp_path: P
         subprocess.run(
             [sys.executable, str(scripts / filename)],
             cwd=tmp_path,
-            env={"PYTHONDONTWRITEBYTECODE": "1"},
+            env=environment,
             check=True,
             capture_output=True,
             timeout=20,
@@ -707,7 +713,7 @@ def test_schema_sync_scripts_preserve_distinct_next_action_contracts(tmp_path: P
     subprocess.run(
         [sys.executable, str(scripts / "sync-legacy-rescue-schemas.py")],
         cwd=tmp_path,
-        env={"PYTHONDONTWRITEBYTECODE": "1"},
+        env=environment,
         check=True,
         capture_output=True,
         timeout=20,

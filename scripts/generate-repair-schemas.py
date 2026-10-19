@@ -50,6 +50,7 @@ for name in (
     "DeliveryWaitHandling",
     "VerifierPreparationEvidence",
     "KnowledgePreparationRetryEvidence",
+    "KnowledgePreparationPauseEvidence",
 ):
     for generated in schemas.values():
         if name in generated.get("$defs", {}):

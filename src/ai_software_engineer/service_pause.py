@@ -133,6 +133,16 @@ class ServicePauseControl:
         with self._lock:
             return self._deadline is not None
 
+    def request_snapshot(self) -> PauseRequest | None:
+        """Freeze the admission-closed epoch, including its completion grace window."""
+        with self._lock:
+            if self._deadline is None:
+                return None
+            assert self._request_id is not None and self._requested_at is not None
+            return PauseRequest(
+                self._request_id, self._instance_id, self._requested_at, self._deadline
+            )
+
     def due(self) -> bool:
         return self.due_request() is not None
 

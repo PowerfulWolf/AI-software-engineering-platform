@@ -1,0 +1,469 @@
+{
+  "schema_version": "v1",
+  "kind": "independent_nonmysql_regression_triage",
+  "recorded_at": "2026-10-19T11:09:07.391788+00:00",
+  "base_revision": "e309f0ba7418569010b942cc4374f7fe243090a5",
+  "main_root": "/Users/zhangjunshuai/workspace/code/AI-software-engineering-platform",
+  "maintenance_root": "/private/tmp/ase-fix-legacy-ignored",
+  "full_run": {
+    "log_path": "/tmp/ase-paused-knowledge-full-nonmysql-20261019.log",
+    "sha256": "31773fd440a749e9e56f537dbd9944c82c2def67aeac0bb074be6f07220893cc",
+    "original_summary": "37 failed, 6777 passed, 27 skipped, 421 deselected, 2 warnings in 3052.99s (0:50:52)",
+    "failed": 37,
+    "passed": 6777,
+    "skipped": 27,
+    "deselected": 421,
+    "warnings": 2,
+    "duration_seconds": 3052.99,
+    "result": "FAILED"
+  },
+  "classification_counts": {
+    "original_failures": 37,
+    "intermediate_snapshot_fixed": 4,
+    "remaining_preexisting_debt": 33,
+    "original_preexisting_on_main": 35,
+    "original_introduced_snapshot_regressions": 2,
+    "unclassified": 0
+  },
+  "boundaries": {
+    "source_or_test_edits": false,
+    "production_fact_mutations": false,
+    "production_or_shared_mysql_access": false,
+    "temporary_sqlite_fixture_used": true,
+    "full_suite_rerun_by_researcher": false,
+    "root_session_polled_by_researcher": false,
+    "report_only_write": true
+  },
+  "conclusion": "Every original failure is classified. Four intermediate snapshot failures have later passing narrow evidence; the other 33 reproduce on main. No additional unresolved newly introduced regression was found by this targeted comparison. The full suite itself did not pass.",
+  "material_existing_debt": [
+    "ExecutionCaptureStop static Schema cross-field gap is a genuine published-contract debt, not merely a stale fixture; typed runtime validation remains fail closed.",
+    "Several old fixtures fail before their later assertions; those later assertions remain unverified until fixture contracts are repaired.",
+    "Temporary fixture/maintenance validation does not establish real K1 Coder, QA or Reviewer delivery success."
+  ],
+  "failure_records": [
+    {
+      "node_id": "tests/agents/test_responses_workspace_admission.py::test_seed_drift_is_rejected_before_provider",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "main-existing workspace seed drift negative-test failure",
+      "evidence": "root previously confirmed main/current; not rerun by this researcher",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/contracts/test_continuation_schema.py::test_capture_schema_and_models_reject_bad_role_cause_and_stop_kind[cause-<lambda>]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "real existing static-Schema cross-field gap: provider_transient permits mismatched stop/error in static Schema; typed ExecutionCaptureStop still rejects",
+      "evidence": "independent main/current original-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/contracts/test_owned_session_stop_schema.py::test_all_known_embeddings_and_fresh_repair_regeneration_keep_exact_stop_graph",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "intermediate_snapshot_failure_fixed",
+      "reason": "exact stop embedding inventory omitted stopped-failure on main; maintenance additionally embeds knowledge-preparation-isolation; script and test inventories synchronized",
+      "evidence": "independent original main/current reproduction; root reported latest independent 12-pass narrow verification",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": {
+        "result": "PASSED",
+        "suite_count": 12,
+        "verifier": "/root reported independent narrow verification; not duplicated"
+      }
+    },
+    {
+      "node_id": "tests/contracts/test_owned_session_stop_schema.py::test_stop_schema_sync_checks_exact_inventory_before_any_write[known]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "intermediate_snapshot_failure_fixed",
+      "reason": "exact stop embedding inventory omitted stopped-failure on main; maintenance additionally embeds knowledge-preparation-isolation; script and test inventories synchronized",
+      "evidence": "independent original main/current reproduction; root reported latest independent 12-pass narrow verification",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": {
+        "result": "PASSED",
+        "suite_count": 12,
+        "verifier": "/root reported independent narrow verification; not duplicated"
+      }
+    },
+    {
+      "node_id": "tests/manager/test_baseline_knowledge_claim_proof.py::test_resealed_or_orphan_knowledge_proof_cannot_replace_original_facts[appended_foreign_claim]",
+      "original_full_run_result": "FAILED",
+      "origin": "introduced_in_maintenance_snapshot",
+      "current_disposition": "intermediate_snapshot_failure_fixed",
+      "reason": "maintenance broad eligible_lease_ids filtering incorrectly hid appended foreign claim; replaced with exclusions from exact independently verified proof",
+      "evidence": "main original knowledge-claim file passed; current exact case independently passed 1/19.94s",
+      "main_result": "PASSED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": {
+        "result": "PASSED",
+        "count": 1,
+        "seconds": 19.94,
+        "verifier": "/root/baseline_regression_triage"
+      }
+    },
+    {
+      "node_id": "tests/manager/test_baseline_read_reuse.py::test_complete_binding_read_reads_plan_once_but_context_remains_fresh",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "main-existing baseline immutable-plan decode/read reuse count assertion failure",
+      "evidence": "root previously confirmed main/current; not rerun by this researcher",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/manager/test_baseline_source_inspection_scope.py::test_failed_plan_integrity_check_releases_source_scope",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "old error text expects integrity mismatch but exact immutable record key guard rejects earlier with recovery immutable record key changed",
+      "evidence": "independent main/current original-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/manager/test_joint_context_limits.py::test_joint_stage_producer_projects_prompt_but_passes_full_checkpoint_to_knowledge[False-design]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "__new__ JointDeliveryService fixture omits journal needed by design feedback history",
+      "evidence": "independent main/current original-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/manager/test_joint_context_limits.py::test_joint_stage_producer_projects_prompt_but_passes_full_checkpoint_to_knowledge[True-design]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "__new__ JointDeliveryService fixture omits journal needed by design feedback history",
+      "evidence": "independent main/current original-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/manager/test_joint_contracts.py::test_schema_sync_scripts_preserve_distinct_next_action_contracts",
+      "original_full_run_result": "FAILED",
+      "origin": "introduced_in_maintenance_snapshot",
+      "current_disposition": "intermediate_snapshot_failure_fixed",
+      "reason": "subprocess fixture discarded PYTHONPATH and imported installed main rather than maintenance; added module import exposed stale test environment; explicit current src path resolves",
+      "evidence": "independent main PASS/current original FAIL; same temporary script with correct PYTHONPATH passed; root latest independent 12-pass narrow verification",
+      "main_result": "PASSED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": {
+        "result": "PASSED",
+        "suite_count": 12,
+        "verifier": "/root reported independent narrow verification; not duplicated"
+      }
+    },
+    {
+      "node_id": "tests/manager/test_team_host.py::test_resume_delivery_does_not_recurse_when_handling_stays_waiting",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace wait handling fixture omits budget_settlement_sha256",
+      "evidence": "independent main/current original-case reproduction: each file 1 failed/17 passed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/manager/test_verifier_route_preparation.py::test_unsupported_fallback_waits_before_any_model_invocation",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "old unsupported-fallback expectation does not raise _Wait under current main behavior; same original failure under real process inspection",
+      "evidence": "independent main/current require_escalated exact-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_joint_resume.py::test_joint_resume_preserves_child_approval_after_parent_sync[False-verification]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace requirements fixture omits journal.current port",
+      "evidence": "independent main/current original 8-case reproduction: each 8 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_joint_resume.py::test_joint_resume_preserves_child_approval_after_parent_sync[False-recovery]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace requirements fixture omits journal.current port",
+      "evidence": "independent main/current original 8-case reproduction: each 8 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_joint_resume.py::test_joint_resume_preserves_child_approval_after_parent_sync[False-scope]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace requirements fixture omits journal.current port",
+      "evidence": "independent main/current original 8-case reproduction: each 8 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_joint_resume.py::test_joint_resume_preserves_child_approval_after_parent_sync[False-environment_wait]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace requirements fixture omits journal.current port",
+      "evidence": "independent main/current original 8-case reproduction: each 8 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_joint_resume.py::test_joint_resume_preserves_child_approval_after_parent_sync[True-verification]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace requirements fixture omits journal.current port",
+      "evidence": "independent main/current original 8-case reproduction: each 8 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_joint_resume.py::test_joint_resume_preserves_child_approval_after_parent_sync[True-recovery]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace requirements fixture omits journal.current port",
+      "evidence": "independent main/current original 8-case reproduction: each 8 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_joint_resume.py::test_joint_resume_preserves_child_approval_after_parent_sync[True-scope]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace requirements fixture omits journal.current port",
+      "evidence": "independent main/current original 8-case reproduction: each 8 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_joint_resume.py::test_joint_resume_preserves_child_approval_after_parent_sync[True-environment_wait]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace requirements fixture omits journal.current port",
+      "evidence": "independent main/current original 8-case reproduction: each 8 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_terminal_source_inspection_scope.py::test_proposal_reuses_exact_full_text_but_repeats_fresh_capture_and_fact_reads[False]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace NativeRecoverySource fixture omits capacity_input",
+      "evidence": "independent main/current original 3-case reproduction: each 3 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_terminal_source_inspection_scope.py::test_proposal_reuses_exact_full_text_but_repeats_fresh_capture_and_fact_reads[True]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace NativeRecoverySource fixture omits capacity_input",
+      "evidence": "independent main/current original 3-case reproduction: each 3 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/recovery/test_terminal_source_inspection_scope.py::test_approval_reuses_pure_scans_across_authorization_and_offline_sealing",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "SimpleNamespace NativeRecoverySource fixture omits capacity_input",
+      "evidence": "independent main/current original 3-case reproduction: each 3 failed",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/runtime/test_runtime.py::test_explicit_context_limit_reaches_all_runtime_roles[12000]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "old BUDGET_EXHAUSTED expectations conflict with new-record CONTEXT_CAPACITY contract; historical compatibility remains separate",
+      "evidence": "readonly child /root/baseline_regression_triage/runtime_baseline_compare main/current exact 5-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/runtime/test_runtime.py::test_context_overflow_records_current_phase_without_retry[orchestrator]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "old BUDGET_EXHAUSTED expectations conflict with new-record CONTEXT_CAPACITY contract; historical compatibility remains separate",
+      "evidence": "readonly child /root/baseline_regression_triage/runtime_baseline_compare main/current exact 5-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/runtime/test_runtime.py::test_context_overflow_records_current_phase_without_retry[coder]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "old BUDGET_EXHAUSTED expectations conflict with new-record CONTEXT_CAPACITY contract; historical compatibility remains separate",
+      "evidence": "readonly child /root/baseline_regression_triage/runtime_baseline_compare main/current exact 5-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/runtime/test_runtime.py::test_context_overflow_records_current_phase_without_retry[qa]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "old BUDGET_EXHAUSTED expectations conflict with new-record CONTEXT_CAPACITY contract; historical compatibility remains separate",
+      "evidence": "readonly child /root/baseline_regression_triage/runtime_baseline_compare main/current exact 5-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/runtime/test_runtime.py::test_context_overflow_records_current_phase_without_retry[reviewer]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "old BUDGET_EXHAUSTED expectations conflict with new-record CONTEXT_CAPACITY contract; historical compatibility remains separate",
+      "evidence": "readonly child /root/baseline_regression_triage/runtime_baseline_compare main/current exact 5-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/team_view/test_read_models.py::test_independent_read_schema_generation_is_repeatable_and_preserves_guards",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "generated team-detail Schema differs in byte ordering while parsed complete JSON is equal",
+      "evidence": "independent main/current original-case reproduction and temporary generated JSON structural comparison",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/tools/test_registry.py::test_real_command_uncertain_stop_is_not_converted_to_tool_rejection",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "main/current both do not raise CommandExecutionUncertain under old execution.os.killpg injection; existing test/behavior discrepancy",
+      "evidence": "independent main/current real subprocess exact-case reproduction",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/web_console/test_administration.py::test_knowledge_tick_isolates_team_and_project_failures",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "old test does not expect final aggregate safe-stop AdministrationError; both temporary SQLite healthy jobs still reach READY",
+      "evidence": "readonly child original main/current and tmp_path-only SQLite observation; root explicitly authorized temporary SQLite",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/web_console/test_deletion_cleanup.py::test_delete_cleanup_interruption_is_readable_and_restartable",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "raw Pydantic Schema equality ignores required handwritten guards; main has 18 structural differences, maintenance 19 with new pause guard",
+      "evidence": "readonly child main/current original-case reproduction; complete Schema structural comparison",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/web_console/test_preparation_progress.py::test_real_execute_observes_dispatch_and_verified_seed_only_after_each_success[seed]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "old offline sidecar fixture omits artifacts directory; read-only FileArtifactStore rejects missing artifact root before model execution",
+      "evidence": "independent main/current exact 2-case reproduction with mocked SQL ports",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/web_console/test_preparation_progress.py::test_real_execute_observes_dispatch_and_verified_seed_only_after_each_success[after_seed]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "old offline sidecar fixture omits artifacts directory; read-only FileArtifactStore rejects missing artifact root before model execution",
+      "evidence": "independent main/current exact 2-case reproduction with mocked SQL ports",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/web_console/test_product_failure.py::test_failed_product_reply_explains_cause_and_resumes_retained_message[auth]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "test _Clients.for_project receives role but omits role=role constructing structured client; exact admission sees product versus None and correctly rejects before model start",
+      "evidence": "readonly child main/current exact 3-case reproduction and in-memory exact mismatch trace",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/web_console/test_product_failure.py::test_failed_product_reply_explains_cause_and_resumes_retained_message[intent_schema]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "test _Clients.for_project receives role but omits role=role constructing structured client; exact admission sees product versus None and correctly rejects before model start",
+      "evidence": "readonly child main/current exact 3-case reproduction and in-memory exact mismatch trace",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    },
+    {
+      "node_id": "tests/web_console/test_product_failure.py::test_failed_product_reply_explains_cause_and_resumes_retained_message[reply_schema]",
+      "original_full_run_result": "FAILED",
+      "origin": "preexisting_on_e309_main",
+      "current_disposition": "remaining_preexisting_debt",
+      "reason": "test _Clients.for_project receives role but omits role=role constructing structured client; exact admission sees product versus None and correctly rejects before model start",
+      "evidence": "readonly child main/current exact 3-case reproduction and in-memory exact mismatch trace",
+      "main_result": "FAILED",
+      "maintenance_original_result": "FAILED",
+      "current_verification": null
+    }
+  ]
+}

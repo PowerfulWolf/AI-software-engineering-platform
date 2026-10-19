@@ -44,11 +44,16 @@ from ai_software_engineer.agents.structured_observation import (
     StructuredHttpRoundTripReceipt,
     StructuredObservationRejected,
     admit_structured_execution,
+    current_structured_call_identity,
     current_structured_execution_observer,
     observation_digest,
     record_structured_http_completion,
     structured_call_identity,
     structured_request_digest,
+)
+from ai_software_engineer.agents.structured_pause import (
+    PreAdmissionPauseOrigin,
+    StructuredPreAdmissionPauseReceipt,
 )
 from ai_software_engineer.config.codex_proxy import (
     codex_cli_proxy_key_environment,
@@ -108,6 +113,26 @@ class StructuredModelError(RuntimeError):
             request_id=self.request_id,
             correlation_id=self.correlation_id,
             timeout_kind=self.timeout_kind,
+        )
+
+
+class StructuredAdmissionPaused(StructuredModelError):
+    """Trusted positive refusal, preserved through bounded fallback context."""
+
+    def __init__(
+        self, receipt: StructuredPreAdmissionPauseReceipt, *, safe_message: str | None = None
+    ) -> None:
+        receipt.validate_integrity()
+        self.receipt = receipt
+        super().__init__(
+            AgentErrorCode.SERVICE_PAUSED,
+            safe_message or "服务重启已暂停新模型调用。",
+            transient=False,
+        )
+
+    def with_context(self, context: str) -> StructuredAdmissionPaused:
+        return StructuredAdmissionPaused(
+            self.receipt, safe_message=f"{safe_diagnostic(context, limit=150)}: {self.safe_message}"
         )
 
 
@@ -201,12 +226,16 @@ class FallbackStructuredModelClient:
         last: StructuredModelError | None = None
         invocation_id = uuid4().hex
         for index, (route_index, route) in enumerate(candidates):
-            from ai_software_engineer.service_pause import service_pause_requested
-
-            if service_pause_requested():
-                raise StructuredModelError(
-                    AgentErrorCode.SERVICE_PAUSED, "服务重启已暂停新模型调用。", transient=False
-                )
+            require_structured_admission_open(
+                origin="fallback_before_route",
+                instructions=instructions,
+                input_payload=input_payload,
+                output_schema=output_schema,
+                timeout_seconds=timeout_seconds,
+                input_images=input_images,
+                role=self._role,
+                invocation_id=invocation_id,
+            )
             started_at, started = datetime.now(UTC), time.monotonic()
             identity = (
                 StructuredCallIdentity(
@@ -356,7 +385,14 @@ class CodexCliStructuredModelClient:
     ) -> StructuredModelResult:
         from ai_software_engineer.agents.codex_policy import no_command_arguments
 
-        _check_service_pause()
+        require_structured_admission_open(
+            origin="native_client_entry",
+            instructions=instructions,
+            input_payload=input_payload,
+            output_schema=output_schema,
+            timeout_seconds=timeout_seconds,
+            input_images=input_images,
+        )
         started = time.monotonic()
         prompt = _prompt(instructions, input_payload)
         with tempfile.TemporaryDirectory(prefix="ase-structured-") as temporary:
@@ -496,7 +532,14 @@ class ResponsesStructuredModelClient:
         timeout_seconds: int,
         input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
-        _check_service_pause()
+        require_structured_admission_open(
+            origin="responses_client_entry",
+            instructions=instructions,
+            input_payload=input_payload,
+            output_schema=output_schema,
+            timeout_seconds=timeout_seconds,
+            input_images=input_images,
+        )
         started = time.monotonic()
         user_content: JsonValue
         if input_images:
@@ -541,7 +584,14 @@ class ResponsesStructuredModelClient:
             },
         }
         request_bytes = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
-        _check_service_pause()
+        require_structured_admission_open(
+            origin="responses_before_transport_admission",
+            instructions=instructions,
+            input_payload=input_payload,
+            output_schema=output_schema,
+            timeout_seconds=timeout_seconds,
+            input_images=input_images,
+        )
         admission = admit_structured_execution(
             execution_kind="http",
             transport_request_sha256=observation_digest(
@@ -641,13 +691,51 @@ def _record_http_round_trip(
         raise StructuredObservationRejected("结构化请求回执不一致; 暂停后续执行") from error
 
 
-def _check_service_pause() -> None:
-    from ai_software_engineer.service_pause import service_pause_requested
+def require_structured_admission_open(
+    *,
+    origin: PreAdmissionPauseOrigin,
+    instructions: str,
+    input_payload: Mapping[str, object],
+    output_schema: Mapping[str, object],
+    timeout_seconds: int,
+    input_images: tuple[Path, ...] = (),
+    role: TeamRole | None = None,
+    invocation_id: str | None = None,
+) -> None:
+    from ai_software_engineer.service_pause import current_service_pause
 
-    if service_pause_requested():
-        raise StructuredModelError(
-            AgentErrorCode.SERVICE_PAUSED, "服务重启已暂停新模型调用。", transient=False
+    scope = current_service_pause()
+    pause = scope.control.request_snapshot() if scope is not None else None
+    if scope is None or pause is None:
+        return
+    try:
+        selected = None if origin == "fallback_before_route" else current_structured_call_identity()
+        receipt = StructuredPreAdmissionPauseReceipt.create(
+            origin=origin,
+            request_sha256=structured_request_digest(
+                instructions=instructions,
+                input_payload=input_payload,
+                output_schema=output_schema,
+                timeout_seconds=timeout_seconds,
+                image_sha256s=tuple(
+                    hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in _verified_images(input_images)
+                ),
+            ),
+            timeout_seconds=timeout_seconds,
+            phase=current_call_phase(),
+            role=selected.role if selected is not None else role,
+            invocation_id=selected.invocation_id if selected is not None else invocation_id,
+            selected_call=selected,
+            operation_id=scope.operation_id,
+            pause_request_id=pause.request_id,
+            pause_instance_id=pause.instance_id,
+            pause_requested_at=pause.requested_at,
+            refused_at=datetime.now(UTC),
         )
+    except Exception as error:
+        raise StructuredObservationRejected("结构化调用暂停事实无法封存; 未启动模型") from error
+    raise StructuredAdmissionPaused(receipt)
 
 
 def _allows_fallback(error: StructuredModelError) -> bool:

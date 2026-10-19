@@ -61,6 +61,8 @@ from ai_software_engineer.manager.baseline_models import (
     ExecutionBaselinePlan,
     require_completed_output_confirmation,
     require_context_capacity_binding,
+    require_knowledge_isolation_binding,
+    require_knowledge_isolation_confirmation,
     require_provider_confirmation_shape,
     require_provider_prerequisite_confirmation,
     require_rescue_confirmation,
@@ -91,6 +93,12 @@ from ai_software_engineer.manager.knowledge_invocation_proof import (
     read_capacity_claim_snapshot,
     read_failed_knowledge_claims,
     read_replay_guarded_claims,
+)
+from ai_software_engineer.manager.knowledge_isolation import (
+    KnowledgePreparationIsolationProof,
+    observe_isolation_boundary,
+    read_unknown_knowledge_preparation,
+    require_current_isolation_boundary,
 )
 from ai_software_engineer.manager.legacy_containment import (
     LegacyExecutionContainment,
@@ -131,6 +139,7 @@ from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.repository_profile import NativeRuleSource, native_rule_kinds
 from ai_software_engineer.spec_compiler import SpecRule
 from ai_software_engineer.store import TaskRepository
+from ai_software_engineer.work_queue.claim_snapshot import require_claim_snapshot
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
 from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationOutcome,
@@ -164,6 +173,7 @@ class BaselineProposeCommand(DomainModel):
             BaselinePurpose.STOPPED_FAILURE_RETRY,
             BaselinePurpose.STOPPED_EXECUTION_RESCUE,
             BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+            BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
         }:
             if (
                 self.target_base_ref is not None
@@ -223,6 +233,7 @@ class BaselineProposeCommand(DomainModel):
                 BaselinePurpose.STOPPED_FAILURE_RETRY,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                 BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+                BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
             }
             else self.target_base_ref,
             self.input_mode,
@@ -243,6 +254,9 @@ class BaselineExecuteCommand(DomainModel):
     approved_native_rule_change_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    confirm_current_knowledge_execution_isolated: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     confirm_legacy_containment: Literal[True] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -256,6 +270,24 @@ class BaselineExecuteCommand(DomainModel):
     confirm_stopped_failure_retry: Literal[True] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+
+    @model_validator(mode="after")
+    def current_isolation_confirmation_shape(self) -> Self:
+        if self.confirm_current_knowledge_execution_isolated is not None and (
+            self.continuation_mode is not BaselineContinuationMode.PAUSE
+            or any(
+                value is not None
+                for value in (
+                    self.confirm_legacy_containment,
+                    self.confirm_local_execution_stopped,
+                    self.confirm_provider_prerequisites_repaired,
+                    self.confirm_stopped_failure_retry,
+                    self.approved_native_rule_change_sha256,
+                )
+            )
+        ):
+            raise ValueError("当前知识隔离确认必须独立批准并保持暂停")
+        return self
 
     @model_validator(mode="after")
     def distinct_confirmation(self) -> Self:
@@ -277,6 +309,9 @@ class BaselineExecuteCommand(DomainModel):
         return self
 
     def require_plan(self, plan: ExecutionBaselinePlan) -> None:
+        require_knowledge_isolation_confirmation(
+            plan, self.confirm_current_knowledge_execution_isolated, self.continuation_mode
+        )
         plan.validate_integrity()
         require_completed_output_confirmation(plan, self.continuation_mode)
         if (
@@ -343,6 +378,12 @@ class BaselineInvocationProof(DomainModel):
     legacy_binding_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    knowledge_isolation: KnowledgePreparationIsolationProof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    knowledge_isolation_binding_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     stopped_execution: StoppedCoderExecutionProof | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -354,11 +395,39 @@ class BaselineInvocationProof(DomainModel):
         "claimed_preflight",
         "claimed_context_capacity",
         "claimed_knowledge_failure",
+        "isolated_knowledge_preparation",
         "legacy_execution_contained",
     ]
 
     @model_validator(mode="after")
     def validate_legacy(self) -> Self:
+        if self.proof_kind == "isolated_knowledge_preparation":
+            isolation_proof = self.knowledge_isolation
+            if (
+                isolation_proof is None
+                or isolation_proof.work_item_id != self.work_item_id
+                or any(
+                    value is not None
+                    for value in (
+                        self.start_sha256,
+                        self.outcome_sha256,
+                        self.interruption_receipt_sha256,
+                        self.legacy_containment,
+                        self.stopped_execution,
+                    )
+                )
+                or self.knowledge_only_claims
+                or self.replay_guarded_claims
+                or self.preflight_checkpoint_sha256s
+                or self.context_capacity_receipt_sha256s
+            ):
+                raise ValueError("当前知识隔离不能冒充主岗位启动、结果或停止事实")
+            isolation_proof.validate_integrity()
+        elif (
+            self.knowledge_isolation is not None
+            or self.knowledge_isolation_binding_sha256 is not None
+        ):
+            raise ValueError("当前知识隔离证明只能覆盖精确原 claim")
         if self.replay_guarded_claims and (
             self.proof_kind
             not in {"stopped_execution_without_outcome", "legacy_execution_contained"}
@@ -562,6 +631,7 @@ class ProductionBaselineFactCollector:
                     BaselinePurpose.STOPPED_FAILURE_RETRY,
                     BaselinePurpose.STOPPED_EXECUTION_RESCUE,
                     BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+                    BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
                 }
                 and command.target_base_ref != target_base_ref
             )
@@ -601,6 +671,10 @@ class ProductionBaselineFactCollector:
         # execution_scope already owns both boundaries. Collection only appends
         # original outcome/receipt facts; HANDLE would also resolve and resume.
         collector.collect(task, step, self.guard)
+
+    def bind_knowledge_isolation(self, proof: KnowledgePreparationIsolationProof) -> None:
+        proof.validate_integrity()
+        self._sealed_knowledge_isolation = proof
 
     def bind_legacy_observation(self, containment: LegacyExecutionContainment) -> None:
         """Pin the approved evidence while collect independently checks it again."""
@@ -714,6 +788,24 @@ class ProductionBaselineFactCollector:
                 )
                 if current != original.invocations:
                     raise ValueError("恢复消费前原调用或重领观察事实已变化, 原现场保留")
+            if plan.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION:
+                require_knowledge_isolation_binding(plan, binding)
+                isolation_proof = plan.facts.knowledge_isolation
+                assert isolation_proof is not None
+                self._reread_knowledge_isolation(
+                    isolation_proof,
+                    self.repository.get(isolation_proof.task_id),
+                    self.queue.get(isolation_proof.work_item_id),
+                )
+                self._verify_knowledge_isolation_boundary(isolation_proof)
+                for capture in (plan.dirty_capture, plan.complete_capture):
+                    self.git.verify_mutations(
+                        capture.to_capture(),
+                        plan.facts.permissions,
+                        denied_paths=plan.facts.denied_paths,
+                    )
+                if capture_mutation_inventory(Path(binding.worktree_path)) != plan.before_inventory:
+                    raise ValueError("当前知识隔离的完整现场已变化")
             if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME:
                 require_context_capacity_binding(plan, binding)
                 if self.collect(plan.target_base_ref) != plan.facts:
@@ -936,6 +1028,11 @@ class ProductionBaselineFactCollector:
                 raise ValueError("保留现场已变化, 不能沿用原继续决定; 文件保持")
             plan = store.plan(binding.plan_sha256)
             for previous in store.bindings_for_task(binding.task_id):
+                if previous.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION:
+                    isolated = store.plan(previous.plan_sha256).facts.knowledge_isolation
+                    if isolated is None:
+                        raise ValueError("历史知识隔离缺少精确原调查")
+                    self._verify_knowledge_isolation_boundary(isolated)
                 if previous.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
                     saved = store.plan(previous.plan_sha256).facts.legacy_containment
                     if saved is None:
@@ -1050,6 +1147,7 @@ class ProductionBaselineFactCollector:
             BaselinePurpose.STOPPED_FAILURE_RETRY,
             BaselinePurpose.STOPPED_EXECUTION_RESCUE,
             BaselinePurpose.CONTEXT_CAPACITY_RESUME,
+            BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
         }:
             if target_base_ref is not None and target_base_ref != source.execution_base_ref:
                 raise ValueError(
@@ -1082,7 +1180,14 @@ class ProductionBaselineFactCollector:
         )
         if self.inputs.store is None:
             raise ValueError("执行基线缺少可信 append-only 事实存储")
-        if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE and target_rules != frozen_rules:
+        if (
+            self.purpose
+            in {
+                BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
+                BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION,
+            }
+            and target_rules != frozen_rules
+        ):
             raise ValueError("旧执行救援不能同时替换原规范, 请先保留进度并暂停")
         change = build_native_rule_change(
             git=self.git,
@@ -1113,8 +1218,19 @@ class ProductionBaselineFactCollector:
         )
         if self.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE and stopped_execution is None:
             raise ValueError("原执行不符合完整已停止且无结果的精确恢复前提, 原现场保留")
+        knowledge_isolation = (
+            self._knowledge_isolation(task, item, step)
+            if self.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION
+            else None
+        )
         invocation_proofs = self._invocations(
-            task, items, receipts, assignments, legacy=legacy, stopped_execution=stopped_execution
+            task,
+            items,
+            receipts,
+            assignments,
+            legacy=legacy,
+            stopped_execution=stopped_execution,
+            knowledge_isolation=knowledge_isolation,
         )
         completed_output = (
             self._completed_output(task, item, step)
@@ -1155,6 +1271,7 @@ class ProductionBaselineFactCollector:
             stopped_provider_failure=stopped_provider_failure,
             stopped_failure=stopped_failure,
             stopped_execution=stopped_execution,
+            knowledge_isolation=knowledge_isolation,
         )
         current_capacity = self._current_capacity_receipt(task, item, invocation_proofs)
         proof = BaselineQuiescenceProof(
@@ -1193,6 +1310,7 @@ class ProductionBaselineFactCollector:
             resolved_interruption_receipt_sha256s=resolved,
             continuation=reservation,
             legacy_containment=legacy,
+            knowledge_isolation=knowledge_isolation,
             completed_output=completed_output,
             stopped_provider_failure=stopped_provider_failure,
             stopped_failure=stopped_failure,
@@ -1354,6 +1472,7 @@ class ProductionBaselineFactCollector:
         *,
         legacy: LegacyExecutionContainment | None = None,
         stopped_execution: StoppedCoderExecutionProof | None = None,
+        knowledge_isolation: KnowledgePreparationIsolationProof | None = None,
     ) -> tuple[BaselineInvocationProof, ...]:
         root = self.state / "invocations"
         records = KnowledgeRecordStore(root, read_only=True) if root.is_dir() else None
@@ -1386,14 +1505,54 @@ class ProductionBaselineFactCollector:
         item_ids = {item.id for item in items}
         if not set(starts_by_id).issubset(item_ids) or not set(outcomes_by_id).issubset(item_ids):
             raise ValueError("原调用日志含未归属当前 Task 队列的执行")
+        historical_isolations = {
+            item.id: self._historical_knowledge_isolation(task, item) for item in items
+        }
+        isolated_lease_ids = frozenset(
+            value[0].original_claim.lease.id
+            for value in historical_isolations.values()
+            if value is not None
+        )
+        if knowledge_isolation is not None:
+            isolated_lease_ids |= frozenset((knowledge_isolation.original_claim.lease.id,))
         result = []
         for item in items:
             start, outcome = starts_by_id.get(item.id), outcomes_by_id.get(item.id)
             claims = self.queue.claims_for_work_item(item.id)
+            historical_isolation = historical_isolations[item.id]
+            isolation = (
+                knowledge_isolation
+                if (knowledge_isolation is not None and knowledge_isolation.work_item_id == item.id)
+                else (historical_isolation[0] if historical_isolation is not None else None)
+            )
+            if isolation is not None:
+                if start is not None or outcome is not None or len(claims) != 1:
+                    raise ValueError("当前知识隔离原工作项出现主调用或不同 claim")
+                require_claim_snapshot(isolation.original_claim, claims[0])
+                result.append(
+                    BaselineInvocationProof(
+                        work_item_id=item.id,
+                        step_sha256=digest(isolation.original_step.to_wire()),
+                        proof_kind="isolated_knowledge_preparation",
+                        knowledge_isolation=isolation,
+                        knowledge_isolation_binding_sha256=(
+                            historical_isolation[1].binding_sha256
+                            if historical_isolation is not None
+                            and (
+                                knowledge_isolation is None
+                                or knowledge_isolation.work_item_id != item.id
+                            )
+                            else None
+                        ),
+                    )
+                )
+                continue
             preflight_claims = tuple(
                 claim for claim in claims if start is None or claim.lease.id != start.lease_id
             )
-            capacity_markers = self._capacity_markers(task, item, preflight_claims)
+            capacity_markers = self._capacity_markers(
+                task, item, preflight_claims, isolated_lease_ids=isolated_lease_ids
+            )
             capacity_leases = {marker.lease_id for marker in capacity_markers}
             fence = self._prior_invocation_fence(task, start, legacy, stopped_execution)
             replay_markers = (
@@ -1410,6 +1569,7 @@ class ProductionBaselineFactCollector:
                     require_step=self._require_step,
                     no_start_reader=self._capacity_input_reader(),
                     fence=fence,
+                    isolated_lease_ids=isolated_lease_ids,
                 )
                 if fence is not None
                 else ()
@@ -1423,6 +1583,7 @@ class ProductionBaselineFactCollector:
                     for claim in preflight_claims
                     if claim.lease.id not in capacity_leases | replay_leases
                 ),
+                isolated_lease_ids=isolated_lease_ids,
             )
             knowledge_leases = {marker.lease_id for marker in knowledge_markers}
             markers = self._preflight_markers(
@@ -1861,6 +2022,7 @@ class ProductionBaselineFactCollector:
         stopped_provider_failure: StoppedProviderFailureProof | None = None,
         stopped_failure: StoppedFailureProof | None = None,
         stopped_execution: StoppedCoderExecutionProof | None = None,
+        knowledge_isolation: KnowledgePreparationIsolationProof | None = None,
     ) -> BaselineExecutionReservation:
         if (
             sum(
@@ -1871,11 +2033,25 @@ class ProductionBaselineFactCollector:
                     stopped_provider_failure,
                     stopped_failure,
                     stopped_execution,
+                    knowledge_isolation,
                 )
             )
             > 1
         ):
             raise ValueError("不同原执行恢复证明不能混用")
+        if knowledge_isolation is not None:
+            if (
+                task.attempts != item.attempt
+                or task.work_budget_exhausted
+                or task.attempts >= task.max_attempts
+            ):
+                raise ValueError("当前知识隔离没有剩余普通工作额度或精确原执行身份")
+            return BaselineExecutionReservation(
+                current_attempt=item.attempt,
+                next_execution_attempt=item.attempt + 1,
+                retry_cause="knowledge_isolation",
+                knowledge_isolation_sha256=knowledge_isolation.proof_sha256,
+            )
         root = self.state / "invocations"
         records = KnowledgeRecordStore(root, read_only=True) if root.is_dir() else None
         start = (
@@ -2092,6 +2268,146 @@ class ProductionBaselineFactCollector:
             reservation_already_applied=already,
         )
 
+    def _reread_knowledge_isolation(
+        self, proof: KnowledgePreparationIsolationProof, task: Task, item: QueuedWorkItem
+    ) -> None:
+        proof.validate_integrity()
+        outcome, claim, step, context_sha256 = read_unknown_knowledge_preparation(
+            state=self.state,
+            task=task,
+            item=item,
+            scope=self.scope,
+            requirement_id=getattr(self, "knowledge_requirement_id", self.requirement_id),
+            queue=self.queue,
+            require_step=self._require_step,
+            no_start_reader=self._capacity_input_reader(),
+        )
+        if (
+            outcome != proof.outcome
+            or step != proof.original_step
+            or context_sha256 != proof.context_sha256
+            or proof.scope != self.scope
+            or proof.task_id != task.id
+            or proof.task_intent_sha256 != task_intent_sha256(task)
+            or proof.requirement_id != self.requirement_id
+            or proof.dispatch_sha256 != self.allocation.dispatch_sha256
+        ):
+            raise ValueError("当前知识隔离的原知识输入、claim 或工程范围已变化")
+        require_claim_snapshot(proof.original_claim, claim)
+
+    def _verify_knowledge_isolation_boundary(
+        self, proof: KnowledgePreparationIsolationProof
+    ) -> None:
+        boot = self._observe_legacy_boot()
+        require_current_isolation_boundary(
+            proof,
+            observer=self.local_execution_observer,
+            boot=boot,
+            repository_root=Path(self.scope.repository_root),
+            worktree_root=Path(proof.worktree_surveys[0].worktree_path),
+        )
+        if self._observe_legacy_boot() != boot:
+            raise ValueError("当前知识隔离检查期间电脑启动会话发生变化")
+
+    def _knowledge_isolation(
+        self, task: Task, item: QueuedWorkItem, step: QueuedRoleStep
+    ) -> KnowledgePreparationIsolationProof:
+        disposition = item.wait_disposition
+        if (
+            item.status not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+            or disposition is None
+            or disposition.facts.classification != "SERVICE_PAUSED"
+            or disposition.facts.task_intent_sha256 != task_intent_sha256(task)
+            or disposition.facts.checkpoint_sequence != item.checkpoint_sequence
+            or disposition.facts.source_revision != step.boundary.source_revision
+            or len(self.queue.claims_for_work_item(item.id)) != 1
+        ):
+            raise ValueError("当前知识隔离只处理精确旧知识准备导致的 Coder 暂停等待")
+        outcome, claim, original_step, context_sha256 = read_unknown_knowledge_preparation(
+            state=self.state,
+            task=task,
+            item=item,
+            scope=self.scope,
+            requirement_id=getattr(self, "knowledge_requirement_id", self.requirement_id),
+            queue=self.queue,
+            require_step=self._require_step,
+            no_start_reader=self._capacity_input_reader(),
+        )
+        sealed: KnowledgePreparationIsolationProof | None = getattr(
+            self, "_sealed_knowledge_isolation", None
+        )
+        if sealed is not None:
+            self._reread_knowledge_isolation(sealed, task, item)
+            self._verify_knowledge_isolation_boundary(sealed)
+            return sealed
+        worktree = self.git.recover(
+            WorktreeSpec(
+                task_id=task.id,
+                role=AgentRole.CODER,
+                attempt=1,
+                source_revision=step.boundary.source_revision,
+            )
+        )
+        boot = self._observe_legacy_boot()
+        repository_surveys, worktree_surveys = observe_isolation_boundary(
+            observer=self.local_execution_observer,
+            boot=boot,
+            repository_root=Path(self.scope.repository_root),
+            worktree_root=worktree.path,
+        )
+        if self._observe_legacy_boot() != boot:
+            raise ValueError("当前知识隔离检查期间电脑启动会话发生变化")
+        proof = KnowledgePreparationIsolationProof.create(
+            scope=self.scope,
+            requirement_id=self.requirement_id,
+            knowledge_requirement_id=outcome.intent.binding.requirement_id,
+            dispatch_sha256=self.allocation.dispatch_sha256,
+            task_id=task.id,
+            task_intent_sha256=task_intent_sha256(task),
+            task_revision=self.repository.current_revision(task.id),
+            work_item_id=item.id,
+            checkpoint_sequence=item.checkpoint_sequence,
+            original_claim=claim,
+            original_step=original_step,
+            outcome=outcome,
+            context_sha256=context_sha256,
+            boot=boot,
+            repository_surveys=repository_surveys,
+            worktree_surveys=worktree_surveys,
+        )
+        self._sealed_knowledge_isolation = proof
+        return proof
+
+    def _historical_knowledge_isolation(
+        self, task: Task, item: QueuedWorkItem
+    ) -> tuple[KnowledgePreparationIsolationProof, ExecutionBaselineBinding] | None:
+        if getattr(self, "inputs", None) is None or self.inputs.store is None:
+            return None
+        for binding in self.inputs.store.bindings_for_task(task.id):
+            if binding.purpose is not BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION:
+                continue
+            plan = self.inputs.store.plan(binding.plan_sha256)
+            proof = plan.facts.knowledge_isolation
+            if proof is None or proof.work_item_id != item.id:
+                continue
+            authority = self.inputs.store.records.get(
+                "baseline-authorities", binding.plan_sha256, BaselineOperatorAuthorization
+            )
+            require_knowledge_isolation_binding(plan, binding)
+            authority.validate_integrity()
+            authority.require_plan_confirmation(plan)
+            if (
+                authority.authorization_sha256 != binding.authority_sha256
+                or authority.plan_sha256 != plan.plan_sha256
+                or authority.facts_sha256 != plan.facts.facts_sha256
+                or authority.task_id != task.id
+                or authority.task_intent_sha256 != task_intent_sha256(task)
+            ):
+                raise ValueError("历史知识隔离缺少精确真实 ENGINEERING 决定")
+            self._reread_knowledge_isolation(proof, task, item)
+            return proof, binding
+        return None
+
     def _legacy_containment(self, task: Task, item: QueuedWorkItem) -> LegacyExecutionContainment:
         disposition = item.wait_disposition
         if (
@@ -2297,7 +2613,12 @@ class ProductionBaselineFactCollector:
         return matches[0] if matches else None
 
     def _knowledge_markers(
-        self, task: Task, item: QueuedWorkItem, claims: tuple[QueueClaim, ...]
+        self,
+        task: Task,
+        item: QueuedWorkItem,
+        claims: tuple[QueueClaim, ...],
+        *,
+        isolated_lease_ids: frozenset[str] = frozenset(),
     ) -> tuple[KnowledgeOnlyClaimProof, ...]:
         root = self.state.parent / "knowledge" / "runs" / "invocations"
         if not claims or not CapacityInputReader._capacity_ledger_exists(root):
@@ -2314,6 +2635,7 @@ class ProductionBaselineFactCollector:
             queue=self.queue,
             require_step=self._require_step,
             no_start_reader=self._capacity_input_reader(),
+            isolated_lease_ids=isolated_lease_ids,
         )
 
     def _preflight_markers(
@@ -2408,7 +2730,12 @@ class ProductionBaselineFactCollector:
         return marker.receipt_sha256
 
     def _capacity_markers(
-        self, task: Task, item: QueuedWorkItem, claims: tuple[QueueClaim, ...]
+        self,
+        task: Task,
+        item: QueuedWorkItem,
+        claims: tuple[QueueClaim, ...],
+        *,
+        isolated_lease_ids: frozenset[str] = frozenset(),
     ) -> tuple[ContextCapacityReceipt, ...]:
         """Cover actual historical claims using independently sealed no-start facts."""
         root = self.state / "delivery-preflight"
@@ -2433,7 +2760,9 @@ class ProductionBaselineFactCollector:
             claim = claims_by_lease[marker.lease_id]
             step = self.queue.step_for_claim(claim)
             self._require_step(item, step)
-            self._require_capacity_identity(task, marker, claim, step)
+            self._require_capacity_identity(
+                task, marker, claim, step, isolated_lease_ids=isolated_lease_ids
+            )
             self._require_capacity_context(task, marker, claim)
             self._require_capacity_not_started(marker)
             if marker.lease_id in matched:
@@ -2441,7 +2770,9 @@ class ProductionBaselineFactCollector:
             matched[marker.lease_id] = marker
         return tuple(sorted(matched.values(), key=lambda marker: marker.dispatch_sequence))
 
-    def _capacity_input_reader(self) -> CapacityInputReader:
+    def _capacity_input_reader(
+        self, *, isolated_lease_ids: frozenset[str] = frozenset()
+    ) -> CapacityInputReader:
         return CapacityInputReader(
             state=self.state,
             queue=self.queue,
@@ -2449,11 +2780,21 @@ class ProductionBaselineFactCollector:
             route_root=self.route_root,
             baselines=self.inputs.store,
             permissions=self.permissions,
-            legacy_claim_snapshot=self._legacy_capacity_claim_snapshot,
+            legacy_claim_snapshot=lambda task, marker, claim, step: (
+                self._legacy_capacity_claim_snapshot(
+                    task, marker, claim, step, isolated_lease_ids=isolated_lease_ids
+                )
+            ),
         )
 
     def _legacy_capacity_claim_snapshot(
-        self, task: Task, marker: ContextCapacityReceipt, claim: QueueClaim, step: QueuedRoleStep
+        self,
+        task: Task,
+        marker: ContextCapacityReceipt,
+        claim: QueueClaim,
+        step: QueuedRoleStep,
+        *,
+        isolated_lease_ids: frozenset[str] = frozenset(),
     ) -> QueueClaim:
         self._require_step(claim.work_item, step)
         return read_capacity_claim_snapshot(
@@ -2465,12 +2806,21 @@ class ProductionBaselineFactCollector:
             requirement_id=getattr(self, "knowledge_requirement_id", self.requirement_id),
             queue=self.queue,
             require_step=self._require_step,
+            isolated_lease_ids=isolated_lease_ids,
         )
 
     def _require_capacity_identity(
-        self, task: Task, marker: ContextCapacityReceipt, claim: QueueClaim, step: QueuedRoleStep
+        self,
+        task: Task,
+        marker: ContextCapacityReceipt,
+        claim: QueueClaim,
+        step: QueuedRoleStep,
+        *,
+        isolated_lease_ids: frozenset[str] = frozenset(),
     ) -> None:
-        self._capacity_input_reader().require_identity(task, marker, claim, step)
+        self._capacity_input_reader(isolated_lease_ids=isolated_lease_ids).require_identity(
+            task, marker, claim, step
+        )
 
     def _require_capacity_context(
         self, task: Task, marker: ContextCapacityReceipt, claim: QueueClaim

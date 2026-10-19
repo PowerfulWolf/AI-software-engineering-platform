@@ -38,6 +38,13 @@
 
 ## Files
 
+- [Stored knowledge preparation isolation](knowledge-preparation-isolation.md): current exact
+  engineering containment of legacy UNKNOWN knowledge execution, complete retained progress,
+  one ordinary work allowance and explicit PAUSE/RESUME.
+
+- [Knowledge preparation pause](knowledge-preparation-pause.md): positive prospective
+  pre-admission refusal, exact original claim and independent receipts; unchanged legacy uncertainty.
+
 - [Native verification output](native-verification-output.md): trusted current execution receipt
   binding at native QA/Review output acceptance, with unchanged independent verdicts and history.
 

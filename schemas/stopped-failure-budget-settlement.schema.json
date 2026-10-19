@@ -674,10 +674,43 @@
           ],
           "default": null
         },
+        "knowledge_pause": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgePreparationPauseEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "rejected_output": {
           "anyOf": [
             {
               "$ref": "#/$defs/RejectedCoderOutputEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rejected_knowledge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedKnowledgePreparationEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rejected_workspace_admission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedWorkspaceAdmissionEvidence"
             },
             {
               "type": "null"
@@ -743,28 +776,6 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Proof Sha256",
           "type": "string"
-        },
-        "rejected_knowledge": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RejectedKnowledgePreparationEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "rejected_workspace_admission": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RejectedWorkspaceAdmissionEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         }
       },
       "required": [
@@ -1358,6 +1369,123 @@
                           "PLATFORM_BUG",
                           "INVALID_OUTPUT"
                         ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "permitted_resolutions",
+              "disposition"
+            ],
+            "properties": {
+              "permitted_resolutions": {
+                "contains": {
+                  "const": "RESUME_UNINVOKED"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "evidence_ids": {
+                        "contains": {
+                          "pattern": "^knowledge-pause://"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "knowledge_pause": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "knowledge_pause"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "knowledge_pause"
+            ],
+            "properties": {
+              "knowledge_pause": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "retry_cause": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "verifier_pause": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
+              },
+              "rejected_knowledge": {
+                "type": "null"
+              },
+              "rejected_workspace_admission": {
+                "type": "null"
+              },
+              "invocation_start_sha256": {
+                "type": "null"
+              },
+              "invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "process_stop_sha256": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "maxItems": 1,
+                "items": {
+                  "const": "RESUME_UNINVOKED"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "classification": {
+                        "const": "SERVICE_PAUSED"
+                      },
+                      "evidence_ids": {
+                        "minItems": 1,
+                        "maxItems": 1,
+                        "items": {
+                          "pattern": "^knowledge-pause://[a-f0-9]{64}$"
+                        }
                       }
                     }
                   }
@@ -4041,6 +4169,205 @@
       ],
       "title": "RejectedWorkspaceAdmissionEvidence",
       "type": "object"
+    },
+    "KnowledgePreparationPauseEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "delivery_requirement_id": {
+          "minLength": 1,
+          "title": "Delivery Requirement Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "original_lease_id": {
+          "minLength": 1,
+          "title": "Original Lease Id",
+          "type": "string"
+        },
+        "original_claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Original Claim Sha256",
+          "type": "string"
+        },
+        "original_attempt": {
+          "minimum": 1,
+          "title": "Original Attempt",
+          "type": "integer"
+        },
+        "original_dispatch_sequence": {
+          "minimum": 0,
+          "title": "Original Dispatch Sequence",
+          "type": "integer"
+        },
+        "checkpoint_sequence": {
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "previous_run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Previous Run Id",
+          "type": "string"
+        },
+        "previous_context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Previous Context Manifest Id",
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "intent",
+            "assessment"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Intent Sha256",
+          "type": "string"
+        },
+        "outcome_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Outcome Sha256",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "proof_mode": {
+          "enum": [
+            "pre_admission_refusal",
+            "native_admission_closed"
+          ],
+          "title": "Proof Mode",
+          "type": "string"
+        },
+        "pre_admission_pause_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pre Admission Pause Sha256"
+        },
+        "execution_record_sha256s": {
+          "items": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "title": "Execution Record Sha256S",
+          "type": "array"
+        }
+      },
+      "required": [
+        "scope",
+        "requirement_id",
+        "delivery_requirement_id",
+        "task_id",
+        "role",
+        "work_item_id",
+        "original_lease_id",
+        "original_claim_sha256",
+        "original_attempt",
+        "original_dispatch_sequence",
+        "checkpoint_sequence",
+        "previous_run_id",
+        "previous_context_manifest_id",
+        "source_revision",
+        "snapshot_sha256",
+        "phase",
+        "intent_sha256",
+        "outcome_sha256",
+        "request_sha256",
+        "proof_mode",
+        "execution_record_sha256s"
+      ],
+      "title": "KnowledgePreparationPauseEvidence",
+      "type": "object",
+      "allOf": [
+        {
+          "properties": {
+            "execution_record_sha256s": {
+              "uniqueItems": true
+            }
+          },
+          "if": {
+            "properties": {
+              "proof_mode": {
+                "const": "pre_admission_refusal"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "pre_admission_pause_sha256"
+            ],
+            "properties": {
+              "pre_admission_pause_sha256": {
+                "type": "string"
+              },
+              "execution_record_sha256s": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "pre_admission_pause_sha256": {
+                "type": "null"
+              },
+              "execution_record_sha256s": {
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "additionalProperties": false,

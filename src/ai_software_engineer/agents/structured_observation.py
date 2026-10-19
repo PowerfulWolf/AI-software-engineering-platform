@@ -277,6 +277,11 @@ def current_structured_execution_observer() -> StructuredExecutionObserver | Non
     return _observer.get()
 
 
+def current_structured_call_identity() -> StructuredCallIdentity | None:
+    """Return only the route actually selected by the current trusted caller."""
+    return _identity.get()
+
+
 def admit_structured_execution(
     *,
     execution_kind: Literal["native", "http"],

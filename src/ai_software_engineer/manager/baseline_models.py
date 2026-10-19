@@ -33,6 +33,7 @@ from ai_software_engineer.manager.completed_output_checkpoint import (
     CompletedCoderOutputUnavailableProof,
     validate_completed_output_capture,
 )
+from ai_software_engineer.manager.knowledge_isolation import KnowledgePreparationIsolationProof
 from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
 from ai_software_engineer.manager.stopped_execution_checkpoint import (
     StoppedCoderExecutionProof,
@@ -57,6 +58,7 @@ class BaselineExecutionReservation(DomainModel):
     next_execution_attempt: ExecutionAttempt
     retry_cause: Literal[
         "uninvoked",
+        "knowledge_isolation",
         "local_execution_limit",
         "provider_transient",
         "service_pause",
@@ -67,6 +69,9 @@ class BaselineExecutionReservation(DomainModel):
         "stopped_failure_retry",
         "stopped_execution_unknown",
     ]
+    knowledge_isolation_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     stopped_execution_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -89,7 +94,32 @@ class BaselineExecutionReservation(DomainModel):
 
     @model_validator(mode="after")
     def validate_reservation(self) -> Self:
-        if self.retry_cause == "stopped_execution_unknown":
+        if (self.retry_cause == "knowledge_isolation") != (
+            self.knowledge_isolation_sha256 is not None
+        ):
+            raise ValueError("当前知识隔离证明只能属于独立普通工作预留")
+        if self.retry_cause == "knowledge_isolation":
+            if (
+                self.next_execution_attempt != self.current_attempt + 1
+                or self.reservation_already_applied
+                or any(
+                    value is not None
+                    for value in (
+                        self.original_run_id,
+                        self.current_invocation_start_sha256,
+                        self.current_invocation_outcome_sha256,
+                        self.interruption_receipt_sha256,
+                        self.retry_failure,
+                        self.containment_sha256,
+                        self.completed_output_sha256,
+                        self.stopped_provider_failure_sha256,
+                        self.stopped_failure_sha256,
+                        self.stopped_execution_sha256,
+                    )
+                )
+            ):
+                raise ValueError("当前知识隔离须消费普通工作额度, 不补造主调用或退款")
+        elif self.retry_cause == "stopped_execution_unknown":
             if (
                 self.original_run_id is None
                 or self.current_invocation_start_sha256 is None
@@ -234,6 +264,9 @@ class BaselineExecutionFacts(DomainModel):
     continuation: BaselineExecutionReservation | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    knowledge_isolation: KnowledgePreparationIsolationProof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     legacy_containment: LegacyExecutionContainment | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -262,6 +295,7 @@ class BaselineExecutionFacts(DomainModel):
             sum(
                 value is not None
                 for value in (
+                    self.knowledge_isolation,
                     self.stopped_execution,
                     self.completed_output,
                     self.stopped_provider_failure,
@@ -273,6 +307,28 @@ class BaselineExecutionFacts(DomainModel):
             > 1
         ):
             raise ValueError("不同执行恢复证明不能混用")
+        isolation, reservation = self.knowledge_isolation, self.continuation
+        if isolation is not None:
+            isolation.validate_integrity()
+            if (
+                isolation.scope != self.scope
+                or isolation.task_id != self.task.id
+                or isolation.task_intent_sha256 != task_intent_sha256(self.task)
+                or isolation.task_revision != self.task_revision
+                or isolation.work_item_id != self.work_item_id
+                or isolation.checkpoint_sequence != self.checkpoint_sequence
+                or isolation.original_claim.work_item.attempt != self.task.attempts
+                or self.implementation_artifact_id is not None
+                or self.native_rule_change is not None
+                or self.source_native_rules_sha256 != self.target_native_rules_sha256
+                or reservation is None
+                or reservation.retry_cause != "knowledge_isolation"
+                or reservation.current_attempt != self.task.attempts
+                or reservation.knowledge_isolation_sha256 != isolation.proof_sha256
+            ):
+                raise ValueError("当前知识隔离未绑定原 Task、完整进度和普通工作预留")
+        elif reservation is not None and reservation.retry_cause == "knowledge_isolation":
+            raise ValueError("当前知识隔离预留缺少完整独立工程事实")
         stopped, reservation = self.stopped_execution, self.continuation
         if stopped is not None:
             stopped.validate_integrity()
@@ -526,6 +582,10 @@ class ExecutionBaselinePlan(DomainModel):
             self.facts.stopped_execution is not None
         ):
             raise ValueError("未知结果停止证明只能属于独立恢复方案")
+        if (self.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION) != (
+            self.facts.knowledge_isolation is not None
+        ):
+            raise ValueError("当前知识隔离只能属于独立精确恢复方案")
         task = self.facts.task
         if (
             self.facts.native_rule_change is not None
@@ -547,7 +607,21 @@ class ExecutionBaselinePlan(DomainModel):
             expected_base = self.previous_binding.execution_base_ref
         if self.complete_capture.base_revision != expected_base:
             raise ValueError("complete baseline capture omitted the old execution base")
-        if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
+        if self.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION:
+            isolation = self.facts.knowledge_isolation
+            if (
+                isolation is None
+                or self.target_base_ref != expected_base
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.prepared_source_revision != self.dirty_capture.source_revision
+                or self.prepared_dirty_patch != self.dirty_capture.patch
+                or self.dirty_capture.source_revision
+                != isolation.outcome.intent.binding.source_revision
+                or self.dirty_capture.worktree_path != isolation.worktree_surveys[0].worktree_path
+                or self.conflicted
+            ):
+                raise ValueError("当前知识隔离必须保留原基线和完整草稿、进度")
+        elif self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE:
             if (
                 self.facts.legacy_containment is None
                 or self.target_base_ref != expected_base
@@ -750,6 +824,9 @@ class BaselineOperatorAuthorization(DomainModel):
     approved_native_rule_change_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    confirm_current_knowledge_execution_isolated: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     confirm_legacy_containment: Literal[True] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -767,6 +844,20 @@ class BaselineOperatorAuthorization(DomainModel):
     @model_validator(mode="after")
     def require_engineering(self) -> Self:
         self.principal.require_duty(OperatorDuty.ENGINEERING)
+        if self.confirm_current_knowledge_execution_isolated is not None and (
+            self.continuation_mode is not BaselineContinuationMode.PAUSE
+            or any(
+                value is not None
+                for value in (
+                    self.confirm_legacy_containment,
+                    self.confirm_local_execution_stopped,
+                    self.confirm_provider_prerequisites_repaired,
+                    self.confirm_stopped_failure_retry,
+                    self.approved_native_rule_change_sha256,
+                )
+            )
+        ):
+            raise ValueError("当前知识隔离确认必须独立批准并保持暂停")
         if self.confirm_legacy_containment and self.confirm_local_execution_stopped:
             raise ValueError("两种旧执行恢复确认不能同时使用")
         require_stopped_failure_confirmation_shape(
@@ -785,6 +876,9 @@ class BaselineOperatorAuthorization(DomainModel):
         return self
 
     def require_plan_confirmation(self, plan: ExecutionBaselinePlan) -> None:
+        require_knowledge_isolation_confirmation(
+            plan, self.confirm_current_knowledge_execution_isolated, self.continuation_mode
+        )
         if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME and (
             self.continuation_mode is not BaselineContinuationMode.PAUSE
         ):
@@ -821,6 +915,7 @@ class BaselineOperatorAuthorization(DomainModel):
         principal: LocalOperatorPrincipal,
         reference: str,
         submitted_at: datetime,
+        confirm_current_knowledge_execution_isolated: Literal[True] | None = None,
         confirm_legacy_containment: Literal[True] | None = None,
         confirm_local_execution_stopped: Literal[True] | None = None,
         confirm_provider_prerequisites_repaired: Literal[True] | None = None,
@@ -844,6 +939,7 @@ class BaselineOperatorAuthorization(DomainModel):
             submitted_at=submitted_at,
             continuation_mode=continuation_mode,
             approved_native_rule_change_sha256=approved_native_rule_change_sha256,
+            confirm_current_knowledge_execution_isolated=confirm_current_knowledge_execution_isolated,
             confirm_legacy_containment=confirm_legacy_containment,
             confirm_local_execution_stopped=confirm_local_execution_stopped,
             confirm_provider_prerequisites_repaired=confirm_provider_prerequisites_repaired,
@@ -1020,3 +1116,51 @@ def require_stopped_failure_confirmation_shape(
             raise ValueError("原执行失败重试确认不能混用其他恢复确认")
         if continuation_mode is not BaselineContinuationMode.PAUSE:
             raise ValueError("原执行失败恢复批准后必须保持暂停, 再明确继续原需求")
+
+
+def require_knowledge_isolation_confirmation(
+    plan: ExecutionBaselinePlan,
+    confirmation: Literal[True] | None,
+    continuation_mode: BaselineContinuationMode,
+) -> None:
+    if plan.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION:
+        if confirmation is not True or continuation_mode is not BaselineContinuationMode.PAUSE:
+            raise ValueError(
+                "请由 ENGINEERING 主体明确批准当前隔离决定并保持暂停; "
+                "旧知识执行仍为 UNKNOWN, 不宣称历史未启动或已停止"
+            )
+    elif confirmation is not None:
+        raise ValueError("当前知识隔离确认只能用于精确独立隔离方案")
+
+
+def require_knowledge_isolation_binding(
+    plan: ExecutionBaselinePlan, binding: ExecutionBaselineBinding
+) -> None:
+    proof, reservation = plan.facts.knowledge_isolation, plan.facts.continuation
+    if plan.purpose is not BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION:
+        if proof is not None or binding.knowledge_isolation_sha256 is not None:
+            raise ValueError("当前知识隔离证明不能混入其他执行绑定")
+        return
+    if (
+        proof is None
+        or reservation is None
+        or reservation.retry_cause != "knowledge_isolation"
+        or reservation.knowledge_isolation_sha256 != proof.proof_sha256
+        or binding.knowledge_isolation_sha256 != proof.proof_sha256
+        or binding.purpose is not BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION
+        or binding.plan_sha256 != plan.plan_sha256
+        or binding.facts_sha256 != plan.facts.facts_sha256
+        or binding.authority_source != "engineering_operator_decision"
+        or binding.continuation_mode is not BaselineContinuationMode.PAUSE
+        or binding.execution_base_ref != binding.prior_execution_base_ref
+        or binding.execution_source_revision != binding.prior_source_revision
+        or binding.before_inventory_sha256 != binding.after_inventory_sha256
+        or binding.superseded_progress_artifact_id is not None
+        or binding.superseded_implementation_artifact_id is not None
+        or reservation.reservation_already_applied
+        or reservation.retry_failure is not None
+        or reservation.current_attempt != proof.original_claim.work_item.attempt
+        or reservation.next_execution_attempt != reservation.current_attempt + 1
+    ):
+        raise ValueError("当前知识隔离绑定必须保持完整原现场、人工批准暂停和普通工作接续")
+    proof.validate_integrity()

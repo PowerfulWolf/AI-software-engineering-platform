@@ -132,7 +132,8 @@
         "stopped_provider_retry",
         "stopped_failure_retry",
         "stopped_execution_rescue",
-        "context_capacity_resume"
+        "context_capacity_resume",
+        "knowledge_preparation_isolation"
       ],
       "title": "BaselinePurpose",
       "type": "string"
@@ -493,6 +494,19 @@
           ],
           "default": null,
           "title": "Context Capacity Receipt Sha256"
+        },
+        "knowledge_isolation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Isolation Sha256"
         },
         "service_pause_outcome_sha256": {
           "anyOf": [
@@ -1001,6 +1015,70 @@
           "else": {
             "properties": {
               "stopped_failure_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "purpose": {
+                "const": "knowledge_preparation_isolation"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "input_mode",
+              "knowledge_isolation_sha256",
+              "continuation_mode"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "knowledge_isolation_sha256": {
+                "type": "string"
+              },
+              "superseded_progress_artifact_id": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "stopped_execution_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_failure_sha256": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "service_pause_outcome_sha256": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "knowledge_isolation_sha256": {
                 "type": "null"
               }
             }

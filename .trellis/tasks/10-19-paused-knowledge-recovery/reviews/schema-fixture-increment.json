@@ -1,0 +1,92 @@
+{
+  "baseline_revision": "e309f0ba7418569010b942cc4374f7fe243090a5",
+  "checked_behaviors": [
+    "Temporary joint-contract generator children use only PYTHONDONTWRITEBYTECODE and an absolute current-worktree/src PYTHONPATH. No host environment credentials/settings are inherited.",
+    "A separate isolated child resolved the new knowledge_isolation module to this exact worktree, independently verifying source origin despite an editable installation pointing elsewhere.",
+    "Stop embedding inventory adds exactly stopped-failure.schema.json and knowledge-preparation-isolation.schema.json, yielding the complete actual 18-file set.",
+    "The generator retains strict set equality. Missing, extra and same-size replacement inventories fail before any write and retain all prior fixture bytes.",
+    "Known inventory refreshes only NativeProcessStop and its canonical graph; enclosing guards and unknown-embedding refusal remain intact.",
+    "All 11 generated Schema files bound by the preceding independent maintenance report have unchanged SHA-256 hashes."
+  ],
+  "files": [
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/manager/test_joint_contracts.py",
+      "sha256": "390c349de937ae4ed8b02bbe097357b473001a08654f60f1fca3bf6222ef1f9b"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/scripts/sync-owned-session-schemas.py",
+      "sha256": "d9a60fcb2d2c75fa92e7d3a22784b8244828e2412d3181b687e6cb1bb77bcfff"
+    },
+    {
+      "path": "/private/tmp/ase-fix-legacy-ignored/tests/contracts/test_owned_session_stop_schema.py",
+      "sha256": "a8680c2169070c0e45de040d76ffe29e3ca9cad9329fae62de8d67f0d4372a37"
+    }
+  ],
+  "findings": [],
+  "kind": "independent_schema_fixture_sync_incremental_review",
+  "limits": [
+    "Read-only review and local temporary fixture execution only; no SQL/network connection attempted.",
+    "No production Host, recovery, role verdict, commit, merge, deployment or source modification performed.",
+    "Formatting/type-check success was reported by the implementer; this review independently ran only the focused contract suite and checks listed above."
+  ],
+  "overall": "PASS for the exact three-file increment; no unresolved P1/P2 findings",
+  "prior_report": {
+    "path": "/tmp/ase-paused-knowledge-legacy-queue-schema-independent-review-20261019.json",
+    "sha256": "bad943066219ec679ce1d1ca6c84a525d91e16854f5623501af0ac244c2c2343"
+  },
+  "reviewed_at": "2026-10-19T10:39:24.645192+00:00",
+  "schema_version": "v0.1",
+  "scope": "Only the three specified fixture/generator files. Does not re-review or replace the previous 60-file maintenance snapshot. No runtime contract, generated Schema artifact or SQL change belongs to this increment.",
+  "validation": [
+    {
+      "command": "env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:. <venv>/python -m pytest -q -m 'not mysql' tests/manager/test_joint_contracts.py::test_schema_sync_scripts_preserve_distinct_next_action_contracts tests/contracts/test_owned_session_stop_schema.py",
+      "result": "12 passed in 7.91s"
+    },
+    {
+      "command": "git diff --check -- tests/manager/test_joint_contracts.py scripts/sync-owned-session-schemas.py tests/contracts/test_owned_session_stop_schema.py",
+      "result": "PASS"
+    },
+    {
+      "check": "Independent exact embedding inventory / isolated source-import / previous Schema hash preservation",
+      "result": {
+        "exact_inventory": {
+          "count": 18,
+          "equals_generator_reviewed_set": true,
+          "members": [
+            "completed-coder-output-unavailable.schema.json",
+            "console-deletion-cleanup.schema.json",
+            "console-operation.schema.json",
+            "engineering-wait-resolution.schema.json",
+            "execution-baseline-plan.schema.json",
+            "execution-baseline-queue-consumption.schema.json",
+            "execution-capture.schema.json",
+            "execution-continuation.schema.json",
+            "knowledge-execution-record.schema.json",
+            "knowledge-invocation-outcome.schema.json",
+            "knowledge-preparation-isolation.schema.json",
+            "rejected-coder-output-checkpoint.schema.json",
+            "service-pause-stop.schema.json",
+            "stopped-coder-execution.schema.json",
+            "stopped-failure-budget-settlement.schema.json",
+            "stopped-failure.schema.json",
+            "stopped-provider-failure.schema.json",
+            "structured-execution-observation.schema.json"
+          ]
+        },
+        "isolated_child_import": {
+          "environment_keys": [
+            "PYTHONDONTWRITEBYTECODE",
+            "PYTHONPATH"
+          ],
+          "matches_current_worktree": true,
+          "resolved_module": "/private/tmp/ase-fix-legacy-ignored/src/ai_software_engineer/manager/knowledge_isolation.py"
+        },
+        "previously_bound_schema_files_unchanged": {
+          "checked": 11,
+          "mismatches": []
+        }
+      }
+    }
+  ],
+  "workspace": "/private/tmp/ase-fix-legacy-ignored"
+}

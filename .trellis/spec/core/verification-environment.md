@@ -12,7 +12,8 @@ This executor is a separately versioned application capability, not an Agent com
 ### 2. Signatures and wire contracts
 
 - `ContinueDeliveryIntent.python_mysql_tests` and `ResumeProjectDelivery.python_mysql_tests`:
-  optional 1..32 `PytestSelection(node_id, criterion_ids)` values. Only exact `tests/**/test_*.py`
+  optional 1..64 `PytestSelection(node_id, criterion_ids)` values, using the shared
+  `python_verification_runner.MAX_PYTEST_SELECTIONS` bound. Only exact `tests/**/test_*.py`
   function/class-method nodes with bounded parametrization; no directory, suite, glob or flags.
   Proposal is mutually exclusive with UI/repair/scope proposals and all approval fields. None is
   omitted from wire values, preserving old operation digests.
