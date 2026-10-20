@@ -38,6 +38,7 @@ from ai_software_engineer.manager.knowledge_invocation_proof import (
 )
 from ai_software_engineer.manager.knowledge_isolation import (
     KnowledgePreparationIsolationProof,
+    observe_isolation_boundary,
     read_unknown_knowledge_preparation,
     require_current_isolation_boundary,
 )
@@ -274,6 +275,60 @@ def test_real_git_isolation_requires_current_engineering_decision_and_preserves_
     ):
         with pytest.raises(ValueError):
             BaselineQueueConsumption.model_validate({**fields, **change})
+
+
+@pytest.mark.parametrize("blocked_at", (1, 2, 3, 4, None))
+def test_isolation_surveys_stop_at_first_non_idle_observation(blocked_at: int | None) -> None:
+    repository = Path("/fixture/repository")
+    worktree = Path("/fixture/worktree")
+    boot = LocalBootObservation(
+        machine_sha256="a" * 64,
+        boot_session_sha256="b" * 64,
+        booted_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    class Observer:
+        def __init__(self) -> None:
+            self.paths: list[Path] = []
+
+        def observe(
+            self, *, worktree_root: Path, boot: LocalBootObservation
+        ) -> LegacyLocalExecutionSurvey:
+            self.paths.append(worktree_root)
+            return LegacyLocalExecutionSurvey.create(
+                worktree_path=str(worktree_root),
+                machine_sha256=boot.machine_sha256,
+                boot_session_sha256=boot.boot_session_sha256,
+                account_sha256="c" * 64,
+                observed_at=boot.booted_at + timedelta(seconds=len(self.paths)),
+                scanner_version="fixture-v1",
+                blockers=("PROCESS_SCAN_INCOMPLETE",) if len(self.paths) == blocked_at else (),
+            )
+
+    observer = Observer()
+    expected_paths = [repository, repository, worktree, worktree]
+    if blocked_at is not None:
+        with pytest.raises(LegacyRescuePrerequisiteError) as raised:
+            observe_isolation_boundary(
+                observer=observer,
+                boot=boot,
+                repository_root=repository,
+                worktree_root=worktree,
+            )
+        assert raised.value.code == "LEGACY_LOCAL_SURVEY_INCOMPLETE"
+        assert observer.paths == expected_paths[:blocked_at]
+    else:
+        repository_surveys, worktree_surveys = observe_isolation_boundary(
+            observer=observer,
+            boot=boot,
+            repository_root=repository,
+            worktree_root=worktree,
+        )
+        assert observer.paths == expected_paths
+        assert tuple(s.worktree_path for s in repository_surveys) == (str(repository),) * 2
+        assert tuple(s.worktree_path for s in worktree_surveys) == (str(worktree),) * 2
+        for survey in (*repository_surveys, *worktree_surveys):
+            survey.require_idle()
 
 
 def test_current_survey_refuses_live_or_changed_boundary(tmp_path: Path) -> None:

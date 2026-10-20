@@ -59,3 +59,32 @@ Malformed lifecycle records still refuse replacement. Service-start acknowledgem
 instance; script success alone is not an independent QA verdict or proof of K1 completion.
 Rollback requires a controlled idle stop first, then reverting this maintenance commit and restarting.
 Preserve lifecycle and requirement history; do not erase an unproven stop to allow replacement.
+
+## Actual deployment and existing-data result (2026-10-20)
+
+The deployment operator observed the following after deploying maintenance commit `db9b438`;
+platform `main` and `origin/main` both point to that commit. These are real service observations,
+separate from the isolated regression results recorded above.
+
+1. The official controlled stop of old PID `18502` recorded `READY` and confirmed its actual exit.
+2. The official start launched PID `67493` and supervisor PID `67573`. The fixed supervisor then
+   consumed the original pending request without changing its identity and performed the controlled
+   configuration replacement.
+3. The resulting Console is PID `67899`, instance
+   `console_instance_e61b78254478e522994e73ad5212ebbc`, started at
+   `2026-10-20T06:07:34.769688Z`.
+4. Public `GET /api/v1/admin/settings/apply` reports the original
+   `configuration_apply_e16ed760d58d42fcf035db5a1e687385` as `SUCCEEDED`.
+   Public Settings reports `restart_required=false`; public Console metadata reports
+   `mode=normal`, `delivery_ready=true` and `operation_contract_version=10`.
+   The `configuration-apply.request` marker no longer exists.
+
+The original PENDING state was resolved by the repaired official supervisor. No lifecycle status
+was edited manually, no SQL or K1 facts were changed, and no new requirement or approval was
+created to bypass the pending request. The deployment itself does not assert K1 delivery completion.
+No additional test or service operation was performed to record this deployment result.
+
+The subsequent public Requirement summary also confirmed the original K1 checkpoint
+`77eaff6f2a6004df8e71d2c94f3973785406c2b611e951d513d0e1c84bf4fbdf`, Task
+`IMPLEMENTING` at revision `11` and `SERVICE_PAUSED`. Configuration replacement did not
+change that delivery checkpoint or resume the requirement.

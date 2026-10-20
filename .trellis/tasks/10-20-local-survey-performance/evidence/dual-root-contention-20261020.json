@@ -1,0 +1,36 @@
+{
+  "kind": "dual-root-current-readonly-survey-with-parent-cpu-contention",
+  "scans": [
+    {
+      "round": 1,
+      "root_kind": "repository",
+      "elapsed_seconds": 2.874,
+      "blockers": [],
+      "survey_sha256": "722eac4777bc67dd087b1c0c6cbc7701f42383284ddb3251d1ac5fdbcb1f702e"
+    },
+    {
+      "round": 1,
+      "root_kind": "worktree",
+      "elapsed_seconds": 2.544,
+      "blockers": [],
+      "survey_sha256": "7a8e4d9135886dbf0063c5e1ffb00d0450fd090bd4f3cab226822c090de0bae5"
+    },
+    {
+      "round": 2,
+      "root_kind": "repository",
+      "elapsed_seconds": 2.612,
+      "blockers": [],
+      "survey_sha256": "7692d3d3c912540698e5e6c5e907c5c7bdf1ad471dce431fa7d52efac67f6d57"
+    },
+    {
+      "round": 2,
+      "root_kind": "worktree",
+      "elapsed_seconds": 3.144,
+      "blockers": [],
+      "survey_sha256": "56d77bd3cfc9f1a6add112950734151991dadc96e69da83379facdee2d7e66de"
+    }
+  ],
+  "scan_limit_seconds": 5.0,
+  "query_limit_seconds": 1.5,
+  "probe_thread_joined": true
+}

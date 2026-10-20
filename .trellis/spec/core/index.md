@@ -38,6 +38,9 @@
 
 ## Files
 
+- [Bounded local path survey worker](local-path-survey-worker.md): private isolated parsing
+  of complete captured lsof bytes, unchanged absolute deadlines, ownership and recovery gates.
+
 - [Stored knowledge preparation isolation](knowledge-preparation-isolation.md): current exact
   engineering containment of legacy UNKNOWN knowledge execution, complete retained progress,
   one ordinary work allowance and explicit PAUSE/RESUME.

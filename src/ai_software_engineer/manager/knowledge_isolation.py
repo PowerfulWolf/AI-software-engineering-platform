@@ -230,10 +230,13 @@ def observe_isolation_boundary(
     tuple[LegacyLocalExecutionSurvey, LegacyLocalExecutionSurvey],
     tuple[LegacyLocalExecutionSurvey, LegacyLocalExecutionSurvey],
 ]:
-    repository = tuple(observer.observe(worktree_root=repository_root, boot=boot) for _ in range(2))
-    worktree = tuple(observer.observe(worktree_root=worktree_root, boot=boot) for _ in range(2))
-    for survey in (*repository, *worktree):
+    def observe_idle(path: Path) -> LegacyLocalExecutionSurvey:
+        survey = observer.observe(worktree_root=path, boot=boot)
         survey.require_idle()
+        return survey
+
+    repository = tuple(observe_idle(repository_root) for _ in range(2))
+    worktree = tuple(observe_idle(worktree_root) for _ in range(2))
     return (repository[0], repository[1]), (worktree[0], worktree[1])
 
 

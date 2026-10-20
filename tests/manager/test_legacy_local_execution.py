@@ -4,19 +4,23 @@ import ctypes
 import logging
 import math
 import subprocess
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
 
 import pytest
 
+from ai_software_engineer.manager import legacy_local_execution as survey_module
 from ai_software_engineer.manager.legacy_containment import LocalBootObservation
 from ai_software_engineer.manager.legacy_local_execution import (
+    LegacyLocalExecutionBlocker,
     LegacyLocalExecutionSurvey,
     LegacyRescuePrerequisiteError,
     TrustedLegacyLocalExecutionObserver,
 )
-from ai_software_engineer.owned_processes import OwnedProcessesUncertain
+from ai_software_engineer.manager.local_path_observation import inspect_mac_paths
+from ai_software_engineer.owned_processes import HostOwnedProcessRegistry, OwnedProcessesUncertain
 
 OBSERVED = datetime(2026, 10, 8, 1, tzinfo=UTC)
 BOOT = LocalBootObservation(
@@ -122,6 +126,20 @@ class MacFixtureObserver(TrustedLegacyLocalExecutionObserver):
             return body.encode()
         return self.open_files
 
+    def _inspect_mac_paths(
+        self,
+        body: bytes,
+        root: Path,
+        *,
+        ignored_pids: frozenset[int],
+        cwd_blocker_pids: frozenset[int],
+    ) -> tuple[set[int], set[LegacyLocalExecutionBlocker]]:
+        self._remaining()
+        deadline = survey_module._DEADLINE.get()
+        assert deadline is not None
+        covered, blockers = inspect_mac_paths(body, root, ignored_pids, cwd_blocker_pids, deadline)
+        return covered, set(blockers)
+
     def _birth(self, pid: int) -> str:
         # Native OS identity is separately tested; this fake must not inspect
         # the real process accidentally sharing its fixture PID.
@@ -188,6 +206,69 @@ class DesktopFixtureObserver(MacFixtureObserver):
 
     def _executable_path(self, pid: int) -> str | None:
         return self.native_paths[pid]
+
+
+class OwnedPathWorkerFixtureObserver(MacFixtureObserver):
+    """Fake only OS facts, and keep the production owned-parser admission."""
+
+    def _inspect_mac_paths(
+        self,
+        body: bytes,
+        root: Path,
+        *,
+        ignored_pids: frozenset[int],
+        cwd_blocker_pids: frozenset[int],
+    ) -> tuple[set[int], set[LegacyLocalExecutionBlocker]]:
+        return TrustedLegacyLocalExecutionObserver._inspect_mac_paths(
+            self, body, root, ignored_pids=ignored_pids, cwd_blocker_pids=cwd_blocker_pids
+        )
+
+
+def test_production_path_seam_uses_real_owned_worker_with_original_scan_deadline(
+    tmp_path: Path, mac: None
+) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    alias = tmp_path / "outside-alias"
+    alias.symlink_to(worktree)
+    observer = OwnedPathWorkerFixtureObserver(
+        open_files=(
+            f"p101\0fcwd\0tDIR\0n/elsewhere\0f4\0tREG\0n{alias}/draft.py (deleted)\0"
+        ).encode()
+    )
+    registry = HostOwnedProcessRegistry()
+    started = time.monotonic()
+    with registry.operation_scope("operation_fixture_path_worker_integration"):
+        result = observer.observe(worktree_root=worktree, boot=BOOT)
+    assert result.blockers == ("WORKTREE_PROCESS_ACTIVE",)
+    assert result.scanner_version == "local-execution-v1"
+    assert time.monotonic() - started < observer.MAX_SCAN_SECONDS == 5.0
+    assert not registry.snapshot()
+    registry.require_stopped()
+    assert survey_module._DEADLINE.get() is None
+
+
+def test_production_path_worker_failure_is_incomplete_and_retains_scan_deadline(
+    tmp_path: Path, mac: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_software_engineer.manager.local_path_observation import LocalPathObservationError
+
+    def refused(
+        body: bytes,
+        root: Path,
+        ignored_pids: frozenset[int],
+        cwd_blocker_pids: frozenset[int],
+        deadline: float,
+    ) -> tuple[set[int], set[Literal["WORKTREE_PROCESS_ACTIVE"]]]:
+        assert deadline == survey_module._DEADLINE.get()
+        assert 0 < deadline - time.monotonic() <= 5.0
+        raise LocalPathObservationError
+
+    monkeypatch.setattr(survey_module, "observe_mac_paths_in_process", refused)
+    result = OwnedPathWorkerFixtureObserver().observe(worktree_root=tmp_path, boot=BOOT)
+    assert result.blockers == ("PROCESS_SCAN_INCOMPLETE",)
+    assert result.scanner_version == "local-execution-v1"
+    assert survey_module._DEADLINE.get() is None
 
 
 def test_exact_desktop_cua_sandbox_is_control_tool_without_original_checkout_access(

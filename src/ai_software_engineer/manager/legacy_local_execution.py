@@ -23,6 +23,10 @@ from pydantic import AwareDatetime, model_validator
 
 from ai_software_engineer.domain.artifact import Sha256
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.manager.local_path_observation import (
+    LocalPathObservationError,
+    observe_mac_paths_in_process,
+)
 from ai_software_engineer.owned_processes import OwnedProcessesUncertain, finish_owned_process
 from ai_software_engineer.owned_spawn import spawn_owned_query
 from ai_software_engineer.recovery.models import digest
@@ -731,48 +735,29 @@ class TrustedLegacyLocalExecutionObserver:
         )
         if pids and not body:
             return set(), set()
-        if len(body) > self.MAX_QUERY_BYTES or not body.endswith((b"\0", b"\0\n")):
-            raise _IncompleteSurvey
-        covered: set[int] = set()
-        blockers: set[LegacyLocalExecutionBlocker] = set()
-        pid: int | None = None
-        descriptor: str | None = None
-        file_type: str | None = None
-        count = 0
-        for raw in body.split(b"\0"):
-            field = raw.removeprefix(b"\n")
-            if not field:
-                continue
-            tag, value = chr(field[0]), field[1:].decode("utf-8", errors="strict")
-            if tag == "p":
-                if not value.isdigit():
-                    raise _IncompleteSurvey
-                pid, descriptor, file_type = int(value), None, None
-            elif tag == "f":
-                if pid is None or count >= _MAX_FILES:
-                    raise _IncompleteSurvey
-                count += 1
-                descriptor, file_type = value, None
-            elif tag == "t":
-                file_type = value
-            elif tag == "n":
-                if pid is None or descriptor is None:
-                    raise _IncompleteSurvey
-                if "(stat:" in value or "(readlink:" in value:
-                    raise _IncompleteSurvey
-                if descriptor == "cwd":
-                    if not value.startswith("/") or file_type != "DIR":
-                        raise _IncompleteSurvey
-                    covered.add(pid)
-                if (
-                    pid not in ignored_pids
-                    and self._covers(value, root)
-                    and (descriptor != "cwd" or pid in cwd_blocker_pids)
-                ):
-                    blockers.add("WORKTREE_PROCESS_ACTIVE")
-            else:
-                raise _IncompleteSurvey
-        return covered, blockers
+        return self._inspect_mac_paths(
+            body, root, ignored_pids=ignored_pids, cwd_blocker_pids=cwd_blocker_pids
+        )
+
+    def _inspect_mac_paths(
+        self,
+        body: bytes,
+        root: Path,
+        *,
+        ignored_pids: frozenset[int],
+        cwd_blocker_pids: frozenset[int],
+    ) -> tuple[set[int], set[LegacyLocalExecutionBlocker]]:
+        self._remaining()
+        deadline = _DEADLINE.get()
+        assert deadline is not None
+        covered, blockers = observe_mac_paths_in_process(
+            body=body,
+            root=root,
+            ignored_pids=ignored_pids,
+            cwd_blocker_pids=cwd_blocker_pids,
+            deadline=deadline,
+        )
+        return covered, set(blockers)
 
     @staticmethod
     def _read_proc(path: Path) -> bytes:
@@ -955,6 +940,7 @@ class TrustedLegacyLocalExecutionObserver:
             subprocess.SubprocessError,
             _IncompleteSurvey,
             OwnedProcessesUncertain,
+            LocalPathObservationError,
         ) as error:
             blockers.add("PROCESS_SCAN_INCOMPLETE")
             reason = type(error).__name__
