@@ -16,6 +16,10 @@ try:
         inspection_required,
         require_inspection_retirement,
     )
+    from ai_software_engineer.web_console.lifecycle import (
+        ConfigurationApplyError,
+        FileConfigurationLifecycle,
+    )
     from ai_software_engineer.web_console.service_lifecycle import (
         ServiceLifecycleError,
         ServiceLifecycleStore,
@@ -137,6 +141,19 @@ def effective_mode() -> str:
     return "inspection" if inspection_required(os.environ) else configured
 
 
+def apply_state(arguments: list[str]) -> None:
+    """Read the fixed lifecycle file; optionally require one exact request identity."""
+    if len(arguments) > 1:
+        raise ServiceLifecycleError("配置应用记录不可用。")
+    try:
+        state = FileConfigurationLifecycle.from_environment(os.environ).current()
+    except ConfigurationApplyError as error:
+        raise ServiceLifecycleError("配置应用记录不可用。") from error
+    if state is None or (arguments and state.request_id != arguments[0]):
+        raise ServiceLifecycleError("配置应用记录不可用。")
+    print(state.status if arguments else f"{state.status} {state.request_id}")
+
+
 def main() -> int:
     try:
         store = ServiceLifecycleStore.from_environment(os.environ)
@@ -196,6 +213,8 @@ def main() -> int:
                 admit_completed_maintenance(os.environ)
         elif command == "launch-mode":
             print(effective_mode())
+        elif command == "apply-state":
+            apply_state(sys.argv[2:])
         elif command == "status":
             instance = store.read_instance()
             if instance is None or instance.pid != int(sys.argv[2]):

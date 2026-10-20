@@ -16,7 +16,16 @@ from pathlib import Path
 
 import pytest
 
+from ai_software_engineer.web_console.lifecycle import FileConfigurationLifecycle
+
 SCRIPT = Path(__file__).parents[1] / "scripts" / "ase-console-service.sh"
+
+
+class _SupervisorProcessProbe:
+    """The isolated launcher's fake process inventory verifies its supervisor."""
+
+    def matches(self, pid: int, script: Path) -> bool:
+        return script.name == SCRIPT.name and pid > 1
 
 
 def _launcher(tmp_path: Path, *, executable: bool = True) -> tuple[Path, dict[str, str]]:
@@ -679,8 +688,18 @@ def test_service_launcher_loads_runtime_environment_next_to_config(tmp_path: Pat
         _run(launcher, environment, "stop")
 
 
+@pytest.mark.parametrize(
+    ("safe_summary", "reordered"),
+    [
+        ("Configuration apply is in progress.", False),
+        ("配置已保存, 正在等待当前工作安全收尾后重启服务。", False),
+        ("配置已保存, 正在等待当前工作安全收尾后重启服务。", True),
+    ],
+)
 def test_service_supervisor_consumes_one_configuration_apply_request(
     tmp_path: Path,
+    safe_summary: str,
+    reordered: bool,
 ) -> None:
     launcher, environment = _launcher(tmp_path)
     state = Path(environment["ASE_SERVICE_STATE_DIR"])
@@ -694,12 +713,14 @@ def test_service_supervisor_consumes_one_configuration_apply_request(
         (state / "configuration-apply.json").write_text(
             json.dumps(
                 {
-                    "request_id": request_id,
-                    "safe_summary": "Configuration apply is in progress.",
                     "status": "PENDING",
+                    "safe_summary": safe_summary,
+                    "request_id": request_id,
                 },
                 separators=(",", ":"),
-                sort_keys=True,
+                ensure_ascii=False,
+                sort_keys=not reordered,
+                indent=2 if reordered else None,
             )
             + "\n",
             encoding="utf-8",
@@ -728,6 +749,86 @@ def test_service_supervisor_consumes_one_configuration_apply_request(
         _run(launcher, environment, "stop")
 
 
+def test_service_supervisor_consumes_actual_file_lifecycle_request(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    lifecycle = FileConfigurationLifecycle(
+        state, supervisor_process_probe=_SupervisorProcessProbe()
+    )
+
+    try:
+        started = _run(launcher, environment, "start")
+        assert started.returncode == 0, started.stderr
+        original_pid = (state / "ase-console.pid").read_text().splitlines()[0]
+        pending = lifecycle.request("7" * 64)
+        # Exercise the producer's real default-escaped Chinese JSON bytes.
+        assert "\\u914d" in (state / "configuration-apply.json").read_text()
+        deadline = time.monotonic() + 15
+        current = pending
+        while time.monotonic() < deadline:
+            observed = lifecycle.current()
+            assert observed is not None
+            current = observed
+            if current.status != "PENDING":
+                break
+            time.sleep(0.1)
+
+        assert current.request_id == pending.request_id
+        assert current.status == "SUCCEEDED"
+        assert (state / "ase-console.pid").read_text().splitlines()[0] != original_pid
+        assert not (state / "configuration-apply.request").exists()
+    finally:
+        _run(launcher, environment, "stop")
+
+
+@pytest.mark.parametrize("extra_arguments", [(), ("unexpected", "argument")])
+def test_apply_state_helper_rejects_missing_state_or_extra_arguments_safely(
+    tmp_path: Path, extra_arguments: tuple[str, ...]
+) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    state.mkdir()
+    result = subprocess.run(
+        (
+            sys.executable,
+            str(launcher.with_name("ase-console-lifecycle.py")),
+            "apply-state",
+            *extra_arguments,
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env=environment,
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == "配置应用记录不可用。\n"
+    assert list(state.iterdir()) == []
+
+
+def test_apply_state_helper_rejects_deeply_nested_state_safely(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    state.mkdir()
+    (state / "configuration-apply.json").write_text(
+        "[" * 10000 + "0" + "]" * 10000, encoding="utf-8"
+    )
+    result = subprocess.run(
+        (sys.executable, str(launcher.with_name("ase-console-lifecycle.py")), "apply-state"),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env=environment,
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == "配置应用记录不可用。\n"
+
+
 @pytest.mark.parametrize(
     "state_body",
     [
@@ -753,6 +854,24 @@ def test_service_supervisor_consumes_one_configuration_apply_request(
             sort_keys=True,
         )
         + "\nextra\n",
+        json.dumps(
+            {
+                "request_id": "configuration_apply_" + "a" * 32,
+                "safe_summary": "not a trusted lifecycle summary",
+                "status": "PENDING",
+            }
+        ),
+        json.dumps(
+            {
+                "request_id": "configuration_apply_" + "a" * 32,
+                "safe_summary": "Configuration apply is in progress.",
+                "status": "PENDING",
+                "unexpected": "field",
+            }
+        ),
+        '{"request_id":"configuration_apply_' + "a" * 32 + '",'
+        '"safe_summary":"Configuration apply is in progress.",'
+        '"status":"PENDING","status":"PENDING"}',
     ],
 )
 def test_service_supervisor_never_signals_child_for_invalid_apply_state(
@@ -939,8 +1058,16 @@ def test_service_supervisor_records_safe_failure_without_rolling_back_runtime(
         _run(launcher, environment, "stop")
 
 
+@pytest.mark.parametrize(
+    "safe_summary",
+    [
+        "Configuration apply is in progress.",
+        "配置已保存, 正在等待当前工作安全收尾后重启服务。",
+    ],
+)
 def test_service_supervisor_reconciles_claimed_pending_request_as_failed(
     tmp_path: Path,
+    safe_summary: str,
 ) -> None:
     launcher, environment = _launcher(tmp_path)
     state = Path(environment["ASE_SERVICE_STATE_DIR"])
@@ -950,7 +1077,7 @@ def test_service_supervisor_reconciles_claimed_pending_request_as_failed(
         json.dumps(
             {
                 "request_id": request_id,
-                "safe_summary": "Configuration apply is in progress.",
+                "safe_summary": safe_summary,
                 "status": "PENDING",
             },
             sort_keys=True,

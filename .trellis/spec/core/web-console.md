@@ -1705,6 +1705,23 @@ configuration-apply.json = request_id + PENDING/SUCCEEDED/FAILED + fixed safe_su
   stop/load/launch interruption likewise records `FAILED`, including malformed or symlinked runtime.env.
   Supervisor shutdown waits boundedly, and trap cleanup removes the PID record only while it
   still names that supervisor, preventing an old process from deleting its replacement's identity.
+- Apply-state decoding is semantic JSON validation through the fixed helper
+  `scripts/ase-console-lifecycle.py apply-state [expected_request_id]` and
+  `FileConfigurationLifecycle.current()`. With an expected identity it prints only the validated
+  `PENDING|SUCCEEDED|FAILED`; without one it prints `<status> <request_id>` for startup orphan
+  reconciliation. The command accepts no arbitrary path and never loads `runtime.env`.
+  Fixed Chinese summaries encoded as JSON Unicode escapes, literal UTF-8 and legacy English
+  summaries are equivalent, regardless of field order, indentation or spacing. Reject duplicate
+  JSON keys before typed validation, extra fields, wrong summary/status/identity, trailing garbage
+  and symlink state before any replacement. A dangling symlink is an error, not an absent state.
+  Deep JSON decoder recursion failures become the same fixed safe error, without a traceback.
+  The real writer uses `json.dump(..., sort_keys=True)` with escaped Chinese; tests must pass
+  its actual bytes to the real isolated supervisor. Shell string matching of serialized JSON
+  or only changing the writer's `ensure_ascii` option does not repair existing requests.
+  Existing valid pending bytes and request markers must be consumed by this same public handshake;
+  never manually mark success. A running old supervisor must be stopped through the official
+  controlled boundary before loading the corrected script. No SQL, Task, Run, approval, draft or
+  verdict migration is required.
 - `restart` holds one OS-released flock across controlled `stop` and `start`; CLI and apply cannot
   race replacement. `status` is read-only apart from preparing its safe
   state directory; `logs` tails the last 100 lines and follows the file.

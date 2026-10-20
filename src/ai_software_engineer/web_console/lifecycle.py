@@ -42,6 +42,15 @@ CONFIGURATION_APPLY_SUMMARIES = {
 }
 
 
+def _unique_state_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    for key, value in pairs:
+        if key in fields:
+            raise ValueError("duplicate configuration apply state field")
+        fields[key] = value
+    return fields
+
+
 class ApplyConfigurationRequest(DomainModel):
     """An intentionally empty browser command."""
 
@@ -257,14 +266,19 @@ class FileConfigurationLifecycle:
 
     def _load_state(self) -> ConfigurationApplyState | None:
         try:
+            if self._state.is_symlink():
+                raise OSError("unsafe lifecycle state")
             if not self._state.exists():
                 return None
-            if self._state.is_symlink() or not self._state.is_file():
+            if not self._state.is_file():
                 raise OSError("unsafe lifecycle state")
-            return ConfigurationApplyState.model_validate_json(
-                self._state.read_text(encoding="utf-8")
+            return ConfigurationApplyState.model_validate(
+                json.loads(
+                    self._state.read_text(encoding="utf-8"),
+                    object_pairs_hook=_unique_state_fields,
+                )
             )
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, RecursionError) as error:
             raise ConfigurationApplyError("Configuration apply state is unavailable.") from error
 
     def _write_state(self, state: ConfigurationApplyState) -> None:

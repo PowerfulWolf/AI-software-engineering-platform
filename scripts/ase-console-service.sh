@@ -412,27 +412,7 @@ write_apply_state() {
 }
 
 read_apply_state_status() {
-  expected_request_id=$1
-  [ -f "$APPLY_STATE_FILE" ] && [ ! -L "$APPLY_STATE_FILE" ] || return 1
-  apply_state_body=$(cat "$APPLY_STATE_FILE")
-  pending_summary='Configuration apply is in progress.'
-  succeeded_summary='Configuration was applied.'
-  failed_summary='Configuration remains saved but the Console could not be restarted. Use the service script to inspect status and retry safely.'
-  pending_summary_zh='配置已保存, 正在等待当前工作安全收尾后重启服务。'
-  succeeded_summary_zh='配置已应用, 服务已安全重启。'
-  failed_summary_zh='配置已保存, 但控制台未完成重启。请查看服务状态; 若当前工作尚未收尾, 可稍后重试或解除安全停止。'
-  case "$apply_state_body" in
-    "{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$pending_summary\",\"status\":\"PENDING\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$pending_summary\", \"status\": \"PENDING\"}"|"{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$pending_summary_zh\",\"status\":\"PENDING\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$pending_summary_zh\", \"status\": \"PENDING\"}")
-      printf '%s\n' PENDING
-      ;;
-    "{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$succeeded_summary\",\"status\":\"SUCCEEDED\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$succeeded_summary\", \"status\": \"SUCCEEDED\"}"|"{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$succeeded_summary_zh\",\"status\":\"SUCCEEDED\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$succeeded_summary_zh\", \"status\": \"SUCCEEDED\"}")
-      printf '%s\n' SUCCEEDED
-      ;;
-    "{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$failed_summary\",\"status\":\"FAILED\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$failed_summary\", \"status\": \"FAILED\"}"|"{\"request_id\":\"$expected_request_id\",\"safe_summary\":\"$failed_summary_zh\",\"status\":\"FAILED\"}"|"{\"request_id\": \"$expected_request_id\", \"safe_summary\": \"$failed_summary_zh\", \"status\": \"FAILED\"}")
-      printf '%s\n' FAILED
-      ;;
-    *) return 1 ;;
-  esac
+  lifecycle apply-state "$1"
 }
 
 stop_child_for_apply() {
@@ -481,15 +461,10 @@ supervise_service() {
     printf '%s\n' "$SERVICE_SCRIPT"
   } >"$SUPERVISOR_PID_FILE"
   if [ ! -e "$APPLY_REQUEST_FILE" ] && [ -f "$APPLY_STATE_FILE" ] && [ ! -L "$APPLY_STATE_FILE" ]; then
-    pending_request_id=$(sed -n \
-      -e 's/^{"request_id":"\(configuration_apply_[0-9a-f]\{32\}\)","safe_summary":"Configuration apply is in progress.","status":"PENDING"}$/\1/p' \
-      -e 's/^{"request_id": "\(configuration_apply_[0-9a-f]\{32\}\)", "safe_summary": "Configuration apply is in progress.", "status": "PENDING"}$/\1/p' \
-      -e 's/^{"request_id":"\(configuration_apply_[0-9a-f]\{32\}\)","safe_summary":"配置已保存, 正在等待当前工作安全收尾后重启服务。","status":"PENDING"}$/\1/p' \
-      -e 's/^{"request_id": "\(configuration_apply_[0-9a-f]\{32\}\)", "safe_summary": "配置已保存, 正在等待当前工作安全收尾后重启服务。", "status": "PENDING"}$/\1/p' \
-      "$APPLY_STATE_FILE")
-    if [ -n "$pending_request_id" ] && \
-      [ "$(read_apply_state_status "$pending_request_id" 2>/dev/null)" = "PENDING" ]; then
-      write_apply_state "$pending_request_id" FAILED
+    if apply_state=$(lifecycle apply-state 2>/dev/null); then
+      case "$apply_state" in
+        'PENDING '*) write_apply_state "${apply_state#PENDING }" FAILED ;;
+      esac
     fi
   fi
   while :; do

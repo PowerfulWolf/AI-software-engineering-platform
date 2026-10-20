@@ -94,6 +94,48 @@ def test_file_lifecycle_republishes_missing_marker_for_pending_replay(
     assert request.read_text(encoding="ascii") == pending.request_id + "\n"
 
 
+@pytest.mark.parametrize("duplicate_field", ["request_id", "status", "safe_summary"])
+def test_file_lifecycle_rejects_duplicate_state_keys(tmp_path: Path, duplicate_field: str) -> None:
+    state = {
+        "request_id": "configuration_apply_" + "a" * 32,
+        "status": "PENDING",
+        "safe_summary": "Configuration apply is in progress.",
+    }
+    body = json.dumps(state)
+    (tmp_path / "configuration-apply.json").write_text(
+        body[:-1]
+        + ","
+        + json.dumps(duplicate_field)
+        + ":"
+        + json.dumps(state[duplicate_field])
+        + "}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationApplyError, match="state is unavailable"):
+        FileConfigurationLifecycle(tmp_path).current()
+
+
+def test_file_lifecycle_rejects_deeply_nested_state_safely(tmp_path: Path) -> None:
+    (tmp_path / "configuration-apply.json").write_text(
+        "[" * 10000 + "0" + "]" * 10000, encoding="utf-8"
+    )
+
+    with pytest.raises(ConfigurationApplyError, match="state is unavailable"):
+        FileConfigurationLifecycle(tmp_path).current()
+
+
+@pytest.mark.parametrize("target_exists", [False, True])
+def test_file_lifecycle_rejects_symlink_state(tmp_path: Path, target_exists: bool) -> None:
+    external = tmp_path / "external.json"
+    if target_exists:
+        external.write_text("{}", encoding="utf-8")
+    (tmp_path / "configuration-apply.json").symlink_to(external)
+
+    with pytest.raises(ConfigurationApplyError, match="state is unavailable"):
+        FileConfigurationLifecycle(tmp_path).current()
+
+
 def test_file_lifecycle_rejects_missing_supervisor_without_writing(
     tmp_path: Path,
 ) -> None:
