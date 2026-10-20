@@ -1,0 +1,40 @@
+{
+  "kind": "complete-current-native-batch-survey-three-parent-cpu-threads",
+  "observer_sha256": "c1cef1713fea6e9a8db73312f6d77f7de3e78382ec63d4e6eb63df8447474d15",
+  "busy_threads": 3,
+  "all_probes_exited": true,
+  "scans": [
+    {
+      "root_kind": "repository",
+      "seconds": 5.103,
+      "blockers": [
+        "PROCESS_SCAN_INCOMPLETE"
+      ],
+      "survey_sha256": "3b322e293f12d9b0542adabb9efbe9af2163c7e6abec3030c4baad7fca30cd46"
+    },
+    {
+      "root_kind": "repository",
+      "seconds": 5.383,
+      "blockers": [
+        "PROCESS_SCAN_INCOMPLETE"
+      ],
+      "survey_sha256": "342bb2f9875ba9e22aae7f7cc0fde23fb912c6bf8658397d5c86691b2c424793"
+    },
+    {
+      "root_kind": "worktree",
+      "seconds": 5.279,
+      "blockers": [
+        "PROCESS_SCAN_INCOMPLETE"
+      ],
+      "survey_sha256": "4c64faa6b36a9c50e323adbd1578f316a85aaa1f15fd24da8fdd9981a3b304d9"
+    },
+    {
+      "root_kind": "worktree",
+      "seconds": 5.506,
+      "blockers": [
+        "PROCESS_SCAN_INCOMPLETE"
+      ],
+      "survey_sha256": "f96bc551fd202ee130f92430616884d9bdf9ca142cef7a0e7fd00abda6c324f9"
+    }
+  ]
+}

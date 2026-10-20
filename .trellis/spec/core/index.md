@@ -38,6 +38,8 @@
 
 ## Files
 
+- [Isolated complete local execution survey](isolated-local-execution-survey.md): one fixed owned interpreter, exact observer identity, full original checks and deadline including cleanup.
+
 - [Bounded local path survey worker](local-path-survey-worker.md): private isolated parsing
   of complete captured lsof bytes, unchanged absolute deadlines, ownership and recovery gates.
 

@@ -1,0 +1,36 @@
+         565186 function calls (564957 primitive calls) in 5.419 seconds
+
+   Ordered by: cumulative time
+   List reduced from 425 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    5.419    5.419 legacy_local_execution.py:835(observe)
+    37778    5.259    0.000    5.259    0.000 {built-in method builtins.sum}
+        2    0.000    0.000    2.615    1.307 local_path_observation.py:434(_observe_path_worker)
+        1    0.000    0.000    2.255    2.255 legacy_local_execution.py:748(_mac_paths)
+        5    0.000    0.000    1.979    0.396 subprocess.py:1259(wait)
+        5    0.001    0.000    1.979    0.396 subprocess.py:2021(_wait)
+       49    0.006    0.000    1.941    0.040 {built-in method time.sleep}
+        1    0.001    0.001    1.683    1.683 legacy_local_execution.py:230(_processes)
+        1    0.000    0.000    1.592    1.592 legacy_local_execution.py:767(_inspect_mac_paths)
+        1    0.000    0.000    1.592    1.592 local_path_observation.py:245(observe_mac_paths_in_process)
+       42    0.001    0.000    1.390    0.033 owned_sessions.py:389(_observe)
+        2    0.000    0.000    1.290    0.645 legacy_local_execution.py:196(_query)
+        1    0.000    0.000    1.165    1.165 legacy_local_execution.py:565(_desktop_sandbox_chains)
+        5    0.000    0.000    1.069    0.214 owned_processes.py:384(finish_owned_process)
+        1    0.000    0.000    1.054    1.054 legacy_local_execution.py:293(_native_identities)
+        1    0.000    0.000    1.054    1.054 local_native_process_observation.py:255(observe_mac_native_identities)
+        1    0.000    0.000    1.041    1.041 legacy_local_execution.py:557(_argument_worktree_references)
+        1    0.000    0.000    1.041    1.041 local_path_observation.py:418(observe_mac_argument_paths_in_process)
+       13    0.000    0.000    0.805    0.062 tempfile.py:610(TemporaryFile)
+       13    0.001    0.000    0.805    0.062 {built-in method _io.open}
+       42    0.010    0.000    0.715    0.017 owned_sessions.py:257(members)
+       84    0.000    0.000    0.627    0.007 owned_sessions.py:382(_require_owner_identity)
+       89    0.003    0.000    0.595    0.007 owned_sessions.py:205(boot_identity)
+        5    0.000    0.000    0.594    0.119 owned_spawn.py:67(spawn_owned_query)
+        5    0.000    0.000    0.594    0.119 owned_processes.py:320(stopped)
+       10    0.000    0.000    0.594    0.059 owned_processes.py:333(_validate_stopped)
+       10    0.000    0.000    0.594    0.059 owned_sessions.py:499(require_empty)
+       10    0.000    0.000    0.594    0.059 owned_sessions.py:504(_require_empty)
+        5    0.000    0.000    0.475    0.095 owned_processes.py:296(stop_session)
+        5    0.000    0.000    0.475    0.095 owned_sessions.py:475(stop)

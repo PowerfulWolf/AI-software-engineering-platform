@@ -1,0 +1,40 @@
+{
+  "kind": "isolated-complete-current-survey-three-parent-cpu-threads",
+  "source_sha256": {
+    "local_survey_observation.py": "409f15e56e6e850474624a4b78634e4d689d7f1b151934553dbd7247e160cada",
+    "local_survey_worker.py": "a2ab516a16cea637c0bd5b5f2ad295110c0288f7431d60881e064d16f34c9e2d",
+    "legacy_local_execution.py": "0f6e1f409cf5cd145672238707c097d0266d876d4368b9d4f7b9964653c2e8e0",
+    "local_native_process_observation.py": "5f2ca46d3b48fa89c1bb6e607019c2e28603738f2e32dbc4ba7b4a5ae7be28b6",
+    "local_path_observation.py": "deeed25927fcfec851bee3dbe34f9a60ebb39414eaa912a1fadd8eb00b5cdfac"
+  },
+  "busy_threads": 3,
+  "all_probes_exited": true,
+  "scans": [
+    {
+      "root_kind": "repository",
+      "seconds": 2.253,
+      "blockers": [],
+      "survey_sha256": "4eb627c4e86721f1d74c54a80f5104392c4f91c17defb06f5ea8820e6e6e3e16"
+    },
+    {
+      "root_kind": "repository",
+      "seconds": 2.264,
+      "blockers": [],
+      "survey_sha256": "ca27d3f6dd408d15f143e5f3ff5cc54c0e88c9ef172fe0f0b87f245f2eaaf000"
+    },
+    {
+      "root_kind": "worktree",
+      "seconds": 2.405,
+      "blockers": [
+        "PROCESS_SCAN_INCOMPLETE"
+      ],
+      "survey_sha256": "1ecf189e7b4f3626b28a95f81ee97a0010860258e2b68747aec59e93b0a9453b"
+    },
+    {
+      "root_kind": "worktree",
+      "seconds": 2.32,
+      "blockers": [],
+      "survey_sha256": "b3c425329bbe413fcc9cbbb0bab2783e1d80244dd9ed0dc2c3ba33609c625648"
+    }
+  ]
+}

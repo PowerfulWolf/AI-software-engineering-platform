@@ -1,0 +1,42 @@
+{
+  "busy_threads": 3,
+  "all_probes_exited": true,
+  "scans": [
+    {
+      "round": 1,
+      "variant": "current",
+      "seconds": 5.15,
+      "blockers": [
+        "PROCESS_SCAN_INCOMPLETE"
+      ],
+      "native_reads": 1056
+    },
+    {
+      "round": 1,
+      "variant": "single_read_prototype",
+      "seconds": 5.081,
+      "blockers": [
+        "PROCESS_SCAN_INCOMPLETE"
+      ],
+      "native_reads": 526
+    },
+    {
+      "round": 2,
+      "variant": "current",
+      "seconds": 5.16,
+      "blockers": [
+        "PROCESS_SCAN_INCOMPLETE"
+      ],
+      "native_reads": 1048
+    },
+    {
+      "round": 2,
+      "variant": "single_read_prototype",
+      "seconds": 5.167,
+      "blockers": [
+        "PROCESS_SCAN_INCOMPLETE"
+      ],
+      "native_reads": 524
+    }
+  ]
+}

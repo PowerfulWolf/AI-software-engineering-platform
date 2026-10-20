@@ -2,6 +2,11 @@
 
 ## 1. Scope and trigger
 
+Production baseline recovery now uses the complete isolated observer described in
+[isolated-local-execution-survey.md](isolated-local-execution-survey.md). Its owned interpreter
+calls this module's pure complete lsof parser directly. The standalone captured-lsof worker
+retains the narrow contract below and gains no process-query capability.
+
 Apply when changing the macOS cwd/open-file interpretation used by
 `TrustedLegacyLocalExecutionObserver`. Under competing Python work in the Host, a real
 profile remained in `_mac_paths → Path.resolve`; complete lsof path processing on the Host's

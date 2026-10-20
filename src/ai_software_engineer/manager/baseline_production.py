@@ -109,9 +109,11 @@ from ai_software_engineer.manager.legacy_containment import (
 from ai_software_engineer.manager.legacy_local_execution import (
     LegacyLocalExecutionObserver,
     LegacyRescuePrerequisiteError,
-    TrustedLegacyLocalExecutionObserver,
 )
 from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy_inventory
+from ai_software_engineer.manager.local_survey_observation import (
+    IsolatedLegacyLocalExecutionObserver,
+)
 from ai_software_engineer.manager.stopped_execution_checkpoint import (
     StoppedCoderExecutionProof,
     read_stopped_coder_execution,
@@ -594,7 +596,7 @@ class ProductionBaselineFactCollector:
         self.local_execution_observer = (
             local_execution_observer
             if local_execution_observer is not None
-            else TrustedLegacyLocalExecutionObserver()
+            else IsolatedLegacyLocalExecutionObserver()
         )
         self._sealed_legacy_observation: LegacyExecutionContainment | None = None
         self.route_root = route_root

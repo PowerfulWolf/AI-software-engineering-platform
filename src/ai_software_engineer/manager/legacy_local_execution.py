@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import logging
+import math
 import os
 import re
 import shlex
@@ -339,10 +340,15 @@ class TrustedLegacyLocalExecutionObserver:
         # Fixed 136-byte proc_bsdinfo ABI: effective UID, kernel executable
         # name and high-resolution start time; no environment or prompt data.
         buffer = ctypes.create_string_buffer(136)
+        ctypes.set_errno(0)
         size = cast(int, query(pid, 3, 0, ctypes.byref(buffer), len(buffer)))
         if size == 0 and ctypes.get_errno() == 3:
             raise ProcessLookupError
-        if size != len(buffer) or struct.unpack_from("=I", buffer.raw, 20)[0] != os.getuid():
+        if (
+            size != len(buffer)
+            or struct.unpack_from("=I", buffer.raw, 12)[0] != pid
+            or struct.unpack_from("=I", buffer.raw, 20)[0] != os.getuid()
+        ):
             raise _IncompleteSurvey
         return buffer.raw
 
@@ -810,23 +816,54 @@ class TrustedLegacyLocalExecutionObserver:
     def observe(
         self, *, worktree_root: Path, boot: LocalBootObservation
     ) -> LegacyLocalExecutionSurvey:
+        started = time.monotonic()
+        return self._observe_with_deadline(
+            worktree_root=worktree_root,
+            boot=boot,
+            started=started,
+            deadline=started + self.MAX_SCAN_SECONDS,
+            observer_pid=os.getpid(),
+        )
+
+    def _confirm_observer_identity(self) -> None:
+        """The isolated worker supplies current actual-parent verification."""
+
+    def _observe_with_deadline(
+        self,
+        *,
+        worktree_root: Path,
+        boot: LocalBootObservation,
+        started: float,
+        deadline: float,
+        observer_pid: int,
+    ) -> LegacyLocalExecutionSurvey:
+        if (
+            not math.isfinite(started)
+            or not math.isfinite(deadline)
+            or deadline != started + self.MAX_SCAN_SECONDS
+            or type(observer_pid) is not int
+            or observer_pid < 1
+        ):
+            raise ValueError("本机执行调查边界无效")
         root = worktree_root.resolve(strict=True)
         if not root.is_dir():
             raise ValueError("本机执行调查的工作区不存在")
         uid = os.getuid()
         blockers: set[LegacyLocalExecutionBlocker] = set()
-        started = time.monotonic()
-        token = _DEADLINE.set(started + self.MAX_SCAN_SECONDS)
+        token = _DEADLINE.set(deadline)
         query_pids: set[int] = set()
         query_token = _QUERY_PIDS.set(query_pids)
         phase = "platform_boundary"
         try:
+            self._remaining()
             if uid != os.geteuid():
                 raise _IncompleteSurvey
             if sys.platform != "darwin" and not sys.platform.startswith("linux"):
                 raise _IncompleteSurvey
             phase = "process_inventory_before"
+            self._confirm_observer_identity()
             before = self._processes(uid)
+            phase = "desktop_attribution_before"
             before_desktop_chains = self._desktop_sandbox_chains(before, root)
             control_pids = self._operator_control_pids(before)
             execution_pids = self._execution_related_pids(
@@ -837,7 +874,7 @@ class TrustedLegacyLocalExecutionObserver:
             )
             # Only the observer itself is excluded from open-file checks.
             # A control session's real source descriptors still block rescue.
-            observer_pids = frozenset({os.getpid()})
+            observer_pids = frozenset({os.getpid(), observer_pid})
             phase = "paths_before"
             covered, path_blockers = (
                 self._mac_paths(
@@ -858,6 +895,8 @@ class TrustedLegacyLocalExecutionObserver:
             before_covered = frozenset(covered)
             phase = "process_inventory_after"
             after = self._processes(uid)
+            self._confirm_observer_identity()
+            phase = "desktop_attribution_after"
             after_desktop_chains = self._desktop_sandbox_chains(after, root)
             after_control_pids = self._operator_control_pids(after)
             execution_pids = execution_pids | self._execution_related_pids(
@@ -925,6 +964,7 @@ class TrustedLegacyLocalExecutionObserver:
                     before[pid].birth == "unobserved" or before[pid].birth != after[pid].birth
                 ):
                     raise _IncompleteSurvey
+            self._confirm_observer_identity()
             for pid, process in after.items():
                 if process.state != "Z":
                     try:

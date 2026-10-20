@@ -3,6 +3,7 @@
 import ctypes
 import logging
 import math
+import struct
 import subprocess
 import time
 from datetime import UTC, datetime, timedelta
@@ -1137,6 +1138,8 @@ def test_query_permission_denial_is_incomplete_without_raw_exception(
     [
         ("process_inventory_before", "incomplete"),
         ("process_inventory_before", "timeout"),
+        ("desktop_attribution_before", "incomplete"),
+        ("desktop_attribution_after", "incomplete"),
         ("paths_before", "permission"),
         ("process_inventory_after", "timeout"),
         ("paths_after", "timeout"),
@@ -1165,6 +1168,7 @@ def test_incomplete_survey_logs_safe_phase_and_reason_without_process_data(
             super().__init__(commands=(first, second))
             self.query_count = 0
             self.birth_count = 0
+            self.desktop_count = 0
 
         def _query(self, argv: tuple[str, ...]) -> bytes:
             self.query_count += 1
@@ -1177,6 +1181,16 @@ def test_incomplete_survey_logs_safe_phase_and_reason_without_process_data(
                     raise PermissionError(sensitive)
                 return b"invalid process inventory containing " + sensitive.encode()
             return super()._query(argv)
+
+        def _desktop_sandbox_chains(
+            self, processes: dict[int, survey_module._Process], root: Path
+        ) -> dict[int, tuple[survey_module._DesktopProcessIdentity, ...]]:
+            self.desktop_count += 1
+            if (phase == "desktop_attribution_before" and self.desktop_count == 1) or (
+                phase == "desktop_attribution_after" and self.desktop_count == 2
+            ):
+                raise survey_module._IncompleteSurvey(sensitive)
+            return super()._desktop_sandbox_chains(processes, root)
 
         def _birth(self, pid: int) -> str:
             self.birth_count += 1
@@ -1220,3 +1234,107 @@ def test_complete_idle_survey_does_not_log_an_incomplete_warning(
     with caplog.at_level(logging.WARNING, logger=logger):
         MacFixtureObserver().observe(worktree_root=tmp_path, boot=BOOT).require_idle()
     assert not [record for record in caplog.records if record.name == logger]
+
+
+@pytest.mark.parametrize("failure", ["none", "stale_errno", "fresh_esrch", "partial", "pid", "uid"])
+def test_darwin_native_info_binds_exact_pid_uid_and_fresh_errno(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    class Query:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, pid: int, kind: int, arg: int, buffer: object, length: int) -> int:
+            assert pid == 101 and kind == 3 and arg == 0 and length == 136
+            assert ctypes.get_errno() == 0
+            if failure == "fresh_esrch":
+                ctypes.set_errno(3)
+                return 0
+            if failure == "stale_errno":
+                return 0
+            body = bytearray(136)
+            struct.pack_into("=I", body, 12, 102 if failure == "pid" else 101)
+            struct.pack_into("=I", body, 20, 502 if failure == "uid" else 501)
+            struct.pack_into("=QQ", body, 120, 123, 45)
+            ctypes.memmove(cast(ctypes.c_void_p, buffer), bytes(body), len(body))
+            return 135 if failure == "partial" else 136
+
+    class Library:
+        proc_pidinfo = Query()
+
+    def native_library(path: str, *, use_errno: bool) -> Library:
+        assert path == "/usr/lib/libproc.dylib" and use_errno
+        return Library()
+
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.legacy_local_execution.ctypes.CDLL", native_library
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.legacy_local_execution.os.getuid", lambda: 501
+    )
+    token = survey_module._DEADLINE.set(time.monotonic() + 5)
+    ctypes.set_errno(3)
+    try:
+        observer = TrustedLegacyLocalExecutionObserver()
+        if failure == "none":
+            assert len(observer._darwin_info(101)) == 136
+        elif failure == "fresh_esrch":
+            with pytest.raises(ProcessLookupError):
+                observer._darwin_info(101)
+        else:
+            with pytest.raises(survey_module._IncompleteSurvey):
+                observer._darwin_info(101)
+    finally:
+        survey_module._DEADLINE.reset(token)
+        ctypes.set_errno(0)
+
+
+@pytest.mark.parametrize("offender", [101, 102, 103])
+def test_exact_parent_and_worker_only_skip_open_files_not_child_or_argv(
+    tmp_path: Path,
+    mac: None,
+    monkeypatch: pytest.MonkeyPatch,
+    offender: int,
+) -> None:
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.legacy_local_execution.os.getpid", lambda: 102
+    )
+    rows = "\n".join(
+        f"{pid} {ppid} 501 S Thu Oct 8 08:00:00 2026 /bin/zsh"
+        for pid, ppid in [(101, 1), (102, 101), (103, 102)]
+    )
+    opened = b"".join(
+        (
+            f"p{pid}\0\nfcwd\0tDIR\0n/elsewhere\0\nf4\0tREG\0n"
+            f"{tmp_path / 'draft.py' if pid == offender else '/elsewhere'}\0\n"
+        ).encode()
+        for pid in [101, 102, 103]
+    )
+    selected_prefix = (
+        f"{offender} {1 if offender == 101 else offender - 1} 501 S Thu Oct 8 08:00:00 2026"
+    )
+    active_rows = rows.replace(
+        f"{selected_prefix} /bin/zsh", f"{selected_prefix} /usr/bin/codex exec fixture"
+    )
+    observer = MacFixtureObserver(commands=(active_rows, active_rows), open_files=opened)
+    started = time.monotonic()
+    report = observer._observe_with_deadline(
+        worktree_root=tmp_path, boot=BOOT, started=started, deadline=started + 5, observer_pid=101
+    )
+    assert "CODEX_EXECUTION_ACTIVE" in report.blockers
+    assert ("WORKTREE_PROCESS_ACTIVE" in report.blockers) == (offender == 103)
+    assert "PROCESS_SCAN_INCOMPLETE" not in report.blockers
+
+
+def test_original_engine_expired_deadline_does_not_start_queries(
+    tmp_path: Path, mac: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observer = MacFixtureObserver()
+    started = time.monotonic()
+    monkeypatch.setattr(time, "monotonic", lambda: started + 5)
+    result = observer._observe_with_deadline(
+        worktree_root=tmp_path, boot=BOOT, started=started, deadline=started + 5, observer_pid=101
+    )
+    assert result.blockers == ("PROCESS_SCAN_INCOMPLETE",)
+    assert not observer.calls

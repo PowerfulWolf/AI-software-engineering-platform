@@ -1,0 +1,36 @@
+         165682 function calls (165149 primitive calls) in 5.180 seconds
+
+   Ordered by: cumulative time
+   List reduced from 343 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    5.180    5.180 legacy_local_execution.py:836(observe)
+    39375    5.130    0.000    5.130    0.000 {built-in method builtins.sum}
+        1    0.000    0.000    3.749    3.749 legacy_local_execution.py:576(_desktop_sandbox_chains)
+       33    0.000    0.000    3.741    0.113 pathlib.py:1228(resolve)
+        2    0.000    0.000    3.682    1.841 legacy_local_execution.py:554(_arguments_reference_worktree)
+       32    0.000    0.000    3.682    0.115 legacy_local_execution.py:739(_covers)
+       33    0.000    0.000    3.369    0.102 <frozen posixpath>:420(realpath)
+    37/33    0.001    0.000    3.368    0.102 <frozen posixpath>:429(_joinrealpath)
+      242    0.010    0.000    3.294    0.014 {built-in method posix.lstat}
+        1    0.001    0.001    1.351    1.351 legacy_local_execution.py:227(_processes)
+        1    0.000    0.000    0.875    0.875 legacy_local_execution.py:290(_native_identities)
+        1    0.000    0.000    0.875    0.875 local_native_process_observation.py:255(observe_mac_native_identities)
+        1    0.000    0.000    0.474    0.474 legacy_local_execution.py:193(_query)
+       16    0.000    0.000    0.390    0.024 owned_sessions.py:389(_observe)
+       33    0.000    0.000    0.372    0.011 pathlib.py:835(stat)
+       33    0.001    0.000    0.372    0.011 {built-in method posix.stat}
+        2    0.000    0.000    0.344    0.172 owned_spawn.py:67(spawn_owned_query)
+        5    0.000    0.000    0.331    0.066 tempfile.py:610(TemporaryFile)
+        5    0.000    0.000    0.331    0.066 {built-in method _io.open}
+        2    0.000    0.000    0.319    0.160 subprocess.py:1259(wait)
+        2    0.000    0.000    0.319    0.160 subprocess.py:2021(_wait)
+       11    0.001    0.000    0.319    0.029 {built-in method time.sleep}
+       16    0.002    0.000    0.263    0.016 owned_sessions.py:257(members)
+        2    0.000    0.000    0.210    0.105 owned_processes.py:384(finish_owned_process)
+        5    0.000    0.000    0.179    0.036 tempfile.py:668(opener)
+        5    0.000    0.000    0.172    0.034 {method '__exit__' of '_io._IOBase' objects}
+        2    0.000    0.000    0.149    0.075 subprocess.py:807(__init__)
+        6    0.000    0.000    0.148    0.025 {built-in method posix.open}
+        4    0.000    0.000    0.147    0.037 owned_processes.py:333(_validate_stopped)
+        4    0.000    0.000    0.147    0.037 owned_sessions.py:499(require_empty)
