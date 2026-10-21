@@ -1,0 +1,256 @@
+{
+  "kind": "exact_terminal_recovery_admission_observation",
+  "schema_validated": true,
+  "progress": {
+    "schema_version": "v0.1",
+    "scope": {
+      "operation_id": "operation_d0e1b020764915a4a1b724419bc676b6",
+      "team_id": "team_ai",
+      "project_id": "project_ai-project_034252eb3595",
+      "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+      "expected_checkpoint_sha256": "b5fdf6b19c800383966d124083bb25034d2596589e6b319c6dc45570fbc7235c",
+      "approved_plan_sha256": "89eb5d5996f9f49490cec84e61998cae23420a084c4b160aaa6db5cc3def27fe"
+    },
+    "records": [
+      {
+        "scope": {
+          "operation_id": "operation_d0e1b020764915a4a1b724419bc676b6",
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+          "expected_checkpoint_sha256": "b5fdf6b19c800383966d124083bb25034d2596589e6b319c6dc45570fbc7235c",
+          "approved_plan_sha256": "89eb5d5996f9f49490cec84e61998cae23420a084c4b160aaa6db5cc3def27fe"
+        },
+        "observed_at": "2026-10-21T02:34:56.330423Z",
+        "record_sha256": "affe3a338fc422dfe0dd8663896f5d2a7bd48670c70421f633b3ec2dbe4f897a",
+        "kind": "AUTHORIZATION_RECORDED",
+        "evidence": {
+          "authorization_sha256": "c313ad4cc7aaa4e54f023bbbdc6572a6fe2002eb0f1d841c58ed968b0af3aaf4"
+        }
+      },
+      {
+        "scope": {
+          "operation_id": "operation_d0e1b020764915a4a1b724419bc676b6",
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+          "expected_checkpoint_sha256": "b5fdf6b19c800383966d124083bb25034d2596589e6b319c6dc45570fbc7235c",
+          "approved_plan_sha256": "89eb5d5996f9f49490cec84e61998cae23420a084c4b160aaa6db5cc3def27fe"
+        },
+        "observed_at": "2026-10-21T02:36:26.802995Z",
+        "record_sha256": "2bb2ccbb312b6874b62536b83015e7163523f1866dbf6444235f043ed4fac9ff",
+        "kind": "TASK_SEALED",
+        "evidence": {
+          "task_id": "task_recovery_89eb5d5996f9f49490cec84e61998cae",
+          "task_record_sha256": "11693e09301b31924a67550e4cac339ce9a6466cf4e55f38b8c5811cd9755339",
+          "source_revision": "d401eda1d32d62348759f1e657ded5f4243b46c5"
+        }
+      },
+      {
+        "scope": {
+          "operation_id": "operation_d0e1b020764915a4a1b724419bc676b6",
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+          "expected_checkpoint_sha256": "b5fdf6b19c800383966d124083bb25034d2596589e6b319c6dc45570fbc7235c",
+          "approved_plan_sha256": "89eb5d5996f9f49490cec84e61998cae23420a084c4b160aaa6db5cc3def27fe"
+        },
+        "observed_at": "2026-10-21T02:45:35.787120Z",
+        "record_sha256": "ebc56caa0780c0d6def9033829ba921b79fa871aeb4d704c8947525a9989b5ce",
+        "kind": "DISPATCH_COMMITTED",
+        "evidence": {
+          "task_id": "task_recovery_89eb5d5996f9f49490cec84e61998cae",
+          "dispatch_id": "dispatch_commit_89eb5d5996f9f49490cec84e61998cae23420a084c4b160aaa6db5cc3def27fe",
+          "dispatch_sha256": "870185505e5ba9db9d3ab156cfb03beea59e8edb505b5d3887ced2ee0114be39",
+          "task_record_sha256": "11693e09301b31924a67550e4cac339ce9a6466cf4e55f38b8c5811cd9755339"
+        }
+      },
+      {
+        "scope": {
+          "operation_id": "operation_d0e1b020764915a4a1b724419bc676b6",
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+          "expected_checkpoint_sha256": "b5fdf6b19c800383966d124083bb25034d2596589e6b319c6dc45570fbc7235c",
+          "approved_plan_sha256": "89eb5d5996f9f49490cec84e61998cae23420a084c4b160aaa6db5cc3def27fe"
+        },
+        "observed_at": "2026-10-21T02:47:16.123147Z",
+        "record_sha256": "5668109cb28d5b5984a31a6a760148cbe33d6070f445be903dd59d5ee053a3cb",
+        "kind": "SEED_VERIFIED",
+        "evidence": {
+          "task_id": "task_recovery_89eb5d5996f9f49490cec84e61998cae",
+          "seed_record_sha256": "d3c71f7589df65852eebfa693f64cf21ee67491172a2a2272c2d0620a5447e57",
+          "dispatch_sha256": "870185505e5ba9db9d3ab156cfb03beea59e8edb505b5d3887ced2ee0114be39",
+          "input_mode": "preserve_draft"
+        }
+      },
+      {
+        "scope": {
+          "operation_id": "operation_d0e1b020764915a4a1b724419bc676b6",
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+          "expected_checkpoint_sha256": "b5fdf6b19c800383966d124083bb25034d2596589e6b319c6dc45570fbc7235c",
+          "approved_plan_sha256": "89eb5d5996f9f49490cec84e61998cae23420a084c4b160aaa6db5cc3def27fe"
+        },
+        "observed_at": "2026-10-21T02:47:22.888074Z",
+        "record_sha256": "26c1f8692e3066446220486cc606530cf182a6c51f58e32b2ec9e3dc0c135b76",
+        "kind": "EXECUTION_CLAIMED",
+        "evidence": {
+          "task_id": "task_recovery_89eb5d5996f9f49490cec84e61998cae",
+          "work_item_id": "work_18575a69841d690e586b08daddf6b4d9d3216bc204d0eb04eff40380115a3f1a",
+          "lease_id": "lease_fb6f9e167c48e9177af8e22c",
+          "assignment_id": "assignment_65d444b1db8d4046b72e114f",
+          "claim_sha256": "72e886e7fa947ace97ed2183a92b1162569f6ef1d0996e0039a9360bfb945dcc",
+          "dispatch_sha256": "870185505e5ba9db9d3ab156cfb03beea59e8edb505b5d3887ced2ee0114be39",
+          "source_revision": "d401eda1d32d62348759f1e657ded5f4243b46c5",
+          "role": "coder",
+          "attempt": 1
+        }
+      }
+    ]
+  },
+  "independent_preapproval_audit": {
+    "current_patch_bytes": 124741,
+    "current_patch_sha256": "31d890828748470d85a649ab1402eb3c788a3d6e55364e0887cf0aea77df5edd",
+    "inherited_patch_bytes": 225678,
+    "inherited_patch_sha256": "26710e71e0bf31c26b61b35daa749c4575671fbc7d9e2f4aff8f23c4a9c1cfb7",
+    "changed_files": 21,
+    "inventory_entries": 2916,
+    "inventory_bytes": 24789593,
+    "excluded_entries": 0,
+    "snapshot_sha256": "42c4a66374a8eac1edca8589b63224ec64960afbd392e2baaa1f8301de9474c5"
+  },
+  "completion_claimed": false,
+  "candidate_claimed": false,
+  "qa_pass_claimed": false,
+  "review_approve_claimed": false,
+  "direct_sql_mutations": 0,
+  "historical_rewrites": 0,
+  "new_requirement_created": false,
+  "subsequent_main_failure": {
+    "run_id": "run_1656816e86e2430cb6a67da8c75b700f",
+    "start_sha256": "17383a1588f98bcd54b3952a24ffac6926c577469ef7f1488a0884d2ee532d1c",
+    "context_manifest_id": "ctx_784d1b1b03071be7cdca2ebae5ab85837568773d36b3c0af7f875a1f7b009c51",
+    "recovery_invocation_sha256": "667beb781d772a8e1b0f66bc1deba7bac81477fd6819f1fd53210de75d29170b",
+    "outcome_sha256": "fc97cda4e3639011256c2ba18654f4b485134745a7ccb581ff85ec6764069dad",
+    "outcome": "FAILED",
+    "code": "PROVIDER_UNAVAILABLE",
+    "transient": false,
+    "native_stop_sha256": "82160b744ad40a2073927034b448c9a63098b53ada5b9974846aae93d4cb6f11",
+    "capture_stop_sha256": "6412e751a43825cfe3880238f7f14d0fe45afbba18eeb11991751acc95417d85",
+    "owned_session_empty_sha256": "5d1ffe9715e6210f6a43e685f99b0eda8d3fe5238c4f62e5341f1128bcff0058",
+    "stopped_at": "2026-10-21T02:55:16.523000Z",
+    "safe_main_error": "stream disconnected before completion: stream closed before response.completed",
+    "artifact_present": false
+  },
+  "select_only_wait_observation": {
+    "task_id": "task_recovery_89eb5d5996f9f49490cec84e61998cae",
+    "checked_at": "2026-10-21T02:55:24.448556+00:00",
+    "read_only": true,
+    "task": {
+      "status": "IMPLEMENTING",
+      "revision": 2,
+      "attempts": 1,
+      "work_attempt": 1,
+      "base_ref": "d401eda1d32d62348759f1e657ded5f4243b46c5"
+    },
+    "items": [
+      {
+        "id": "work_18575a69841d690e586b08daddf6b4d9d3216bc204d0eb04eff40380115a3f1a",
+        "role": "coder",
+        "attempt": 1,
+        "status": "WAITING_DEPENDENCY",
+        "checkpoint_sequence": 2
+      }
+    ],
+    "claims": [
+      {
+        "state": "RELEASED",
+        "last_heartbeat_at": "2026-10-21T02:55:16.485927+00:00",
+        "ended_at": "2026-10-21T02:55:17.269421+00:00"
+      }
+    ]
+  },
+  "operation_terminal_status": "SUCCEEDED",
+  "delivery_completed": false,
+  "independent_document_review": "passed; snapshot/heartbeat timestamp distinction corrected",
+  "stopped_failure_retry": {
+    "proposal_operation": "operation_e87be9daf1ff87983c5a6896dfb7d83b",
+    "pause_operation": "operation_83bb97eee3edbf939e9ae8e821ad2fb8",
+    "pause_status": "SUCCEEDED",
+    "plan_sha256": "03799670ab194e64704451b5aebf9091eb051cca9a7d620a81e46fb83136f13e",
+    "binding_sha256": "6c8d6b0f7d39af2866a17a9c452911b2e33421e5a34ef01555e3d56cdc33eb02",
+    "stopped_failure_sha256": "a86d5694ccf3dab3c228853676f9cd1983ce9bc353e6165b2081b08791dfc37e",
+    "before_inventory_sha256": "9685c170e6c0d40946897199fe2b085bd09f428dadaf6033d2245d2aa665bf2c",
+    "after_inventory_sha256": "9685c170e6c0d40946897199fe2b085bd09f428dadaf6033d2245d2aa665bf2c",
+    "authority_sha256": "888b2b7643a7747a71034accdc216ac0781dbf58840a91594568015431d913a0",
+    "human_action_event_id": "evalevt_failure_6c8d6b0f7d39af2866a17a9c452911b2",
+    "resume_operation": "operation_fd6484b97c806efa01db04fdc5ab4f5c",
+    "postresume_select_only_snapshot": {
+      "kind": "exact_k1_successor_select_only",
+      "checked_at": "2026-10-21T03:14:49.661617+00:00",
+      "task_id": "task_recovery_89eb5d5996f9f49490cec84e61998cae",
+      "task": {
+        "status": "IMPLEMENTING",
+        "attempts": 3,
+        "work_attempt": 2,
+        "base_ref": "d401eda1d32d62348759f1e657ded5f4243b46c5",
+        "revision": 2
+      },
+      "work_items": [
+        {
+          "id": "work_18575a69841d690e586b08daddf6b4d9d3216bc204d0eb04eff40380115a3f1a",
+          "role": "coder",
+          "attempt": 1,
+          "status": "CLOSED",
+          "checkpoint_sequence": 2
+        },
+        {
+          "id": "work_6c8d6b0f7d39af2866a17a9c452911b2e33421e5a34ef01555e3d56cdc33eb02",
+          "role": "coder",
+          "attempt": 2,
+          "status": "CLOSED",
+          "checkpoint_sequence": 2
+        },
+        {
+          "id": "work_7f5e586ba06601a3ea0d8c9a0e54f07a4dc9c09e3675d6b671060a84c96b97fd",
+          "role": "coder",
+          "attempt": 3,
+          "status": "RUNNING",
+          "checkpoint_sequence": 2
+        }
+      ],
+      "claims": [
+        {
+          "lease_id": "lease_fb6f9e167c48e9177af8e22c",
+          "work_item_id": "work_18575a69841d690e586b08daddf6b4d9d3216bc204d0eb04eff40380115a3f1a",
+          "state": "RELEASED",
+          "last_heartbeat_at": "2026-10-21T02:55:16.485927+00:00",
+          "ended_at": "2026-10-21T02:55:17.269421+00:00"
+        },
+        {
+          "lease_id": "lease_2a0240665841f0fa29efe85f",
+          "work_item_id": "work_6c8d6b0f7d39af2866a17a9c452911b2e33421e5a34ef01555e3d56cdc33eb02",
+          "state": "RELEASED",
+          "last_heartbeat_at": "2026-10-21T03:13:57.255359+00:00",
+          "ended_at": "2026-10-21T03:14:04.293567+00:00"
+        },
+        {
+          "lease_id": "lease_3ebbe5402a192d29700f26dc",
+          "work_item_id": "work_7f5e586ba06601a3ea0d8c9a0e54f07a4dc9c09e3675d6b671060a84c96b97fd",
+          "state": "ACTIVE",
+          "last_heartbeat_at": "2026-10-21T03:14:44.943751+00:00",
+          "ended_at": null
+        }
+      ],
+      "read_only_transaction": true,
+      "control_calls": 0
+    },
+    "knowledge_attempt2_outcome_sha256": "1a2fcbc0cfd20042beed90256ec75a3adad796e334ca25371152960667d61ab4",
+    "knowledge_attempt2_transient": true,
+    "ordinary_work_use": 2,
+    "ordinary_work_limit": 10,
+    "completion_claimed": false
+  }
+}

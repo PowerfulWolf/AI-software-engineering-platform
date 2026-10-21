@@ -298,3 +298,153 @@ not this later terminal state or completion. Deployment rollback still requires 
 controlled idle stop and actual exit; keep additive readers and every persisted recovery
 record. Reverting the performance fix can restore the measured survey timeout, and reverting
 the configuration helper can strand escaped-Unicode apply requests again.
+
+## Exact terminal recovery admission on the original Requirement (2026-10-21)
+
+The original Requirement remains
+`delivery_multi_bb78e2316afca47d005384542f685174535b69db`. Its historical failed
+Task/attempt/outcome and the older UNKNOWN execution were not rewritten. The normal public
+Continue proposal `operation_1c8704867958e203a758e9131b6b212f` completed and produced plan
+`89eb5d5996f9f49490cec84e61998cae23420a084c4b160aaa6db5cc3def27fe`.
+An independent read-only audit checked its typed store, complete current patch (124741 bytes,
+SHA `31d890828748470d85a649ab1402eb3c788a3d6e55364e0887cf0aea77df5edd`), complete inherited
+input (225678 bytes, SHA `26710e71e0bf31c26b61b35daa749c4575671fbc7d9e2f4aff8f23c4a9c1cfb7`),
+21 allowed files and complete 2916-entry workspace snapshot (24789593 bytes, excluded zero,
+SHA `42c4a66374a8eac1edca8589b63224ec64960afbd392e2baaa1f8301de9474c5`).
+The exact target is `d401eda1d32d62348759f1e657ded5f4243b46c5`; the original approval/base
+remains in history. The registered clean target clone was fast-forwarded to that exact revision.
+The later main commit `2aff9b9` changes maintenance documentation only and was not silently
+substituted into this frozen plan.
+
+Using the user's existing delegated approval authority, the exact approval was submitted once
+as `operation_d0e1b020764915a4a1b724419bc676b6`. Its public preparation-progress endpoint
+verified all five durable boundaries:
+
+| Boundary | UTC time | Evidence SHA-256 |
+| --- | --- | --- |
+| AUTHORIZATION_RECORDED | 02:34:56.330423 | c313ad4cc7aaa4e54f023bbbdc6572a6fe2002eb0f1d841c58ed968b0af3aaf4 |
+| TASK_SEALED | 02:36:26.802995 | 11693e09301b31924a67550e4cac339ce9a6466cf4e55f38b8c5811cd9755339 |
+| DISPATCH_COMMITTED | 02:45:35.787120 | 870185505e5ba9db9d3ab156cfb03beea59e8edb505b5d3887ced2ee0114be39 |
+| SEED_VERIFIED | 02:47:16.123147 | d3c71f7589df65852eebfa693f64cf21ee67491172a2a2272c2d0620a5447e57 |
+| EXECUTION_CLAIMED | 02:47:22.888074 | 72e886e7fa947ace97ed2183a92b1162569f6ef1d0996e0039a9360bfb945dcc |
+
+The new internal Task is `task_recovery_89eb5d5996f9f49490cec84e61998cae`, branch
+`ai/feature/project-delivery-learning-loop-recovery-4`. Seed completed in the originally
+approved `preserve_draft` mode; there was no silent switch to `coder_reapply`. New Task budget
+copies the approved original frozen policy; no old Task budget was refunded or increased.
+
+The public snapshot (detail as_of 02:49:21Z; lease heartbeat 02:49:03Z) showed the original Requirement DELIVERING, new Task
+IMPLEMENTING/revision 2, attempt 1 RUNNING and a valid lease in KNOWLEDGE_PREPARATION.
+Independent inspection subsequently verified that the new knowledge intent and assessment
+returned at 02:49:34Z and 02:51:47Z. Knowledge Run
+`run_knowledge_0fe91be00cc9e6c2a83084bc656cf63a` is not a main Coder invocation. These
+admission facts do not establish an accepted Coder report, candidate, QA PASS, Review APPROVE
+or K1 delivery completion; later observations must be recorded separately.
+
+Preparation took approximately nine minutes from TASK_SEALED to DISPATCH_COMMITTED. A bounded
+one-second native sample observed Pydantic/encoding/hashing and GIL contention; it did not
+identify exact Python functions or establish deadlock. No flock or SQL socket long wait was
+sampled. At 02:47:45Z an exact SELECT-only dispatch read independently verified the same
+committed dispatch; visible database sessions contained only one sleeping peer. The separate
+aggregate lock inspection was denied with MySQL code 1227 (PROCESS privilege), so global lock
+waits are unknown, not zero. No database permissions were broadened. Repeated full facts
+gates are a remaining performance concern; this observation does not authorize removing them.
+
+存量数据处置：all existing Requirement, Task, claim, approval, failure and draft history is
+retained. Recovery used public proposal/approval and normal allocation/seed/worker paths; no
+direct SQL writes, Task reset, synthetic stop proof, manual K1 source edits or new Requirement.
+The finite foreground SELECT-only observer is a temporary diagnostic process, not an automation
+or scheduled task. Keep the current operation while it runs; do not resend or restart to load
+documentation. Normal independent same-candidate QA and Review are still required. Rollback
+of platform code remains a controlled idle-maintenance action and must retain additive readers
+and all recovery evidence.
+
+## Subsequent main invocation and actual engineering wait
+
+The main `DeliveryInvocationStart` was sealed at 02:52:12.509510Z for
+`run_1656816e86e2430cb6a67da8c75b700f`, SHA
+`17383a1588f98bcd54b3952a24ffac6926c577469ef7f1488a0884d2ee532d1c`.
+Its Context is `ctx_784d1b1b03071be7cdca2ebae5ab85837568773d36b3c0af7f875a1f7b009c51`:
+113 sections, zero truncated, all section hashes verified, complete inherited inputs validated
+and knowledge reads/consultation sealed. Recovery invocation receipt SHA
+`667beb781d772a8e1b0f66bc1deba7bac81477fd6819f1fd53210de75d29170b` binds that exact
+Run/Context/seed/plan/dispatch. The request's write paths and commands equal the sealed Task;
+no merge or state modification capability was granted.
+
+The later final outcome is FAILED / PROVIDER_UNAVAILABLE / transient=false, without an artifact,
+SHA `fc97cda4e3639011256c2ba18654f4b485134745a7ccb581ff85ec6764069dad`.
+Safe main diagnostic: `stream disconnected before completion: stream closed before response.completed`.
+The immutable failure retains UNKNOWN_EXIT / return code 1; the display text does not establish
+transient authority. Native stop at 02:55:16.523000Z is genuinely `failed`, rc1, output absent,
+cause/abort absent, original error PROVIDER_UNAVAILABLE. Stop SHA
+`82160b744ad40a2073927034b448c9a63098b53ada5b9974846aae93d4cb6f11`; capture-stop SHA
+`6412e751a43825cfe3880238f7f14d0fe45afbba18eeb11991751acc95417d85`; independently verified
+owned-session-empty proof SHA
+`5d1ffe9715e6210f6a43e685f99b0eda8d3fe5238c4f62e5341f1128bcff0058`.
+No candidate or QA/Review result was produced.
+
+At 02:55:17.269421Z the claim was RELEASED. The finite read-only observer ended after observing
+WAITING_DEPENDENCY; no monitoring job or automation remains from that observer. The public
+Operation completed SUCCEEDED in the operational sense and attached the same recovery Task's
+actual engineering wait to the original Requirement. The new public parent checkpoint is
+`3f607fe91e59e24ffe3d65ee04baa324e83897b721f231de77864b223b550f7d`; Task remains IMPLEMENTING,
+revision2/attempt1, disposition NONTRANSIENT_INFRA / INVESTIGATE_EXECUTION. Delivery is incomplete.
+
+The two knowledge phases each encountered a bounded Responses HTTP504 and succeeded through
+the configured CLI fallback. Those historical failures remain; the main invocation's later
+unclassified failure is a distinct execution. Independent typed inspection found that its exact
+failure/stop facts qualify for the existing stopped-failure-retry proposal. Current complete
+noncache stability, late artifacts and remaining budget must still pass that public proposal;
+the stop record alone is not an after-inventory. Follow the same Task's explicit ordinary-work
+PAUSE and separate RESUME if those gates pass. Do not relabel unknown failure, refund transient
+budget, claim repaired provider prerequisites or create another Requirement. This is additional
+engineering intervention and must retain its normal HumanActionEvent/evaluation audit.
+
+## Exact ordinary-work PAUSE and separate RESUME after that failure
+
+Public proposal `operation_e87be9daf1ff87983c5a6896dfb7d83b` completed SUCCEEDED and sealed
+plan `03799670ab194e64704451b5aebf9091eb051cca9a7d620a81e46fb83136f13e`, facts SHA
+`f7e19e2770ec3ffe3336b25a32f0cd6eb256f57e80a1bac4476d83c9c1f845a3` and stopped-failure
+proof `a86d5694ccf3dab3c228853676f9cd1983ce9bc353e6165b2081b08791dfc37e`. Independent typed
+review passed. Scope, source/base d401eda, permissions, Task, branch and worktree are unchanged.
+The complete current 2974-entry inventory equals the invocation-start inventory, SHA
+`9685c170e6c0d40946897199fe2b085bd09f428dadaf6033d2245d2aa665bf2c`, with no changed mutation
+paths. All 21 draft files remain identical to the seed. The complete on-target seed diff is
+124741 bytes, SHA `edeb980d47abc766529c4d06247e9d2de5916058a3b90f042927f02c7eb11c96`;
+this compares the same target-diff representation rather than the older source capture. Complete
+225678-byte inherited inputs remain in the original immutable lineage. No implementation,
+progress, QA or Review verdict was invented.
+
+Under the user's existing delegated engineering approval, exact PAUSE operation
+`operation_83bb97eee3edbf939e9ae8e821ad2fb8` completed SUCCEEDED. Its sole sequence1 binding is
+`6c8d6b0f7d39af2866a17a9c452911b2e33421e5a34ef01555e3d56cdc33eb02`, with identical before/after
+inventory SHA above. Authority SHA
+`888b2b7643a7747a71034accdc216ac0781dbf58840a91594568015431d913a0` explicitly confirms
+unknown failure and one ordinary-work generation, not repaired provider prerequisites.
+Independent inspection also verified its actual SUPPLY_EVIDENCE HumanActionEvent
+`evalevt_failure_6c8d6b0f7d39af2866a17a9c452911b2`, case
+`case_e34e471c996e97e04f1afa6bf757c2a7`, at 03:06:11.645100Z, referencing that exact authority.
+This is audited human intervention, not an autonomous delivery claim.
+
+The original attempt1 WorkItem closed; the unique attempt2 successor initially remained
+WAITING_HUMAN, disposition SHA
+`f885906643f81671aefc258da7f1ab09d725f8d8bc10cfda365002ba05918c21`.
+Separate exact RESUME operation `operation_fd6484b97c806efa01db04fdc5ab4f5c` was then accepted.
+No new binding, second ordinary-work reservation, source change, Task reset or old outcome rewrite
+was performed. The frozen ordinary work use is 2/10 after reservation; execution-identity ceiling
+remains40 and Coder/QA/Reviewer transient limits remain10 each.
+
+At 03:14:49.661617Z, a consistent SELECT-only snapshot verified attempt2 CLOSED/claim RELEASED
+and attempt3 RUNNING with a new ACTIVE claim; Task remained IMPLEMENTING/revision2 with
+work_attempt2. Independent knowledge metadata explains the transition: attempt2 knowledge intent
+failed at 03:14:03.135434Z with typed PROVIDER_UNAVAILABLE/transient=true, outcome SHA
+`1a2fcbc0cfd20042beed90256ec75a3adad796e334ca25371152960667d61ab4`, before any main invocation
+start. Its base Context passed complete inherited-input checks. The existing frozen transient
+policy produced execution identity3 without another ordinary-work debit. This preparation failure
+is distinct from attempt1's unclassified nontransient main failure. The original recovery
+invocation receipt remains bound to attempt1; no seed consumption was replayed.
+
+This is a historical admission snapshot, not a final current-state or delivery verdict. The
+separate RESUME was still RUNNING at its last public operation read. Later actual main invocation,
+candidate and independent QA/Review must be verified separately. Preserve all failures, approvals,
+budgets and workspace bytes; no direct production database repair is required.
