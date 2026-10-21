@@ -10,6 +10,7 @@ from ai_software_engineer.domain.workspace_admission_contract import (
     WorkspaceAdmissionAdapterContractRecord,
 )
 from ai_software_engineer.knowledge.assessment_rejection import RejectedKnowledgeAssessment
+from ai_software_engineer.manager.rejected_knowledge_draft import RejectedKnowledgeCurrentDraft
 from ai_software_engineer.manager.rejected_knowledge_preparation import (
     RejectedKnowledgeCarryRefusal,
 )
@@ -96,6 +97,7 @@ def main() -> None:
     for name, model in (
         ("rejected-knowledge-assessment", RejectedKnowledgeAssessment),
         ("rejected-knowledge-carry-refusal", RejectedKnowledgeCarryRefusal),
+        ("rejected-knowledge-current-draft", RejectedKnowledgeCurrentDraft),
         ("workspace-admission-adapter-contract", WorkspaceAdmissionAdapterContractRecord),
     ):
         wire = model.model_json_schema()

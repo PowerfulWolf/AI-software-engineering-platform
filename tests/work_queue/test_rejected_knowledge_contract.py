@@ -126,3 +126,55 @@ def test_carry_refusal_schema_matches_its_trusted_runtime_record() -> None:
     assert wire.pop("$schema") == "https://json-schema.org/draft/2020-12/schema"
     assert wire.pop("$id") == f"https://ai-software-engineer.local/schemas/{name}.schema.json"
     assert wire == RejectedKnowledgeCarryRefusal.model_json_schema()
+
+
+@pytest.mark.parametrize(
+    ("classification", "evidence", "allowed"),
+    [
+        ("PLATFORM_BUG", (), True),
+        ("PLATFORM_BUG", ("foreign://observation",), False),
+        ("INVALID_OUTPUT", (), False),
+        ("EXECUTION_UNCERTAIN", (), False),
+        ("POLICY_VIOLATION", (), False),
+    ],
+)
+def test_generic_wait_semantic_proof_retains_exact_original_classification(
+    classification: str, evidence: tuple[str, ...], allowed: bool
+) -> None:
+    from ai_software_engineer.domain.delivery_resolution import DeliveryWaitInvestigation
+    from tests.domain.factories import make_task
+    from tests.team_view.test_engineering_history import _rejected_knowledge_proof
+
+    original = _rejected_knowledge_proof(make_task())
+    facts = DeliveryFailureFacts.model_validate(
+        {
+            **original.disposition.facts.to_wire(),
+            "classification": classification,
+            "evidence_ids": evidence,
+        }
+    )
+    disposition = decide_delivery_disposition(facts)
+    wire = {
+        **original.to_wire(),
+        "disposition": disposition.to_wire(),
+        "disposition_sha256": disposition.disposition_sha256,
+    }
+    if not allowed:
+        with pytest.raises(ValidationError):
+            DeliveryWaitInvestigation.model_validate(wire)
+    else:
+        value = DeliveryWaitInvestigation.model_validate(wire)
+        assert value.disposition == disposition
+        assert value.rejected_knowledge == original.rejected_knowledge
+        assert value.permitted_resolutions == original.permitted_resolutions
+
+
+def test_current_draft_requires_separate_human_engineering_decision() -> None:
+    from ai_software_engineer.domain.delivery_resolution import RejectedKnowledgePreparationEvidence
+
+    wire = _rejected_resolution()
+    evidence = {**wire["rejected_knowledge"], "current_draft_sha256": "5" * 64}
+    proposed = RejectedKnowledgePreparationEvidence.model_validate(evidence)
+    assert proposed.current_draft_sha256 == "5" * 64
+    record = DeliveryResolution.model_validate({**wire, "rejected_knowledge": proposed.to_wire()})
+    assert record.authorization_source == "engineering_operator_decision"

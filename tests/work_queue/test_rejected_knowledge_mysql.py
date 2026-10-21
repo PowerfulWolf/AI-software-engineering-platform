@@ -312,7 +312,18 @@ def rejected_waiting(
             runner._delivery_failure_control = WorkerDeliveryFailureControl(guard)
             if not scenario.startswith("legacy"):
                 with pytest.raises(DeliveryWaiting):
-                    runner._knowledge_failure(task, rejected.value)
+                    if scenario == "platform":
+                        # Old generic KnowledgeError routing left no semantic URI.
+                        # The future investigator must derive facts, not parse detail.
+                        runner._delivery_failure_control.wait(
+                            task,
+                            classification="PLATFORM_BUG",
+                            reason="opaque historical failure",
+                            source_revision=source,
+                            artifact_ids=(),
+                        )
+                    else:
+                        runner._knowledge_failure(task, rejected.value)
         finally:
             lease.stop()
             guard.lease = None
@@ -348,6 +359,7 @@ def rejected_waiting(
         )
 
 
+@pytest.mark.parametrize("rejected_waiting", ["normal", "platform"], indirect=True)
 def test_exact_returned_rejection_releases_owner_then_resolves_once_with_ordinary_work(
     rejected_waiting: RejectedKnowledgeWaiting,
 ) -> None:
@@ -358,7 +370,7 @@ def test_exact_returned_rejection_releases_owner_then_resolves_once_with_ordinar
     original = waiting.queue.get(waiting.claim.work_item.id)
     assert original.status is WorkItemStatus.WAITING_DEPENDENCY
     assert original.wait_disposition is not None
-    assert original.wait_disposition.facts.classification == "INVALID_OUTPUT"
+    assert original.wait_disposition.facts.classification in {"INVALID_OUTPUT", "PLATFORM_BUG"}
     proof = waiting.entry.inspect(waiting.command())
     assert proof.permitted_resolutions == (
         DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION,

@@ -13,7 +13,11 @@ from ai_software_engineer.agents.execution import PausedInvocationProof
 from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.artifact import ArtifactId
 from ai_software_engineer.domain.continuation import ContinuationCause
-from ai_software_engineer.domain.delivery_disposition import DeliveryDisposition, DispositionSha256
+from ai_software_engineer.domain.delivery_disposition import (
+    DeliveryDisposition,
+    DeliveryFailureFacts,
+    DispositionSha256,
+)
 from ai_software_engineer.domain.engineering_authority import (
     EngineeringAdmission,
     EngineeringCapability,
@@ -84,6 +88,18 @@ RESULT_REPLAY_REJECTED_CLASSIFICATIONS: frozenset[str] = frozenset(
         "SERVICE_PAUSED",
     }
 )
+
+
+def rejected_knowledge_wait_matches(facts: DeliveryFailureFacts, observation_sha256: str) -> bool:
+    """Match an exact wait shape only; a complete independent proof grants authority.
+
+    Historical generic waits retain their original classification and empty evidence.
+    Error text never establishes knowledge semantics or replacement permission.
+    """
+    return (
+        facts.classification == "INVALID_OUTPUT"
+        and facts.evidence_ids == ("knowledge-assessment-rejection://" + observation_sha256,)
+    ) or (facts.classification == "PLATFORM_BUG" and not facts.evidence_ids)
 
 
 class VerificationRetryEvidence(DomainModel):
@@ -285,6 +301,9 @@ class RejectedKnowledgePreparationEvidence(DomainModel):
     context_sha256: DispositionSha256
     workspace_inventory_sha256: DispositionSha256
     workspace_capture_sha256: DispositionSha256
+    current_draft_sha256: DispositionSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     current_lease_id: NonEmptyStr
     current_claim_sha256: DispositionSha256
     current_dispatch_sequence: Annotated[StrictInt, Field(ge=0)]
@@ -529,9 +548,7 @@ class DeliveryWaitInvestigation(DomainModel):
             or rejected_knowledge.source_revision != self.source_revision
             or rejected_knowledge.checkpoint_sequence != self.checkpoint_sequence
             or rejected_knowledge.role is not facts.role
-            or facts.classification != "INVALID_OUTPUT"
-            or facts.evidence_ids
-            != ("knowledge-assessment-rejection://" + rejected_knowledge.observation_sha256,)
+            or not rejected_knowledge_wait_matches(facts, rejected_knowledge.observation_sha256)
             or self.invocation_start_sha256 is not None
             or self.invocation_outcome_sha256 is not None
             or self.knowledge_preparation is not None
@@ -880,6 +897,10 @@ class DeliveryResolution(DomainModel):
             or self.rejected_knowledge.work_item_id != self.work_item_id
             or self.rejected_knowledge.source_revision != self.expected_source_revision
             or self.rejected_knowledge.checkpoint_sequence != self.expected_checkpoint_sequence
+            or (
+                self.rejected_knowledge.current_draft_sha256 is not None
+                and self.authorization_source != "engineering_operator_decision"
+            )
         ):
             raise ValueError("rejected knowledge decision changed its exact task or source")
         if (self.resolution_kind is DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION) != (

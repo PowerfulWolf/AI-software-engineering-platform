@@ -82,6 +82,38 @@ def verified_state_record(
             raise ValueError("rejected checkpoint Task/Repository differs")
         _validate_scope(start.scope.to_wire(), expected)
         return rejected.to_wire()
+    if path.parent == sidecar / "state/rejected-knowledge":
+        rejected_record = _rejected_knowledge_record(path, sidecar)
+        from ai_software_engineer.knowledge.assessment_rejection import (
+            read_historical_rejected_assessment,
+        )
+        from ai_software_engineer.manager.rejected_knowledge_preparation import (
+            RejectedKnowledgeCarryRefusal,
+        )
+
+        # The claim alone has no Team/Project/Requirement identity. Reopen the
+        # exact original semantic observation before accepting deletion scope.
+        observation = read_historical_rejected_assessment(
+            sidecar / "knowledge/runs", str(rejected_record.to_wire()["observation_sha256"])
+        )
+        record_task_id = (
+            rejected_record.claim.work_item.task_id
+            if isinstance(rejected_record, RejectedKnowledgeCarryRefusal)
+            else str(rejected_record.to_wire()["task_id"])
+        )
+        if observation.binding.task_id != record_task_id or record_task_id not in expected.task_ids:
+            raise ValueError("rejected knowledge Task differs")
+        # The documented legacy knowledge/continuation lane may name this exact
+        # verified Task as its Requirement. No sibling Task becomes an alias.
+        exact = expected.model_copy(
+            update={
+                "task_ids": frozenset({record_task_id}),
+                "requirement_ids": expected.requirement_ids | {record_task_id},
+            }
+        )
+        validate_declared_scopes(observation.to_wire(), exact)
+        validate_declared_scopes(rejected_record.to_wire(), exact)
+        return rejected_record.to_wire()
     namespace = next((name for name in models if path.name.startswith(name + "-")), None)
     if namespace is None:
         raise ValueError(
@@ -196,6 +228,65 @@ def verified_state_record(
     return wire
 
 
+def _rejected_knowledge_record(path: Path, sidecar: Path) -> DomainModel:
+    """Decode only the real shared-directory writer contracts and canonical keys."""
+    if path.parent != sidecar / "state/rejected-knowledge":
+        raise ValueError("rejected knowledge storage directory differs")
+    if path.name.startswith("carry-refusals-"):
+        from ai_software_engineer.manager.rejected_knowledge_preparation import (
+            RejectedKnowledgeCarryRefusal,
+        )
+
+        carry = KnowledgeRecordStore._decode_payload(
+            _read_regular(path, 64 * 1024 * 1024), RejectedKnowledgeCarryRefusal
+        )
+        carry.validate_integrity()
+        if path.name != KnowledgeRecordStore._name("carry-refusals", carry.claim.lease.id):
+            raise ValueError("rejected knowledge carry storage key differs")
+        return carry
+    if path.name.startswith("current-drafts-"):
+        from ai_software_engineer.manager.rejected_knowledge_draft import (
+            RejectedKnowledgeCurrentDraft,
+            read_current_draft,
+        )
+
+        draft = KnowledgeRecordStore._decode_payload(
+            _read_regular(path, 64 * 1024 * 1024), RejectedKnowledgeCurrentDraft
+        )
+        if (
+            path.name != KnowledgeRecordStore._name("current-drafts", draft.record_sha256)
+            or read_current_draft(sidecar / "state", draft.record_sha256) != draft
+        ):
+            raise ValueError("rejected knowledge current draft storage key differs")
+        return draft
+    raise ValueError("unsupported rejected knowledge state contract")
+
+
+def rejected_knowledge_files(sidecar: Path, expected: StateDeletionScope) -> tuple[Path, ...]:
+    """Select exact owned files, keeping other Tasks in this shared directory."""
+    root = sidecar / "state/rejected-knowledge"
+    _reject_symlinks(root)
+    if not root.exists():
+        return ()
+    selected = []
+    from ai_software_engineer.manager.rejected_knowledge_preparation import (
+        RejectedKnowledgeCarryRefusal,
+    )
+
+    for path in sorted(root.iterdir()):
+        record = _rejected_knowledge_record(path, sidecar)
+        task_id = (
+            record.claim.work_item.task_id
+            if isinstance(record, RejectedKnowledgeCarryRefusal)
+            else str(record.to_wire()["task_id"])
+        )
+        if task_id not in expected.task_ids:
+            continue
+        verified_state_record(path, sidecar, {}, expected)
+        selected.append(path)
+    return tuple(selected)
+
+
 def validate_declared_scopes(wire: WirePayload, expected: StateDeletionScope) -> None:
     """Validate only formal ownership positions, never arbitrary descriptions."""
     records = [wire]
@@ -218,6 +309,15 @@ def validate_declared_scopes(wire: WirePayload, expected: StateDeletionScope) ->
             records.extend(item for item in invocations if isinstance(item, dict))
         for field in (
             "scope",
+            "binding",
+            "manifest",
+            "progress",
+            "publication",
+            "start",
+            "outcome",
+            "capture",
+            "capture_stop",
+            "assignment",
             "policy",
             "engineering_policy",
             "investigation",
@@ -257,6 +357,9 @@ def _validate_scope(scope: WirePayload, expected: StateDeletionScope) -> None:
     for field in ("team_id", "project_id", "repository_id", "repository_root"):
         if field in scope and scope[field] != getattr(expected, field):
             raise ValueError("state " + field + " differs")
+    repository_ids = scope.get("repository_ids")
+    if repository_ids is not None and repository_ids != [expected.repository_id]:
+        raise ValueError("state Repository identities differs")
     for field in ("requirement_id", "delivery_id"):
         value = scope.get(field)
         if value is not None and value not in expected.requirement_ids:

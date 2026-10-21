@@ -522,6 +522,7 @@ class RequirementPurger:
                             add(path, "project")
             from ai_software_engineer.multi_directory.purge_state import (
                 StateDeletionScope,
+                rejected_knowledge_files,
                 task_state_directories,
                 upstream_files,
             )
@@ -537,6 +538,8 @@ class RequirementPurger:
                 requirement_ids=frozenset({checkpoint.delivery_id, *native_ids}),
                 task_ids=frozenset(owned_tasks),
             )
+            for path in rejected_knowledge_files(repo.root, state_scope):
+                add(path, "project")
             for directory in task_state_directories(repo.root, state_scope):
                 add(directory, "project")
             for path in upstream_files(

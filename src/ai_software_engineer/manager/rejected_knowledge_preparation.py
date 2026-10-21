@@ -46,6 +46,7 @@ from ai_software_engineer.manager.capacity_input_reader import (
 )
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.manager.knowledge_invocation_proof import require_knowledge_claim_context
+from ai_software_engineer.manager.rejected_knowledge_draft import collect_current_draft
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.orchestration.continuation_models import ContinuationRejected
 from ai_software_engineer.work_queue.claim_snapshot import require_claim_snapshot
@@ -91,6 +92,7 @@ def rejected_assessment_for_work(
 ) -> RejectedKnowledgeAssessment | None:
     """Inspect only the two documented exact lanes and this WorkItem's preparations."""
     bindings: dict[str, KnowledgeRunBinding] = {}
+    work_intents: list[KnowledgeInvocationIntent] = []
     for requirement in dict.fromkeys((requirement_id, task.id)):
         lane_id = invocation_scope_lane_sha256(
             team_id=scope.team_id,
@@ -110,6 +112,7 @@ def rejected_assessment_for_work(
             if claimed is None or claimed.work_item.id != item.id:
                 continue
             intent.validate_integrity()
+            work_intents.append(intent)
             if intent.phase != "assessment":
                 continue
             outcome = lane.find(
@@ -131,7 +134,15 @@ def rejected_assessment_for_work(
     if len(bindings) != 1:
         raise ValueError("原工作项含不同知识输入或未知接续调用")
     try:
-        return derive_rejected_assessment(records_root, next(iter(bindings.values())))
+        observation = derive_rejected_assessment(records_root, next(iter(bindings.values())))
+        if any(
+            intent.binding != observation.binding
+            or intent.claim is None
+            or claim_identity_sha256(intent.claim) != observation.original_claim_sha256
+            for intent in work_intents
+        ):
+            raise ValueError("语义拒绝之外仍有不同或未知的知识调用, 不允许按无主执行续跑")
+        return observation
     except KnowledgeError as error:
         if str(error) == "ASSESSMENT_REJECTION_NOT_REJECTED":
             return None
@@ -201,8 +212,17 @@ def rejected_knowledge_evidence(
     ):
         raise ValueError("知识拒绝恢复的任务、范围、claim 或接纳事实已变化")
     records_root = state.parent / "knowledge/runs"
-    if derive_rejected_assessment(records_root, bound) != observation:
-        raise ValueError("知识拒绝恢复的精确封存事实已变化")
+    if (
+        rejected_assessment_for_work(
+            records_root=records_root,
+            task=task,
+            item=item,
+            scope=scope,
+            requirement_id=bound.requirement_id,
+        )
+        != observation
+    ):
+        raise ValueError("知识拒绝恢复的精确封存事实或完整调用集合已变化")
     lane = KnowledgeRecordStore(
         records_root / "invocations" / invocation_lane_sha256(bound), read_only=True
     )
@@ -281,11 +301,8 @@ def rejected_knowledge_evidence(
         assert inputs.store is not None
         baseline = source.baseline
         plan = inputs.store.plan(baseline.plan_sha256)
-        if (
-            plan.facts.permissions != permissions
-            or plan.facts.denied_paths
-            != (task.constraints.denied_paths if task.constraints else ())
-            or baseline.after_inventory_sha256 != inventory.sha256
+        if plan.facts.permissions != permissions or plan.facts.denied_paths != (
+            task.constraints.denied_paths if task.constraints else ()
         ):
             raise ValueError("知识准备前的完整已批准草稿或权限发生漂移")
     capture = CapturedMutations.from_capture(
@@ -298,8 +315,26 @@ def rejected_knowledge_evidence(
             retained_source_paths=retained,
         )
     )
-    if source.baseline is None and capture.mutations:
-        raise ValueError("没有完整已批准草稿的知识准备恢复只接受干净输入")
+    current_draft = None
+    if (source.baseline is None and capture.mutations) or (
+        source.baseline is not None and source.baseline.after_inventory_sha256 != inventory.sha256
+    ):
+        # This is a current complete proposal, never a historical post-progress
+        # inventory. Only a separate exact human engineering decision can accept it.
+        current_draft = collect_current_draft(
+            state=state,
+            task=task,
+            item=item,
+            observation=observation,
+            scope=scope,
+            queue=queue,
+            artifacts=artifacts,
+            git=git,
+            permissions=permissions,
+            capture=capture,
+            inventory=inventory,
+            source=source,
+        )
     if capture_mutation_inventory(worktree.path) != inventory:
         raise ValueError("知识拒绝恢复的完整工作现场正在变化")
     carry_sha = None
@@ -331,6 +366,10 @@ def rejected_knowledge_evidence(
             if claimed.lease.id == current.lease.id:
                 carry_sha = carry.refusal_sha256
         previous = claimed
+    if current_draft is not None:
+        KnowledgeRecordStore(state / "rejected-knowledge").put(
+            "current-drafts", current_draft.record_sha256, current_draft
+        )
     return RejectedKnowledgePreparationEvidence(
         scope=scope,
         requirement_id=bound.requirement_id,
@@ -349,6 +388,7 @@ def rejected_knowledge_evidence(
         context_sha256=context_sha,
         workspace_inventory_sha256=inventory.sha256,
         workspace_capture_sha256=digest(capture.to_wire()),
+        current_draft_sha256=(current_draft.record_sha256 if current_draft is not None else None),
         current_lease_id=current.lease.id,
         current_claim_sha256=claim_identity_sha256(current),
         current_dispatch_sequence=current.work_item.dispatch_sequence,

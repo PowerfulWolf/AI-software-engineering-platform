@@ -15,6 +15,10 @@ from ai_software_engineer.knowledge.agents import (
     KnowledgeModelCall,
     consultation_integrity_matches,
 )
+from ai_software_engineer.knowledge.assessment_rejection import (
+    RejectedKnowledgeAssessment,
+    read_historical_rejected_assessment,
+)
 from ai_software_engineer.knowledge.delivery import DeliveryWorkflowAdmission, DeliveryWorkflowProof
 from ai_software_engineer.knowledge.gaps import (
     KnowledgeGap,
@@ -47,6 +51,7 @@ from ai_software_engineer.work_queue.invocation import (
 
 _MODELS: Mapping[str, type[DomainModel]] = {
     "bindings": KnowledgeRunBinding,
+    "assessment-rejections": RejectedKnowledgeAssessment,
     "consultation-inputs": KnowledgeConsultationInput,
     "knowledge-intents": KnowledgeIntent,
     "consultations": KnowledgeConsultation,
@@ -183,6 +188,11 @@ def select_knowledge(
                 ):
                     raise ValueError("knowledge resume chain owner differs")
                 key = record.new_binding.run_id + ":" + record.gap_id
+        elif isinstance(record, RejectedKnowledgeAssessment):
+            if binding_owned(record.binding):
+                if read_historical_rejected_assessment(root, record.observation_sha256) != record:
+                    raise ValueError("knowledge rejection observation differs")
+                key = record.observation_sha256
         elif isinstance(record, KnowledgeRunBinding):
             if binding_owned(record):
                 key = record.run_id

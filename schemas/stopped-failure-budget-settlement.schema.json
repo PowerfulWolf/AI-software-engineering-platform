@@ -1101,18 +1101,39 @@
                     "properties": {
                       "role": {
                         "const": "coder"
+                      }
+                    },
+                    "required": [
+                      "role",
+                      "classification",
+                      "evidence_ids"
+                    ],
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "classification": {
+                            "const": "INVALID_OUTPUT"
+                          },
+                          "evidence_ids": {
+                            "minItems": 1,
+                            "maxItems": 1,
+                            "items": {
+                              "pattern": "^knowledge-assessment-rejection://[a-f0-9]{64}$"
+                            }
+                          }
+                        }
                       },
-                      "classification": {
-                        "const": "INVALID_OUTPUT"
-                      },
-                      "evidence_ids": {
-                        "minItems": 1,
-                        "maxItems": 1,
-                        "items": {
-                          "pattern": "^knowledge-assessment-rejection://[a-f0-9]{64}$"
+                      {
+                        "properties": {
+                          "classification": {
+                            "const": "PLATFORM_BUG"
+                          },
+                          "evidence_ids": {
+                            "maxItems": 0
+                          }
                         }
                       }
-                    }
+                    ]
                   }
                 }
               },
@@ -3973,6 +3994,19 @@
           "default": "frozen_work_attempt",
           "title": "Budget Source",
           "type": "string"
+        },
+        "current_draft_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Draft Sha256"
         }
       },
       "required": [

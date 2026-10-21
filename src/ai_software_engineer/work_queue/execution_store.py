@@ -26,6 +26,8 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolutionKind,
     KnowledgePreparationRetryEvidence,
     RejectedCoderOutputEvidence,
+    RejectedKnowledgePreparationEvidence,
+    rejected_knowledge_wait_matches,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringCapability
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
@@ -234,13 +236,24 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
     def _rejected_output_decisions(
         self, task_id: str, *, cursor: DictCursor | None = None
     ) -> tuple[DeliveryResolution, ...]:
-        """Only consumed decisions retire an exact rejected publication from execution."""
+        return self._rejected_wait_decisions(
+            task_id, DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT, cursor=cursor
+        )
+
+    def _rejected_wait_decisions(
+        self,
+        task_id: str,
+        resolution_kind: DeliveryResolutionKind,
+        *,
+        cursor: DictCursor | None = None,
+    ) -> tuple[DeliveryResolution, ...]:
+        """Read complete consumed decisions; unconsumed filesystem records grant no authority."""
         if cursor is None:
             with (
                 closing(open_mysql_connection(self._dsn)) as connection,
                 connection.cursor(DictCursor) as owned_cursor,
             ):
-                return self._rejected_output_decisions(task_id, cursor=owned_cursor)
+                return self._rejected_wait_decisions(task_id, resolution_kind, cursor=owned_cursor)
         cursor.execute(
             "SELECT e.payload_json FROM work_queue_events e JOIN work_queue_items i "
             "ON e.work_item_id=i.id WHERE i.task_id=%s "
@@ -248,7 +261,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             "AND JSON_UNQUOTE(JSON_EXTRACT(e.payload_json,"
             "'$.detail.resolution.resolution_kind'))=%s "
             "ORDER BY e.sequence LIMIT 513",
-            (task_id, DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT.value),
+            (task_id, resolution_kind.value),
         )
         rows = cursor.fetchall()
         if len(rows) > 512:
@@ -270,8 +283,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 or payload.detail.resolution_sha256 != decision.resolution_sha256
                 or payload.detail.next_work_item_id != "work_" + decision.resolution_sha256
                 or payload.detail.budget_refund
-                or decision.resolution_kind
-                is not DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT
+                or decision.resolution_kind is not resolution_kind
             ):
                 raise QueueCorruption("被拒产出恢复决定改变了已消费的原工作项")
             decisions.append(decision)
@@ -305,6 +317,45 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             or step.allocation_sha256 != parent_step.allocation_sha256
         ):
             raise QueueCorruption("被拒产出续跑决定不属于当前工作项与原源码")
+        return evidence
+
+    def rejected_knowledge_retry(
+        self, work_item_id: str
+    ) -> RejectedKnowledgePreparationEvidence | None:
+        current = self.get(work_item_id)
+        matches = tuple(
+            decision
+            for decision in self._rejected_wait_decisions(
+                current.task_id, DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION
+            )
+            if current.id == "work_" + decision.resolution_sha256
+        )
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise QueueCorruption("知识拒绝续跑缺少唯一已消费的精确决定")
+        decision = matches[0]
+        evidence = decision.rejected_knowledge
+        if evidence is None:
+            raise QueueCorruption("知识拒绝续跑缺少已消费的完整证明")
+        parent = self.get(evidence.work_item_id)
+        step, parent_step = self.step(current.id), self.step(parent.id)
+        if (
+            current.parent_work_item_id != parent.id
+            or current.task_id != evidence.task_id
+            or current.repository_id != evidence.scope.repository_id
+            or current.repository_scopes != parent.repository_scopes
+            or current.role is not AgentRole.CODER
+            or current.attempt != evidence.original_attempt + 1
+            or current.checkpoint_sequence != evidence.checkpoint_sequence
+            or step.boundary.source_revision != evidence.source_revision
+            or step.allocation_sha256 != parent_step.allocation_sha256
+            or (
+                evidence.current_draft_sha256 is not None
+                and decision.authorization_source != "engineering_operator_decision"
+            )
+        ):
+            raise QueueCorruption("知识拒绝续跑改变了原源码、普通工作额度或精确工程决定")
         return evidence
 
     def rejected_output_artifact_ids(self, task_id: str) -> frozenset[str]:
@@ -1044,11 +1095,12 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                         rejected_knowledge is None
                         or current.role is not AgentRole.CODER
                         or task.status is not TaskStatus.IMPLEMENTING
-                        or disposition.facts.classification != "INVALID_OUTPUT"
-                        or disposition.facts.evidence_ids
-                        != (
-                            "knowledge-assessment-rejection://"
-                            + rejected_knowledge.observation_sha256,
+                        or not rejected_knowledge_wait_matches(
+                            disposition.facts, rejected_knowledge.observation_sha256
+                        )
+                        or (
+                            rejected_knowledge.current_draft_sha256 is not None
+                            and resolution.authorization_source != "engineering_operator_decision"
                         )
                         or rejected_knowledge.task_id != task.id
                         or rejected_knowledge.work_item_id != current.id

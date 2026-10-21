@@ -1646,6 +1646,41 @@ class ProductionProjectDeliveryBackend:
             selected_adapters = selected_adapters.wrap_initial_workspace_admission(
                 wrap_rejected_output_admission
             )
+            from ai_software_engineer.manager.rejected_knowledge_draft import (
+                RejectedKnowledgeDraftAdmission,
+            )
+
+            def wrap_rejected_knowledge_admission(
+                delegate: InitialWorkspaceAdmission | None,
+            ) -> InitialWorkspaceAdmission:
+                admission = RejectedKnowledgeDraftAdmission(
+                    state=facts.workspace.directory("state"),
+                    git=GitWorktreeManager(
+                        facts.workspace.repository_root,
+                        Path(self._config.platform_root).expanduser().resolve()
+                        / "worktrees"
+                        / dispatch.repository_id,
+                        branch_names={dispatch.task_id: dispatch.task.branch_name},
+                    ),
+                    task_reader=current_task,
+                    claim_reader=rejected_output_claim,
+                    retry_reader=queue.rejected_knowledge_retry,
+                )
+
+                def select(request: AgentRequest) -> InitialWorkspaceAdmission | None:
+                    if request.role is AgentRole.CODER:
+                        evidence = queue.rejected_knowledge_retry(
+                            rejected_output_claim().work_item.id
+                        )
+                        if evidence is not None and evidence.current_draft_sha256 is not None:
+                            return admission
+                    return delegate
+
+                return ConditionalWorkspaceAdmission(select)
+
+            selected_adapters = selected_adapters.wrap_initial_workspace_admission(
+                wrap_rejected_knowledge_admission
+            )
         adapter = DispatchDeliveryAgentAdapter(
             dispatch=dispatch,
             definitions=definitions,

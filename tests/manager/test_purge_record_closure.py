@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_software_engineer.knowledge.models import digest
+from ai_software_engineer.knowledge.models import KnowledgeError, digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.multi_directory.purge import RequirementPurger, _owners
 from ai_software_engineer.multi_directory.purge_state import (
@@ -317,3 +317,417 @@ def test_nested_quiescence_legacy_scope_is_checked_from_real_producer(tmp_path: 
     assert task_state_directories(sidecar, expected) == (root,)
     with pytest.raises(ValueError, match="team_id differs"):
         task_state_directories(sidecar, expected.model_copy(update={"team_id": "foreign"}))
+
+
+def _knowledge_carry(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, StateDeletionScope]:
+    from ai_software_engineer.knowledge.claim_identity import claim_identity_sha256
+    from ai_software_engineer.knowledge.models import KnowledgeRunBinding
+    from ai_software_engineer.manager.rejected_knowledge_preparation import (
+        RejectedKnowledgeCarryRefusal,
+    )
+    from ai_software_engineer.work_queue.models import QueueClaim
+    from tests.knowledge import test_assessment_rejection as assessment
+    from tests.knowledge.test_invocation_native import _actual_claim
+
+    def scoped_claim(bound: KnowledgeRunBinding) -> QueueClaim:
+        # Keep the fixture's real invocation claim inside this exact repository.
+        claim = _actual_claim(bound)
+        return claim.model_copy(
+            update={
+                "work_item": claim.work_item.model_copy(update={"repository_scopes": (str(root),)})
+            }
+        )
+
+    monkeypatch.setattr(assessment, "_actual_claim", scoped_claim)
+    case = assessment._http_rejection(root, assessment_fallback=False)
+    claim = case.observation.original_claim
+    record = RejectedKnowledgeCarryRefusal(
+        observation_sha256=case.observation.observation_sha256,
+        claim=claim,
+        claim_sha256=claim_identity_sha256(claim),
+        refused_at=datetime.now(UTC),
+        refusal_sha256="0" * 64,
+    )
+    record = record.model_copy(
+        update={
+            "refusal_sha256": digest(record.model_dump(mode="json", exclude={"refusal_sha256"}))
+        }
+    )
+    store = KnowledgeRecordStore(root / "state/rejected-knowledge")
+    store.put("carry-refusals", claim.lease.id, record)
+    expected = StateDeletionScope(
+        team_id=case.bound.team_id,
+        project_id=case.bound.project_id,
+        repository_id=case.bound.repository_ids[0],
+        repository_root=str(root),
+        requirement_ids=frozenset({case.bound.requirement_id}),
+        task_ids=frozenset({claim.work_item.task_id}),
+    )
+    return store.root / store._name("carry-refusals", claim.lease.id), expected
+
+
+def test_knowledge_carry_requires_typed_owned_deletion_closure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path, expected = _knowledge_carry(tmp_path, monkeypatch)
+    assert (
+        verified_state_record(path, tmp_path, {}, expected)["kind"]
+        == "rejected_knowledge_carry_refusal"
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["team_id", "project_id", "repository_id", "repository_root", "requirement_ids", "task_ids"],
+)
+def test_knowledge_carry_deletion_refuses_foreign_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    path, expected = _knowledge_carry(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    foreign = expected.model_copy(
+        update={field: frozenset({"foreign"}) if field.endswith("_ids") else "foreign"}
+    )
+    with pytest.raises(ValueError, match="differs"):
+        verified_state_record(path, tmp_path, {}, foreign)
+    assert path.read_bytes() == before
+
+
+def test_knowledge_carry_selector_selects_owned_file_and_retains_foreign_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_software_engineer.multi_directory.purge_state import rejected_knowledge_files
+
+    path, expected = _knowledge_carry(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    assert rejected_knowledge_files(tmp_path, expected) == (path,)
+    assert (
+        rejected_knowledge_files(tmp_path, expected.model_copy(update={"task_ids": frozenset()}))
+        == ()
+    )
+    assert path.read_bytes() == before
+    unknown = path.parent / "unknown.json"
+    unknown.write_text("{}")
+    with pytest.raises(ValueError, match="unsupported"):
+        rejected_knowledge_files(tmp_path, expected)
+    assert path.read_bytes() == before and unknown.exists()
+
+
+def test_knowledge_carry_wrong_key_and_missing_observation_refuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_software_engineer.multi_directory.purge_state import rejected_knowledge_files
+
+    path, expected = _knowledge_carry(tmp_path, monkeypatch)
+    wrong = path.with_name(KnowledgeRecordStore._name("carry-refusals", "wrong-key"))
+    path.rename(wrong)
+    with pytest.raises(ValueError, match="storage key"):
+        rejected_knowledge_files(tmp_path, expected)
+    wrong.rename(path)
+    for observation in (tmp_path / "knowledge/runs").glob("assessment-rejections-*.json"):
+        observation.unlink()
+    with pytest.raises((KnowledgeError, ValueError)):
+        rejected_knowledge_files(tmp_path, expected)
+    assert path.exists()
+
+
+def test_original_semantic_observation_has_typed_knowledge_deletion_closure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_software_engineer.multi_directory.purge_knowledge import select_knowledge
+    from ai_software_engineer.multi_directory.service import CreateRequirement
+    from tests.manager.test_requirement_retirement import _service
+
+    root = tmp_path / "knowledge-fixture"
+    root.mkdir()
+    _, expected = _knowledge_carry(root, monkeypatch)
+    service, repository = _service(tmp_path / "platform-fixture", monkeypatch)
+    checkpoint = service.create(
+        CreateRequirement(name="closure", repository_roots=(str(repository),))
+    ).checkpoint
+    checkpoint = checkpoint.model_copy(
+        update={"team_id": expected.team_id, "project_id": expected.project_id}
+    )
+    task_id = next(iter(expected.task_ids))
+    records = root / "knowledge/runs"
+    originals = tuple(records.glob("assessment-rejections-*.json"))
+    assert len(originals) == 1
+    selected = select_knowledge(
+        records,
+        checkpoint,
+        identities={task_id, *expected.requirement_ids},
+        task_repositories={task_id: expected.repository_id},
+        repository_id=expected.repository_id,
+    )
+    assert originals[0] in selected
+    assert (
+        select_knowledge(
+            records,
+            checkpoint,
+            identities=set(),
+            task_repositories={task_id: expected.repository_id},
+            repository_id=expected.repository_id,
+        )
+        == ()
+    )
+    wrong = originals[0].with_name(KnowledgeRecordStore._name("assessment-rejections", "wrong-key"))
+    originals[0].rename(wrong)
+    with pytest.raises((KnowledgeError, ValueError)):
+        select_knowledge(
+            records,
+            checkpoint,
+            identities={task_id, *expected.requirement_ids},
+            task_repositories={task_id: expected.repository_id},
+            repository_id=expected.repository_id,
+        )
+    assert wrong.exists()
+
+
+def _current_draft_deletion(
+    root: Path,
+) -> tuple[Path, StateDeletionScope]:
+    from tests.manager.test_rejected_knowledge_current_draft import current_draft_fixture
+
+    fixture = current_draft_fixture(root)
+    evidence = fixture.evidence()
+    assert evidence.current_draft_sha256 is not None
+    path = (
+        fixture.state
+        / "rejected-knowledge"
+        / KnowledgeRecordStore._name("current-drafts", evidence.current_draft_sha256)
+    )
+    expected = StateDeletionScope(
+        team_id=fixture.scope.team_id,
+        project_id=fixture.scope.project_id,
+        repository_id=fixture.scope.repository_id,
+        repository_root=fixture.scope.repository_root,
+        requirement_ids=frozenset({"delivery_parent_scope", "delivery_current_draft"}),
+        task_ids=frozenset({fixture.task.id}),
+    )
+    return path, expected
+
+
+def test_current_draft_selector_uses_exact_record_and_keeps_other_tasks(tmp_path: Path) -> None:
+    from ai_software_engineer.multi_directory.purge_state import rejected_knowledge_files
+
+    path, expected = _current_draft_deletion(tmp_path)
+    sidecar = path.parent.parent.parent
+    before = path.read_bytes()
+    assert rejected_knowledge_files(sidecar, expected) == (path,)
+    assert (
+        verified_state_record(path, sidecar, {}, expected)["kind"]
+        == "rejected_knowledge_current_draft"
+    )
+    assert (
+        rejected_knowledge_files(sidecar, expected.model_copy(update={"task_ids": frozenset()}))
+        == ()
+    )
+    assert path.read_bytes() == before
+    unknown = path.parent / "unknown.json"
+    unknown.write_text("{}")
+    with pytest.raises(ValueError, match="unsupported"):
+        rejected_knowledge_files(sidecar, expected)
+    assert path.read_bytes() == before and unknown.exists()
+
+
+@pytest.mark.parametrize(
+    "mutation", ["key", "scope", "nested-task", "sibling-task-alias", "digest"]
+)
+def test_current_draft_selector_refuses_changed_scope_key_and_complete_graph(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    import json
+
+    from ai_software_engineer.knowledge.assessment_rejection import RejectedKnowledgeAssessment
+    from ai_software_engineer.manager.rejected_knowledge_draft import RejectedKnowledgeCurrentDraft
+    from ai_software_engineer.multi_directory.purge_state import rejected_knowledge_files
+
+    path, expected = _current_draft_deletion(tmp_path)
+    sidecar = path.parent.parent.parent
+    store = KnowledgeRecordStore(path.parent)
+    record = KnowledgeRecordStore._decode_payload(path.read_bytes(), RejectedKnowledgeCurrentDraft)
+    if mutation == "key":
+        wrong = path.with_name(store._name("current-drafts", "wrong-key"))
+        path.rename(wrong)
+    elif mutation == "scope":
+        expected = expected.model_copy(update={"project_id": "project_foreign"})
+    elif mutation == "digest":
+        envelope = json.loads(path.read_text())
+        envelope["sha256"] = "f" * 64
+        path.write_text(json.dumps(envelope))
+    else:
+        if mutation == "nested-task":
+            changed = record.model_copy(
+                update={
+                    "publication": record.publication.model_copy(update={"task_id": "task_foreign"})
+                }
+            )
+        else:
+            knowledge = KnowledgeRecordStore(sidecar / "knowledge/runs")
+            original = knowledge.get(
+                "assessment-rejections", record.observation_sha256, RejectedKnowledgeAssessment
+            )
+            bound = original.binding.model_copy(update={"requirement_id": "task_foreign"})
+            manifest = original.manifest.model_copy(update={"binding": bound})
+            manifest = manifest.model_copy(
+                update={
+                    "manifest_sha256": digest(
+                        manifest.model_dump(mode="json", exclude={"manifest_sha256"})
+                    )
+                }
+            )
+            changed_observation = RejectedKnowledgeAssessment.create(
+                **original.model_dump(exclude={"binding", "manifest", "observation_sha256"}),
+                binding=bound,
+                manifest=manifest,
+            )
+            knowledge.put(
+                "assessment-rejections", changed_observation.observation_sha256, changed_observation
+            )
+            changed = record.model_copy(
+                update={"observation_sha256": changed_observation.observation_sha256}
+            )
+            expected = expected.model_copy(
+                update={"task_ids": expected.task_ids | {"task_foreign"}}
+            )
+        changed = changed.model_copy(update={"record_sha256": changed.recompute_sha256()})
+        path.unlink()
+        # Self-consistently resealed hostile envelope bypasses the real writer's
+        # read-after-write validation, so the cleanup reader must still reject.
+        changed_path = path.parent / store._name("current-drafts", changed.record_sha256)
+        changed_path.write_text(
+            json.dumps({"record": changed.to_wire(), "sha256": digest(changed.to_wire())})
+        )
+    before = {value: value.read_bytes() for value in path.parent.glob("*.json")}
+    with pytest.raises((KnowledgeError, ValueError)):
+        rejected_knowledge_files(sidecar, expected)
+    assert all(value.read_bytes() == content for value, content in before.items())
+
+
+@pytest.mark.parametrize("kernel_change", ["boot", "reused-pid"])
+def test_native_knowledge_deletion_uses_history_after_kernel_identity_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kernel_change: str,
+) -> None:
+    import json
+
+    from ai_software_engineer.agents.structured_observation import StructuredNativeStopReceipt
+    from ai_software_engineer.knowledge.assessment_rejection import (
+        RejectedKnowledgeAssessment,
+        read_rejected_assessment,
+    )
+    from ai_software_engineer.knowledge.claim_identity import claim_identity_sha256
+    from ai_software_engineer.knowledge.invocation import (
+        KnowledgeExecutionRecord,
+        invocation_lane_sha256,
+    )
+    from ai_software_engineer.manager.rejected_knowledge_draft import RejectedKnowledgeCurrentDraft
+    from ai_software_engineer.manager.rejected_knowledge_preparation import (
+        RejectedKnowledgeCarryRefusal,
+    )
+    from ai_software_engineer.multi_directory.purge_knowledge import select_knowledge
+    from ai_software_engineer.multi_directory.purge_state import rejected_knowledge_files
+    from ai_software_engineer.multi_directory.service import CreateRequirement
+    from ai_software_engineer.owned_sessions import OwnedProcessIdentity
+    from tests.manager.test_requirement_retirement import _service
+
+    draft_path, expected = _current_draft_deletion(tmp_path)
+    sidecar = draft_path.parent.parent.parent
+    state = KnowledgeRecordStore(draft_path.parent)
+    draft = state._decode_payload(draft_path.read_bytes(), RejectedKnowledgeCurrentDraft)
+    records = KnowledgeRecordStore(sidecar / "knowledge/runs")
+    observation = records.get(
+        "assessment-rejections", draft.observation_sha256, RejectedKnowledgeAssessment
+    )
+    lane = KnowledgeRecordStore(
+        records.root / "invocations" / invocation_lane_sha256(observation.binding)
+    )
+    native_record = next(
+        record
+        for record in lane.list("knowledge-execution-records", KnowledgeExecutionRecord)
+        if isinstance(record.observation, StructuredNativeStopReceipt)
+    )
+    native = native_record.observation
+    assert isinstance(native, StructuredNativeStopReceipt)
+    proof = native.process_stop.session_proof
+    assert proof is not None
+    original_boot = proof.boot_identity
+    original_leader = proof.leader
+    claim = observation.original_claim
+    carry = RejectedKnowledgeCarryRefusal(
+        observation_sha256=observation.observation_sha256,
+        claim=claim,
+        claim_sha256=claim_identity_sha256(claim),
+        refused_at=datetime.now(UTC),
+        refusal_sha256="0" * 64,
+    )
+    carry = carry.model_copy(
+        update={"refusal_sha256": digest(carry.model_dump(mode="json", exclude={"refusal_sha256"}))}
+    )
+    state.put("carry-refusals", claim.lease.id, carry)
+    carry_path = state.root / state._name("carry-refusals", claim.lease.id)
+
+    class ChangedKernelInspector:
+        def boot_identity(self) -> str:
+            return original_boot + ":later" if kernel_change == "boot" else original_boot
+
+        def identity(self, pid: int) -> OwnedProcessIdentity | None:
+            if kernel_change == "reused-pid" and pid == original_leader.process_id:
+                return original_leader.model_copy(update={"birth_identity": "reused-pid-new-birth"})
+            return None
+
+        def members(self, sid: int) -> tuple[OwnedProcessIdentity, ...]:
+            return ()
+
+    # The original stop was produced by real owned processes. Only current OS
+    # observation changes: history stays byte-for-byte intact after reboot/reuse.
+    monkeypatch.setattr("ai_software_engineer.owned_sessions._inspector", ChangedKernelInspector)
+    before = {path: path.read_bytes() for path in sidecar.rglob("*.json")}
+    with pytest.raises(KnowledgeError, match="EXECUTION_UNKNOWN"):
+        read_rejected_assessment(records.root, observation.observation_sha256)
+    assert set(rejected_knowledge_files(sidecar, expected)) == {draft_path, carry_path}
+
+    service, repository = _service(tmp_path / "platform-fixture", monkeypatch)
+    checkpoint = service.create(
+        CreateRequirement(name="native history closure", repository_roots=(str(repository),))
+    ).checkpoint.model_copy(update={"team_id": expected.team_id, "project_id": expected.project_id})
+    task_id = next(iter(expected.task_ids))
+
+    def selected_knowledge() -> tuple[Path, ...]:
+        return select_knowledge(
+            records.root,
+            checkpoint,
+            identities={task_id, *expected.requirement_ids},
+            task_repositories={task_id: expected.repository_id},
+            repository_id=expected.repository_id,
+        )
+
+    observation_path = records.root / records._name(
+        "assessment-rejections", observation.observation_sha256
+    )
+    assert observation_path in selected_knowledge()
+    assert all(path.read_bytes() == content for path, content in before.items())
+    # Omitting current OS checks must never omit the independently sealed native
+    # stop proof. Even a resealed outer record with a corrupt inner digest refuses.
+    native_path = lane.root / lane._name("knowledge-execution-records", native_record.record_sha256)
+    envelope = json.loads(native_path.read_text())
+    envelope["record"]["observation"]["process_stop"]["session_proof"]["proof_sha256"] = "f" * 64
+    envelope["sha256"] = digest(envelope["record"])
+    native_path.write_text(json.dumps(envelope))
+    damaged = {path: path.read_bytes() for path in sidecar.rglob("*.json")}
+    with pytest.raises((KnowledgeError, ValueError)):
+        rejected_knowledge_files(sidecar, expected)
+    with pytest.raises((KnowledgeError, ValueError)):
+        selected_knowledge()
+    assert all(path.read_bytes() == content for path, content in damaged.items())

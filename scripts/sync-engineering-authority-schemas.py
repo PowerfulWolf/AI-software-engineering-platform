@@ -477,6 +477,55 @@ resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] += [
         },
     },
 ]
+# A sealed semantic rejection may reprove an old generic wait without changing it.
+# Keep the exact two accepted shapes; foreign evidence never becomes retry authority.
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"][-1]["then"]["properties"][
+    "disposition"
+]["properties"]["facts"] = {
+    "required": ["role", "classification", "evidence_ids"],
+    "properties": {"role": {"const": "coder"}},
+    "anyOf": [
+        {
+            "properties": {
+                "classification": {"const": "INVALID_OUTPUT"},
+                "evidence_ids": {
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": {"pattern": "^knowledge-assessment-rejection://[a-f0-9]{64}$"},
+                },
+            }
+        },
+        {
+            "properties": {
+                "classification": {"const": "PLATFORM_BUG"},
+                "evidence_ids": {"maxItems": 0},
+            }
+        },
+    ],
+}
+# Today's complete draft needs its own operator decision, never an old policy grant.
+resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
+    {
+        "if": {
+            "required": ["rejected_knowledge"],
+            "properties": {
+                "rejected_knowledge": {
+                    "type": "object",
+                    "required": ["current_draft_sha256"],
+                    "properties": {"current_draft_sha256": {"type": "string"}},
+                }
+            },
+        },
+        "then": {
+            "required": ["authorization_source", "operator_principal"],
+            "properties": {
+                "authorization_source": {"const": "engineering_operator_decision"},
+                "operator_principal": {"type": "object"},
+                "engineering_admission": {"type": "null"},
+            },
+        },
+    }
+)
 resolution_schema["$defs"]["RejectedKnowledgePreparationEvidence"]["properties"]["role"] = {
     "const": "coder"
 }
@@ -756,7 +805,7 @@ for proof_name in ("DeliveryResolution", "DeliveryWaitInvestigation"):
             )
         ),
     )
-    properties = {name: {"type": "null"} for name in excluded_pause_fields}
+    properties: dict[str, object] = {name: {"type": "null"} for name in excluded_pause_fields}
     if proof_name == "DeliveryResolution":
         properties["resolution_kind"] = {"const": "RESUME_UNINVOKED"}
     else:

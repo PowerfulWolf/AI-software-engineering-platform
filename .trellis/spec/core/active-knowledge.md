@@ -2,6 +2,10 @@
 
 ## Rejected assessment recovery contract (2026-10-16)
 
+Route-aware HTTP completion and exact existing generic-wait recovery are extended by
+[`http-knowledge-rejection-recovery.md`](http-knowledge-rejection-recovery.md). Native
+execution still requires real owned stops; HTTP synchronous completion is a distinct fact.
+
 A RETURNED knowledge invocation only proves model output publication. Exact same-run READ
 membership and redaction validation remain mandatory. CLAIM_WITHOUT_READ and
 ASSESSMENT_REQUIRES_REDACTION on a safely sealed and fully revalidatable RETURNED result
@@ -16,7 +20,7 @@ and grant no semantic retry authority without complete safely sealed facts.
 
 Recovery uses a separate rejected-knowledge proof/resolution through existing Inspect/Resolve/
 Continue operations. It binds full original scope/claim/Context/snapshot/READ/native completion,
-fixed semantic reason, no-main/route/output/accepted facts and complete unchanged draft input.
+fixed semantic reason, exact route-aware completion, no-main/route/output/accepted facts and complete unchanged draft input.
 Main-fact exclusions bind the target original WorkItem/claim and carry successors, not the
 whole Task history. Earlier main runs and accepted progress remain valid; completed knowledge
 routes and their independent receipts are required evidence, not forbidden main execution.

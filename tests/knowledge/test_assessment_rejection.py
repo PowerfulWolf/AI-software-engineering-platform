@@ -4,6 +4,7 @@ import json
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -11,9 +12,19 @@ import pytest
 
 from ai_software_engineer.agents.execution import NativeProcessStop
 from ai_software_engineer.agents.models import AgentErrorCode
-from ai_software_engineer.agents.structured import StructuredModelError, StructuredModelResult
+from ai_software_engineer.agents.openai_compatible import HttpResponse
+from ai_software_engineer.agents.structured import (
+    CodexCliStructuredModelClient,
+    FallbackStructuredModelClient,
+    ResponsesStructuredModelClient,
+    StructuredModelClient,
+    StructuredModelError,
+    StructuredModelResult,
+    StructuredModelRoute,
+)
 from ai_software_engineer.agents.structured_observation import (
     StructuredExecutionAdmission,
+    StructuredHttpRoundTripReceipt,
     StructuredNativeStopReceipt,
 )
 from ai_software_engineer.context import (
@@ -22,7 +33,7 @@ from ai_software_engineer.context import (
     FileContextBuilder,
     FileContextStore,
 )
-from ai_software_engineer.domain.enums import AgentRole, TaskStatus
+from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.knowledge.agents import KnowledgeConsultationService
 from ai_software_engineer.knowledge.assessment_rejection import (
@@ -30,6 +41,7 @@ from ai_software_engineer.knowledge.assessment_rejection import (
     RejectedAssessmentUnavailable,
     RejectedKnowledgeAssessment,
     derive_rejected_assessment,
+    read_historical_rejected_assessment,
     read_rejected_assessment,
 )
 from ai_software_engineer.knowledge.assessment_validation import (
@@ -213,6 +225,10 @@ class NativeRejection:
 
 @pytest.fixture
 def native_rejection(tmp_path: Path) -> NativeRejection:
+    return _rejection(tmp_path)
+
+
+def _rejection(tmp_path: Path, *, model: StructuredModelClient | None = None) -> NativeRejection:
     frozen = snapshot(document())
     bound = binding(frozen)
     claim = _actual_claim(bound)
@@ -258,7 +274,7 @@ def native_rejection(tmp_path: Path) -> NativeRejection:
     records = KnowledgeRecordStore(tmp_path / "knowledge" / "runs")
     records.put("snapshots", frozen.snapshot_sha256, frozen)
     service = KnowledgeConsultationService(
-        _client(tmp_path, _native_executable(tmp_path), bound.role),
+        model if model is not None else _client(tmp_path, _native_executable(tmp_path), bound.role),
         records,
         allow_repository_inspection=True,
         invocation_journal=KnowledgeInvocationJournal(records, claimed=lambda: claim),
@@ -288,6 +304,10 @@ def test_native_rejection_reopens_full_original_facts_without_mutation(
         assert derive_rejected_assessment(case.records.root, case.bound) == observation
         assert (
             read_rejected_assessment(case.records.root, observation.observation_sha256)
+            == observation
+        )
+        assert (
+            read_historical_rejected_assessment(case.records.root, observation.observation_sha256)
             == observation
         )
     frozen = case.records.get("snapshots", case.bound.snapshot_sha256, KnowledgeSnapshot)
@@ -359,6 +379,8 @@ def test_legacy_unowned_native_stop_does_not_grant_recovery(
     before = _bytes(case.root)
     with pytest.raises(RejectedAssessmentUnavailable, match="OWNED_STOP_REQUIRED"):
         derive_rejected_assessment(case.records.root, case.bound)
+    with pytest.raises(RejectedAssessmentUnavailable, match="OWNED_STOP_REQUIRED"):
+        read_historical_rejected_assessment(case.records.root, case.observation.observation_sha256)
     assert _bytes(case.root) == before
 
 
@@ -531,6 +553,9 @@ def test_reopen_refuses_changed_original_or_current_facts(
     before = _bytes(case.root)
     with pytest.raises((KnowledgeError, ValueError)):
         read_rejected_assessment(case.records.root, observation.observation_sha256)
+    if mutation != "native-unknown":
+        with pytest.raises((KnowledgeError, ValueError)):
+            read_historical_rejected_assessment(case.records.root, observation.observation_sha256)
     assert _bytes(case.root) == before
     assert (case.root / "calls").read_text().splitlines() == [
         "KnowledgeIntent",
@@ -565,3 +590,355 @@ def test_raw_secret_never_becomes_returned_or_recovery_proof(tmp_path: Path) -> 
     assert all(secret not in payload for payload in _bytes(tmp_path).values())
     with pytest.raises(KnowledgeError):
         derive_rejected_assessment(records.root, bound)
+
+
+class _KnowledgeHttpTransport:
+    def __init__(self, *, assessment_fallback: bool = False) -> None:
+        self.assessment_fallback = assessment_fallback
+        self.calls: list[str] = []
+
+    def post(
+        self,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+        timeout_seconds: float,
+    ) -> HttpResponse:
+        request = json.loads(body)
+        title = request["text"]["format"]["schema"]["title"]
+        self.calls.append(title)
+        result: dict[str, object]
+        if title == "KnowledgeIntent":
+            result = {"queries": ["original payment"]}
+        elif self.assessment_fallback:
+            return HttpResponse(504, b"fixture gateway timeout")
+        else:
+            payload = json.loads(request["input"][1]["content"])
+            read = next(
+                item["chunk"] for item in payload["knowledge_evidence"] if item.get("chunk")
+            )
+            result = {
+                "status": "GAP",
+                "gap_owner": "REPOSITORY",
+                "claims": [
+                    {
+                        "statement": "Unread exact chunk",
+                        "citations": [{**read["citation"], "chunk_id": "f" * 64}],
+                    }
+                ],
+            }
+        return HttpResponse(200, json.dumps({"output_text": json.dumps(result)}).encode())
+
+
+def _http_rejection(tmp_path: Path, *, assessment_fallback: bool) -> NativeRejection:
+    transport = _KnowledgeHttpTransport(assessment_fallback=assessment_fallback)
+    routes: tuple[StructuredModelRoute, ...] = (
+        StructuredModelRoute(
+            provider="fixture-http",
+            model="fixture-http-model",
+            client=ResponsesStructuredModelClient(
+                endpoint="https://example.invalid/v1",
+                api_key="fixture",
+                model="fixture-http-model",
+                transport=transport,
+            ),
+        ),
+    )
+    if assessment_fallback:
+        routes += (
+            StructuredModelRoute(
+                provider="fixture-native",
+                model="fixture-native-model",
+                client=CodexCliStructuredModelClient(
+                    repository_root=tmp_path,
+                    model="fixture-native-model",
+                    executable=str(_native_executable(tmp_path)),
+                    environment={},
+                ),
+            ),
+        )
+    case = _rejection(
+        tmp_path, model=FallbackStructuredModelClient(routes, role=binding(snapshot()).role)
+    )
+    assert transport.calls == ["KnowledgeIntent", "KnowledgeAssessment"]
+    return case
+
+
+@pytest.mark.parametrize("assessment_fallback", [False, True], ids=["http-only", "http-native"])
+def test_http_returned_rejection_reopens_exact_completion_without_native_substitution(
+    tmp_path: Path,
+    assessment_fallback: bool,
+) -> None:
+    case = _http_rejection(tmp_path, assessment_fallback=assessment_fallback)
+    before = _bytes(tmp_path)
+    assert derive_rejected_assessment(case.records.root, case.bound) == case.observation
+    assert (
+        read_rejected_assessment(case.records.root, case.observation.observation_sha256)
+        == case.observation
+    )
+    assert _bytes(tmp_path) == before
+    intent = case.lane.get(
+        "knowledge-invocation-outcomes", case.bound.run_id + ":intent", KnowledgeInvocationOutcome
+    )
+    assert len(intent.executions) == 2
+    assert isinstance(intent.executions[-1].observation, StructuredHttpRoundTripReceipt)
+    assessment = case.lane.get(
+        "knowledge-invocation-outcomes",
+        case.bound.run_id + ":assessment",
+        KnowledgeInvocationOutcome,
+    )
+    assert len(assessment.executions) == (4 if assessment_fallback else 2)
+    assert isinstance(
+        assessment.executions[-1].observation,
+        StructuredNativeStopReceipt if assessment_fallback else StructuredHttpRoundTripReceipt,
+    )
+    assert bool(list(tmp_path.glob("calls"))) is assessment_fallback
+
+
+@pytest.mark.parametrize("phase", ["intent", "assessment"])
+@pytest.mark.parametrize("missing", ["outcome", "admission", "http-completion"])
+def test_http_rejection_refuses_missing_independent_facts(
+    tmp_path: Path,
+    phase: str,
+    missing: str,
+) -> None:
+    case = _http_rejection(tmp_path, assessment_fallback=False)
+    key = case.bound.run_id + ":" + phase
+    outcome = case.lane.get("knowledge-invocation-outcomes", key, KnowledgeInvocationOutcome)
+    if missing == "outcome":
+        namespace, identity = "knowledge-invocation-outcomes", key
+    else:
+        namespace = "knowledge-execution-records"
+        identity = outcome.executions[0 if missing == "admission" else 1].record_sha256
+    (case.lane.root / case.lane._name(namespace, identity)).unlink()
+    before = _bytes(case.root)
+    with pytest.raises((KnowledgeError, KnowledgeInvocationUncertain, ValueError)):
+        derive_rejected_assessment(case.records.root, case.bound)
+    assert _bytes(case.root) == before
+
+
+def _reseal_http_outcome(
+    case: NativeRejection,
+    phase: str,
+    changed: KnowledgeInvocationOutcome,
+) -> None:
+    key = case.bound.run_id + ":" + phase
+    previous = case.lane.get("knowledge-invocation-outcomes", key, KnowledgeInvocationOutcome)
+    for old in previous.executions:
+        (
+            case.lane.root / case.lane._name("knowledge-execution-records", old.record_sha256)
+        ).unlink()
+    for record in changed.executions:
+        case.lane.put("knowledge-execution-records", record.record_sha256, record)
+    _replace_record(case.lane, "knowledge-invocation-intents", key, changed.intent.to_wire())
+    _replace_record(case.lane, "knowledge-invocation-outcomes", key, changed.to_wire())
+
+
+@pytest.mark.parametrize("phase", ["intent", "assessment"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "provider",
+        "model",
+        "status",
+        "completion-after-outcome",
+        "unobserved",
+        "request",
+        "role",
+        "phase",
+        "timeout",
+        "admission-before-intent",
+        "http-transport-error",
+        "http-error-status",
+    ],
+)
+def test_http_rejection_refuses_resealed_identity_result_and_time_drift(
+    tmp_path: Path,
+    phase: str,
+    mutation: str,
+) -> None:
+    case = _http_rejection(tmp_path, assessment_fallback=False)
+    outcome = case.lane.get(
+        "knowledge-invocation-outcomes", case.bound.run_id + ":" + phase, KnowledgeInvocationOutcome
+    )
+    admission, receipt = (record.observation for record in outcome.executions)
+    assert isinstance(admission, StructuredExecutionAdmission)
+    assert isinstance(receipt, StructuredHttpRoundTripReceipt)
+    assert outcome.result is not None
+    changed: KnowledgeInvocationOutcome
+    if mutation in {"provider", "model", "status"}:
+        update: dict[str, object] = (
+            {"http_status": 201} if mutation == "status" else {mutation: "foreign"}
+        )
+        result = outcome.result.model_copy(update=update)
+        changed = KnowledgeInvocationOutcome.create(
+            **outcome.model_dump(exclude={"result", "outcome_sha256"}), result=result
+        )
+    elif mutation == "unobserved":
+        changed = KnowledgeInvocationOutcome.create(
+            **outcome.model_dump(exclude={"executions", "outcome_sha256"}), executions=()
+        )
+    else:
+        if mutation == "request":
+            intent = KnowledgeInvocationIntent.create(
+                **outcome.intent.model_dump(exclude={"request_sha256", "intent_sha256"}),
+                request_sha256="f" * 64,
+            )
+            admission = StructuredExecutionAdmission.create(
+                **admission.model_dump(exclude={"call", "admission_sha256"}),
+                call=admission.call.model_copy(update={"request_sha256": intent.request_sha256}),
+            )
+            outcome = outcome.model_copy(update={"intent": intent})
+        elif mutation in {"role", "phase"}:
+            call_update: dict[str, object] = (
+                {"role": TeamRole.QA} if mutation == "role" else {"phase": "stage_reply"}
+            )
+            admission = StructuredExecutionAdmission.create(
+                **admission.model_dump(exclude={"call", "admission_sha256"}),
+                call=admission.call.model_copy(update=call_update),
+            )
+        elif mutation in {"timeout", "admission-before-intent"}:
+            update = (
+                {"timeout_seconds": 6}
+                if mutation == "timeout"
+                else {"admitted_at": outcome.intent.created_at - timedelta(seconds=1)}
+            )
+            admission = StructuredExecutionAdmission.create(
+                **admission.model_dump(exclude={*update, "admission_sha256"}), **update
+            )
+        receipt_values = receipt.model_dump(exclude={"admission", "receipt_sha256"})
+        if mutation == "completion-after-outcome":
+            receipt_values["completed_at"] = outcome.completed_at + timedelta(seconds=1)
+        elif mutation == "http-transport-error":
+            receipt_values.update(
+                outcome="transport_error",
+                http_status=None,
+                response_body_sha256=None,
+                error_kind="timeout",
+            )
+        elif mutation == "http-error-status":
+            receipt_values["http_status"] = 504
+        receipt = StructuredHttpRoundTripReceipt.create(**receipt_values, admission=admission)
+        executions = tuple(
+            KnowledgeExecutionRecord.create(
+                intent_sha256=outcome.intent.intent_sha256, observation=observation
+            )
+            for observation in (admission, receipt)
+        )
+        # Deliberately reseal an internally valid envelope; semantic provenance must still refuse.
+        provisional = outcome.model_copy(update={"executions": executions})
+        changed = provisional.model_copy(update={"outcome_sha256": provisional.recompute_sha256()})
+    _reseal_http_outcome(case, phase, changed)
+    before = _bytes(case.root)
+    with pytest.raises((KnowledgeError, KnowledgeInvocationUncertain, ValueError)):
+        derive_rejected_assessment(case.records.root, case.bound)
+    assert _bytes(case.root) == before
+
+
+@pytest.mark.parametrize(
+    "mutation", ["invocation", "route-index", "overlapping-route", "native-stop-missing"]
+)
+def test_http_native_rejection_requires_every_ordered_exact_route(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    case = _http_rejection(tmp_path, assessment_fallback=True)
+    outcome = case.lane.get(
+        "knowledge-invocation-outcomes",
+        case.bound.run_id + ":assessment",
+        KnowledgeInvocationOutcome,
+    )
+    if mutation == "native-stop-missing":
+        (
+            case.lane.root
+            / case.lane._name("knowledge-execution-records", outcome.executions[-1].record_sha256)
+        ).unlink()
+    else:
+        admission = outcome.executions[2].observation
+        receipt = outcome.executions[3].observation
+        prior = outcome.executions[1].observation
+        assert isinstance(admission, StructuredExecutionAdmission)
+        assert isinstance(receipt, StructuredNativeStopReceipt)
+        assert isinstance(prior, StructuredHttpRoundTripReceipt)
+        if mutation == "overlapping-route":
+            admission = StructuredExecutionAdmission.create(
+                **admission.model_dump(exclude={"admitted_at", "admission_sha256"}),
+                admitted_at=prior.admission.admitted_at,
+            )
+        else:
+            call_update: dict[str, object] = (
+                {"invocation_id": "f" * 32} if mutation == "invocation" else {"route_index": 1}
+            )
+            admission = StructuredExecutionAdmission.create(
+                **admission.model_dump(exclude={"call", "admission_sha256"}),
+                call=admission.call.model_copy(update=call_update),
+            )
+        receipt = StructuredNativeStopReceipt.create(
+            **receipt.model_dump(exclude={"admission", "receipt_sha256"}), admission=admission
+        )
+        executions = (
+            *outcome.executions[:2],
+            *(
+                KnowledgeExecutionRecord.create(
+                    intent_sha256=outcome.intent.intent_sha256, observation=value
+                )
+                for value in (admission, receipt)
+            ),
+        )
+        changed = KnowledgeInvocationOutcome.create(
+            **outcome.model_dump(exclude={"executions", "outcome_sha256"}), executions=executions
+        )
+        _reseal_http_outcome(case, "assessment", changed)
+    before = _bytes(case.root)
+    with pytest.raises((KnowledgeError, KnowledgeInvocationUncertain, ValueError)):
+        derive_rejected_assessment(case.records.root, case.bound)
+    assert _bytes(case.root) == before
+
+
+def test_http_rejection_refuses_different_original_claim(tmp_path: Path) -> None:
+    case = _http_rejection(tmp_path, assessment_fallback=False)
+    outcome = case.lane.get(
+        "knowledge-invocation-outcomes",
+        case.bound.run_id + ":assessment",
+        KnowledgeInvocationOutcome,
+    )
+    assert outcome.intent.claim is not None
+    intent = KnowledgeInvocationIntent.create(
+        **outcome.intent.model_dump(exclude={"claim", "intent_sha256"}),
+        claim=outcome.intent.claim.model_copy(update={"worker_id": "worker_foreign"}),
+    )
+    executions = tuple(
+        KnowledgeExecutionRecord.create(
+            intent_sha256=intent.intent_sha256, observation=record.observation
+        )
+        for record in outcome.executions
+    )
+    changed = KnowledgeInvocationOutcome.create(
+        **outcome.model_dump(exclude={"intent", "executions", "outcome_sha256"}),
+        intent=intent,
+        executions=executions,
+    )
+    _reseal_http_outcome(case, "assessment", changed)
+    before = _bytes(case.root)
+    with pytest.raises(KnowledgeError, match="CLAIM_CHANGED"):
+        derive_rejected_assessment(case.records.root, case.bound)
+    assert _bytes(case.root) == before
+
+
+def test_http_fallback_never_hides_unknown_native_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _http_rejection(tmp_path, assessment_fallback=True)
+
+    def unknown(*args: object, **kwargs: object) -> None:
+        raise ValueError("fixture owned session unknown")
+
+    monkeypatch.setattr(
+        "ai_software_engineer.knowledge.assessment_rejection.require_recorded_session_empty",
+        unknown,
+    )
+    before = _bytes(case.root)
+    with pytest.raises(KnowledgeError, match="EXECUTION_UNKNOWN"):
+        derive_rejected_assessment(case.records.root, case.bound)
+    assert _bytes(case.root) == before

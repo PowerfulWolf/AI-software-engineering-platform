@@ -11,6 +11,9 @@ from ai_software_engineer.agents.execution import current_execution_guard, execu
 from ai_software_engineer.agents.models import AgentErrorCode
 from ai_software_engineer.agents.structured import StructuredModelError
 from ai_software_engineer.agents.structured_observation import (
+    StructuredExecutionAdmission,
+    StructuredHttpRoundTripReceipt,
+    StructuredNativeNotStartedReceipt,
     StructuredNativeStopReceipt,
     structured_request_digest,
 )
@@ -140,7 +143,11 @@ class KnowledgeAssessmentRejected(StructuredModelError):
 
 
 def _returned(
-    lane: KnowledgeRecordStore, binding: KnowledgeRunBinding, phase: Literal["intent", "assessment"]
+    lane: KnowledgeRecordStore,
+    binding: KnowledgeRunBinding,
+    phase: Literal["intent", "assessment"],
+    *,
+    require_current_stop: bool,
 ) -> KnowledgeInvocationOutcome:
     key = binding.run_id + ":" + phase
     intent = lane.get("knowledge-invocation-intents", key, KnowledgeInvocationIntent)
@@ -169,24 +176,71 @@ def _returned(
         record.record_sha256 for record in outcome.executions
     }:
         raise KnowledgeError("ASSESSMENT_REJECTION_EXECUTIONS_CHANGED")
-    stops = tuple(
-        record.observation
-        for record in outcome.executions
-        if isinstance(record.observation, StructuredNativeStopReceipt)
-    )
-    if not stops:
-        raise RejectedAssessmentUnavailable("ASSESSMENT_REJECTION_NATIVE_STOP_REQUIRED")
-    for stopped in stops:
-        stop = stopped.process_stop
-        if stop.session_proof is None:
-            raise RejectedAssessmentUnavailable("ASSESSMENT_REJECTION_OWNED_STOP_REQUIRED")
-        if stop.stopped_at > outcome.completed_at:
-            raise KnowledgeError("ASSESSMENT_REJECTION_STOP_TIME_CHANGED")
-        try:
-            require_recorded_session_empty(stop.session_proof)
-        except (OSError, ValueError, OwnedSessionUnknown) as error:
-            raise KnowledgeError("ASSESSMENT_REJECTION_EXECUTION_UNKNOWN") from error
+    _require_returned_executions(outcome, require_current_stop=require_current_stop)
     return outcome
+
+
+def _require_returned_executions(
+    outcome: KnowledgeInvocationOutcome, *, require_current_stop: bool
+) -> None:
+    """Verify every local route; HTTP completion never stands in for native stop."""
+    assert outcome.result is not None
+    observations = tuple(record.observation for record in outcome.executions)
+    if len(observations) % 2:
+        raise RejectedAssessmentUnavailable("ASSESSMENT_REJECTION_COMPLETION_REQUIRED")
+    invocation_id: str | None = None
+    route_index = 0
+    previous_completed_at = outcome.intent.created_at
+    for index in range(0, len(observations), 2):
+        admission, receipt = observations[index : index + 2]
+        if (
+            not isinstance(admission, StructuredExecutionAdmission)
+            or isinstance(receipt, StructuredExecutionAdmission)
+            or receipt.admission != admission
+        ):
+            raise KnowledgeError("ASSESSMENT_REJECTION_EXECUTION_ORDER_CHANGED")
+        call = admission.call
+        if (
+            (invocation_id is not None and invocation_id != call.invocation_id)
+            or call.route_index <= route_index
+            or admission.admitted_at < previous_completed_at
+        ):
+            raise KnowledgeError("ASSESSMENT_REJECTION_EXECUTION_IDENTITY_CHANGED")
+        invocation_id, route_index = call.invocation_id, call.route_index
+        final = index + 2 == len(observations)
+        if isinstance(receipt, StructuredNativeStopReceipt):
+            stop = receipt.process_stop
+            if stop.session_proof is None:
+                raise RejectedAssessmentUnavailable("ASSESSMENT_REJECTION_OWNED_STOP_REQUIRED")
+            completed_at = stop.stopped_at
+            if final and (stop.kind != "completed" or outcome.result.http_status is not None):
+                raise KnowledgeError("ASSESSMENT_REJECTION_RETURNED_COMPLETION_CHANGED")
+            stop.session_proof.validate_integrity()
+            if require_current_stop:
+                try:
+                    require_recorded_session_empty(stop.session_proof)
+                except (OSError, ValueError, OwnedSessionUnknown) as error:
+                    raise KnowledgeError("ASSESSMENT_REJECTION_EXECUTION_UNKNOWN") from error
+        elif isinstance(receipt, StructuredHttpRoundTripReceipt):
+            # Only the local synchronous request has ended. No remote-stop assertion.
+            completed_at = receipt.completed_at
+            if final and (
+                receipt.outcome != "returned"
+                or receipt.http_status is None
+                or not 200 <= receipt.http_status < 300
+                or outcome.result.http_status != receipt.http_status
+            ):
+                raise KnowledgeError("ASSESSMENT_REJECTION_RETURNED_COMPLETION_CHANGED")
+        else:
+            assert isinstance(receipt, StructuredNativeNotStartedReceipt)
+            completed_at = receipt.failed_at
+            if final:
+                raise RejectedAssessmentUnavailable("ASSESSMENT_REJECTION_RETURNED_START_REQUIRED")
+        if completed_at > outcome.completed_at:
+            raise KnowledgeError("ASSESSMENT_REJECTION_COMPLETION_TIME_CHANGED")
+        if final and (outcome.result.provider, outcome.result.model) != (call.provider, call.model):
+            raise KnowledgeError("ASSESSMENT_REJECTION_RETURNED_ROUTE_CHANGED")
+        previous_completed_at = completed_at
 
 
 def _manifest(
@@ -405,13 +459,22 @@ def _require_requests(
 def derive_rejected_assessment(
     records_root: Path, binding: KnowledgeRunBinding
 ) -> RejectedKnowledgeAssessment:
-    """Read-only current recomputation; no queue, result or historical facts are written."""
+    """Recompute recovery proof with current native session emptiness checks."""
+    return _derive_rejected_assessment(records_root, binding, require_current_stop=True)
+
+
+def _derive_rejected_assessment(
+    records_root: Path, binding: KnowledgeRunBinding, *, require_current_stop: bool
+) -> RejectedKnowledgeAssessment:
+    """Reopen every immutable source; runtime liveness is a separate check."""
     records = KnowledgeRecordStore(records_root, read_only=True)
     lane = KnowledgeRecordStore(
         records_root / "invocations" / invocation_lane_sha256(binding), read_only=True
     )
-    intent_outcome = _returned(lane, binding, "intent")
-    assessment_outcome = _returned(lane, binding, "assessment")
+    intent_outcome = _returned(lane, binding, "intent", require_current_stop=require_current_stop)
+    assessment_outcome = _returned(
+        lane, binding, "assessment", require_current_stop=require_current_stop
+    )
     claim = assessment_outcome.intent.claim
     previous_claim = intent_outcome.intent.claim
     assert claim is not None and previous_claim is not None
@@ -466,11 +529,33 @@ def record_rejected_assessment(
 def read_rejected_assessment(
     records_root: Path, observation_sha256: str
 ) -> RejectedKnowledgeAssessment:
+    """Revalidate original facts and current native emptiness for recovery."""
+    return _read_rejected_assessment(records_root, observation_sha256, require_current_stop=True)
+
+
+def read_historical_rejected_assessment(
+    records_root: Path, observation_sha256: str
+) -> RejectedKnowledgeAssessment:
+    """Validate sealed history for cleanup; grants no current execution authority.
+
+    Original admissions, completions, native stop proofs, reads and all digests
+    remain required. A later boot or recycled PID cannot invalidate immutable
+    ownership facts. Cleanup must independently establish current inactivity.
+    """
+    return _read_rejected_assessment(records_root, observation_sha256, require_current_stop=False)
+
+
+def _read_rejected_assessment(
+    records_root: Path, observation_sha256: str, *, require_current_stop: bool
+) -> RejectedKnowledgeAssessment:
     records = KnowledgeRecordStore(records_root, read_only=True)
     observation = records.get(_REJECTIONS, observation_sha256, RejectedKnowledgeAssessment)
     observation.validate_integrity()
     if observation.observation_sha256 != observation_sha256 or (
-        derive_rejected_assessment(records_root, observation.binding) != observation
+        _derive_rejected_assessment(
+            records_root, observation.binding, require_current_stop=require_current_stop
+        )
+        != observation
     ):
         raise KnowledgeError("ASSESSMENT_REJECTION_FACTS_CHANGED")
     return observation

@@ -92,7 +92,10 @@ from ai_software_engineer.manager.engineering_authority import (
 from ai_software_engineer.manager.knowledge_preparation_pause import (
     knowledge_preparation_pause_evidence,
 )
-from ai_software_engineer.manager.rejected_knowledge_preparation import rejected_knowledge_evidence
+from ai_software_engineer.manager.rejected_knowledge_preparation import (
+    rejected_assessment_for_work,
+    rejected_knowledge_evidence,
+)
 from ai_software_engineer.manager.rejected_output_checkpoint import (
     read_rejected_checkpoint,
     verify_rejected_workspace,
@@ -515,7 +518,12 @@ class DeliveryWaitService:
                     EngineeringRejectionKind.CAPABILITY_UNAVAILABLE,
                 }:
                     status = "NEEDS_AUTHORIZATION"
-                    summary = "恢复条件已核验, 但原任务没有授权平台自动执行此处理。"
+                    summary = (
+                        "当前完整草稿已封存, 需要对本次精确现场记录独立工程接纳决定。"
+                        if proof.rejected_knowledge is not None
+                        and proof.rejected_knowledge.current_draft_sha256 is not None
+                        else "恢复条件已核验, 但原任务没有授权平台自动执行此处理。"
+                    )
                     user_action = (
                         "请核对下面的处理方式, 再记录精确工程决定; 批准不代表验收通过。"
                         if OperatorDuty.ENGINEERING in self.principal.duties
@@ -793,6 +801,14 @@ class DeliveryWaitService:
                     raise DeliveryWaitRejected("工程决定早于对应调查, 不能消费此证明")
                 admission = None
                 if automatic:
+                    if (
+                        proof.rejected_knowledge is not None
+                        and proof.rejected_knowledge.current_draft_sha256 is not None
+                    ):
+                        raise EngineeringAuthorityRejected(
+                            EngineeringRejectionKind.CAPABILITY_UNAVAILABLE,
+                            "当前完整草稿需要精确工程决定, 不能借冻结策略自动接纳。",
+                        )
                     policy = task.engineering_policy
                     if self.engineering_authority is None or policy is None:
                         raise EngineeringAuthorityRejected(
@@ -1318,18 +1334,49 @@ class DeliveryWaitService:
                     missing.append(DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN)
                 except (ValueError, QueueError, OSError, KnowledgeError):
                     missing.append(DeliveryProofMissing.KNOWLEDGE_PREPARATION_UNAVAILABLE)
-        elif item.wait_disposition.facts.classification == "INVALID_OUTPUT" and any(
-            value.startswith("knowledge-assessment-rejection://")
-            for value in item.wait_disposition.facts.evidence_ids
+        elif (
+            item.wait_disposition.facts.classification == "INVALID_OUTPUT"
+            and any(
+                value.startswith("knowledge-assessment-rejection://")
+                for value in item.wait_disposition.facts.evidence_ids
+            )
+        ) or (
+            item.wait_disposition.facts.classification == "PLATFORM_BUG"
+            and not item.wait_disposition.facts.evidence_ids
+            and item.role is AgentRole.CODER
+            and task.status is TaskStatus.IMPLEMENTING
         ):
             try:
                 identities = item.wait_disposition.facts.evidence_ids
-                if len(identities) != 1 or start is not None or outcome is not None:
-                    raise ValueError("知识评估拒绝没有唯一精确来源或主执行已开始")
-                observation = read_rejected_assessment(
-                    self.sidecar_state.parent / "knowledge/runs",
-                    identities[0].removeprefix("knowledge-assessment-rejection://"),
-                )
+                if start is not None or outcome is not None:
+                    raise ValueError("知识评估拒绝的主执行已开始")
+                if identities:
+                    if len(identities) != 1:
+                        raise ValueError("知识评估拒绝没有唯一精确来源")
+                    observation = read_rejected_assessment(
+                        self.sidecar_state.parent / "knowledge/runs",
+                        identities[0].removeprefix("knowledge-assessment-rejection://"),
+                    )
+                else:
+                    # Re-derive safely sealed legacy facts; neither the old
+                    # PLATFORM_BUG label nor its free text grants retry authority.
+                    derived_observation = rejected_assessment_for_work(
+                        records_root=self.sidecar_state.parent / "knowledge/runs",
+                        task=task,
+                        item=item,
+                        scope=self.scope,
+                        requirement_id=self.knowledge_requirement_id or task.id,
+                    )
+                    if derived_observation is None:
+                        missing.append(DeliveryProofMissing.INVOCATION_UNRECORDED)
+                        return self._proof(
+                            item,
+                            step,
+                            task,
+                            missing=tuple(dict.fromkeys(missing)),
+                            prerequisites=prerequisites,
+                        )
+                    observation = derived_observation
                 require_delivery_requirement_scope(
                     observation.binding,
                     self.knowledge_requirement_id or observation.binding.requirement_id,
@@ -1350,6 +1397,12 @@ class DeliveryWaitService:
                     queue=self.queue,
                     artifacts=self.artifacts,
                     git=self.git,
+                )
+                # Append the independently derived observation only after its
+                # exact owner, no-main and complete retained input checks pass.
+                # Original wait, RETURNED outcomes and citation bytes stay intact.
+                KnowledgeRecordStore(self.sidecar_state.parent / "knowledge/runs").put(
+                    "assessment-rejections", observation.observation_sha256, observation
                 )
                 if task.work_budget_exhausted or task.attempts >= task.max_attempts:
                     missing.append(DeliveryProofMissing.BUDGET_EXHAUSTED)

@@ -38,6 +38,9 @@
 
 ## Files
 
+- [HTTP knowledge rejection recovery](http-knowledge-rejection-recovery.md): exact route-aware
+  completion, legacy generic-wait proof, current accepted-progress inventory and same-Task recovery.
+
 - [Isolated complete local execution survey](isolated-local-execution-survey.md): one fixed owned interpreter, exact observer identity, full original checks and deadline including cleanup.
 
 - [Bounded local path survey worker](local-path-survey-worker.md): private isolated parsing
