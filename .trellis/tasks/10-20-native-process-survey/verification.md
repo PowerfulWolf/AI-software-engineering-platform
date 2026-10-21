@@ -49,7 +49,8 @@ K1 QA/Review completion is asserted in this initial record.
 
 ## Post-fix checks, deployment and recovery
 
-To be appended after actual execution. Tests/probes alone do not establish real K1 delivery.
+Actual focused checks, deployment, public continuation attempts and current recovery facts are
+recorded below. Tests/probes alone do not establish real K1 delivery.
 
 ## Native batch intermediate real measurement (not acceptance)
 
@@ -84,11 +85,11 @@ PROCESS_SCAN_INCOMPLETE at process_identity_final, so this is not four-of-four a
 All probe threads exited. Evidence is kept in evidence/whole-survey-first-measurement.json.
 Final native identity/coverage uncertainty is retained; it is not converted into idle.
 
-The final implementation is being reduced to the complete isolated facade/worker and narrow
+The final implementation was reduced to the complete isolated facade/worker and narrow
 engine seams, reusing the original kernel identity and full argv algorithms inside that isolated
-interpreter. Failed intermediate native/argument subprocess protocols are not required by the
-final design and will not become additional production capabilities. Final tests and real
-four-survey acceptance must use this reduced implementation, after test subprocesses exit.
+interpreter. Failed intermediate native/argument subprocess protocols were removed and did not
+become additional production capabilities. The final checks and real four-survey measurements
+below used this reduced implementation after test subprocesses exited.
 
 ## Final reduced implementation checks
 
@@ -124,7 +125,8 @@ exited. Full aggregate evidence and exact source hashes are preserved for both r
 
 The measured deadline defect is resolved on this workload. These results do not establish
 current four-survey recovery eligibility. Unknown state remains a refusal under the original
-guard; its cause is independently being checked before final deployment/recovery observation.
+guard. The later independent assessment, deployment and public recovery observations are
+recorded below; the earlier unknown observations remain unexplained.
 
 ## Independent unknown-state assessment and deployment admission
 
@@ -147,3 +149,152 @@ checks both default isolated observer and exact explicit injection, allocation v
 task ID binding. Its separate narrow run passed2 tests (101 deselected) in0.33s; Ruff and
 strict Mypy for that test file passed. Production source hashes did not change. The complete
 four-suite367 result above precedes this two-case addition; it was not rerun or relabeled369.
+
+## Actual deployment and first original continuation retry
+
+Maintenance commit d401eda1d32d62348759f1e657ded5f4243b46c5 was fast-forwarded to main and
+pushed to origin/main. Official stop ofPID99948 reached READY and confirmed actual exit;
+official startup createdPID55446, instance console_instance_9f730f95bf6805a3e835e7b67a669f7f,
+started2026-10-20T08:09:15.671949Z. Public Console is normal/ready/contract10. The original
+configuration apply request remains SUCCEEDED and restart_required=false. Original K1
+Task revision11 and attempt6 WAITING_HUMAN remained unchanged before continuation.
+
+Only the Operation key changed for retry02; complete original RESUME intent/reference equals
+the already sealed authorization, comparison SHA b0c070090d057389be317305338c72962ab77c1635ff5385277b022e7cdc7820.
+Public operation_25d29b7ca9d954a97b0257a632ad6113 was accepted QUEUED then FAILED with
+LEGACY_LOCAL_SURVEY_INCOMPLETE. No new incomplete-phase log followed the deployed worker;
+unknown-state is a hypothesis, not yet a proved reason for this exact failed Operation.
+The failed Operation is retained. The wait, retry allowance and old facts were not edited. The
+subsequent temporary aggregate-only exact full-worker diagnostic and public retry are recorded
+below; no cause for this exact failed Operation was inferred from later idle observations.
+
+
+## Bounded unknown-state diagnostic and subsequent public continuation
+
+Root executed the fixed temporary harness once, for exactly four complete surveys in the order
+repository, repository, worktree, worktree. The diagnostic subclass only wrapped the original
+worker's `_processes`; the original engine, returned inventory objects, blockers, actual-parent
+identity checks, single owned SID and final ownership cleanup remained unchanged. The same
+absolute **5.0-second** scan deadline and **min(1.5 seconds, remaining)** fixed-query budget
+applied. No production code, status gate, database, verdict or K1 draft was changed by diagnosis.
+The complete aggregate-only report is preserved in `evidence/unknown-state-diagnostic.json`.
+
+| Scan | Root kind | Duration | Result |
+|---|---|---|---|
+| 1 | repository | 1.643s | idle; typed result validated |
+| 2 | repository | 1.328s | idle; typed result validated |
+| 3 | worktree | 1.265s | idle; typed result validated |
+| 4 | worktree | 1.387s | idle; typed result validated |
+
+All eight before/after inventories contained no unknown primary state. Consequently the
+conditional diagnostic native reads were **0**, and state transitions, native-status counts and
+positive-gone observations were empty. The owned registry was empty after all four scans.
+These results did **not reproduce** the earlier refusal: they provide no unknown character,
+no proof of its cause and no reason to relax the state whitelist. The temporary diagnostic
+cannot replace the production's fresh recovery gates, and cannot turn current idle into a
+historical process-stop or no-start fact.
+
+The separate original-intent public RESUME retry03,
+`operation_fc40a17eef8750bb1c18824d3eb119ab`, subsequently passed the production fresh gate
+and entered the normal queue. An earlier public detail observation recorded attempt **6 CLOSED** and
+attempt **7 RUNNING**, with execution phase **KNOWLEDGE_PREPARATION**, **LEASE_VALID** and
+heartbeat **2026-10-20T08:33:58.545665Z**. This is a current queue/execution observation; the
+Operation was still **RUNNING**. It does not assert Operation SUCCEEDED, K1 DONE, a new
+accepted Coder implementation, a confirmed main-execution Run/Context, or any QA/Review
+verdict.
+
+Independent typed execution-history audit explains the attempt 6-to-7 transition: attempt 6's
+assessment has a sealed **FAILED / PROVIDER_UNAVAILABLE / transient=true** outcome at
+**2026-10-20T08:30:06Z**, SHA
+`4d7abd84acf64e7c6d52abe149b2952348fb95e5ea3f374eff59d54f164e0379`.
+Attempt 7's new knowledge run is `run_knowledge_6b56e4ed0db2352c4138166904174062`.
+Its intent phase returned at **2026-10-20T08:33:06Z**, SHA
+`aad780938bd2fc48241d276dcb782bf5f45ea019e08e304e4590c4b2f01a77bd`;
+assessment intent SHA
+`cf6d3b12e8b29d848ac0d9f73c738bb7536d3308c5432451dae70c63a247c642`
+was written at **2026-10-20T08:33:09Z** with no assessment outcome yet at that observation.
+This records a typed transient-failure retry, rather than inferring a new ordinary-work charge
+from the incremented execution identity. A separate exact typed Task read at
+**2026-10-20T08:46:42.616009Z**, inside a consistent-snapshot READ ONLY transaction that was
+rolled back and closed, confirmed execution identity **7**, ordinary work attempt **6 of 10**,
+and Coder transient failures **1 of 10**. The sole retry-failure fact is attempt 6,
+Coder/PROVIDER_UNAVAILABLE. The aggregate is stored in `evidence/continuation-budget.json`;
+it used no Host, queue mutation, budget restoration or control call. A first temporary output
+formatter incorrectly treated a literal string as an enum and failed after read-only rollback;
+the corrected formatter produced this report. That diagnostic-script error was not a platform
+execution failure. No extra approval or main-execution completion is inferred from these facts.
+
+
+### Later production observation: Coder main execution started
+
+The **08:33** knowledge-preparation snapshot above remains a historical observation. A later
+public detail observation with heartbeat **2026-10-20T08:38:50.314385Z** confirmed attempt **7**,
+`lease_liveness=LEASE_VALID`, execution phase **ROLE_EXECUTION**, and execution
+`state=RUNNING` / `reason_code=ROLE_RUNNING`. The separate resource-level
+`execution_liveness` remained **UNKNOWN**; a role start does not establish current OS
+liveness or rewrite that independent field. Independent typed
+state/invocation inspection confirmed the main-role start at
+**2026-10-20T08:38:17.812830Z**:
+
+- Run: `run_88a8310012cb46f8a7b973ca180b0429`.
+- Start SHA: `a493cb3d65fc616bfb35603ad74a7f6d5c44e4f765114abb984109ecf96348dc`.
+- Context: `ctx_2399054d9b9ff8f1e15564c33b355c83b8f61a809ed59a858f7cc907c9573ecc`.
+- Lease: `lease_8471054ed31adaa8b708aff8`, retaining the same Task/source binding.
+
+The same independent audit subsequently verified attempt 7 assessment's RETURNED outcome at
+**2026-10-20T08:38:02Z**, SHA
+`f832f9e7d25be99c7836b6a1c5b7f0f946ab9993b3426d0933724e6e11eec332`,
+with native return code 0 and owned-session proof
+`5a30d20fbf3e7d82c4a6222fdac3130c69b49522c3399836671e36d9150f1b1c`.
+Attempt 6's failed HTTP/native fallback also has a complete owned-session proof,
+`231df92bc64883c991c259013fbbcfb95e859bf943f9019a34b26752983ca5f6`.
+These typed transient and current successful fallback records are distinct from the older
+UNKNOWN history, which was retained without a fabricated stop or no-start conclusion.
+
+Recovery has therefore actually reached Coder main execution through the public continuation
+path. The Operation was still **RUNNING**, and no main-role outcome was present in the stores
+at the independent audit. No accepted candidate, QA/Review verdict, Operation SUCCEEDED or K1 DONE is
+claimed. These observations did not require a new Requirement, direct database updates or a
+change to the unknown-state guard.
+
+
+## Later terminal result of the failed invocation (2026-10-21)
+
+The earlier running snapshots above are historical. A fresh public read on October 21 reports
+the same Task BLOCKED at revision 12, attempt 7 CLOSED and no candidate. The original public
+RESUME operation `operation_fc40a17eef8750bb1c18824d3eb119ab` completed SUCCEEDED at
+2026-10-20T08:59:01.088877Z: continuation was processed, but delivery did not finish.
+
+Independent read-only typed inspection of the exact attempt 7 invocation verified outcome SHA
+`266a96d28ac1c36c86f81a8f15c00e3449c180436a02b1d3d35b5832d91aff6b`.
+Its FAILED/POLICY_VIOLATION error says the native CLI exited with unknown cause, return code 1,
+and the post-failure workspace could not be accepted as unchanged. Output was absent and no
+role artifact was accepted. The diagnostic contains only stdout/stderr SHA values; it does not
+establish a denied tool or the original provider failure's cause. The before/after guard also
+refuses failed inventory observation, so the final error alone cannot distinguish new source
+changes from observation failure. Do not infer unauthorized writes from the UI's coarse
+PERMISSION_DENIED label.
+
+The actual owned process stop is complete, unlike the older UNKNOWN history:
+
+- Capture start: `db480284725c615cd465043541845ad738765642124739e7490ea875ec324883`.
+- Capture stop: `8042d134da70c1f7c1ea30a5ef293dcd0806949a723e65cfb29d284f5ddb931d`.
+- Native failed stop: `ed633f01f070df8c759f830a2659f94eeafe2d47f92ebab65f68f216e36495f6`,
+  return code 1, stopped 2026-10-20T08:58:05.014284Z.
+- Complete owned-session proof:
+  `b8d6858d0df3fc8844c1ad1e4f950545a9a4b8aead009406cbefe0f423bbd7db`.
+
+Existing production-team-host policy explicitly rejects dirty/uncertain failed invocations
+without automatic retry. This inspection establishes no new permission defect. The latest
+accepted progress remains checkpoint 4 (steps 01-03 complete, 04-08 remaining); attempt 7 has
+no candidate, QA PASS or Review APPROVE. Preserve its outcome and all draft bytes. The
+STOPPED_FAILURE_RETRY same-Task path is inapplicable to a final POLICY_VIOLATION; use the
+normal exact terminal recovery proposal/approval path in the original Requirement instead.
+No SQL migration, historical result rewrite, Task reset or budget refund has been performed.
+
+The independent audit of the earlier successful admission and knowledge retry is separately
+stored in `evidence/continuation-independent-audit.json`. It describes those earlier reads,
+not this later terminal state or completion. Deployment rollback still requires the official
+controlled idle stop and actual exit; keep additive readers and every persisted recovery
+record. Reverting the performance fix can restore the measured survey timeout, and reverting
+the configuration helper can strand escaped-Unicode apply requests again.

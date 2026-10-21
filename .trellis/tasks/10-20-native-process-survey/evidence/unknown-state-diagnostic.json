@@ -1,0 +1,145 @@
+{
+  "kind": "temporary-unknown-state-readonly-diagnostic",
+  "scan_count": 4,
+  "max_scan_count": 4,
+  "scan_limit_seconds": 5.0,
+  "query_limit_seconds": 1.5,
+  "owned_registry_empty": true,
+  "worker_file_sha256": "9287f3fc891f7b45493d9a07da4cfbea3e245638006d843811598746b85dede1",
+  "production_worker_sha256": "701f173d5f68cf2f95f94a71e79f6d7bca9910ee51eb082a0d252473237d96f0",
+  "production_engine_sha256": "eed77206f0a53d69f6dd476b52df3570eba4555d9c3fb7817888a385615f26fc",
+  "scans": [
+    {
+      "scan": 1,
+      "root_kind": "repository",
+      "elapsed_seconds": 1.643,
+      "typed_result_validated": true,
+      "survey_sha256": "d7cd2db5540437df23c3cc68e46c33c4cb7ab972aca1af06f84fd874193f9975",
+      "blockers": [],
+      "incomplete_phase": null,
+      "diagnostic_evidence_sha256": "35d06955831877b7fd86333c667df1b8d1e4b8c776ccdc7cdc208ceed91efc14",
+      "unknown_state_evidence": {
+        "inventories": [
+          {
+            "stage": "before",
+            "process_count": 509,
+            "unknown": [],
+            "unknown_native_birth_unobserved_count": 0
+          },
+          {
+            "stage": "after",
+            "process_count": 509,
+            "unknown": [],
+            "unknown_native_birth_unobserved_count": 0
+          }
+        ],
+        "transitions": [],
+        "newly_observed_unknown": [],
+        "fresh_native_birth_checks": [],
+        "native_status_counts": [],
+        "diagnostic_native_read_count": 0,
+        "fresh_checks_share_original_deadline": true,
+        "original_inventory_objects_returned_unchanged": true
+      }
+    },
+    {
+      "scan": 2,
+      "root_kind": "repository",
+      "elapsed_seconds": 1.328,
+      "typed_result_validated": true,
+      "survey_sha256": "28542a514c229a15c656358f31c53fab7d8284f9cc99346a26e721451ad26211",
+      "blockers": [],
+      "incomplete_phase": null,
+      "diagnostic_evidence_sha256": "7ab1cc5dbd792eba0be012bad581079365f7e51112396c4a2075840398e070d9",
+      "unknown_state_evidence": {
+        "inventories": [
+          {
+            "stage": "before",
+            "process_count": 509,
+            "unknown": [],
+            "unknown_native_birth_unobserved_count": 0
+          },
+          {
+            "stage": "after",
+            "process_count": 509,
+            "unknown": [],
+            "unknown_native_birth_unobserved_count": 0
+          }
+        ],
+        "transitions": [],
+        "newly_observed_unknown": [],
+        "fresh_native_birth_checks": [],
+        "native_status_counts": [],
+        "diagnostic_native_read_count": 0,
+        "fresh_checks_share_original_deadline": true,
+        "original_inventory_objects_returned_unchanged": true
+      }
+    },
+    {
+      "scan": 3,
+      "root_kind": "worktree",
+      "elapsed_seconds": 1.265,
+      "typed_result_validated": true,
+      "survey_sha256": "0b30012b12a44f83d2077f6e1ad03d7a4121d2d48fb0df8593f8938a271956c1",
+      "blockers": [],
+      "incomplete_phase": null,
+      "diagnostic_evidence_sha256": "970a848f41a2eae9db8e097dab2ba0bebfcc2b45fae6b3d677bfe610e70779cc",
+      "unknown_state_evidence": {
+        "inventories": [
+          {
+            "stage": "before",
+            "process_count": 508,
+            "unknown": [],
+            "unknown_native_birth_unobserved_count": 0
+          },
+          {
+            "stage": "after",
+            "process_count": 507,
+            "unknown": [],
+            "unknown_native_birth_unobserved_count": 0
+          }
+        ],
+        "transitions": [],
+        "newly_observed_unknown": [],
+        "fresh_native_birth_checks": [],
+        "native_status_counts": [],
+        "diagnostic_native_read_count": 0,
+        "fresh_checks_share_original_deadline": true,
+        "original_inventory_objects_returned_unchanged": true
+      }
+    },
+    {
+      "scan": 4,
+      "root_kind": "worktree",
+      "elapsed_seconds": 1.387,
+      "typed_result_validated": true,
+      "survey_sha256": "a62579b130b202e879eeeca10ce049018c2c8fef0a0caa2932fe680c00bd6f96",
+      "blockers": [],
+      "incomplete_phase": null,
+      "diagnostic_evidence_sha256": "6a14457518aa1c5f428284e874013cc7f651d4a5eb4971d93b88ce4e1de72d78",
+      "unknown_state_evidence": {
+        "inventories": [
+          {
+            "stage": "before",
+            "process_count": 506,
+            "unknown": [],
+            "unknown_native_birth_unobserved_count": 0
+          },
+          {
+            "stage": "after",
+            "process_count": 507,
+            "unknown": [],
+            "unknown_native_birth_unobserved_count": 0
+          }
+        ],
+        "transitions": [],
+        "newly_observed_unknown": [],
+        "fresh_native_birth_checks": [],
+        "native_status_counts": [],
+        "diagnostic_native_read_count": 0,
+        "fresh_checks_share_original_deadline": true,
+        "original_inventory_objects_returned_unchanged": true
+      }
+    }
+  ]
+}

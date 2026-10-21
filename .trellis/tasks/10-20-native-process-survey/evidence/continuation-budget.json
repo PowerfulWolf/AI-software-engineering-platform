@@ -1,0 +1,21 @@
+{
+  "kind": "exact_k1_typed_budget_readonly",
+  "checked_at": "2026-10-20T08:46:42.616009+00:00",
+  "task_id": "task_recovery_711a755e5852a52346876a7b07376311",
+  "status": "IMPLEMENTING",
+  "revision": 11,
+  "attempts": 7,
+  "work_attempt": 6,
+  "max_work_attempts": 10,
+  "coder_transient_failures": 1,
+  "coder_transient_limit": 10,
+  "retry_failures": [
+    {
+      "code": "PROVIDER_UNAVAILABLE",
+      "role": "coder",
+      "attempt": 6
+    }
+  ],
+  "read_only_transaction": true,
+  "control_calls": 0
+}

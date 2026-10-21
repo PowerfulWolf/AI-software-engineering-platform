@@ -1,0 +1,63 @@
+{
+  "kind": "k1_continuation_independent_audit_summary",
+  "auditor": "/root/resume_contract_audit",
+  "aggregation_source": "Completed independent read-only typed audit messages; no new production reads during aggregation",
+  "task_id": "task_recovery_711a755e5852a52346876a7b07376311",
+  "native_delivery_id": "delivery_c833c3235d0bb73adba67937d16ea66c",
+  "source_revision": "fa3589a2251ed19a54bdd8848bad82ab4d7c61ae",
+  "method": {
+    "knowledge_store_read_only": true,
+    "typed_integrity_and_exact_intent_equality_validated": true,
+    "independently_stored_execution_records_validated": true,
+    "main_invocations_read_by_exact_work_item_keys": true,
+    "os_surveys": 0,
+    "control_calls": 0,
+    "database_writes": 0,
+    "credentials_or_raw_payloads_included": false
+  },
+  "attempt_6": {
+    "work_item_id": "work_bff4531e8fcec28f28443a7677a876aa597feaff192c86400b1dbe3493547b3f",
+    "lease_id": "lease_4d7c004bc3e0d16c97dabaa9",
+    "assessment_status": "FAILED",
+    "failure_code": "PROVIDER_UNAVAILABLE",
+    "transient": true,
+    "completed_at": "2026-10-20T08:30:06.583313Z",
+    "outcome_sha256": "4d7abd84acf64e7c6d52abe149b2952348fb95e5ea3f374eff59d54f164e0379",
+    "http_status": 504,
+    "native_fallback_returncode": 1,
+    "complete_owned_session_proof_sha256": "231df92bc64883c991c259013fbbcfb95e859bf943f9019a34b26752983ca5f6",
+    "main_start_and_outcome": "ABSENT_AT_READ; not a historical no-start or stop proof"
+  },
+  "attempt_7": {
+    "work_item_id": "work_7b4967b6b6cea16b16e4aaa6bf5c0c378a0d8f643857b47b48477a350fcb2d7c",
+    "lease_id": "lease_8471054ed31adaa8b708aff8",
+    "assignment_id": "assignment_e298e7d00af53d7e2927a7ac",
+    "knowledge_run_id": "run_knowledge_6b56e4ed0db2352c4138166904174062",
+    "intent_status": "RETURNED",
+    "intent_outcome_sha256": "aad780938bd2fc48241d276dcb782bf5f45ea019e08e304e4590c4b2f01a77bd",
+    "assessment_status": "RETURNED",
+    "assessment_outcome_sha256": "f832f9e7d25be99c7836b6a1c5b7f0f946ab9993b3426d0933724e6e11eec332",
+    "native_fallback_stopped_at": "2026-10-20T08:38:02.433750Z",
+    "native_fallback_returncode": 0,
+    "complete_owned_session_proof_sha256": "5a30d20fbf3e7d82c4a6222fdac3130c69b49522c3399836671e36d9150f1b1c",
+    "main_run_id": "run_88a8310012cb46f8a7b973ca180b0429",
+    "main_context_manifest_id": "ctx_2399054d9b9ff8f1e15564c33b355c83b8f61a809ed59a858f7cc907c9573ecc",
+    "main_started_at": "2026-10-20T08:38:17.812830Z",
+    "main_start_sha256": "a493cb3d65fc616bfb35603ad74a7f6d5c44e4f765114abb984109ecf96348dc",
+    "main_outcome": "ABSENT_AT_READ",
+    "os_liveness_or_completion_conclusion": null
+  },
+  "budget": {
+    "provenance": "Root supplied independent typed read; this auditor did not read the database",
+    "source": "continuation-budget.json",
+    "observed_at": "2026-10-20T08:46:42.616009Z",
+    "attempts": 7,
+    "work_attempt": 6,
+    "max_work_attempts": 10,
+    "coder_transient_failures": 1,
+    "coder_transient_limit": 10
+  },
+  "historical_unknown_reclassified": false,
+  "new_requirement_required_by_these_facts": false,
+  "candidate_or_qa_review_verdict_asserted": false
+}
