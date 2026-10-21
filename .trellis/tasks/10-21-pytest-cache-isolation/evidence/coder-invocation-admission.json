@@ -1,0 +1,76 @@
+{
+  "kind": "observed_k1_main_coder_invocation_admission",
+  "main_invocation_readonly": {
+    "kind": "exact_k1_recovery5_invocation_readonly",
+    "checked_at": "2026-10-21T04:28:58.730604+00:00",
+    "task_id": "task_recovery_6c7e369928a23df6e2ccf8ba32d6f816",
+    "work_item_id": "work_ed1c68a5ef5723ebfe0e6c157478a73ef35b2746060c7fad4a3dc2c9b86eb53d",
+    "recovery_admission": {
+      "kind": "recovery_invocation_record",
+      "schema_version": "v0.1",
+      "recovery_plan_sha256": "6c7e369928a23df6e2ccf8ba32d6f816c30cfcc7d12c966485d42e1803295137",
+      "seed_record_sha256": "6d1acd824d26a162ead93e771462fb290e006bf1d0047f50b4ef469b1986c472",
+      "run_id": "run_b22ed4926c7e4cb2a3bd29cf21844f1e",
+      "context_manifest_id": "ctx_c64be20139b0f04251bbb398d7e8bfce1ff971eed9ae8db6fe000ff3c850285e",
+      "record_sha256": "4f071a3c3db7445eadbb0010e74ef3862b4a168e1c5ada9a479bc56645db2c88"
+    },
+    "main": {
+      "start": true,
+      "outcome": false,
+      "run_id": "run_b22ed4926c7e4cb2a3bd29cf21844f1e",
+      "context_manifest_id": "ctx_c64be20139b0f04251bbb398d7e8bfce1ff971eed9ae8db6fe000ff3c850285e",
+      "started_at": "2026-10-21T04:26:25.698367+00:00",
+      "start_sha256": "39f64b05d09e1339d08b7e2e9e2313e03d2217551dfa51b447c74e7c57386cd8"
+    },
+    "read_only": true
+  },
+  "knowledge_diagnostics": [
+    {
+      "invocation_id": "8cb1b048973b482d97702308eb5baa6c",
+      "route_index": 1,
+      "started_at": "2026-10-21T04:19:03.161601Z",
+      "role": "coder",
+      "phase": "knowledge_intent",
+      "provider": "codex",
+      "model": "codex/gpt-6.1-sol",
+      "route_kind": "responses",
+      "reasoning_effort": "xhigh",
+      "duration_ms": 56187,
+      "outcome": "SUCCEEDED",
+      "http_status": 200,
+      "request_id": "8aeeff6f-839a-4bef-94d6-2648a36c4a77",
+      "correlation_id": "8d4912db-f7d0-429a-ab0b-d606a6573914"
+    },
+    {
+      "invocation_id": "1def75a8af374e568053e3a15fcecbfa",
+      "route_index": 1,
+      "started_at": "2026-10-21T04:20:01.418684Z",
+      "role": "coder",
+      "phase": "knowledge_assessment",
+      "provider": "codex",
+      "model": "codex/gpt-6.1-sol",
+      "route_kind": "responses",
+      "reasoning_effort": "xhigh",
+      "duration_ms": 60844,
+      "outcome": "FAILED",
+      "http_status": 504,
+      "error_code": "PROVIDER_UNAVAILABLE",
+      "error_summary": "Responses structured provider returned HTTP 504; 未获得结构化服务错误详情"
+    },
+    {
+      "invocation_id": "1def75a8af374e568053e3a15fcecbfa",
+      "route_index": 2,
+      "started_at": "2026-10-21T04:21:02.266727Z",
+      "role": "coder",
+      "phase": "knowledge_assessment",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "route_kind": "codex_cli",
+      "connection_mode": "proxy",
+      "reasoning_effort": "xhigh",
+      "duration_ms": 293210,
+      "outcome": "SUCCEEDED"
+    }
+  ],
+  "delivery_complete": false
+}

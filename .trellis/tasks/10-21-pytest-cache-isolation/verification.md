@@ -119,3 +119,25 @@ A limited follow-up source scan found no current Ruff default-cache binding or m
 `--no-cache` contract. It did not run a production reproduction or establish another K1 incident.
 This change and its acceptance are limited to default pytest cache ownership; no claim of
 all-tools cache isolation or scope expansion was made.
+
+
+## Actual main Coder invocation admission
+
+A later exact read-only observation at 2026-10-21T04:28:58.730604+00:00 found the real recovery
+invocation receipt `4f071a3c3db7445eadbb0010e74ef3862b4a168e1c5ada9a479bc56645db2c88`
+and the matching durable DeliveryInvocationStart. Both bind run
+`run_b22ed4926c7e4cb2a3bd29cf21844f1e` and Context `ctx_c64be20139b0f04251bbb398d7e8bfce1ff971eed9ae8db6fe000ff3c850285e` to the approved seed.
+The main invocation start is 2026-10-21T04:26:25.698367+00:00, SHA
+`39f64b05d09e1339d08b7e2e9e2313e03d2217551dfa51b447c74e7c57386cd8`. Its request is the exact Task, Coder attempt 1, real
+lease `lease_36724a7e0d16315fe34fceec` and code base `5547815` verified by the reader.
+
+Public diagnostics separately recorded one knowledge-assessment Responses HTTP 504 followed
+by successful route-2 Codex CLI fallback within the same knowledge invocation. That single
+failed route does not establish a Task transient retry or a new Worker claim. The main Coder
+result was not yet sealed at this observation. This proves actual main invocation admission,
+not successful Coder output, candidate acceptance, independent QA/Review or K1 DONE.
+
+The exact bounded observations are in `evidence/coder-invocation-admission.json`. Main later
+advanced to documentation-only `b491bfa`; the running service, registered target and this
+approved recovery retain code revision `5547815`. No rebase, reapproval or restart was caused
+by publishing audit notes. K1 remains the same public Requirement.
