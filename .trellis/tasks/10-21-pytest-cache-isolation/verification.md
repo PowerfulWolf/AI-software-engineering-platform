@@ -66,3 +66,56 @@ probe combining project addopts workspace-cache configuration, hostile child env
 private path containing spaces plus a single quote. The cache remained private, full source
 inventory unchanged and private root cleaned after failure. The reviewer did not modify code,
 merge or access production data. The119-pass suite above remains its own measured test total.
+
+
+## Actual deployment, recovery preparation and Coder Worker claim
+
+Maintenance commit `5547815464a04991f50a2e0532d6f2f13d8daa69` was fast-forwarded into `main`,
+pushed to `origin/main` and fast-forwarded into the clean registered target. The official
+service stop reached READY for old PID 55446, request
+`console_shutdown_df6d6977adaf0329f8ced01a917bb910`, at 03:51:21.217357Z. The official service
+script separately confirmed actual exit; READY alone is not that proof. Official start
+produced PID 67060, instance `console_instance_9f7dc6e121c84738f0076a24b1c35dd2`, at
+03:53:31.836335Z. The public check kept the original configuration request SUCCEEDED,
+`restart_required=false`, Console normal and delivery ready.
+
+Proposal `operation_0ee600933c6fe46e6f81db6ccb72dc7d` sealed exact current plan
+`6c7e369928a23df6e2ccf8ba32d6f816c30cfcc7d12c966485d42e1803295137`. Independent typed/store
+inspection found no blocking approval issue: target `5547815`, original permissions/denies
+and frozen budgets unchanged, 21 draft files and full 225678-byte inherited inputs preserved.
+The capture paths have no intersection with the two cache-fix Python files. The original
+durable final POLICY outcome and real stop remain immutable. The old unapproved `404e` plan
+was not executed.
+
+Under the user's existing delegated authority, exact public approval
+`operation_5029159491163755d093f33dd4279770` was accepted. These actual public milestones
+passed typed identity/digest validation and independent matching against durable preparation,
+authorization, Task and seed records:
+
+| Milestone | UTC time | Observation SHA256 |
+| --- | --- | --- |
+| AUTHORIZATION_RECORDED | 2026-10-21T04:05:51.129274+00:00 | `8eae783c7900f377770b6ce5ab395f4bdb85a9826473c0ab2bacaa437e2cd0c4` |
+| TASK_SEALED | 2026-10-21T04:07:27.960458+00:00 | `d56b0d5348a8f3116172c397462e339f5477ddcf049b55f5d42d96d327d7e95c` |
+| DISPATCH_COMMITTED | 2026-10-21T04:17:07.148522+00:00 | `33f0abb7f1c35b439df998d5d19e832e05a68da00e3f3f1cbdfdcd40a5f4d8d3` |
+| SEED_VERIFIED | 2026-10-21T04:18:55.947977+00:00 | `6d9c7815b261ae74aa0847147ebd24abb2c86d12fa32e965eea0c857b663828c` |
+| EXECUTION_CLAIMED | 2026-10-21T04:19:02.784374+00:00 | `4b7dc0c2edb991dfe58871d2d417aadfa926c47de6befdfeb78258625f3bcec7` |
+
+The seed mode is `preserve_draft`: no manual conflict repair or silent `coder_reapply` switch.
+The internal successor is `task_recovery_6c7e369928a23df6e2ccf8ba32d6f816` under the original
+public Requirement, branch `ai/feature/project-delivery-learning-loop-recovery-5`. The consistent
+SELECT-only snapshot at 2026-10-21T04:21:25.243509+00:00 observes `IMPLEMENTING`,
+attempt 1, ordinary work 1 on exact
+`5547815`, with the Coder WorkItem RUNNING and its real lease ACTIVE.
+
+This proves recovery preparation and Coder Worker claim only. It does not by itself establish
+main Coder provider admission, a candidate, QA PASS, Review APPROVE or K1 DONE. The operation
+was still running at this observation; later failures and role results retain their actual
+classification and history. `evidence/deployment-and-recovery.json` contains the bounded lifecycle,
+five milestones and SELECT-only snapshot. It excludes raw provider logs, secrets, patch bodies
+and fabricated historical records. Its original outcome SHA is an audit reference to the
+independently checked durable final POLICY, not a replacement for the native error.
+
+A limited follow-up source scan found no current Ruff default-cache binding or mandatory
+`--no-cache` contract. It did not run a production reproduction or establish another K1 incident.
+This change and its acceptance are limited to default pytest cache ownership; no claim of
+all-tools cache isolation or scope expansion was made.

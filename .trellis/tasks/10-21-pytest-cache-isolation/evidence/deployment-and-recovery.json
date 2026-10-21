@@ -1,0 +1,176 @@
+{
+  "kind": "maintenance_deployment_and_original_requirement_recovery_observation",
+  "recorded_at": "2026-10-21T04:23:23.802318+00:00",
+  "code_revision": "5547815464a04991f50a2e0532d6f2f13d8daa69",
+  "lifecycle": {
+    "instance": {
+      "schema_version": "v1",
+      "instance_id": "console_instance_9f7dc6e121c84738f0076a24b1c35dd2",
+      "pid": 67060,
+      "state": "RUNNING",
+      "started_at": "2026-10-21T03:53:31.836335Z",
+      "updated_at": "2026-10-21T03:53:33.212442Z",
+      "safe_summary": "服务正在运行, 可以接收新操作。"
+    },
+    "last_shutdown": {
+      "schema_version": "v1",
+      "request_id": "console_shutdown_df6d6977adaf0329f8ced01a917bb910",
+      "instance_id": "console_instance_9f730f95bf6805a3e835e7b67a669f7f",
+      "pid": 55446,
+      "state": "READY",
+      "recorded_at": "2026-10-21T03:51:21.217357Z",
+      "safe_summary": "当前操作与写入已保存, 执行器和索引已结束, 可以安全退出服务。"
+    }
+  },
+  "configuration_public_check": {
+    "request_id": "configuration_apply_e16ed760d58d42fcf035db5a1e687385",
+    "status": "SUCCEEDED",
+    "safe_summary": "配置已应用, 服务已安全重启。",
+    "restart_required": false,
+    "mode": "normal",
+    "delivery_ready": true
+  },
+  "preparation_progress": {
+    "schema_version": "v0.1",
+    "scope": {
+      "operation_id": "operation_5029159491163755d093f33dd4279770",
+      "team_id": "team_ai",
+      "project_id": "project_ai-project_034252eb3595",
+      "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+      "expected_checkpoint_sha256": "ffe8bd78495496475c7465db68e6a59117f974a96471ad4d3d4c6e033282cad5",
+      "approved_plan_sha256": "6c7e369928a23df6e2ccf8ba32d6f816c30cfcc7d12c966485d42e1803295137"
+    },
+    "records": [
+      {
+        "scope": {
+          "operation_id": "operation_5029159491163755d093f33dd4279770",
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+          "expected_checkpoint_sha256": "ffe8bd78495496475c7465db68e6a59117f974a96471ad4d3d4c6e033282cad5",
+          "approved_plan_sha256": "6c7e369928a23df6e2ccf8ba32d6f816c30cfcc7d12c966485d42e1803295137"
+        },
+        "observed_at": "2026-10-21T04:05:51.129274Z",
+        "record_sha256": "8eae783c7900f377770b6ce5ab395f4bdb85a9826473c0ab2bacaa437e2cd0c4",
+        "kind": "AUTHORIZATION_RECORDED",
+        "evidence": {
+          "authorization_sha256": "f907e330eb2d021550d31e825a81fb9d2a233f9de08cd7bdb4ac76ea91c00fec"
+        }
+      },
+      {
+        "scope": {
+          "operation_id": "operation_5029159491163755d093f33dd4279770",
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+          "expected_checkpoint_sha256": "ffe8bd78495496475c7465db68e6a59117f974a96471ad4d3d4c6e033282cad5",
+          "approved_plan_sha256": "6c7e369928a23df6e2ccf8ba32d6f816c30cfcc7d12c966485d42e1803295137"
+        },
+        "observed_at": "2026-10-21T04:07:27.960458Z",
+        "record_sha256": "d56b0d5348a8f3116172c397462e339f5477ddcf049b55f5d42d96d327d7e95c",
+        "kind": "TASK_SEALED",
+        "evidence": {
+          "task_id": "task_recovery_6c7e369928a23df6e2ccf8ba32d6f816",
+          "task_record_sha256": "e7a39bd9689cb2b068581cfd80bd69bba608fb45c0a316d5aaef2fa55a70791c",
+          "source_revision": "5547815464a04991f50a2e0532d6f2f13d8daa69"
+        }
+      },
+      {
+        "scope": {
+          "operation_id": "operation_5029159491163755d093f33dd4279770",
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+          "expected_checkpoint_sha256": "ffe8bd78495496475c7465db68e6a59117f974a96471ad4d3d4c6e033282cad5",
+          "approved_plan_sha256": "6c7e369928a23df6e2ccf8ba32d6f816c30cfcc7d12c966485d42e1803295137"
+        },
+        "observed_at": "2026-10-21T04:17:07.148522Z",
+        "record_sha256": "33f0abb7f1c35b439df998d5d19e832e05a68da00e3f3f1cbdfdcd40a5f4d8d3",
+        "kind": "DISPATCH_COMMITTED",
+        "evidence": {
+          "task_id": "task_recovery_6c7e369928a23df6e2ccf8ba32d6f816",
+          "dispatch_id": "dispatch_commit_6c7e369928a23df6e2ccf8ba32d6f816c30cfcc7d12c966485d42e1803295137",
+          "dispatch_sha256": "5ea32e12c6f793815fa11a25e74f68daabc74d3299150e7b54631da938b48a02",
+          "task_record_sha256": "e7a39bd9689cb2b068581cfd80bd69bba608fb45c0a316d5aaef2fa55a70791c"
+        }
+      },
+      {
+        "scope": {
+          "operation_id": "operation_5029159491163755d093f33dd4279770",
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+          "expected_checkpoint_sha256": "ffe8bd78495496475c7465db68e6a59117f974a96471ad4d3d4c6e033282cad5",
+          "approved_plan_sha256": "6c7e369928a23df6e2ccf8ba32d6f816c30cfcc7d12c966485d42e1803295137"
+        },
+        "observed_at": "2026-10-21T04:18:55.947977Z",
+        "record_sha256": "6d9c7815b261ae74aa0847147ebd24abb2c86d12fa32e965eea0c857b663828c",
+        "kind": "SEED_VERIFIED",
+        "evidence": {
+          "task_id": "task_recovery_6c7e369928a23df6e2ccf8ba32d6f816",
+          "seed_record_sha256": "6d1acd824d26a162ead93e771462fb290e006bf1d0047f50b4ef469b1986c472",
+          "dispatch_sha256": "5ea32e12c6f793815fa11a25e74f68daabc74d3299150e7b54631da938b48a02",
+          "input_mode": "preserve_draft"
+        }
+      },
+      {
+        "scope": {
+          "operation_id": "operation_5029159491163755d093f33dd4279770",
+          "team_id": "team_ai",
+          "project_id": "project_ai-project_034252eb3595",
+          "delivery_id": "delivery_multi_bb78e2316afca47d005384542f685174535b69db",
+          "expected_checkpoint_sha256": "ffe8bd78495496475c7465db68e6a59117f974a96471ad4d3d4c6e033282cad5",
+          "approved_plan_sha256": "6c7e369928a23df6e2ccf8ba32d6f816c30cfcc7d12c966485d42e1803295137"
+        },
+        "observed_at": "2026-10-21T04:19:02.784374Z",
+        "record_sha256": "4b7dc0c2edb991dfe58871d2d417aadfa926c47de6befdfeb78258625f3bcec7",
+        "kind": "EXECUTION_CLAIMED",
+        "evidence": {
+          "task_id": "task_recovery_6c7e369928a23df6e2ccf8ba32d6f816",
+          "work_item_id": "work_ed1c68a5ef5723ebfe0e6c157478a73ef35b2746060c7fad4a3dc2c9b86eb53d",
+          "lease_id": "lease_36724a7e0d16315fe34fceec",
+          "assignment_id": "assignment_aa3323d06762fe7be88c8bbc",
+          "claim_sha256": "c214a659949345c95f0e75effd408d6d1d12f9d3b8a8927b966bda9029b4b781",
+          "dispatch_sha256": "5ea32e12c6f793815fa11a25e74f68daabc74d3299150e7b54631da938b48a02",
+          "source_revision": "5547815464a04991f50a2e0532d6f2f13d8daa69",
+          "role": "coder",
+          "attempt": 1
+        }
+      }
+    ]
+  },
+  "task_readonly_snapshot": {
+    "kind": "exact_k1_successor_select_only",
+    "checked_at": "2026-10-21T04:21:25.243509+00:00",
+    "task_id": "task_recovery_6c7e369928a23df6e2ccf8ba32d6f816",
+    "task": {
+      "status": "IMPLEMENTING",
+      "attempts": 1,
+      "work_attempt": 1,
+      "base_ref": "5547815464a04991f50a2e0532d6f2f13d8daa69",
+      "revision": 2
+    },
+    "work_items": [
+      {
+        "id": "work_ed1c68a5ef5723ebfe0e6c157478a73ef35b2746060c7fad4a3dc2c9b86eb53d",
+        "role": "coder",
+        "attempt": 1,
+        "status": "RUNNING",
+        "checkpoint_sequence": 2
+      }
+    ],
+    "claims": [
+      {
+        "lease_id": "lease_36724a7e0d16315fe34fceec",
+        "work_item_id": "work_ed1c68a5ef5723ebfe0e6c157478a73ef35b2746060c7fad4a3dc2c9b86eb53d",
+        "state": "ACTIVE",
+        "last_heartbeat_at": "2026-10-21T04:21:23.327784+00:00",
+        "ended_at": null
+      }
+    ],
+    "read_only_transaction": true,
+    "control_calls": 0
+  },
+  "delivery_complete": false,
+  "old_durable_final_policy_outcome_sha256": "91c4af230808e81f5ea8e66a89baadb1cc561b8fa5ba01ed9d0cec3ec425f6e0"
+}
