@@ -1130,15 +1130,23 @@ class CodexCliAgentAdapter:
                 scratch = temporary_root / "scratch"
                 cache = temporary_root / "uv-cache"
                 mypy_cache = temporary_root / "mypy-cache"
+                pytest_cache = temporary_root / "pytest-cache"
                 scratch.mkdir(mode=0o700)
                 cache.mkdir(mode=0o700)
                 mypy_cache.mkdir(mode=0o700)
+                pytest_cache.mkdir(mode=0o700)
                 coder_tooling = _prepare_coder_python_launchers(
-                    coder_tooling, tooling_root, mypy_cache_root=mypy_cache
+                    coder_tooling,
+                    tooling_root,
+                    mypy_cache_root=mypy_cache,
+                    pytest_cache_root=pytest_cache,
                 )
                 invocation_environment["TMPDIR"] = str(scratch)
                 invocation_environment["UV_CACHE_DIR"] = str(cache)
                 invocation_environment["MYPY_CACHE_DIR"] = str(mypy_cache)
+                invocation_environment["PYTEST_ADDOPTS"] = shlex.join(
+                    ("-o", f"cache_dir={pytest_cache}")
+                )
             if coder_tooling is not None:
                 if coder_tooling.pytest is not None:
                     invocation_environment["ASE_PROJECT_PYTEST"] = str(coder_tooling.pytest)
@@ -1663,6 +1671,7 @@ def _prepare_coder_python_launchers(
     temporary_root: Path,
     *,
     mypy_cache_root: Path,
+    pytest_cache_root: Path,
 ) -> _NativePythonTooling | None:
     """Fixed isolated startup bypasses executable .pth and site customization entirely."""
     if tooling is None or tooling.python is None:
@@ -1677,6 +1686,7 @@ def _prepare_coder_python_launchers(
         # private cache before user code starts, rather than relying on prose or
         # inheriting a host cache directory outside the run's sandbox authority.
         f"os.environ['MYPY_CACHE_DIR'] = {str(mypy_cache_root)!r}\n"
+        f"os.environ['PYTEST_ADDOPTS'] = {shlex.join(('-o', f'cache_dir={pytest_cache_root}'))!r}\n"
         "stdlib_paths = tuple(sys.path)\n"
         "mode, arguments = sys.argv[1], sys.argv[2:]\n"
         "if Path.cwd().resolve() != Path(source_paths[-1]):\n"

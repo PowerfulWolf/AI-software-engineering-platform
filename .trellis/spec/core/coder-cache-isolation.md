@@ -14,6 +14,7 @@ _prepare_coder_python_launchers(
     temporary_root: Path,
     *,
     mypy_cache_root: Path,
+    pytest_cache_root: Path,
 ) -> _NativePythonTooling | None
 ```
 
@@ -74,3 +75,51 @@ _prepare_coder_python_launchers(
 缓存已进入原工作区，必须按独立、exact/hash-bound 的工程维护计划保留 bytes 并封存，
 再走原 Task 的公开后处理失败恢复路径；本默认隔离不能替代该存量处理或审批。
 回滚仅还原代码/测试/spec diff，保留 Requirement、Task、原日志和审计事实。
+
+
+## Default pytest cache ownership (2026-10-21)
+
+The same registered Coder tooling seam allocates `<run-root>/pytest-cache` with mode0700.
+`_prepare_coder_python_launchers(..., mypy_cache_root, pytest_cache_root)` binds both caches.
+The native environment and immutable bootstrap each set a fixed, safely quoted
+`PYTEST_ADDOPTS` containing only `-o cache_dir=<exact-private-path>`; host or reduced child
+environment options cannot change this default. Both `ASE_PROJECT_PYTEST` and
+`ASE_PROJECT_PYTHON -m pytest` retain current-source imports and the existing isolated
+interpreter/dependency/sandbox boundaries. Cache lifetime is one invocation; no capability
+is granted without registered Coder Python tooling or to QA/Reviewer.
+
+Real pytest must run and write nodeids under that private root, leave complete source
+inventory unchanged, survive reduced/untrusted environment and project cache_dir defaults,
+and use distinct cleaned roots across calls, including native failure cleanup. Paths with
+spaces require actual subprocess coverage. Explicit command-line cache redirection keeps
+pytest precedence but grants no new write authority. Existing ignored-cache and source
+mutation failure tests must continue to reject; do not change `_workspace_unchanged`,
+cache classifications, inventory limits or transient routing to accept new workspace writes.
+
+Good: default validation uses run-owned scratch, so an otherwise unknown unchanged native
+failure remains eligible only for its existing exact engineering investigation. Base: old
+POLICY outcomes stay intact. Bad: ignore .pytest_cache globally, recover based on stderr
+words, delete old cache files, or claim the new default repairs a historical provider cause.
+
+Existing K1 run_c9014385fa3c4dc6b0a7e4872876ad9e has no accepted artifact. Preserve its
+actual failed stop, POLICY outcome and full retained scene; no DB migration or direct data
+write is required. A fresh public terminal recovery proposal must inspect the complete
+current scene, target revision, inherited inputs and authority before exact approval.
+Same-Task stopped-failure proof must continue to reject the old POLICY outcome. The original
+Requirement may continue through an approved internal successor, followed by native Coder
+and independent QA/Review on the same candidate. Reverting cache defaults does not erase
+records and must occur only while execution is idle.
+
+
+### Pytest validation matrix
+
+| Input | Required result |
+| --- | --- |
+| Actual default pytest through either trusted launcher | Nodeids exist only under private run cache; full source inventory unchanged |
+| Reduced child environment or hostile PYTEST_ADDOPTS | Bootstrap rebinds the exact private cache before import/user code |
+| Project cache_dir / project addopts cache override | Fixed environment -o wins over project configuration |
+| Explicit later CLI -o cache_dir | Normal pytest precedence; no extra workspace permission or mutation exemption |
+| Private root contains spaces | shlex-safe option parsing and actual external cache writes |
+| Unknown native rc1 after default pytest | Unchanged source retains original provider failure classification |
+| New ignored workspace cache or source/index changes | Existing strict POLICY/nontransient rejection unchanged |
+| Native error / next Run / no registered tools / verifier | Cleanup, distinct roots and original role boundaries |

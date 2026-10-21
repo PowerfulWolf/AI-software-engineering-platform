@@ -1,6 +1,7 @@
-"""Coder mypy defaults use private scratch without weakening source inventory."""
+"""Coder validation defaults use private scratch without weakening source inventory."""
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from ai_software_engineer.agents import (
+    AgentErrorCode,
     AgentRequest,
     AgentResult,
     AgentRunStatus,
@@ -28,7 +30,12 @@ from ai_software_engineer.git.mutation import (
     is_execution_cache_path,
 )
 from tests.agents.test_codex_cli import _git
-from tests.agents.test_native_python_tooling import _fake_tools, _project, _ToolProbeRunner
+from tests.agents.test_native_python_tooling import (
+    _copy_pytest_dependencies,
+    _fake_tools,
+    _project,
+    _ToolProbeRunner,
+)
 from tests.agents.test_openai_compatible import StaticPromptBuilder, _coder_request, _request
 
 
@@ -36,6 +43,8 @@ def _run_coder(
     worktree: Path,
     base: str,
     probe: Callable[[Path, Mapping[str, str], str], None],
+    *,
+    native_failure: bool = False,
 ) -> AgentResult:
     request = _coder_request().model_copy(update={"source_revision": base})
     return CodexCliAgentAdapter(
@@ -46,9 +55,14 @@ def _run_coder(
         environment={
             "PATH": os.environ["PATH"],
             "MYPY_CACHE_DIR": "/untrusted/host-cache",
+            "PYTEST_ADDOPTS": "--untrusted-host-option",
         },
         prompt_builder=StaticPromptBuilder(),
-        runner=_ToolProbeRunner(request, probe, None),
+        runner=(
+            _UnknownNativeFailureRunner(probe)
+            if native_failure
+            else _ToolProbeRunner(request, probe, None)
+        ),
     ).run(request)
 
 
@@ -57,6 +71,7 @@ def test_each_coder_call_owns_fresh_cache_and_cleans_it_on_exit(
     tmp_path: Path, failure: bool
 ) -> None:
     roots: list[Path] = []
+    pytest_roots: list[Path] = []
     for index in range(2):
         fixture = tmp_path / str(index)
         fixture.mkdir()
@@ -79,6 +94,12 @@ def test_each_coder_call_owns_fresh_cache_and_cleans_it_on_exit(
             assert not cache.is_relative_to(registered_root)
             assert not cache.is_relative_to(Path(environment["ASE_PROJECT_PYTHON"]).parent)
             roots.append(cache)
+            pytest_cache = cache.parent / "pytest-cache"
+            assert pytest_cache.is_dir()
+            assert pytest_cache.stat().st_mode & 0o777 == 0o700
+            assert shlex.split(environment["PYTEST_ADDOPTS"]) == ["-o", f"cache_dir={pytest_cache}"]
+            pytest_roots.append(pytest_cache)
+            (pytest_cache / "nodeids").write_bytes(b"private pytest cache")
             (cache / "cache.db").write_bytes(b"private cache")
             if failure:
                 raise CodexCliError("fixture runner could not start")
@@ -86,8 +107,10 @@ def test_each_coder_call_owns_fresh_cache_and_cleans_it_on_exit(
         result = _run_coder(worktree, base, probe)
         assert result.status is (AgentRunStatus.FAILED if failure else AgentRunStatus.SUCCEEDED)
         assert not roots[-1].exists()
+        assert not pytest_roots[-1].exists()
         assert not (worktree / ".mypy_cache").exists()
     assert roots[0] != roots[1]
+    assert pytest_roots[0] != pytest_roots[1]
 
 
 def _real_mypy_tools(registered: Path) -> None:
@@ -214,10 +237,188 @@ def test_verifiers_do_not_receive_coder_cache_capability(tmp_path: Path, role: A
         model="gpt-test",
         agent_id="agent_verifier_001",
         agent_version="v0.1",
-        environment={"PATH": os.environ["PATH"], "MYPY_CACHE_DIR": "/untrusted/host-cache"},
+        environment={
+            "PATH": os.environ["PATH"],
+            "MYPY_CACHE_DIR": "/untrusted/host-cache",
+            "PYTEST_ADDOPTS": "--untrusted-host-option",
+        },
         prompt_builder=StaticPromptBuilder(),
         runner=runner,
     ).run(request)
     assert runner.environment is not None
     assert "MYPY_CACHE_DIR" not in runner.environment
+    assert "PYTEST_ADDOPTS" not in runner.environment
     assert "ASE_PROJECT_PYTHON" not in runner.environment
+
+
+class _UnknownNativeFailureRunner:
+    """Real validation followed by a native rc1 with no final output."""
+
+    def __init__(self, probe: Callable[[Path, Mapping[str, str], str], None]) -> None:
+        self._probe = probe
+
+    def run(
+        self,
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        stdin: str,
+        timeout_seconds: float,
+    ) -> CodexInvocationResult:
+        del argv, timeout_seconds
+        self._probe(cwd, environment, stdin)
+        return CodexInvocationResult(returncode=1)
+
+
+def _real_pytest_project(tmp_path: Path, *, ini_cache: bool) -> tuple[Path, str]:
+    registered, worktree, _ = _project(tmp_path)
+    venv.EnvBuilder(with_pip=False, symlinks=False).create(registered / ".venv")
+    dependency_root = (
+        registered
+        / ".venv"
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    _copy_pytest_dependencies(dependency_root)
+    pytest_runner = registered / ".venv" / "bin" / "pytest"
+    pytest_runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    pytest_runner.chmod(0o700)
+    (registered / ".git" / "info" / "exclude").write_text(
+        ".venv/\n.pytest_cache/\nproject-ini-cache/\n", encoding="utf-8"
+    )
+    (worktree / "tests").mkdir()
+    (worktree / "src").mkdir()
+    (worktree / "src" / "cache_sample.py").write_text("VALUE = 41\n", encoding="utf-8")
+    (worktree / "tests" / "test_cache.py").write_text(
+        "from cache_sample import VALUE\ndef test_current_source():\n    assert VALUE + 1 == 42\n",
+        encoding="utf-8",
+    )
+    if ini_cache:
+        with (worktree / "pyproject.toml").open("a", encoding="utf-8") as stream:
+            stream.write('\n[tool.pytest.ini_options]\ncache_dir = "project-ini-cache"\n')
+    _git(worktree, "add", "src", "tests", "pyproject.toml")
+    _git(worktree, "commit", "-qm", "actual pytest validation fixture")
+    return worktree, _git(worktree, "rev-parse", "HEAD")
+
+
+def _pytest_argv(environment: Mapping[str, str], launcher: str) -> tuple[str, ...]:
+    prefix = (
+        (environment["ASE_PROJECT_PYTEST"],)
+        if launcher == "pytest"
+        else (environment["ASE_PROJECT_PYTHON"], "-m", "pytest")
+    )
+    return (*prefix, "-q", "tests/test_cache.py")
+
+
+@pytest.mark.parametrize("launcher", ["pytest", "python"])
+@pytest.mark.parametrize("child_environment", ["native", "reduced", "hostile"])
+@pytest.mark.parametrize("ini_cache", [False, True])
+def test_actual_default_pytest_cache_keeps_unknown_native_failure_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    launcher: str,
+    child_environment: str,
+    ini_cache: bool,
+) -> None:
+    worktree, base = _real_pytest_project(tmp_path, ini_cache=ini_cache)
+    # Exercise actual quoting in both launcher and PYTEST_ADDOPTS parsing.
+    run_parent = tmp_path / "private run roots with spaces"
+    run_parent.mkdir()
+    monkeypatch.setattr("ai_software_engineer.agents.codex_cli.tempfile.tempdir", str(run_parent))
+    private_roots: list[Path] = []
+    options: list[str | None] = []
+    private_modes: list[int | None] = []
+    cached: list[bool] = []
+    unchanged: list[bool] = []
+
+    def probe(cwd: Path, environment: Mapping[str, str], prompt: str) -> None:
+        del prompt
+        before = capture_mutation_inventory(cwd)
+        private_cache = Path(environment["TMPDIR"]).parent / "pytest-cache"
+        private_roots.append(private_cache)
+        options.append(environment.get("PYTEST_ADDOPTS"))
+        private_modes.append(
+            private_cache.stat().st_mode & 0o777 if private_cache.exists() else None
+        )
+        child = (
+            dict(environment) if child_environment == "native" else {"PATH": environment["PATH"]}
+        )
+        if child_environment == "hostile":
+            child["PYTEST_ADDOPTS"] = "--untrusted-child-option"
+        checked = subprocess.run(
+            _pytest_argv(environment, launcher),
+            cwd=cwd,
+            env=child,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert checked.returncode == 0, checked.stderr
+        assert "1 passed" in checked.stdout
+        cached.append((private_cache / "v" / "cache" / "nodeids").is_file())
+        unchanged.append(capture_mutation_inventory(cwd) == before)
+
+    result = _run_coder(worktree, base, probe, native_failure=True)
+
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.PROVIDER_UNAVAILABLE
+    assert result.error.transient is False
+    assert result.artifact is None
+    assert options == [shlex.join(("-o", f"cache_dir={private_roots[0]}"))]
+    assert private_modes == [0o700]
+    assert cached == [True]
+    assert unchanged == [True]
+    assert not private_roots[0].exists()
+    assert not (worktree / ".pytest_cache").exists()
+    assert not (worktree / "project-ini-cache").exists()
+
+
+@pytest.mark.parametrize("launcher", ["pytest", "python"])
+def test_explicit_pytest_workspace_cache_override_remains_policy_violation(
+    tmp_path: Path, launcher: str
+) -> None:
+    worktree, base = _real_pytest_project(tmp_path, ini_cache=False)
+    private_roots: list[Path] = []
+
+    def probe(cwd: Path, environment: Mapping[str, str], prompt: str) -> None:
+        del prompt
+        private_roots.append(Path(environment["TMPDIR"]).parent / "pytest-cache")
+        checked = subprocess.run(
+            (*_pytest_argv(environment, launcher), "-o", "cache_dir=.pytest_cache"),
+            cwd=cwd,
+            env={"PATH": environment["PATH"]},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert checked.returncode == 0, checked.stderr
+        assert (cwd / ".pytest_cache" / "v" / "cache" / "nodeids").is_file()
+
+    result = _run_coder(worktree, base, probe, native_failure=True)
+
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.POLICY_VIOLATION
+    assert result.error.transient is False
+    assert result.artifact is None
+    assert (worktree / ".pytest_cache" / "v" / "cache" / "nodeids").is_file()
+    assert not private_roots[0].exists()
+
+
+@pytest.mark.parametrize("python_project", [False, True])
+def test_coder_without_registered_tooling_receives_no_cache_capability(
+    tmp_path: Path, python_project: bool
+) -> None:
+    _, worktree, base = _project(tmp_path, python=python_project)
+
+    def probe(cwd: Path, environment: Mapping[str, str], prompt: str) -> None:
+        del cwd, prompt
+        assert "PYTEST_ADDOPTS" not in environment
+        assert "MYPY_CACHE_DIR" not in environment
+        assert "ASE_PROJECT_PYTHON" not in environment
+        assert "ASE_PROJECT_PYTEST" not in environment
+
+    _run_coder(worktree, base, probe)
