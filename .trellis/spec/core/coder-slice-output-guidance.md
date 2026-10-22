@@ -13,6 +13,7 @@ Prompt 必须说明真实 gate，不能只传切片 JSON 然后泛称实现完�
 
 ```python
 _coder_slice_output_guidance(request: AgentRequest) -> str
+_coder_verification_guidance(request: AgentRequest) -> str
 RequestPromptBuilder.build(request: AgentRequest) -> PromptPayload
 ContextPromptBuilder.build(request: AgentRequest) -> PromptPayload
 validate_coder_slice_output(work: CoderWorkSlice, artifact: Artifact) -> None
@@ -36,7 +37,7 @@ output SHA-256/字节数以及失败接纳规则保持不变。native 诊断另�
 3. progress 的 completed 保留全部 inherited completed；新增完成只能来自 selected 且
    在本轮真实核实完成。later 全部留在 remaining；尚未完成的 selected 也留在 remaining。
    completed/remaining 精确、互斥、完整覆盖已批准步骤。保留草稿/文件不证明 later 完成。
-4. later 为空不强迫生成 candidate：仅在完整实施和 required verification 实际完成后
+4. later 为空不强迫生成 candidate：仅在完整实施和原批准要求由 Coder 完成的验证实际完成后
    才能提供 provisional report，并经过原 CandidateCommitSkill/Git/权限/身份/lineage gate。
    未完成则继续报告 progress。required verification 的记录不能编造。
 5. `changed_files` 仍是完整保留 dirty inventory，而不是只列本轮所选步骤的新增文件。
@@ -45,6 +46,11 @@ output SHA-256/字节数以及失败接纳规则保持不变。native 诊断另�
    `CoderSliceRejected.code` 只使用固定 Enum；native exception catch 不输出其 message。
    未识别的其它 `ValueError` 保留 `GIT_CONTRACT`，不猜测 slice 原因。
 7. 不放宽 gate、补造 progress/candidate、自动修订输出或更改恢复/队列/人工批准。
+8. Coder 的验证职责与批准 Plan 中独立 QA/Reviewer 的验证职责分开。仅缺独立验证环境，
+   不能自行推导为 Coder 必须停止其余合法实施；继续实现选定步骤及精确测试入口，并如实
+   记录未执行的检查、原因和风险。真实实施依赖、明确 Coder 必做条件、失败检查仍需处理，
+   不能据此把未完成步骤标为完成。候选不等于交付通过，完整独立验收仍使用原候选与全部
+   原测试等级。此规则作为共享 Coder system guidance 作用于未来输入，不注入任意 Context。
 
 ## Validation and error matrix
 
@@ -77,6 +83,8 @@ output SHA-256/字节数以及失败接纳规则保持不变。native 诊断另�
 prompt compilation、fake process port 和真实临时 Git 仓库。覆盖 partial/final 指导、legacy、
 保留继承完成的合法 partial progress、partial candidate/越界完成/撤回 prior/遗漏 partition、
 安全固定诊断、完整dirty保留、最后切片的原候选门禁以及其它 Git 错误不误分类。
+共享职责指导另覆盖有/无 slice 的 Request/Context/native、非 Coder 不增加指导、原 request
+和权限不变，以及真实 native CandidateCommit 保留 NOT_RUN、原因与 evidence 而不产出 verdict。
 
 相关增量回归：`tests/planning/test_execution_window.py`、
 `tests/agents/test_negative_credential_prompt_guidance.py` 和实际 native/ordinary adapter 测试。

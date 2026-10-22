@@ -19,7 +19,13 @@ from ai_software_engineer.agents import (
     RequestPromptBuilder,
 )
 from ai_software_engineer.context import ContextBudget, ContextBundle, ContextSection
-from ai_software_engineer.domain import AgentRole, ChangedFile, ChangeType
+from ai_software_engineer.domain import (
+    AgentRole,
+    ChangedFile,
+    ChangeType,
+    ImplementationReportArtifact,
+    ImplementationTestStatus,
+)
 from ai_software_engineer.domain.artifact import Artifact
 from ai_software_engineer.domain.execution_window import CoderWorkSlice, PlanExecutionWindow
 from tests.agents.test_codex_cli import _ArtifactOutputRunner, _git, _repository
@@ -32,6 +38,7 @@ from tests.domain.factories import (
 )
 
 _MARKER = "CODER_WORK_SLICE_GUIDANCE:"
+_VERIFICATION_MARKER = "CODER_VERIFICATION_BOUNDARY:"
 
 
 def _slice_request(base: str = "b" * 40, *, deferred: bool = True) -> AgentRequest:
@@ -263,6 +270,98 @@ def test_last_slice_can_finish_through_original_candidate_gate(tmp_path: Path) -
     ).run(request)
     assert result.status is AgentRunStatus.SUCCEEDED
     assert result.artifact is not None and result.artifact.kind.value == "implementation-report"
+    assert result.artifact.source_revision == _git(root, "rev-parse", "HEAD") != base
+    assert _git(root, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize("builder", ["request", "context", "native"])
+@pytest.mark.parametrize("sliced", [True, False])
+def test_coder_prompt_distinguishes_independent_verification_from_implementation(
+    tmp_path: Path, builder: str, sliced: bool
+) -> None:
+    root, base = _repository(tmp_path)
+    request = _slice_request(base, deferred=False) if sliced else _request(AgentRole.CODER)
+    original_request = request.to_wire()
+    prompt_builder = _context_builder(request) if builder == "context" else RequestPromptBuilder()
+    if builder == "native":
+        request = request.model_copy(update={"source_revision": base})
+        original_request = request.to_wire()
+        runner = _DraftOutputRunner(_output(request, implementation=True).to_wire())
+        result = CodexCliAgentAdapter(
+            workspace_root=root,
+            model="test-model",
+            agent_id="agent_coder_001",
+            agent_version="v0.1",
+            prompt_builder=prompt_builder,
+            runner=runner,
+        ).run(request)
+        assert result.status is AgentRunStatus.SUCCEEDED
+        text = runner.prompt
+    else:
+        prompt = prompt_builder.build(request)
+        text = prompt.messages[0].content
+        assert _VERIFICATION_MARKER not in prompt.messages[1].content
+    assert text.count(_VERIFICATION_MARKER) == 1
+    for rule in (
+        "verification assigned to independent QA/Reviewer",
+        "continue other authorized implementation and test-code work",
+        "Record unexecuted checks as NOT_RUN",
+        "explicit Coder obligations and genuine implementation dependencies",
+        "do not mark incomplete steps complete",
+        "original candidate, independent QA and Review gates",
+    ):
+        assert rule in text
+    assert request.to_wire() == original_request
+    if sliced:
+        assert "complete implementation and required Coder verification" in text
+        assert "complete implementation and required verification have finished" not in text
+
+
+@pytest.mark.parametrize("builder", ["request", "context"])
+@pytest.mark.parametrize("role", [AgentRole.ORCHESTRATOR, AgentRole.QA, AgentRole.REVIEWER])
+def test_other_roles_do_not_receive_coder_verification_boundary(
+    builder: str, role: AgentRole
+) -> None:
+    request = _request(role)
+    prompt = (_context_builder(request) if builder == "context" else RequestPromptBuilder()).build(
+        request
+    )
+    assert _VERIFICATION_MARKER not in prompt.messages[0].content
+
+
+def test_native_candidate_retains_not_run_without_promoting_it_to_verdict(tmp_path: Path) -> None:
+    root, base = _repository(tmp_path)
+    request = _slice_request(base, deferred=False)
+    artifact = _output(request, implementation=True)
+    assert isinstance(artifact, ImplementationReportArtifact)
+    artifact = artifact.model_copy(
+        update={
+            "content": artifact.content.model_copy(
+                update={
+                    "tests_run": tuple(
+                        test.model_copy(update={"status": ImplementationTestStatus.NOT_RUN})
+                        for test in artifact.content.tests_run
+                    ),
+                    "known_risks": (
+                        "Independent SQL verification needs the registered QA executor.",
+                    ),
+                }
+            )
+        }
+    )
+    runner = _DraftOutputRunner(artifact.to_wire())
+    result = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="test-model",
+        agent_id="agent_coder_001",
+        agent_version="v0.1",
+        runner=runner,
+    ).run(request)
+    assert result.status is AgentRunStatus.SUCCEEDED
+    assert isinstance(result.artifact, ImplementationReportArtifact)
+    assert result.artifact.content.tests_run == artifact.content.tests_run
+    assert result.artifact.content.known_risks == artifact.content.known_risks
+    assert result.artifact.evidence == artifact.evidence
     assert result.artifact.source_revision == _git(root, "rev-parse", "HEAD") != base
     assert _git(root, "status", "--porcelain") == ""
 

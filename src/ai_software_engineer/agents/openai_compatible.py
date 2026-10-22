@@ -382,7 +382,7 @@ def _coder_slice_output_guidance(request: AgentRequest) -> str:
         "finished. Do not return implementation-report for this slice. "
         if request.work_slice.later_step_ids
         else "This slice has no deferred steps: return implementation-report only after the "
-        "complete implementation and required verification have finished; otherwise return "
+        "complete implementation and required Coder verification have finished; otherwise return "
         "coder-progress with remaining work and concrete next actions. "
     )
     return (
@@ -399,6 +399,25 @@ def _coder_slice_output_guidance(request: AgentRequest) -> str:
         "Report the complete retained dirty-file inventory, including earlier legal changes; "
         "step selection does not authorize dropping retained paths or expanding write permissions. "
         "Keep progress at the exact input source revision and do not create a candidate commit."
+    )
+
+
+def _coder_verification_guidance(request: AgentRequest) -> str:
+    """Keep implementation checks distinct from the approved independent role checks."""
+    if request.role is not AgentRole.CODER:
+        return ""
+    return (
+        "\nCODER_VERIFICATION_BOUNDARY: Follow the approved Plan's verification role assignments. "
+        "Distinguish your implementation checks from verification assigned to independent "
+        "QA/Reviewer. If only an independent verifier's execution prerequisites are missing, "
+        "continue other authorized implementation and test-code work within the current slice. "
+        "Record unexecuted checks as NOT_RUN with their actual cause and known risks, never PASS. "
+        "Preserve explicit Coder obligations and genuine implementation dependencies; do not mark "
+        "incomplete steps complete or treat test source as successful execution. Only complete "
+        "implementation within the approved slice can reach the original candidate, independent "
+        "QA and Review gates. A candidate is not delivery acceptance; all original criteria, "
+        "test levels and independent verification remain required. This guidance grants no "
+        "additional tools, paths, network access, budget or authority to change the Plan."
     )
 
 
@@ -452,6 +471,7 @@ class RequestPromptBuilder:
             "input_artifact_ids are context dependencies, not necessarily direct parents."
             + _progress_output_guidance(request)
             + _coder_slice_output_guidance(request)
+            + _coder_verification_guidance(request)
             + _negative_credential_test_guidance(request)
             + _PROJECT_OBSERVATION_GUIDANCE
         )
@@ -522,6 +542,7 @@ class ContextPromptBuilder:
             f"MACHINE_POLICY={policy_sections[0]}"
             + _progress_output_guidance(request)
             + _coder_slice_output_guidance(request)
+            + _coder_verification_guidance(request)
             + _negative_credential_test_guidance(request)
             + _PROJECT_OBSERVATION_GUIDANCE
         )
