@@ -19,6 +19,12 @@ from typing import Literal, Protocol, cast
 
 from pydantic import TypeAdapter, ValidationError
 
+from ai_software_engineer.agents._codex_events import (
+    CodexEventClassification,
+    CodexEventClassifier,
+    CodexJsonEventObserver,
+    CodexJsonFailure,
+)
 from ai_software_engineer.agents._native_output import _STREAM_LIMIT, _NativeOutputDrain
 from ai_software_engineer.agents.candidate_binding import BoundCandidateSource
 from ai_software_engineer.agents.codex_policy import candidate_read_snapshot, no_command_arguments
@@ -208,6 +214,7 @@ class CodexInvocationResult:
     process_stop: NativeProcessStop | None = None
     stderr_truncated: bool = False
     execution_abort_reason: ExecutionAbortReason | None = None
+    native_failure: CodexJsonFailure | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,9 +269,17 @@ class SubprocessCodexCommandRunner:
         execution_guard: ExecutionGuard | None = None,
         *,
         process_kind: OwnedProcessKind = "native",
+        output_protocol: Literal["codex_json"] | None = None,
+        event_classifier: CodexEventClassifier | None = None,
+        diagnostic_secret: str | None = None,
+        diagnostic_secret_required: bool = False,
     ) -> None:
         self._execution_guard = execution_guard
         self._process_kind = process_kind
+        self._output_protocol = output_protocol
+        self._event_classifier = event_classifier or _classify_native_json_failure
+        self._diagnostic_secret = diagnostic_secret
+        self._diagnostic_secret_required = diagnostic_secret_required
 
     def run(
         self,
@@ -385,7 +400,16 @@ class SubprocessCodexCommandRunner:
             nonlocal output
             if output is None:
                 assert process.stdout is not None and process.stderr is not None
-                output = _NativeOutputDrain(process.stdout, process.stderr)
+                events = (
+                    CodexJsonEventObserver(
+                        self._event_classifier,
+                        exact_secret=self._diagnostic_secret,
+                        secret_required=self._diagnostic_secret_required,
+                    )
+                    if self._output_protocol == "codex_json"
+                    else None
+                )
+                output = _NativeOutputDrain(process.stdout, process.stderr, codex_events=events)
             return output.poll(process, timeout=timeout)
 
         def stop() -> tuple[str, str]:
@@ -438,6 +462,8 @@ class SubprocessCodexCommandRunner:
                 result = replace(result, execution_abort_reason=execution_abort_reason)
             if output is not None and output.stderr_truncated:
                 result = replace(result, stderr_truncated=True)
+            if output is not None and result.process_stop is not None:
+                result = replace(result, native_failure=output.native_failure)
             # Cleanup can fail too. Do not clear the Host's live observation or
             # publish a stop until both proven EOF pipes are locally released.
             close_output()
@@ -608,7 +634,14 @@ class CodexCliAgentAdapter:
             codex_cli_proxy_key_environment(source_environment, proxy_api_key_env)
         )
         self._execution_guard = execution_guard
-        self._runner = runner or SubprocessCodexCommandRunner(execution_guard)
+        self._runner = runner or SubprocessCodexCommandRunner(
+            execution_guard,
+            output_protocol="codex_json",
+            diagnostic_secret=(
+                self._environment.get(proxy_api_key_env) if proxy_api_key_env is not None else None
+            ),
+            diagnostic_secret_required=proxy_api_key_env is not None,
+        )
         self._initial_admission = initial_workspace_admission
         self._candidate_commit = candidate_commit_skill or GitCandidateCommitSkill(
             root, environment=environment
@@ -888,6 +921,7 @@ class CodexCliAgentAdapter:
                 (
                     self._executable,
                     "exec",
+                    "--json",
                     "--ephemeral",
                     "--ignore-user-config",
                     *sandbox_arguments,
@@ -2093,9 +2127,7 @@ def _classify_cli_failure(
     if invocation.returncode < 0:
         return AgentErrorCode.PROVIDER_ERROR, False
     recognized = _recognized_cli_failure(invocation)
-    diagnostic = _select_main_cli_failure_diagnostic(
-        invocation.stderr, truncated=invocation.stderr_truncated
-    )
+    diagnostic = _invocation_main_cli_failure(invocation)
     if not diagnostic.complete:
         return recognized or AgentErrorCode.PROVIDER_UNAVAILABLE, False
     if recognized is None and (
@@ -2116,9 +2148,36 @@ def _classify_cli_failure(
 def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode | None:
     if invocation.returncode <= 0:
         return None
-    text = _main_cli_failure_diagnostic(
-        invocation.stderr, truncated=invocation.stderr_truncated
-    ).lower()
+    event = _native_json_failure(invocation)
+    if event is not None:
+        return event.classification.code
+    return _recognized_cli_failure_text(
+        _main_cli_failure_diagnostic(invocation.stderr, truncated=invocation.stderr_truncated)
+    )
+
+
+def _classify_native_json_failure(message: str) -> CodexEventClassification:
+    background = re.match(
+        r"^(?:error\s*:\s*)?(?:(?:mcp|rmcp)(?:::|:|\s)|tool\s+server\b)",
+        message.strip(),
+        re.IGNORECASE,
+    )
+    code = None if background is not None else _recognized_cli_failure_text(message)
+    return CodexEventClassification(
+        source="delivery",
+        main_error=background is None,
+        code=code,
+        transient=code is not None
+        and code
+        not in {
+            AgentErrorCode.AUTHENTICATION_ERROR,
+            AgentErrorCode.INVALID_OUTPUT,
+        },
+    )
+
+
+def _recognized_cli_failure_text(text: str) -> AgentErrorCode | None:
+    text = text.lower()
     if "invalid_json_schema" in text:
         return AgentErrorCode.INVALID_OUTPUT
     if any(marker in text for marker in ("insufficient_quota", "quota exceeded", "usage limit")):
@@ -2143,6 +2202,30 @@ def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode
 class _MainCliFailureDiagnostic:
     text: str
     complete: bool
+
+
+def _native_json_failure(invocation: CodexInvocationResult) -> CodexJsonFailure | None:
+    event = invocation.native_failure
+    if (
+        event is not None
+        and event.complete
+        and event.classification.source == "delivery"
+        and invocation.returncode > 0
+        and not invocation.timed_out
+        and invocation.execution_abort_reason is None
+        and (invocation.process_stop is None or invocation.process_stop.kind != "service_pause")
+    ):
+        return event
+    return None
+
+
+def _invocation_main_cli_failure(invocation: CodexInvocationResult) -> _MainCliFailureDiagnostic:
+    event = _native_json_failure(invocation)
+    if event is not None:
+        return _MainCliFailureDiagnostic(event.message or "", event.complete)
+    return _select_main_cli_failure_diagnostic(
+        invocation.stderr, truncated=invocation.stderr_truncated
+    )
 
 
 def _main_cli_failure_diagnostic(stderr: str, *, truncated: bool = False) -> str:
@@ -2267,9 +2350,7 @@ def _complete_cli_error_json(text: str, limit: int) -> str | None:
 
 def _failure_diagnostic(invocation: CodexInvocationResult) -> str:
     code = AgentErrorCode.TIMEOUT if invocation.timed_out else _recognized_cli_failure(invocation)
-    complete = _select_main_cli_failure_diagnostic(
-        invocation.stderr, truncated=invocation.stderr_truncated
-    ).complete
+    complete = _invocation_main_cli_failure(invocation).complete
     cause = (
         "LEASE_AUTHORITY_UNCONFIRMED"
         if invocation.execution_abort_reason is not None
@@ -2278,7 +2359,8 @@ def _failure_diagnostic(invocation: CodexInvocationResult) -> str:
         else "INTERRUPTED"
         if invocation.returncode < 0
         else "UNKNOWN_EXIT_TRUNCATED"
-        if invocation.stderr_truncated or len(invocation.stderr) > _STREAM_LIMIT
+        if _native_json_failure(invocation) is None
+        and (invocation.stderr_truncated or len(invocation.stderr) > _STREAM_LIMIT)
         else "UNKNOWN_EXIT_INCOMPLETE_DIAGNOSTIC"
         if not complete
         else "UNKNOWN_EXIT"
@@ -2306,6 +2388,13 @@ def _safe_cli_failure_detail(
         # Normalization can change the configured value itself. Preserve only
         # metadata when its exact reconstruction cannot be safely redacted.
         return unavailable
+    event = _native_json_failure(invocation)
+    if event is not None:
+        return (
+            safe_diagnostic(event.message, limit=500, exact_secret=proxy_key)
+            if event.message
+            else unavailable
+        )
     if invocation.stderr_truncated or len(invocation.stderr) > _STREAM_LIMIT:
         return unavailable
     original = _select_main_cli_failure_diagnostic(invocation.stderr)

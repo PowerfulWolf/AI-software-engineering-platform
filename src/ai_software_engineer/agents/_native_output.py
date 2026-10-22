@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass, field
 from typing import IO, cast
 
+from ai_software_engineer.agents._codex_events import CodexJsonEventObserver, CodexJsonFailure
+
 _STREAM_LIMIT = 1_000_000
 _READ_BYTES = 64 * 1024
 
@@ -55,7 +57,14 @@ class _NativeOutputDrain:
     closing this local selector or either local pipe is never completion proof.
     """
 
-    def __init__(self, stdout: IO[bytes], stderr: IO[bytes]) -> None:
+    def __init__(
+        self,
+        stdout: IO[bytes],
+        stderr: IO[bytes],
+        *,
+        codex_events: CodexJsonEventObserver | None = None,
+    ) -> None:
+        self._codex_events = codex_events
         self._selector = selectors.DefaultSelector()
         try:
             self._stdout, self._stderr = _Stream(stdout), _Stream(stderr)
@@ -87,6 +96,11 @@ class _NativeOutputDrain:
                     data = os.read(key.fd, _READ_BYTES)
                 except BlockingIOError:
                     continue
+                if stream is self._stdout and self._codex_events is not None:
+                    if data:
+                        self._codex_events.feed(data)
+                    else:
+                        self._codex_events.finish()
                 stream.text.append(stream.decoder.decode(data, final=not data))
                 if not data:
                     self._selector.unregister(stream.pipe)
@@ -96,6 +110,12 @@ class _NativeOutputDrain:
         if self._pending:
             raise OSError("native output has not reached EOF")
         return self._stdout.text.value(), self._stderr.text.value()
+
+    @property
+    def native_failure(self) -> CodexJsonFailure | None:
+        if self._pending:
+            raise OSError("native output has not reached EOF")
+        return self._codex_events.result() if self._codex_events is not None else None
 
     @property
     def stderr_truncated(self) -> bool:

@@ -410,7 +410,7 @@ def test_cli_transcript_is_not_provider_failure_evidence(
         (504, AgentErrorCode.PROVIDER_UNAVAILABLE),
     ],
 )
-def test_cli_json_provider_events_are_classified(
+def test_unobserved_stdout_json_cannot_supply_provider_event_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     timed_out: bool,
@@ -430,8 +430,15 @@ def test_cli_json_provider_events_are_classified(
     client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
     with pytest.raises(StructuredModelError) as raised:
         client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
-    assert raised.value.code is expected
-    assert raised.value.retryable is (status not in {401, 403})
+    # Plain injected stdout has no live complete-byte observation. It cannot
+    # select provider facts, including when a local watchdog supplies the result.
+    if timed_out:
+        assert raised.value.code is AgentErrorCode.TIMEOUT
+        assert raised.value.timeout_kind == "local_execution_limit"
+        assert not raised.value.retryable
+    else:
+        assert raised.value.code is AgentErrorCode.PROVIDER_UNAVAILABLE
+        assert raised.value.retryable
 
 
 def test_cli_json_model_text_is_not_a_provider_event(

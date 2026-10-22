@@ -5,7 +5,9 @@ import subprocess
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
+from ai_software_engineer.agents._codex_events import CodexEventClassifier
 from ai_software_engineer.agents.codex_cli import (
     CodexCliError,
     CodexExecutionUnconfirmed,
@@ -26,6 +28,36 @@ from ai_software_engineer.agents.structured_observation import (
 )
 
 
+class _StructuredCommandResult(subprocess.CompletedProcess[str]):
+    def __init__(self, argv: tuple[str, ...], invocation: CodexInvocationResult) -> None:
+        super().__init__(argv, invocation.returncode, invocation.stdout, invocation.stderr)
+        self.invocation = invocation
+
+
+class _StructuredCommandTimeout(subprocess.TimeoutExpired):
+    def __init__(
+        self,
+        argv: tuple[str, ...],
+        timeout: int,
+        invocation: CodexInvocationResult,
+    ) -> None:
+        super().__init__(argv, timeout, output=invocation.stdout, stderr=invocation.stderr)
+        self.invocation = invocation
+
+
+def structured_native_invocation(
+    outcome: subprocess.CompletedProcess[str] | subprocess.TimeoutExpired,
+) -> CodexInvocationResult | None:
+    return (
+        outcome.invocation
+        if isinstance(
+            outcome,
+            (_StructuredCommandResult, _StructuredCommandTimeout),
+        )
+        else None
+    )
+
+
 def run_structured_command(
     argv: tuple[str, ...],
     *,
@@ -36,6 +68,10 @@ def run_structured_command(
     text: bool,
     timeout: int,
     check: bool,
+    output_protocol: Literal["codex_json"] | None = None,
+    event_classifier: CodexEventClassifier | None = None,
+    diagnostic_secret: str | None = None,
+    diagnostic_secret_required: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     guard = current_execution_guard()
     if not capture_output or not text:
@@ -80,7 +116,14 @@ def run_structured_command(
             raise StructuredObservationRejected("结构化执行停止事实不一致; 暂停后续执行") from error
 
     try:
-        runner = SubprocessCodexCommandRunner(guard, process_kind="structured")
+        runner = SubprocessCodexCommandRunner(
+            guard,
+            process_kind="structured",
+            output_protocol=output_protocol,
+            event_classifier=event_classifier,
+            diagnostic_secret=diagnostic_secret,
+            diagnostic_secret_required=diagnostic_secret_required,
+        )
         if admission is None:
             result = runner.run(
                 argv, cwd=cwd, environment=env, stdin=input, timeout_seconds=timeout
@@ -124,9 +167,9 @@ def run_structured_command(
             transient=False,
         )
     if result.timed_out:
-        raise subprocess.TimeoutExpired(argv, timeout, output=result.stdout, stderr=result.stderr)
+        raise _StructuredCommandTimeout(argv, timeout, result)
     if check and result.returncode != 0:
         raise subprocess.CalledProcessError(
             result.returncode, argv, output=result.stdout, stderr=result.stderr
         )
-    return subprocess.CompletedProcess(argv, result.returncode, result.stdout, result.stderr)
+    return _StructuredCommandResult(argv, result)

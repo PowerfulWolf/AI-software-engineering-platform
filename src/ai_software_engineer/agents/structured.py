@@ -19,6 +19,7 @@ from typing import Literal, Protocol, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from ai_software_engineer.agents._codex_events import CodexEventClassification
 from ai_software_engineer.agents.diagnostics import (
     http_error_detail,
     provider_error_detail,
@@ -37,7 +38,10 @@ from ai_software_engineer.agents.openai_compatible import (
     HttpTransport,
     UrllibHttpTransport,
 )
-from ai_software_engineer.agents.structured_execution import run_structured_command
+from ai_software_engineer.agents.structured_execution import (
+    run_structured_command,
+    structured_native_invocation,
+)
 from ai_software_engineer.agents.structured_observation import (
     StructuredCallIdentity,
     StructuredExecutionAdmission,
@@ -446,9 +450,26 @@ class CodexCliStructuredModelClient:
                     text=True,
                     timeout=timeout_seconds,
                     check=False,
+                    output_protocol="codex_json",
+                    event_classifier=_classify_structured_json_failure,
+                    diagnostic_secret=(
+                        self._environment.get(self._proxy_api_key_env)
+                        if self._proxy_api_key_env is not None
+                        else None
+                    ),
+                    diagnostic_secret_required=self._proxy_api_key_env is not None,
                 )
             except subprocess.TimeoutExpired as error:
-                provider_failure = _timed_out_cli_provider_failure(error.stderr, error.output)
+                native = structured_native_invocation(error)
+                event = native.native_failure if native is not None else None
+                provider_failure = (
+                    (event.classification.code, event.classification.transient)
+                    if event is not None
+                    and event.classification.source == "structured"
+                    and event.classification.code is not None
+                    and event.classification.timeout_provider_failure
+                    else _timed_out_cli_provider_failure(error.stderr)
+                )
                 if provider_failure is not None:
                     code, transient = provider_failure
                     raise StructuredModelError(
@@ -474,8 +495,18 @@ class CodexCliStructuredModelClient:
                     transient=True,
                 ) from error
             if completed.returncode != 0:
-                diagnostic = _cli_failure_diagnostic(completed.stderr, completed.stdout)
-                code, transient = _classify_text_failure(diagnostic)
+                native = structured_native_invocation(completed)
+                event = native.native_failure if native is not None else None
+                diagnostic = _cli_failure_diagnostic(completed.stderr)
+                if (
+                    event is not None
+                    and event.classification.source == "structured"
+                    and event.classification.code is not None
+                ):
+                    code, transient = event.classification.code, event.classification.transient
+                    diagnostic = "Error: " + event.message if event.message else ""
+                else:
+                    code, transient = _classify_text_failure(diagnostic)
                 raise StructuredModelError(
                     code,
                     f"Codex CLI 执行失败(退出码 {completed.returncode}); "
@@ -888,7 +919,11 @@ def _provider_error_code(body: bytes) -> str | None:
 
 
 def _classify_text_failure(text: str) -> tuple[AgentErrorCode, bool]:
-    normalized = _cli_failure_diagnostic(text).lower()
+    return _classify_structured_main_failure(_cli_failure_diagnostic(text))
+
+
+def _classify_structured_main_failure(text: str) -> tuple[AgentErrorCode, bool]:
+    normalized = text.lower()
     quota_markers = ("insufficient_quota", "quota exceeded", "usage limit")
     if any(marker in normalized for marker in quota_markers):
         return AgentErrorCode.QUOTA_EXHAUSTED, True
@@ -913,11 +948,37 @@ def _classify_text_failure(text: str) -> tuple[AgentErrorCode, bool]:
 
 def _timed_out_cli_provider_failure(
     stderr: bytes | str | None,
-    stdout: bytes | str | None = None,
 ) -> tuple[AgentErrorCode, bool] | None:
     text = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr or ""
-    diagnostic = _cli_failure_diagnostic(text, stdout)
-    normalized = diagnostic.lower()
+    diagnostic = _cli_failure_diagnostic(text)
+    if _explicit_structured_provider_failure(diagnostic):
+        return _classify_text_failure(diagnostic)
+    return None
+
+
+def _classify_structured_json_failure(message: str) -> CodexEventClassification:
+    if re.match(
+        r"^(?:error\s*:\s*)?(?:(?:mcp|rmcp)(?:::|:|\s)|tool\s+server\b)",
+        message.strip(),
+        re.IGNORECASE,
+    ):
+        return CodexEventClassification(
+            source="structured",
+            code=AgentErrorCode.PROVIDER_UNAVAILABLE,
+            transient=True,
+            main_error=False,
+        )
+    code, transient = _classify_structured_main_failure(message)
+    return CodexEventClassification(
+        source="structured",
+        code=code,
+        transient=transient,
+        timeout_provider_failure=_explicit_structured_provider_failure(message),
+    )
+
+
+def _explicit_structured_provider_failure(text: str) -> bool:
+    normalized = text.lower()
     explicit = (
         "insufficient_quota",
         "quota exceeded",
@@ -934,32 +995,14 @@ def _timed_out_cli_provider_failure(
         "network error",
         "service unavailable",
     )
-    if any(marker in normalized for marker in explicit) or re.search(
-        r"\b(?:401|403|408|429|500|502|503|504)\b", normalized
-    ):
-        return _classify_text_failure(diagnostic)
-    return None
+    return any(marker in normalized for marker in explicit) or bool(
+        re.search(r"\b(?:401|403|408|429|500|502|503|504)\b", normalized)
+    )
 
 
-def _cli_failure_diagnostic(stderr: str, stdout: bytes | str | None = None) -> str:
+def _cli_failure_diagnostic(stderr: str) -> str:
     """Read CLI error events, never model/tool items or arbitrary transcript prose."""
-    output = stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else stdout or ""
-    for line in reversed(output[-1_000_000:].splitlines()):
-        if len(line) > 64_000:
-            continue
-        try:
-            event = json.loads(line)
-        except (ValueError, RecursionError):
-            continue
-        if not isinstance(event, dict):
-            continue
-        detail = (
-            event
-            if event.get("type") == "error"
-            else (event.get("error") if event.get("type") == "turn.failed" else None)
-        )
-        if isinstance(detail, dict) and isinstance(detail.get("message"), str):
-            return "Error: " + safe_diagnostic(detail["message"])
+    # Only the live raw-stream observer can supply stdout event authority.
     for line in reversed(stderr.splitlines()):
         cleaned = safe_diagnostic(line)
         if re.match(r"^(?:error|fatal)(?:\s|:|\[)", cleaned, re.IGNORECASE) or re.fullmatch(
