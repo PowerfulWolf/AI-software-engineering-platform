@@ -10,6 +10,7 @@ from typing import cast
 
 import pytest
 
+import ai_software_engineer.knowledge.agents as knowledge_agents
 from ai_software_engineer.agents.execution import NativeProcessStop
 from ai_software_engineer.agents.models import AgentErrorCode
 from ai_software_engineer.agents.openai_compatible import HttpResponse
@@ -26,6 +27,7 @@ from ai_software_engineer.agents.structured_observation import (
     StructuredExecutionAdmission,
     StructuredHttpRoundTripReceipt,
     StructuredNativeStopReceipt,
+    structured_request_digest,
 )
 from ai_software_engineer.context import (
     ContextBundle,
@@ -45,7 +47,9 @@ from ai_software_engineer.knowledge.assessment_rejection import (
     read_rejected_assessment,
 )
 from ai_software_engineer.knowledge.assessment_validation import (
+    KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
     KnowledgeAssessment,
+    assessment_output_schema,
     assessment_rejection_reason,
 )
 from ai_software_engineer.knowledge.claim_identity import claim_identity_sha256
@@ -942,3 +946,60 @@ def test_http_fallback_never_hides_unknown_native_session(
     with pytest.raises(KnowledgeError, match="EXECUTION_UNKNOWN"):
         derive_rejected_assessment(case.records.root, case.bound)
     assert _bytes(case.root) == before
+
+
+@pytest.mark.parametrize("legacy_static", [False, True], ids=["exact-read", "legacy-static"])
+def test_both_exact_request_formats_preserve_rejected_output_and_historical_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_static: bool
+) -> None:
+    with monkeypatch.context() as emitter:
+        if legacy_static:
+            emitter.setattr(
+                knowledge_agents,
+                "assessment_output_schema",
+                lambda citations: KnowledgeAssessment.model_json_schema(),
+            )
+        case = _http_rejection(tmp_path, assessment_fallback=False)
+    outcome = case.lane.get(
+        "knowledge-invocation-outcomes",
+        case.bound.run_id + ":assessment",
+        KnowledgeInvocationOutcome,
+    )
+    original = _bytes(case.root)
+    evidence = [
+        case.records.get("operations", case.bound.run_id + ":" + key, KnowledgeEvidence).to_wire()
+        for key in ("search_000", "read_000_000")
+    ]
+    payload = {
+        "binding": case.bound.to_wire(),
+        "task": {
+            "task": case.task.to_wire(),
+            "context": case.context.to_wire(),
+            "design_rechecks": [],
+            "approved_knowledge_resolutions": [],
+        },
+        "knowledge_evidence": evidence,
+    }
+    legacy_digest = structured_request_digest(
+        instructions=KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
+        input_payload=payload,
+        output_schema=KnowledgeAssessment.model_json_schema(),
+        timeout_seconds=5,
+    )
+    exact_digest = structured_request_digest(
+        instructions=KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
+        input_payload=payload,
+        output_schema=assessment_output_schema(case.observation.manifest.citations),
+        timeout_seconds=5,
+    )
+    assert legacy_digest != exact_digest
+    assert outcome.intent.request_sha256 == (legacy_digest if legacy_static else exact_digest)
+    assert outcome.result is not None
+    assert outcome.state == "RETURNED" and outcome.result.payload["status"] == "GAP"
+    assert case.observation.reason == "CLAIM_WITHOUT_READ"
+    assert derive_rejected_assessment(case.records.root, case.bound) == case.observation
+    assert (
+        read_historical_rejected_assessment(case.records.root, case.observation.observation_sha256)
+        == case.observation
+    )
+    assert _bytes(case.root) == original

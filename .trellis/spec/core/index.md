@@ -38,6 +38,8 @@
 
 ## Files
 
+- [Exact knowledge assessment citations](exact-knowledge-citations.md): complete READ object transport constraints and exact historical request compatibility.
+
 - [HTTP knowledge rejection recovery](http-knowledge-rejection-recovery.md): exact route-aware
   completion, legacy generic-wait proof, current accepted-progress inventory and same-Task recovery.
 

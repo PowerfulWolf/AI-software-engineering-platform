@@ -1,6 +1,7 @@
 """Pure assessment semantics shared by online consultation and exact recovery reads."""
 
-from typing import Annotated, Literal
+from copy import deepcopy
+from typing import Annotated, Literal, cast
 
 from pydantic import Field
 
@@ -9,8 +10,10 @@ from ai_software_engineer.knowledge.gaps import KnowledgeClaim
 from ai_software_engineer.knowledge.models import (
     BoundedText,
     Digest,
+    KnowledgeCitation,
     KnowledgeRunBinding,
     KnowledgeRunManifest,
+    digest,
 )
 from ai_software_engineer.redaction import redact_text
 
@@ -29,6 +32,35 @@ class KnowledgeAssessment(DomainModel):
     gap_question: BoundedText | None = None
     gap_reason: Literal["MISSING", "CONFLICT", "STALE", "UNVERIFIABLE"] = "MISSING"
     gap_owner: Literal["HUMAN", "REPOSITORY"] = "HUMAN"
+
+
+def assessment_output_schema(citations: tuple[KnowledgeCitation, ...]) -> dict[str, object]:
+    """Constrain future model output to complete citations actually READ in this Run.
+
+    Keep the static domain schema unchanged so old requests and stored results retain
+    their original wire contract. Complete-object alternatives prevent field splicing.
+    """
+    schema = KnowledgeAssessment.model_json_schema()
+    if not citations:
+        properties = cast(dict[str, object], schema["properties"])
+        claims = cast(dict[str, object], properties["claims"])
+        claims["maxItems"] = 0
+        return schema
+    unique: dict[str, KnowledgeCitation] = {}
+    for citation in citations:
+        unique.setdefault(digest(citation.to_wire()), citation)
+    base = KnowledgeCitation.model_json_schema()
+    alternatives: list[dict[str, object]] = []
+    for citation in unique.values():
+        exact = deepcopy(base)
+        properties = cast(dict[str, object], exact["properties"])
+        for name, value in citation.to_wire().items():
+            property_schema = cast(dict[str, object], properties[name])
+            property_schema["const"] = value
+        alternatives.append(exact)
+    definitions = cast(dict[str, object], schema["$defs"])
+    definitions["KnowledgeCitation"] = {"anyOf": alternatives}
+    return schema
 
 
 class KnowledgeConsultationInput(DomainModel):

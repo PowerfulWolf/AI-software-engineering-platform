@@ -27,6 +27,7 @@ from ai_software_engineer.knowledge.assessment_rejection import (
 from ai_software_engineer.knowledge.assessment_validation import (
     KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
     KNOWLEDGE_INTENT_INSTRUCTIONS,
+    assessment_output_schema,
     assessment_rejection_reason,
 )
 from ai_software_engineer.knowledge.assessment_validation import (
@@ -339,6 +340,7 @@ class KnowledgeConsultationService:
                         )
                     ).to_wire()
                 )
+        manifest = skills.manifest()
         if intent.queries:
             assessment = KnowledgeAssessment.model_validate(
                 self._call(
@@ -350,13 +352,12 @@ class KnowledgeConsultationService:
                         "task": consultation_payload,
                         "knowledge_evidence": evidence,
                     },
-                    output_schema=KnowledgeAssessment.model_json_schema(),
+                    output_schema=assessment_output_schema(manifest.citations),
                     timeout_seconds=timeout_seconds,
                 ).payload
             )
         else:
             assessment = KnowledgeAssessment(status="SUFFICIENT")
-        manifest = skills.manifest()
         rejection = assessment_rejection_reason(assessment, manifest)
         if rejection is not None:
             observation = None

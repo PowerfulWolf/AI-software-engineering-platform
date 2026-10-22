@@ -27,6 +27,7 @@ from ai_software_engineer.knowledge.assessment_validation import (
     KnowledgeAssessment,
     KnowledgeConsultationInput,
     KnowledgeIntent,
+    assessment_output_schema,
     assessment_rejection_reason,
 )
 from ai_software_engineer.knowledge.claim_identity import claim_identity_sha256
@@ -422,6 +423,7 @@ def _require_requests(
     intent_outcome: KnowledgeInvocationOutcome,
     assessment_outcome: KnowledgeInvocationOutcome,
     evidence: tuple[KnowledgeEvidence, ...],
+    manifest: KnowledgeRunManifest,
 ) -> None:
     payload = _request_payload(records, binding, input_sha256)
     snapshot = records.get("snapshots", binding.snapshot_sha256, KnowledgeSnapshot)
@@ -439,19 +441,25 @@ def _require_requests(
         output_schema=KnowledgeIntent.model_json_schema(),
         timeout_seconds=intent_outcome.intent.timeout_seconds,
     )
-    assessment_request_sha = structured_request_digest(
-        instructions=KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
-        input_payload={
-            "binding": binding.to_wire(),
-            "task": payload,
-            "knowledge_evidence": [item.to_wire() for item in evidence],
-        },
-        output_schema=KnowledgeAssessment.model_json_schema(),
-        timeout_seconds=assessment_outcome.intent.timeout_seconds,
-    )
+    assessment_request_shas = {
+        structured_request_digest(
+            instructions=KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
+            input_payload={
+                "binding": binding.to_wire(),
+                "task": payload,
+                "knowledge_evidence": [item.to_wire() for item in evidence],
+            },
+            output_schema=schema,
+            timeout_seconds=assessment_outcome.intent.timeout_seconds,
+        )
+        for schema in (
+            KnowledgeAssessment.model_json_schema(),
+            assessment_output_schema(manifest.citations),
+        )
+    }
     if (
         intent_request_sha != intent_outcome.intent.request_sha256
-        or assessment_request_sha != assessment_outcome.intent.request_sha256
+        or assessment_outcome.intent.request_sha256 not in assessment_request_shas
     ):
         raise KnowledgeError("ASSESSMENT_REJECTION_REQUEST_CHANGED")
 
@@ -496,7 +504,13 @@ def _derive_rejected_assessment(
         raise KnowledgeError("ASSESSMENT_REJECTION_INPUT_CHANGED")
     manifest, evidence = _manifest(records, binding, intent)
     _require_requests(
-        records, binding, original_input.input_sha256, intent_outcome, assessment_outcome, evidence
+        records,
+        binding,
+        original_input.input_sha256,
+        intent_outcome,
+        assessment_outcome,
+        evidence,
+        manifest,
     )
     assessment = KnowledgeAssessment.model_validate(assessment_outcome.result.payload)
     reason = assessment_rejection_reason(assessment, manifest)
