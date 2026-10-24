@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import cast
 
+from ai_software_engineer.domain.artifact import SUPPORTED_ARTIFACT_SCHEMA_VERSION
+
 
 def strict_output_schema(schema: Mapping[str, object]) -> dict[str, object]:
     """Copy a schema and require every declared object property recursively.
@@ -46,4 +48,24 @@ def _normalize(value: object) -> object:
     return value
 
 
-__all__ = ["bind_coder_progress_sequence", "strict_output_schema"]
+__all__ = ["bind_artifact_schema_version", "bind_coder_progress_sequence", "strict_output_schema"]
+
+
+def bind_artifact_schema_version(schema: dict[str, object]) -> None:
+    """Constrain generated live transport schemas, leaving historical models unchanged."""
+
+    def bind(value: object) -> None:
+        if isinstance(value, dict):
+            properties = value.get("properties")
+            if isinstance(properties, dict) and "schema_version" in properties:
+                properties["schema_version"] = {
+                    "type": "string",
+                    "const": SUPPORTED_ARTIFACT_SCHEMA_VERSION,
+                }
+            for child in value.values():
+                bind(child)
+        elif isinstance(value, list):
+            for child in value:
+                bind(child)
+
+    bind(schema)

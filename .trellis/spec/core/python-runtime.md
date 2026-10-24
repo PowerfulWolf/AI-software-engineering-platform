@@ -2318,3 +2318,34 @@ result.checkpoint.validate_integrity()
 ```
 
 runtime 以 immutable checkpoint 和可信 port 隔离模型推理、用户决定、项目政策与 durable state。
+
+### Live Artifact versions and historical decoding (2026-10-25)
+
+`domain.artifact.SUPPORTED_ARTIFACT_SCHEMA_VERSION` and
+`validate_current_artifact_version(artifact)` own current version admission. The immutable
+store's `SUPPORTED_SCHEMA_VERSION` remains an alias. Typed historical decoding keeps its
+version syntax so a rejected SUCCEEDED outcome can still be read without changing its hash.
+`AgentResult.validate_current_output()` rejects unsupported versions as a derived
+nontransient INVALID_OUTPUT result; it never mutates the original. Generic orchestration
+must perform this gate before fresh outcome/publication, including replay admission.
+
+Codex and Responses must admit the version before CandidateCommitSkill can create a candidate.
+Provider schemas produced by `bind_artifact_schema_version` constrain all four role envelope
+versions to const v0.1. A provider schema is guidance, so actual decoded output must still be
+checked. Do not fix an old report by editing its schema_version or reclassifying a sealed
+SUCCEEDED result. A successful invocation, a Git candidate and an accepted implementation
+report are distinct facts.
+
+| Input / boundary | Required result |
+| --- | --- |
+| Current supported v0.1 | Normal identity, permissions and lineage checks |
+| Dirty provisional v1.0/v0.2 at adapter | INVALID_OUTPUT, no new candidate/index change, full draft retained |
+| Generic adapter or replay unsupported version | Derived INVALID_OUTPUT before publication; no rewritten old outcome |
+| Historical intact unsupported SUCCEEDED | Decode/hash unchanged; current admission rejects |
+| Already committed but unaccepted unsupported candidate | Separate exact engineering recovery; no silent artifact repair |
+
+Regression modules: tests/agents/test_codex_cli.py and test_responses.py exercise actual Git
+finalization; test_codex_provider_contract.py checks each role/transport; test_fake.py checks
+historical roundtrip; tests/orchestration/test_progress_output_contract.py checks live/replay
+publication. Existing INVALID_OUTPUT failure control must retain the Task checkpoint, durably
+wait and release the lease. No DDL or direct production SQL update is needed for this gate.

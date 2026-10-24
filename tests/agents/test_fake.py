@@ -433,3 +433,31 @@ def test_agent_result_rejects_invalid_state_combinations(
             error=error,
             duration_ms=0,
         )
+
+
+@pytest.mark.parametrize("role", list(AgentRole))
+def test_unsupported_historical_version_remains_readable_but_cannot_be_admitted(
+    role: AgentRole,
+) -> None:
+    request = _request(role)
+    templates: dict[AgentRole, Artifact] = {
+        AgentRole.ORCHESTRATOR: make_plan_artifact(),
+        AgentRole.CODER: make_implementation_artifact(),
+        AgentRole.QA: make_qa_artifact(),
+        AgentRole.REVIEWER: make_review_artifact(),
+    }
+    artifact = _align(templates[role], request).model_copy(update={"schema_version": "v1.0"})
+    historical = AgentResult(
+        run_id=request.run_id,
+        task_id=request.task_id,
+        role=role,
+        attempt=request.attempt,
+        source_revision=request.source_revision,
+        context_manifest_id=request.context_manifest_id,
+        status=AgentRunStatus.SUCCEEDED,
+        artifact=artifact,
+    ).to_wire()
+    restored = AgentResult.model_validate(historical)
+    with pytest.raises(ValueError, match="schema_version"):
+        restored.validate_current_output()
+    assert restored.to_wire() == historical

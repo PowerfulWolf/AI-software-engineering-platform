@@ -13,6 +13,7 @@ from ai_software_engineer.domain.artifact import (
     CoderProgressArtifact,
     ImplementationReportArtifact,
     Sha256,
+    validate_current_artifact_version,
 )
 from ai_software_engineer.domain.enums import AgentRole, ArtifactKind
 from ai_software_engineer.domain.execution_baseline import FullGitRevision
@@ -249,6 +250,11 @@ class AgentResult(DomainModel):
 
     def validate_current_output(self) -> None:
         """Validate live acceptance without invalidating immutable historical records."""
+        if self.status is AgentRunStatus.SUCCEEDED and self.artifact is not None:
+            try:
+                validate_current_artifact_version(self.artifact)
+            except ValueError as error:
+                raise AgentOutputContractError(self, message=str(error)) from error
         if (
             self.status is AgentRunStatus.SUCCEEDED
             and isinstance(self.artifact, CoderProgressArtifact)
@@ -260,10 +266,14 @@ class AgentResult(DomainModel):
 class AgentOutputContractError(ValueError):
     """An intact recorded result is not a valid output for current execution."""
 
-    def __init__(self, result: AgentResult) -> None:
-        message = (
+    def __init__(
+        self,
+        result: AgentResult,
+        *,
+        message: str = (
             "开发检查点 checkpoint_sequence 必须等于本次执行 attempt; 产出未被接纳, 开发文件保留。"
-        )
+        ),
+    ) -> None:
         self.result = result.model_copy(
             update={
                 "status": AgentRunStatus.FAILED,

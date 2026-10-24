@@ -13,6 +13,9 @@ from pydantic import TypeAdapter, ValidationError
 
 from ai_software_engineer.artifacts.ports import ArtifactRef
 from ai_software_engineer.domain.artifact import (
+    SUPPORTED_ARTIFACT_SCHEMA_VERSION as SUPPORTED_SCHEMA_VERSION,
+)
+from ai_software_engineer.domain.artifact import (
     Artifact,
     ArtifactId,
     ArtifactIntegrity,
@@ -23,7 +26,6 @@ from ai_software_engineer.domain.enums import ArtifactKind
 from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.domain.task import TaskId
 
-SUPPORTED_SCHEMA_VERSION: Final = "v0.1"
 _ARTIFACT_ID_ADAPTER: Final[TypeAdapter[ArtifactId]] = TypeAdapter(ArtifactId)
 
 

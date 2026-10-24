@@ -28,6 +28,7 @@ from ai_software_engineer.agents.execution import (
     execution_scope,
 )
 from ai_software_engineer.agents.json_schema import (
+    bind_artifact_schema_version,
     bind_coder_progress_sequence,
     strict_output_schema,
 )
@@ -735,6 +736,19 @@ class ResponsesAgentAdapter:
                     request, self._workspace_root, before=window.before
                 )
             window.remaining()
+            result = AgentResult(
+                run_id=request.run_id,
+                task_id=request.task_id,
+                role=request.role,
+                attempt=request.attempt,
+                source_revision=request.source_revision,
+                context_manifest_id=request.context_manifest_id,
+                status=AgentRunStatus.SUCCEEDED,
+                artifact=artifact,
+                usage=latest_usage,
+                duration_ms=_elapsed_ms(started),
+            )
+            result.validate_current_output()
             with execution_scope(self._execution_guard):
                 artifact = _finalize_coder_candidate(
                     request,
@@ -750,17 +764,8 @@ class ResponsesAgentAdapter:
                     self._candidate_commit,
                 )
             window.remaining()
-            result = AgentResult(
-                run_id=request.run_id,
-                task_id=request.task_id,
-                role=request.role,
-                attempt=request.attempt,
-                source_revision=request.source_revision,
-                context_manifest_id=request.context_manifest_id,
-                status=AgentRunStatus.SUCCEEDED,
-                artifact=artifact,
-                usage=latest_usage,
-                duration_ms=_elapsed_ms(started),
+            result = result.model_copy(
+                update={"artifact": artifact, "duration_ms": _elapsed_ms(started)}
             )
             result.validate_current_output()
             return result
@@ -984,6 +989,7 @@ def _artifact_schema(role: AgentRole, *, attempt: int | None = None) -> dict[str
     else:
         schema = ReviewReportArtifact.model_json_schema()
     normalized = strict_output_schema(cast(dict[str, object], schema))
+    bind_artifact_schema_version(normalized)
     if role is AgentRole.CODER and attempt is not None:
         bind_coder_progress_sequence(normalized, attempt=attempt)
     definitions = cast(dict[str, object], normalized.pop("$defs", {}))

@@ -46,6 +46,7 @@ from ai_software_engineer.agents.execution import (
     execution_scope,
 )
 from ai_software_engineer.agents.json_schema import (
+    bind_artifact_schema_version,
     bind_coder_progress_sequence,
     strict_output_schema,
 )
@@ -90,6 +91,7 @@ from ai_software_engineer.domain.artifact import (
     CoderProgressArtifact,
     ImplementationReportArtifact,
     validate_artifact_payload,
+    validate_current_artifact_version,
 )
 from ai_software_engineer.domain.coder_work import (
     CoderSliceRejected,
@@ -1112,6 +1114,12 @@ class CodexCliAgentAdapter:
                 path=validation_path,
                 validation_rule=_validation_rule(error),
             ) from error
+        try:
+            validate_current_artifact_version(artifact)
+        except ValueError as error:
+            raise _CodexOutputContractError(
+                "SCHEMA_VERSION", raw_output, path="schema_version"
+            ) from error
         if artifact.kind not in ROLE_OUTPUTS[request.role]:
             raise _CodexOutputContractError(
                 "ROLE_CONTRACT",
@@ -1436,6 +1444,7 @@ def _artifact_schema(role: AgentRole, *, attempt: int | None = None) -> dict[str
     else:
         schema = ReviewReportArtifact.model_json_schema()
     normalized = strict_output_schema(cast(dict[str, object], schema))
+    bind_artifact_schema_version(normalized)
     if role is AgentRole.CODER and attempt is not None:
         bind_coder_progress_sequence(normalized, attempt=attempt)
     return normalized

@@ -1332,3 +1332,50 @@ def test_adapter_seals_real_stop_before_return_when_original_ownership_is_lost(
     finally:
         fixture.repository.close()
         os.close(descriptor)
+
+
+@pytest.mark.parametrize("schema_version", ["v0.2", "v1.0"])
+def test_unsupported_version_is_rejected_before_candidate_commit(
+    tmp_path: Path, schema_version: str
+) -> None:
+    root, base = _repository(tmp_path)
+    request = _coder_request().model_copy(update={"source_revision": base})
+
+    class UnsupportedVersionRunner(_DirtySuccessRunner):
+        def run(
+            self,
+            argv: tuple[str, ...],
+            *,
+            cwd: Path,
+            environment: Mapping[str, str],
+            stdin: str,
+            timeout_seconds: float,
+        ) -> CodexInvocationResult:
+            result = super().run(
+                argv,
+                cwd=cwd,
+                environment=environment,
+                stdin=stdin,
+                timeout_seconds=timeout_seconds,
+            )
+            output = Path(argv[argv.index("--output-last-message") + 1])
+            payload = json.loads(output.read_text())
+            payload["artifact"]["schema_version"] = schema_version
+            output.write_text(json.dumps(payload))
+            return result
+
+    result = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="fixture",
+        agent_id="agent_coder_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=UnsupportedVersionRunner(request),
+    ).run(request)
+    assert result.status is AgentRunStatus.FAILED and result.artifact is None
+    assert result.error is not None and result.error.code is AgentErrorCode.INVALID_OUTPUT
+    assert not result.error.transient
+    assert "schema_version" in result.error.message
+    assert _git(root, "rev-parse", "HEAD") == base
+    assert _git(root, "diff", "--cached", "--name-only") == ""
+    assert (root / "src/change.py").read_text() == "VALUE = 1\n"

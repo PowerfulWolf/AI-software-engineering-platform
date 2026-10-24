@@ -41,6 +41,8 @@ from ai_software_engineer.domain.model import (
 )
 from ai_software_engineer.domain.task import AcceptanceCriterionId, TaskId
 
+SUPPORTED_ARTIFACT_SCHEMA_VERSION: Final = "v0.1"
+
 ArtifactId = Annotated[str, StringConstraints(pattern=r"^art_[a-z0-9][a-z0-9_-]{2,63}$")]
 EvidenceId = Annotated[str, StringConstraints(pattern=r"^ev_[a-z0-9][a-z0-9_-]{2,63}$")]
 SchemaVersion = Annotated[str, StringConstraints(pattern=r"^v[0-9]+\.[0-9]+$")]
@@ -460,3 +462,9 @@ def validate_artifact(payload: object, kind: ArtifactKind) -> Artifact:
 def validate_artifact_payload(payload: object) -> Artifact:
     """Validate an Artifact without trusting an external expected-kind discriminator."""
     return _ARTIFACT_ADAPTER.validate_python(payload)
+
+
+def validate_current_artifact_version(artifact: Artifact) -> None:
+    """Admit live output separately from immutable historical decoding."""
+    if artifact.schema_version != SUPPORTED_ARTIFACT_SCHEMA_VERSION:
+        raise ValueError("Artifact schema_version 必须为平台支持的 v0.1; 产出未被接纳。")

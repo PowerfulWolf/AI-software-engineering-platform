@@ -24,13 +24,18 @@ from tests.work_queue.test_invocation_journal import _progress_result
 
 
 class _Adapter:
-    def __init__(self, sequence: int) -> None:
+    def __init__(self, sequence: int, version: str = "v0.1") -> None:
         self.sequence = sequence
+        self.version = version
         self.calls = 0
 
     def run(self, request: AgentRequest) -> AgentResult:
         self.calls += 1
-        return _progress_result(request, self.sequence)
+        result = _progress_result(request, self.sequence)
+        assert result.artifact is not None
+        return result.model_copy(
+            update={"artifact": result.artifact.model_copy(update={"schema_version": self.version})}
+        )
 
 
 class _InvocationControl:
@@ -113,3 +118,54 @@ def test_progress_acceptance_precedes_artifact_publication_and_preserves_replay(
         if mode == "live" and sequence != 4:
             assert invocation.completions[0].error is not None
             assert invocation.completions[0].error.code is AgentErrorCode.INVALID_OUTPUT
+
+
+@pytest.mark.parametrize("mode", ["live", "replay"])
+def test_unsupported_version_classifies_invalid_output_before_publication(
+    tmp_path: Path, mode: Literal["live", "replay"]
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    task = _task(root).model_copy(update={"status": TaskStatus.IMPLEMENTING, "attempts": 4})
+    artifacts = FileArtifactStore(tmp_path / "artifacts")
+    plan = seal_artifact(make_plan_artifact(), validated_at=_clock())
+    artifacts.put(plan)
+    adapter = _Adapter(4, "v1.0")
+
+    class Invocation(_InvocationControl):
+        def result(self, request: AgentRequest) -> AgentResult | None:
+            if self.mode == "live":
+                return None
+            return adapter.run(request)
+
+    invocation = Invocation(mode, 4)
+    with SqliteTaskRepository(tmp_path / "state.sqlite3") as repository:
+        repository.create(task)
+        runner = SerialOrchestrator(
+            repository=repository,
+            artifact_store=artifacts,
+            context_builder=FileRunContextBuilder(root),
+            agent_adapter=adapter,
+            agent_definitions=_definitions(),
+            identities=FixedIdentityFactory(),
+            clock=_clock,
+            invocation_control=invocation,
+        )
+        with pytest.raises(AgentRunFailed) as captured:
+            runner._run_agent(
+                task,
+                AgentRole.CODER,
+                attempt=4,
+                candidate_revision=None,
+                input_artifacts=(plan,),
+                expected_parents=("art_plan_001",),
+                seen_run_ids=set(),
+            )
+        result = captured.value.result
+        assert result.artifact is None
+        assert result.error is not None and result.error.code is AgentErrorCode.INVALID_OUTPUT
+        assert not result.error.transient and "schema_version" in result.error.message
+        assert artifacts.list_for_task(task.id) == (plan,)
+        assert len(invocation.completions) == int(mode == "live")
+        if mode == "live":
+            assert invocation.completions[0] == result

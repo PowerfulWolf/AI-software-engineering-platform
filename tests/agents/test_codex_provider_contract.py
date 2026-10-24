@@ -278,3 +278,33 @@ def test_json_body_must_be_complete_within_the_diagnostic_bound() -> None:
 )
 def test_incomplete_main_diagnostic_cannot_authorize_provider_fallback(stderr: str) -> None:
     assert _classify_cli_failure(CodexInvocationResult(returncode=1, stderr=stderr))[1] is False
+
+
+@pytest.mark.parametrize("role", list(AgentRole))
+@pytest.mark.parametrize("transport", ["codex", "responses"])
+def test_provider_artifact_versions_are_bound_to_the_supported_version(
+    role: AgentRole, transport: str
+) -> None:
+    from ai_software_engineer.agents.responses import _artifact_schema as responses_schema
+
+    schema = (_artifact_schema if transport == "codex" else responses_schema)(role)
+    versions: list[dict[str, object]] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            properties = value.get("properties")
+            if isinstance(properties, dict) and "schema_version" in properties:
+                versions.append(properties["schema_version"])
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    collect(schema)
+    assert versions
+    for version in versions:
+        validator = Draft202012Validator(version)
+        assert validator.is_valid("v0.1")
+        assert not validator.is_valid("v1.0")
+        assert not validator.is_valid("v0.2")

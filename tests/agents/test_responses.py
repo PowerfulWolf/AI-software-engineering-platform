@@ -539,3 +539,67 @@ def test_authentication_error_is_typed_and_safe(tmp_path: Path) -> None:
     assert result.error is not None
     assert result.error.code is AgentErrorCode.AUTHENTICATION_ERROR
     assert "secret" not in result.error.message
+
+
+def test_responses_unsupported_version_preserves_draft_without_candidate(tmp_path: Path) -> None:
+    root, base = _repository(tmp_path)
+    request, definition = _request(base)
+    template = make_implementation_artifact()
+    artifact = template.model_copy(
+        update={
+            "schema_version": "v1.0",
+            "task_id": request.task_id,
+            "source_revision": base,
+            "context_manifest_id": request.context_manifest_id,
+            "parent_artifact_ids": (),
+            "producer": template.producer.model_copy(update={"run_id": request.run_id}),
+            "content": template.content.model_copy(
+                update={
+                    "commit_sha": base,
+                    "changed_files": (
+                        ChangedFile(
+                            path="src/change.py",
+                            change=ChangeType.ADDED,
+                            lines_added=1,
+                            lines_deleted=0,
+                        ),
+                    ),
+                }
+            ),
+        }
+    )
+
+    class DirtyTransport:
+        def post(
+            self,
+            url: str,
+            headers: Mapping[str, str],
+            body: bytes,
+            timeout_seconds: float,
+        ) -> HttpResponse:
+            del url, headers, body, timeout_seconds
+            (root / "src/change.py").write_text("VALUE = 1\n")
+            return HttpResponse(
+                status_code=200,
+                body=json.dumps(
+                    {
+                        "output_text": json.dumps({"artifact": artifact.to_wire()}),
+                    }
+                ).encode(),
+            )
+
+    result = ResponsesAgentAdapter(
+        workspace_root=root,
+        endpoint="https://example.invalid/v1",
+        api_key="test-key",
+        model="model",
+        agent=definition,
+        prompt_builder=StaticPromptBuilder(),
+        transport=DirtyTransport(),
+    ).run(request)
+    assert result.status is AgentRunStatus.FAILED and result.artifact is None
+    assert result.error is not None and result.error.code is AgentErrorCode.INVALID_OUTPUT
+    assert not result.error.transient
+    assert _git(root, "rev-parse", "HEAD") == base
+    assert _git(root, "diff", "--cached", "--name-only") == ""
+    assert (root / "src/change.py").read_text() == "VALUE = 1\n"
