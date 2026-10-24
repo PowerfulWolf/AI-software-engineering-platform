@@ -149,3 +149,63 @@ proof, approval and Task. No direct SQL writes, source rebase, provider-restorat
 candidate or future independent QA/Review verdict is inferred from these maintenance checks.
 Stage1 still adds no production browser/live executor; actual browser and live A→B acceptance
 remain required after a real candidate. No automation or recurring task was created.
+
+## Actual release and original K1 public recovery (2026-10-24)
+
+Released maintenance commit `ff1d9c6339f980f5a2fe2c352b3554601d721dc4` by verified
+fast-forward to local/main and origin/main. Main checkout and maintenance worktree
+were clean. The official controlled service lifecycle drained Host PID34401,
+verified durable completion and its actual exit, then started Host PID52238 from
+released main. A sandbox-external status check confirmed the managed identity and
+normal operation admission. No force termination, lifecycle deletion or automation.
+The K1 target clone remains `5547815464a04991f50a2e0532d6f2f13d8daa69`.
+
+Fresh public preparation `operation_aca86164f0ced973d23f77a7d70ea2a0` SUCCEEDED with
+plan `3eeafbe15b9505437ca4e040c1148d4ebe3bfd415df9cda2c4c794843da584b9`.
+Independent read-only review validated typed operation/plan integrity, exact original
+failed invocation and approved lineage, all29 complete draft bodies/patches/original
+Git blobs, unchanged HEAD/index/branch, frozen permissions and complete2990-file
+inventory `85859671974fa3ffc9c7c8139c9154b58ef2818771a51801dded6ef265b9a54d`.
+The delegated engineering reference explicitly accepts unknown EOF cause and one
+ordinary-work debit (work2→3, execution3→4; frozen maxima10/40). It neither asserts
+provider restoration nor grants Schema/Trellis/AGENTS authority or future verdicts.
+Reviewed intent SHA `bed41d664132af9ad4eae940bf2202701267dd5eea263cfa97bd268e054dda01`.
+
+Public PAUSE `operation_2813aad3db58caf95fa341b66168eaaa` SUCCEEDED in111.943369s
+(request13:06:13.561110Z, updated13:08:05.504479Z). New binding
+`0a2fc13f342cf652fdc430e872aca8b99d7202ab176cbe21ce77603d6f6952ce`, sequence2,
+retains exact source/base, worktree/branch and identical before/after inventory.
+Latest public snapshot confirms old failed work closed, new exec4 WorkItem
+`work_0a2fc13f342cf652fdc430e872aca8b99d7202ab176cbe21ce77603d6f6952ce`
+WAITING_HUMAN without Agent/lease. Task stays IMPLEMENTING at revision2;
+Requirement checkpoint `bc9443b92968a6fbcf085bb574e9d24bf7a11bb3ad059a141bb8f94029c25f64`.
+Its exact paused disposition is
+`24e4c472050faad22b742fab19c50f6e7565524797120b7f42a04b53a958f8c6`.
+Actual browser read showed the same original K1 and retained-progress pause.
+
+存量数据处置：全部通过公开 typed Operation，不直接写 SQL、不重建 Requirement/Task、
+不重算历史预算，不删除旧失败/UNKNOWN、claim、proof、approval或草稿。上述 PAUSE
+不是候选或交付完成；须另行最新精确 RESUME，再新 claim/Run/Context 及独立 QA/Review。
+当前29份草稿仅覆盖基础采集账本/来源/位置/staging，生产接入、Console及实际 browser/live A→B
+仍未完成；两个计划验收文件尚不存在。保留全部验收要求，不以 Python 子集替代。
+
+Separate RESUME `operation_4ed19fa448e2edc24e96fe059192c0b7` was submitted through
+public typed API at13:14:36.360477Z after independent review of intent
+SHA `8b61f555fec223b2953f170fcec0c031924bc03bfd27c7195e01388a498ecda8`.
+The reviewer reopened actual persisted binding, latest disposition, complete current
+inventory and release code: one existing WorkItem is released; there is no second
+ordinary reservation. At13:18:17Z public summary showed the same exec4 WorkItem
+RUNNING with a fresh valid lease and heartbeat. Original Task revision2 and source
+remain unchanged; this is execution admission, not accepted code or a verdict.
+
+Actual knowledge intent began13:17:32.800839Z, independently decoded from the private
+read-only KnowledgeRecordStore with envelope and typed digest validation:
+Run `run_knowledge_f4c7c80c8433b3dffd17bb7ba30511e4`,
+Context `ctx_34b9a9bdc78011b6d4fe5a858264e967cd28679714f097672d53a77a53928412`,
+lease `lease_e2b810428daf6e84686d1fed`, intent
+`02ce5695f91e77cc1d92abdec37179e49ab3c31db7ab03c2a3187099ad8b727d`.
+At13:22:20Z heartbeat was valid and Coder remained in knowledge preparation;
+no current main invocation start existed at the preceding read. Actual browser
+showed original K1 in progress (1 active,0 blocked). The temporary browser tab
+was then closed. No assertion of model completion, candidate, QA/Review or
+Requirement DONE is made; continue active supervision through those real facts.
