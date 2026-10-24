@@ -98,7 +98,7 @@ class RedactedText:
 _MAX_INSPECTION_ENTRIES = 512
 _MAX_INSPECTION_BYTES = 16 * 1024 * 1024
 
-type _SourceInspectionKey = tuple[Literal["source", "patch"], str | None, str]
+type _SourceInspectionKey = tuple[Literal["source", "patch-source", "patch"], str | None, str]
 type _GenericInspectionKey = tuple[
     Literal["generic", "generic-body"], tuple[tuple[str, re.Pattern[str]], ...], str
 ]
@@ -170,6 +170,9 @@ class _SourceInspectionCache:
 _SOURCE_INSPECTION_CACHE: ContextVar[_SourceInspectionCache | None] = ContextVar(
     "source_inspection_cache", default=None
 )
+# A parseable hunk is still missing file-wide binding facts. Its pure detection
+# facts must never borrow the new complete-body runtime-handle classification.
+_PATCH_SOURCE_INSPECTION: ContextVar[bool] = ContextVar("patch_source_inspection", default=False)
 
 
 @contextmanager
@@ -240,7 +243,11 @@ def source_secret_occurrences(
 ) -> tuple[RedactionOccurrence, ...]:
     """Inspect complete source, reusing only pure facts within an explicit read scope."""
     cache = _SOURCE_INSPECTION_CACHE.get()
-    key: _SourceInspectionKey = ("source", source_path, content)
+    key: _SourceInspectionKey = (
+        "patch-source" if _PATCH_SOURCE_INSPECTION.get() else "source",
+        source_path,
+        content,
+    )
     if cache is not None and (found := cache.facts.get(key)) is not None:
         return found
     with _source_scan(cache):
@@ -287,6 +294,7 @@ def _source_stdlib_imports(tree: ast.Module) -> dict[str, tuple[str, str | None,
         "dataclasses": {"field"},
         "secrets": {"token_bytes", "token_hex", "token_urlsafe"},
         "urllib.parse": {"unquote"},
+        "contextvars": {"ContextVar"},
     }
     for statement in tree.body:
         if not isinstance(statement, (ast.Import, ast.ImportFrom)):
@@ -379,6 +387,18 @@ def _source_stdlib_imports(tree: ast.Module) -> dict[str, tuple[str, str | None,
                         continue
                     callee = parent
                 call = parents.get(callee)
+                if (
+                    module == "contextvars"
+                    and isinstance(call, ast.Subscript)
+                    and call.value is callee
+                ):
+                    declaration = parents.get(call)
+                    if (
+                        isinstance(declaration, ast.AnnAssign)
+                        and declaration.annotation is call
+                        and _source_type_reference(call)
+                    ):
+                        continue
                 if not isinstance(call, ast.Call) or call.func is not callee:
                     ambiguous.add(node.id)
         elif isinstance(node, ast.Import) and any(alias.name == "builtins" for alias in node.names):
@@ -395,7 +415,9 @@ def _source_stdlib_imports(tree: ast.Module) -> dict[str, tuple[str, str | None,
     return {name: binding for name, binding in allowed.items() if name not in ambiguous}
 
 
-def _source_url_decoder_has_reflection(nodes: tuple[ast.AST, ...]) -> bool:
+def _source_url_decoder_has_reflection(
+    nodes: tuple[ast.AST, ...], *, allow_resource_import: bool = False
+) -> bool:
     """Deny the new decoder proof at observed module/namespace mutation entrances."""
     reflective_modules = {"sys", "inspect", "importlib", "builtins", "operator", "_operator"}
     reflective_attributes = {
@@ -427,7 +449,16 @@ def _source_url_decoder_has_reflection(nodes: tuple[ast.AST, ...]) -> bool:
             isinstance(node, ast.ImportFrom)
             and node.module is not None
             and (
-                node.module.split(".")[0] in reflective_modules
+                (
+                    node.module.split(".")[0] in reflective_modules
+                    and not (
+                        allow_resource_import
+                        and node.module == "importlib.resources"
+                        and all(
+                            alias.name == "files" and alias.asname is None for alias in node.names
+                        )
+                    )
+                )
                 or node.module == "urllib"
                 or (
                     node.module == "urllib.parse"
@@ -542,11 +573,445 @@ def _source_proven_value(
     )
 
 
+def _source_runtime_handle_targets(
+    tree: ast.Module, imports: dict[str, tuple[str, str | None, int]]
+) -> frozenset[ast.Name]:
+    """Classify exact nonliteral runtime handles; never evaluate supplied source."""
+    nodes = tuple(ast.walk(tree))
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    if _source_url_decoder_has_reflection(nodes, allow_resource_import=True) or any(
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id in {"exec", "eval", "globals", "locals", "__import__", "__builtins__"}
+        for node in nodes
+    ):
+        return frozenset()
+    scope_types = (
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ClassDef,
+        ast.Lambda,
+        ast.ListComp,
+        ast.SetComp,
+        ast.DictComp,
+        ast.GeneratorExp,
+    )
+
+    def scope_of(node: ast.AST) -> ast.AST:
+        parent = parents.get(node)
+        while parent is not None and not isinstance(parent, scope_types):
+            parent = parents.get(parent)
+        return parent if parent is not None else tree
+
+    def unique_name(name: str, scope: ast.AST | None, target: ast.Name) -> bool:
+        for node in nodes:
+            if (
+                isinstance(node, ast.Name)
+                and node.id == name
+                and (scope is None or scope_of(node) is scope)
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+                and node is not target
+            ):
+                return False
+            if scope is not None and scope_of(node) is not scope:
+                continue
+            if (
+                (isinstance(node, ast.arg) and node.arg == name)
+                or (isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names)
+                or (
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                    and node.name == name
+                )
+                or (
+                    isinstance(node, ast.alias)
+                    and (node.name == "*" or (node.asname or node.name.split(".")[0]) == name)
+                )
+                or (
+                    isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar))
+                    and node.name == name
+                )
+                or (isinstance(node, ast.MatchMapping) and node.rest == name)
+            ):
+                return False
+        return True
+
+    def external_store_constructor(call: ast.expr | None) -> bool:
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+            return False
+        owner = scope_of(call)
+        if not isinstance(owner, ast.FunctionDef):
+            return False
+        positional = (*owner.args.posonlyargs, *owner.args.args)
+        required = {
+            argument.arg for argument in positional[: len(positional) - len(owner.args.defaults)]
+        } | {
+            argument.arg
+            for argument, default in zip(owner.args.kwonlyargs, owner.args.kw_defaults, strict=True)
+            if default is None
+        }
+
+        def reference(value: ast.expr) -> bool:
+            root = value
+            while isinstance(root, ast.Attribute) and not root.attr.startswith("_"):
+                root = root.value
+            return (
+                isinstance(root, ast.Name)
+                and root.id in required
+                and not any(
+                    isinstance(node, ast.Name)
+                    and node.id == root.id
+                    and isinstance(node.ctx, (ast.Store, ast.Del))
+                    and scope_of(node) is owner
+                    for node in nodes
+                )
+            )
+
+        def constructor_input(value: ast.expr) -> bool:
+            if reference(value):
+                return True
+            if not (
+                isinstance(value, ast.BinOp)
+                and isinstance(value.op, ast.Div)
+                and isinstance(value.right, ast.Constant)
+                and isinstance(value.right.value, str)
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", value.right.value)
+                and not redact_text(value.right.value).occurrences
+            ):
+                return False
+            return (
+                isinstance(value.left, ast.Attribute)
+                and value.left.attr == "root"
+                and reference(value.left)
+            ) or (isinstance(value.left, ast.BinOp) and constructor_input(value.left))
+
+        if not all(constructor_input(argument) for argument in call.args) or any(
+            keyword.arg is None or not constructor_input(keyword.value) for keyword in call.keywords
+        ):
+            return False
+        name = call.func.id
+        aliases = [
+            alias
+            for statement in tree.body
+            if isinstance(statement, ast.ImportFrom)
+            and statement.level == 0
+            and statement.lineno < call.lineno
+            for alias in statement.names
+            if alias.name == name and alias.asname is None
+        ]
+        if len(aliases) != 1:
+            return False
+        for node in nodes:
+            if (
+                (isinstance(node, ast.Name) and node.id == name)
+                and not (
+                    isinstance(node.ctx, ast.Load)
+                    and isinstance(parent := parents.get(node), ast.Call)
+                    and parent.func is node
+                )
+            ) or (
+                (isinstance(node, ast.arg) and node.arg == name)
+                or (
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                    and node.name == name
+                )
+                or (
+                    isinstance(node, ast.alias)
+                    and node is not aliases[0]
+                    and (node.name == "*" or (node.asname or node.name.split(".")[0]) == name)
+                )
+            ):
+                return False
+        return True
+
+    def unambiguous_store(scope: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        initializers = 0
+        for node in nodes:
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in {"claim", "store"}
+            ) or (
+                isinstance(node, ast.Name)
+                and node.id in {"claim", "store"}
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            ):
+                return False
+            if not isinstance(node, ast.Attribute):
+                continue
+            if node.attr == "claim" and isinstance(node.ctx, (ast.Store, ast.Del)):
+                return False
+            if not (
+                node.attr == "store"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "self"
+            ):
+                continue
+            parent = parents.get(node)
+            if isinstance(node.ctx, ast.Load):
+                if not (isinstance(parent, ast.Attribute) and parent.value is node):
+                    return False
+                continue
+            owner = scope_of(node)
+            if not (
+                isinstance(node.ctx, ast.Store)
+                and isinstance(parent, ast.Assign)
+                and parent.targets == [node]
+                and isinstance(owner, ast.FunctionDef)
+                and owner.name == "__init__"
+                and scope_of(owner) is scope_of(scope)
+                and parent in owner.body
+                and external_store_constructor(parent.value)
+            ):
+                return False
+            initializers += 1
+        return initializers <= 1
+
+    context_imports = {
+        name: binding for name, binding in imports.items() if binding[0] == "contextvars"
+    }
+    # A second module alias can mutate a constructor through another spelling.
+    for node in nodes:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            aliases = [
+                alias
+                for alias in node.names
+                if (
+                    (isinstance(node, ast.Import) and alias.name == "contextvars")
+                    or (isinstance(node, ast.ImportFrom) and node.module == "contextvars")
+                )
+            ]
+            if aliases and any(
+                (alias.asname or alias.name) not in context_imports for alias in aliases
+            ):
+                context_imports.clear()
+                break
+    instances: dict[str, int] = {}
+    for statement in tree.body:
+        if not isinstance(statement, (ast.Assign, ast.AnnAssign)) or not isinstance(
+            statement.value, ast.Call
+        ):
+            continue
+        target = (
+            statement.target
+            if isinstance(statement, ast.AnnAssign)
+            else statement.targets[0]
+            if len(statement.targets) == 1
+            else None
+        )
+        call = statement.value
+        if not isinstance(target, ast.Name) or not unique_name(target.id, None, target):
+            continue
+        callee = call.func
+        imported = context_imports.get(callee.id) if isinstance(callee, ast.Name) else None
+        if (
+            isinstance(callee, ast.Attribute)
+            and isinstance(callee.value, ast.Name)
+            and callee.attr == "ContextVar"
+        ):
+            module = context_imports.get(callee.value.id)
+            imported = module if module is not None and module[1] is None else None
+        if (
+            imported is None
+            or imported[2] >= statement.lineno
+            or (imported[1] not in {None, "ContextVar"})
+        ):
+            continue
+        if (
+            len(call.args) != 1
+            or not isinstance(call.args[0], ast.Constant)
+            or not isinstance(call.args[0].value, str)
+            or not call.args[0].value
+            or len(call.args[0].value) > 256
+            or redact_text(call.args[0].value).occurrences
+            or len(call.keywords) > 1
+            or any(
+                keyword.arg != "default"
+                or not isinstance(keyword.value, ast.Constant)
+                or keyword.value.value is not None
+                for keyword in call.keywords
+            )
+        ):
+            continue
+        valid = True
+        for node in nodes:
+            if (isinstance(node, ast.arg) and node.arg == target.id) or (
+                isinstance(node, (ast.Global, ast.Nonlocal)) and target.id in node.names
+            ):
+                valid = False
+                break
+            if not isinstance(node, ast.Name) or node.id != target.id or node is target:
+                continue
+            member = parents.get(node)
+            invocation = parents.get(member) if member is not None else None
+            if not (
+                isinstance(node.ctx, ast.Load)
+                and isinstance(member, ast.Attribute)
+                and member.value is node
+                and member.attr in {"get", "set", "reset"}
+                and isinstance(invocation, ast.Call)
+                and invocation.func is member
+                and not invocation.keywords
+                and (
+                    not invocation.args
+                    if member.attr == "get"
+                    else len(invocation.args) == 1 and isinstance(invocation.args[0], ast.Name)
+                )
+            ):
+                valid = False
+                break
+        if valid:
+            instances[target.id] = statement.lineno
+    result: set[ast.Name] = set()
+    for assignment in nodes:
+        if not isinstance(assignment, ast.Assign) or len(assignment.targets) != 1:
+            continue
+        target = assignment.targets[0]
+        scope = scope_of(assignment)
+        if not isinstance(scope, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(target, ast.Name):
+            setter = assignment.value
+            if (
+                isinstance(setter, ast.Call)
+                and isinstance(setter.func, ast.Attribute)
+                and isinstance(setter.func.value, ast.Name)
+                and setter.func.value.id in instances
+                and instances[setter.func.value.id] < assignment.lineno
+                and setter.func.attr == "set"
+                and len(setter.args) == 1
+                and isinstance(setter.args[0], ast.Name)
+                and not setter.keywords
+                and unique_name(target.id, scope, target)
+                and assignment in scope.body
+            ):
+                result.add(target)
+            continue
+        if (
+            not isinstance(target, ast.Tuple)
+            or not all(isinstance(item, ast.Name) for item in target.elts)
+            or not isinstance(assignment.value, ast.Name)
+        ):
+            continue
+        names = tuple(item for item in target.elts if isinstance(item, ast.Name))
+        if (
+            len(names) < 2
+            or len({item.id for item in names}) != len(names)
+            or not all(unique_name(item.id, scope, item) for item in names)
+        ):
+            continue
+        value = assignment.value
+        writers = [
+            node
+            for node in nodes
+            if isinstance(node, ast.Name)
+            and node.id == value.id
+            and isinstance(node.ctx, ast.Store)
+            and scope_of(node) is scope
+        ]
+        if len(writers) != 1 or not unique_name(value.id, scope, writers[0]):
+            continue
+        binding = parents.get(writers[0])
+        if not (
+            isinstance(binding, ast.Assign)
+            and binding.targets == [writers[0]]
+            and parents.get(binding) is parents.get(assignment)
+            and binding.lineno < assignment.lineno
+            and isinstance(binding.value, ast.Call)
+            and not binding.value.args
+            and isinstance(binding.value.func, ast.Attribute)
+            and binding.value.func.attr == "claim"
+            and isinstance(binding.value.func.value, ast.Attribute)
+            and binding.value.func.value.attr == "store"
+            and isinstance(binding.value.func.value.value, ast.Name)
+            and binding.value.func.value.value.id == "self"
+            and isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and bool(scope.args.posonlyargs or scope.args.args)
+            and (*scope.args.posonlyargs, *scope.args.args)[0].arg == "self"
+            and unambiguous_store(scope)
+        ):
+            continue
+        if any(
+            (
+                isinstance(node, ast.Name)
+                and node.id == "self"
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            )
+            or (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+                and (
+                    (
+                        isinstance(node.value, ast.Name)
+                        and node.value.id == "self"
+                        and node.attr == "store"
+                    )
+                    or (
+                        isinstance(node.value, ast.Attribute)
+                        and isinstance(node.value.value, ast.Name)
+                        and node.value.value.id == "self"
+                        and node.value.attr == "store"
+                    )
+                )
+            )
+            for node in nodes
+            if scope_of(node) is scope
+        ) or any(
+            keyword.arg is None
+            or not (
+                (
+                    isinstance(keyword.value, ast.Attribute)
+                    and isinstance(keyword.value.value, ast.Name)
+                    and keyword.value.value.id == "self"
+                )
+                or (
+                    isinstance(keyword.value, ast.Call)
+                    and not keyword.value.args
+                    and not keyword.value.keywords
+                    and isinstance(keyword.value.func, ast.Attribute)
+                    and isinstance(keyword.value.func.value, ast.Name)
+                    and keyword.value.func.value.id == "self"
+                    and keyword.value.func.attr == "clock"
+                )
+            )
+            for keyword in binding.value.keywords
+        ):
+            continue
+        # Do not borrow a closure/alias or consume a value that an unknown call may mutate.
+        references = [
+            node
+            for node in nodes
+            if isinstance(node, ast.Name) and node.id == value.id and isinstance(node.ctx, ast.Load)
+        ]
+        if any(
+            scope_of(node) is not scope
+            or (
+                node is not value
+                and not (
+                    isinstance(parent := parents.get(node), ast.Compare)
+                    and parent.left is node
+                    and len(parent.ops) == 1
+                    and isinstance(parent.ops[0], ast.Is)
+                    and len(parent.comparators) == 1
+                    and isinstance(parent.comparators[0], ast.Constant)
+                    and parent.comparators[0].value is None
+                )
+            )
+            for node in references
+        ):
+            continue
+        result.update(names)
+    return frozenset(result)
+
+
 def _source_assignment_facts(
     tree: ast.Module, content: str, lines: list[str], offsets: list[int]
 ) -> tuple[frozenset[int], tuple[RedactionOccurrence, ...]]:
     """Mask only syntactic field declarations; inspect each default/RHS separately."""
     imports = _source_stdlib_imports(tree)
+    runtime_handles = (
+        frozenset()
+        if _PATCH_SOURCE_INSPECTION.get()
+        else _source_runtime_handle_targets(tree, imports)
+    )
     safe_starts: set[int] = set()
     extra: list[RedactionOccurrence] = []
 
@@ -573,6 +1038,9 @@ def _source_assignment_facts(
             else:
                 extra.extend(redact_text(name + "=" + expression).occurrences)
 
+    for target in runtime_handles:
+        if (start := field_start(target.id, target)) is not None:
+            safe_starts.add(start)
     for node in ast.walk(tree):
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             annotation(node.target.id, node.target, node.annotation, node.value)
@@ -939,9 +1407,13 @@ def _inspect_patch(content: str) -> tuple[RedactionOccurrence, ...]:
             (new_lines, paths[1] if paths else None),
         ):
             if body:
-                occurrences.extend(
-                    source_secret_occurrences(textwrap.dedent("".join(body)), source_path=path)
-                )
+                inspection_binding = _PATCH_SOURCE_INSPECTION.set(True)
+                try:
+                    occurrences.extend(
+                        source_secret_occurrences(textwrap.dedent("".join(body)), source_path=path)
+                    )
+                finally:
+                    _PATCH_SOURCE_INSPECTION.reset(inspection_binding)
         old_lines.clear()
         new_lines.clear()
 

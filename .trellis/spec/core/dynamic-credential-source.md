@@ -72,6 +72,67 @@ Keep existing source/dynamic-credential/patch and continuation refusal regressio
 修复加载后只使用公开 HANDLE 在 Task lock/idle fence 中重新完整封存，再使用当前事实提供的
 精确恢复路径；维护 probe 的通过不是 receipt、progress、candidate 或 QA/Review 结论。
 
+## Complete-source runtime handles (2026-10-25)
+
+Scope/trigger: complete retained Python BEFORE/AFTER source can contain noncredential
+runtime handles that the generic `secret_assignment` pattern matches. The public
+signatures above stay unchanged; only full, parseable `.py` source gets these two
+bounded AST classifications. Inspection never executes supplied source.
+
+- A single local `token = INSTANCE.set(value)` can reference a genuine module-level
+  `contextvars.ContextVar` created by an exact unaliased stdlib import. The constructor
+  has one bounded, nonsensitive literal name and optionally `default=None`; `.set`
+  takes exactly one runtime Name. Import/instance rebinding, aliases, shadowing, escape,
+  mutations and observed namespace/reflection authority revoke the proof. Instance
+  reads are only direct `.get()`, `.set(Name)` and `.reset(Name)` calls.
+- A flat, unique Name tuple such as `job, source, token = claimed` can reference the
+  sole preceding direct `claimed = self.store.claim(...)` binding in the same ordinary
+  method and statement container. There are no positional arguments; keywords are
+  direct `self.attribute` references or no-argument `self.clock()`. Only the unpack
+  and `claimed is None` may read that local value. Parameters, rebinding, aliases,
+  closures, literal/unknown RHS and receiver mutations are not proof.
+- Observable local `claim`/`store` definitions or rebinding, `.claim` writes, store
+  aliases/escape and replacement in other methods revoke the tuple classification.
+  A visible `self.store` initialization is allowed only once in that class's ordinary
+  `__init__`, by a direct uniquely imported, unaliased external constructor with no
+  visible shadowing or escape. Constructor inputs are only unrebound required parameter
+  references/field chains; a `.root / "basename"` chain permits bounded nonsensitive
+  path components. Direct literals, local values, defaults, arbitrary calls, containers,
+  starred/expanded arguments are rejected. This classifies a runtime reference; it does not claim
+  to prove arbitrary external providers' behavior.
+- Only exact matching target spans in temporary detector input are masked. Literal,
+  strong-key, comment, other assignment and generic/non-Python scans still inspect the
+  original source. Source, patch, retained bodies, SHA-256 and wire bytes never change.
+- Partial patch hunks do not get these two exceptions even when dedenting makes a hunk
+  parseable as a module. The request-local inspection cache uses a separate
+  `patch-source` namespace; a full-source result cannot supply patch provenance.
+  Existing URL-decoder/dynamic-source patch behavior and cache bounds/lifetime remain.
+
+| Validation input | Result |
+| --- | --- |
+| Proven stdlib ContextVar token or exact runtime claim tuple in full Python | Preserve full source and allow normal body verification |
+| Fake/aliased/rebound constructor, literal/default, local fake claim returning a fixed value | Sensitive; no body admission |
+| Tuple alias/rebinding, nested/starred/duplicate targets, observable store replacement | Sensitive; no body admission |
+| Incomplete or parseable partial patch, non-Python/generic text | Conservative detection unchanged |
+| Separate fixed credential or strong key in the same complete body | Sensitive; no whole-file exemption |
+
+Good: commit either real platform runtime source as a Git baseline, change only an
+unrelated value, then retain exact BEFORE/AFTER text and hashes through capture, wire
+roundtrip and verification without changing HEAD/index/status/source. Base: generic
+`redact_text` still detects both runtime patterns. Bad/wrong: whitelist a file or trust
+a method named `claim` despite a visible local fixed-value implementation. Correct:
+verify the bounded AST provenance and keep all independent secret scans.
+
+Required tests: `tests/context/test_runtime_token_references.py` covers imports,
+shadowing, mutation, literal provenance, local fake claim, tuple restrictions, other
+secrets and source/patch cache isolation. `tests/git/test_runtime_token_capture.py`
+uses both real platform BEFORE bodies, verifies complete wire/hash preservation and
+rejects a separate secret; it also asserts no Git/worktree writes by capture/verify.
+
+存量数据处置：本修复不改数据库、原源码、停止事实、执行结果、UNKNOWN 历史或 QA/Review
+verdict。维护版本加载后，由公开 HANDLE 在当前 Task lock/idle fence 下重新完整封存，
+再使用当前事实允许的精确恢复动作。测试通过不生成生产 receipt/progress/candidate。
+
 ## Tests, stored data and rollback
 
 增量：`tests/context/test_dynamic_credential_source.py`、`test_source_secret_detection.py`、
