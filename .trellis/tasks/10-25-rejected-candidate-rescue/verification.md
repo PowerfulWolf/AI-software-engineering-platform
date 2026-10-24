@@ -80,3 +80,29 @@ must validate the resulting candidate before any handoff or merge decision.
   green full-suite result.
 - The final target branch contains no mixed verification implementation; mixed
   production/catalog work remains outside this maintenance commit.
+
+## Follow-up platform correction (2026-10-25)
+
+The first post-deploy public proposal (`operation_aa71bb5bf1c81002b2da2399c809d026`)
+failed before any mutation with `WorktreeCaptureRejected`. Read-only reproduction
+identified two platform compatibility defects: the aggregate mutation-body limit
+was too small for the sealed 37-file candidate (both pre-image and post-image
+bytes count), and the source scanner treated the Team View's local
+`token = detail.slice(...).match(...)` parser variable as a credential.
+
+The follow-up correction keeps the one-megabyte per-file and patch limits,
+raises only the aggregate body bound to four megabytes, and adds a narrow
+JavaScript/TypeScript parser-reference exception while retaining secret
+producer and unknown-expression rejection. The candidate capture now rereads
+all 37 changed paths successfully with both ignored-cache modes. Validation:
+
+- `PYTHONPATH=src pytest -q -p no:cacheprovider tests/context/test_source_secret_detection.py` — 117 passed;
+- Ruff on redaction, mutation capture and the regression test — passed;
+- strict mypy on `redaction.py` with an isolated cache — passed;
+- real K1 candidate capture repro — 37 paths passed with `include_ignored=False`
+  and `include_ignored=True`.
+
+The failed operation remains an immutable failed attempt and caused no Task,
+queue, budget, candidate or approval mutation. After this maintenance commit is
+deployed, the exact public proposal must be submitted once with a new
+idempotency key; the prior failed operation must not be retried.

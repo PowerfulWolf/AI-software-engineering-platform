@@ -35,6 +35,30 @@ _SECRET_ASSIGNMENT_PATTERN: Final[re.Pattern[str]] = next(
     pattern for kind, pattern in _SECRET_PATTERNS if kind == "secret_assignment"
 )
 
+# JavaScript/TypeScript source has no Python AST pass in this detector. Keep the
+# conservative assignment rule for literals and unknown expressions, while
+# recognizing the common local parsing shape used by the console: a variable
+# named ``token`` receives the result of a non-secret string helper. This is a
+# source reference, not a credential value. Secret-producing namespaces and
+# field names remain excluded so ``token = secrets.token_bytes(...)`` stays
+# sensitive.
+_SCRIPT_SAFE_TOKEN_CALL: Final[re.Pattern[str]] = re.compile(
+    r"(?is)(?P<field>\btoken\b)\s*[:=]\s*"
+    r"(?P<object>[A-Za-z_$][\w$]*)\.(?P<method>[A-Za-z_$][\w$]*)\s*\("
+)
+_SCRIPT_SECRET_OBJECTS: Final[frozenset[str]] = frozenset(
+    {"secret", "secrets", "crypto", "credential", "credentials", "auth"}
+)
+_SCRIPT_SECRET_METHODS: Final[frozenset[str]] = frozenset(
+    {"token", "tokenbytes", "tokenhex", "tokenurlsafe", "password", "secret", "key"}
+)
+_SCRIPT_SAFE_OBJECTS: Final[frozenset[str]] = frozenset(
+    {"detail", "metadata", "value", "text", "decoded", "string", "json"}
+)
+_SCRIPT_SAFE_METHODS: Final[frozenset[str]] = frozenset(
+    {"slice", "match", "replace", "trim", "split", "join", "parse", "stringify"}
+)
+
 # A source snapshot is code, rather than a log or a URI.  These are the only
 # assignment RHS forms that may be treated as references while checking a
 # complete source file.  In particular, arbitrary identifiers and dotted
@@ -1289,6 +1313,36 @@ def _inspect_source(
     detected = redact_text(content).occurrences
     if not any(occurrence.kind == "secret_assignment" for occurrence in detected):
         return detected
+    if source_path is not None and source_path.casefold().endswith(
+        (".js", ".jsx", ".ts", ".tsx")
+    ):
+        # The complete-source detector intentionally has no JavaScript parser.
+        # Mask only a small, typed family of local string-parser calls before
+        # applying the generic assignment rule. Unknown objects/methods and all
+        # secret-producing names remain conservative. This also keeps comments
+        # and string literals protected because the generic scan still sees any
+        # assignment outside these exact source shapes.
+        safe_spans: list[tuple[int, int]] = []
+        for match in _SCRIPT_SAFE_TOKEN_CALL.finditer(content):
+            object_name = match["object"].casefold()
+            method_name = match["method"].casefold()
+            if (
+                object_name in _SCRIPT_SAFE_OBJECTS
+                and method_name in _SCRIPT_SAFE_METHODS
+                and object_name not in _SCRIPT_SECRET_OBJECTS
+                and method_name not in _SCRIPT_SECRET_METHODS
+            ):
+                line_start = content.rfind("\n", 0, match.start()) + 1
+                line_end = content.find("\n", match.end())
+                safe_spans.append((line_start, len(content) if line_end < 0 else line_end))
+        if safe_spans:
+            chars = list(content)
+            for start, end in safe_spans:
+                chars[start:end] = "source_reference".ljust(end - start, " ")
+            content = "".join(chars)
+            detected = redact_text(content).occurrences
+            if not any(occurrence.kind == "secret_assignment" for occurrence in detected):
+                return detected
     if (
         source_path is None
         or not source_path.endswith(".py")

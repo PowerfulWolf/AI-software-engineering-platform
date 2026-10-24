@@ -13,7 +13,13 @@ from ai_software_engineer.git.ports import WorktreeRef
 from ai_software_engineer.redaction import source_secret_occurrences
 
 RegularMode = Literal[0o644, 0o755]
-MAX_MUTATION_BODY_BYTES = 2 * MAX_CAPTURE_BYTES
+# A mutation records both the pre-image and post-image for every changed file.
+# The former 2x bound was effectively a one-megabyte aggregate budget for a
+# multi-file change (because the same file can contribute two full bodies). A
+# legitimate candidate can exceed that while each individual file and patch
+# remain within their existing one-megabyte limits. Keep the per-file bound and
+# raise only the aggregate body budget to four megabytes.
+MAX_MUTATION_BODY_BYTES = 4 * MAX_CAPTURE_BYTES
 
 
 @dataclass(frozen=True, slots=True)

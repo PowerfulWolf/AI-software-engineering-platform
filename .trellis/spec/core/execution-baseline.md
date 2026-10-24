@@ -2,6 +2,24 @@
 
 ## Unaccepted committed candidate recovery (2026-10-25)
 
+### Historical candidate capture compatibility
+
+Mutation capture keeps the existing one-megabyte per-file and patch limits, but
+the aggregate body budget is four megabytes because each changed file can carry
+both a base body and a current body. The earlier two-megabyte aggregate bound
+could reject a clean, already committed multi-file candidate during a later
+read-only recovery proposal even though its original sealed patch and every
+file were individually within policy. Recovery must still reject binary,
+oversized, secret-bearing, ignored non-cache, or changing files. JavaScript and
+TypeScript source inspection recognizes only the small allowlisted local string
+parser call shape (`token` from `detail`/`metadata`/`value`/`text` helpers);
+unknown expressions and secret-producing namespaces remain conservative.
+
+Regression points: `tests/context/test_source_secret_detection.py` covers the
+false-positive parser variable and secret-producing negative case, while the
+real candidate capture must re-read the exact 37-file K1 diff with both
+`include_ignored=False` and `True` before the public plan is accepted.
+
 ### Scope / Trigger
 
 Use only for an original completed `SUCCEEDED` Coder invocation whose

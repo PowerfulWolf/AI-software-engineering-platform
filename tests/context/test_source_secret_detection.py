@@ -23,6 +23,16 @@ def test_source_references_preserve_bytes_but_generic_text_stays_conservative(so
     assert redact_text(source).occurrences
 
 
+def test_javascript_local_parser_token_is_not_treated_as_a_credential() -> None:
+    source = "const token = detail.slice(index + marker.length).match(/^json$/);\n"
+    assert not source_secret_occurrences(source, source_path="src/team_view/app.js")
+
+
+def test_javascript_secret_producer_remains_sensitive() -> None:
+    source = "const token = secrets.token_bytes(32);\n"
+    assert source_secret_occurrences(source, source_path="src/team_view/app.js")
+
+
 @pytest.mark.parametrize(
     "source",
     [
