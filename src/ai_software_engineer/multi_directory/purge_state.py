@@ -411,6 +411,13 @@ def task_state_directories(sidecar: Path, expected: StateDeletionScope) -> tuple
                 validated[path.name] = start
             for path in continuation.glob("capture-stop-*.json"):
                 validated[path.name] = records.capture_stop(path.stem.removeprefix("capture-stop-"))
+            for path in continuation.glob("native-observation-*.json"):
+                observation = records.native_observation(
+                    path.stem.removeprefix("native-observation-")
+                )
+                if observation.availability != "AVAILABLE" or observation.record is None:
+                    raise ValueError("continuation native observation is unavailable")
+                validated[path.name] = observation.record
             supported_names = set(validated)
             declarations = WorkspaceAdmissionAdapterContractStore(sidecar / "state", task_id)
             _reject_symlinks(declarations.root)

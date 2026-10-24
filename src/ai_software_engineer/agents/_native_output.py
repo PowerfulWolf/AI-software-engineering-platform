@@ -12,6 +12,11 @@ from dataclasses import dataclass, field
 from typing import IO, cast
 
 from ai_software_engineer.agents._codex_events import CodexJsonEventObserver, CodexJsonFailure
+from ai_software_engineer.agents.native_observation import (
+    MAX_OBSERVATION_COUNT,
+    NativeOutputObservation,
+    NativeStreamObservation,
+)
 
 _STREAM_LIMIT = 1_000_000
 _READ_BYTES = 64 * 1024
@@ -48,6 +53,31 @@ class _Stream:
         )
     )
     text: _BoundedText = field(default_factory=_BoundedText)
+    raw_bytes: int = 0
+    saturated: bool = False
+    first_byte_seconds: float | None = None
+    last_byte_seconds: float | None = None
+    eof: bool = False
+
+    def observe(self, data: bytes, elapsed: float) -> None:
+        if not data:
+            self.eof = True
+            return
+        total = self.raw_bytes + len(data)
+        self.saturated = self.saturated or total > MAX_OBSERVATION_COUNT
+        self.raw_bytes = min(total, MAX_OBSERVATION_COUNT)
+        if self.first_byte_seconds is None:
+            self.first_byte_seconds = elapsed
+        self.last_byte_seconds = elapsed
+
+    def observation(self) -> NativeStreamObservation:
+        return NativeStreamObservation(
+            raw_bytes=self.raw_bytes,
+            saturated=self.saturated,
+            first_byte_seconds=self.first_byte_seconds,
+            last_byte_seconds=self.last_byte_seconds,
+            eof=self.eof,
+        )
 
 
 class _NativeOutputDrain:
@@ -63,8 +93,10 @@ class _NativeOutputDrain:
         stderr: IO[bytes],
         *,
         codex_events: CodexJsonEventObserver | None = None,
+        started_at: float | None = None,
     ) -> None:
         self._codex_events = codex_events
+        self._started_at = time.monotonic() if started_at is None else started_at
         self._selector = selectors.DefaultSelector()
         try:
             self._stdout, self._stderr = _Stream(stdout), _Stream(stderr)
@@ -96,6 +128,7 @@ class _NativeOutputDrain:
                     data = os.read(key.fd, _READ_BYTES)
                 except BlockingIOError:
                     continue
+                stream.observe(data, max(0.0, time.monotonic() - self._started_at))
                 if stream is self._stdout and self._codex_events is not None:
                     if data:
                         self._codex_events.feed(data)
@@ -110,6 +143,16 @@ class _NativeOutputDrain:
         if self._pending:
             raise OSError("native output has not reached EOF")
         return self._stdout.text.value(), self._stderr.text.value()
+
+    def observation(self) -> NativeOutputObservation:
+        if self._pending:
+            raise OSError("native output has not reached EOF")
+        return NativeOutputObservation(
+            elapsed_seconds=max(0.0, time.monotonic() - self._started_at),
+            stdout=self._stdout.observation(),
+            stderr=self._stderr.observation(),
+            events=self._codex_events.observation() if self._codex_events is not None else None,
+        )
 
     @property
     def native_failure(self) -> CodexJsonFailure | None:

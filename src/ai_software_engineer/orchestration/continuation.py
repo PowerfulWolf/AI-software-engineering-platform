@@ -29,6 +29,7 @@ from ai_software_engineer.agents.models import (
     AgentResult,
     AgentRunStatus,
 )
+from ai_software_engineer.agents.native_observation import NativeOutputObservation
 from ai_software_engineer.domain import AgentPermissions, AgentRole, TaskStatus
 from ai_software_engineer.domain.continuation import ContinuationCause, task_intent_sha256
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure
@@ -56,6 +57,7 @@ from ai_software_engineer.orchestration.continuation_models import (
     ExecutionInterruptionReceipt,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
+from ai_software_engineer.orchestration.native_observation import NativeExecutionObservation
 from ai_software_engineer.owned_sessions import RecordedBootContinuity
 from ai_software_engineer.recovery.models import CapturedChanges
 from ai_software_engineer.store.ports import TaskRepository
@@ -354,6 +356,31 @@ class NativeCoderContinuation:
                 cause=cause,
                 original_error_code=original_error_code,
                 execution_abort_reason=execution_abort_reason,
+            )
+        )
+
+    def record_native_observation(
+        self,
+        request: AgentRequest,
+        root: Path,
+        *,
+        output: NativeOutputObservation,
+    ) -> None:
+        """Seal only body-free diagnostics using the original still-held lock."""
+        if request.role is not AgentRole.CODER or request.run_id not in self._starts:
+            raise ContinuationRejected("native observation has no original Coder start")
+        if not self._guard.inherited_fds:
+            raise ContinuationRejected("native observation requires the original Task lock")
+        start = self._store.capture_start(request.run_id)
+        stop = self._store.capture_stop(request.run_id)
+        if start.request != request or start.worktree_path != str(root):
+            raise ContinuationRejected("native observation changed its claimed start")
+        self._store.put_native_observation(
+            NativeExecutionObservation.from_capture(
+                start=start,
+                stop=stop,
+                output=output,
+                recorded_at=self._clock(),
             )
         )
 

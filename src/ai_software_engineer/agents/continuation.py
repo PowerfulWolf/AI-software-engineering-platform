@@ -10,6 +10,7 @@ from ai_software_engineer.agents.execution import (
     NativeProcessStop,
 )
 from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentResult
+from ai_software_engineer.agents.native_observation import NativeOutputObservation
 from ai_software_engineer.domain.continuation import ContinuationCause
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git.mutation import WorkspaceMutationInventory
@@ -93,6 +94,23 @@ class NativeStopRecordingControl(Protocol):
 def native_stop_recorder(control: object) -> NativeStopRecordingControl | None:
     """Discover an optional fact seam without expanding the base adapter policy."""
     return control if isinstance(control, NativeStopRecordingControl) else None
+
+
+@runtime_checkable
+class NativeObservationRecordingControl(Protocol):
+    """Optional diagnostics, strictly after the mandatory original stop writer."""
+
+    def record_native_observation(
+        self,
+        request: AgentRequest,
+        root: Path,
+        *,
+        output: NativeOutputObservation,
+    ) -> None: ...
+
+
+def native_observation_recorder(control: object) -> NativeObservationRecordingControl | None:
+    return control if isinstance(control, NativeObservationRecordingControl) else None
 
 
 class InterruptionRetryControl(Protocol):

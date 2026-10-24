@@ -114,6 +114,13 @@ Task-owned continuation and execution-baseline directories are not selected by T
 `task_state_directories(sidecar, StateDeletionScope)` validates every receipt, admission,
 capture claim, plan, authority, binding, native-rule epoch, continuation authorization and
 quiescence record against exact Team/Project/Repository/Requirement scope and writer keys.
+Private `native-observation-<run_id>.json` diagnostics are part of the same Task-owned
+continuation directory. Read each through `FileContinuationStore.native_observation(run_id)`:
+only an AVAILABLE immutable record with exact original capture start/stop, claim, source,
+Context and scope binding may enter the deletion inventory. Missing, changed, corrupt or
+foreign diagnostics refuse deletion; diagnostic counters never authorize cleanup by themselves.
+The complete verified record is sealed with the other directory bytes and physically removed;
+an observation created or changed after plan preparation invalidates that plan's file inventory.
 The complete baseline namespaces are `baseline-plans`, `baseline-authorities`, `baseline-starts`,
 `baseline-bindings`, `baseline-native-rules`, `baseline-continuations`, `baseline-quiescence`.
 Validate the formal `invocations[*].legacy_containment` and original claim repository scopes;

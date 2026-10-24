@@ -23,6 +23,10 @@ from ai_software_engineer.orchestration.continuation_models import (
     ExecutionCaptureStop,
     ExecutionInterruptionReceipt,
 )
+from ai_software_engineer.orchestration.native_observation import (
+    NativeExecutionObservation,
+    NativeObservationRead,
+)
 from ai_software_engineer.recovery.models import canonical_bytes, digest
 from ai_software_engineer.redaction import source_inspection_scope
 
@@ -32,6 +36,7 @@ type _Record = (
     | ContinuationAdmission
     | ExecutionCaptureStart
     | ExecutionCaptureStop
+    | NativeExecutionObservation
 )
 
 
@@ -170,6 +175,30 @@ class FileContinuationStore:
         if record.run_id != run_id or record.capture_start_sha256 != start.start_sha256:
             raise ContinuationRejected("capture stop changed its original invocation")
         return record
+
+    def put_native_observation(
+        self, record: NativeExecutionObservation
+    ) -> NativeExecutionObservation:
+        record.validate_integrity()
+        self._require_task(record.task_id)
+        record.validate_capture(self.capture_start(record.run_id), self.capture_stop(record.run_id))
+        return self._put(
+            f"native-observation-{self._checked_run(record.run_id)}.json",
+            record,
+            NativeExecutionObservation,
+        )
+
+    def native_observation(self, run_id: str) -> NativeObservationRead:
+        checked = self._checked_run(run_id)
+        try:
+            record = self._get(f"native-observation-{checked}.json", NativeExecutionObservation)
+        except ContinuationRecordMissing:
+            return NativeObservationRead(availability="UNAVAILABLE", record=None)
+        self._require_task(record.task_id)
+        if record.run_id != checked:
+            raise ContinuationRejected("native observation belongs to another Run")
+        record.validate_capture(self.capture_start(checked), self.capture_stop(checked))
+        return NativeObservationRead(availability="AVAILABLE", record=record)
 
     @source_inspection_scope()
     def get_receipt(self, run_id: str) -> ExecutionInterruptionReceipt:

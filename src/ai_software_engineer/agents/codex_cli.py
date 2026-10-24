@@ -34,6 +34,7 @@ from ai_software_engineer.agents.continuation import (
     InterruptionAdmissionRejected,
     InterruptionObservation,
     continuation_preview,
+    native_observation_recorder,
     native_stop_recorder,
 )
 from ai_software_engineer.agents.diagnostics import safe_diagnostic
@@ -57,6 +58,7 @@ from ai_software_engineer.agents.models import (
     AgentResult,
     AgentRunStatus,
 )
+from ai_software_engineer.agents.native_observation import NativeOutputObservation
 from ai_software_engineer.agents.openai_compatible import PromptBuilder, RequestPromptBuilder
 from ai_software_engineer.agents.ports import (
     AgentConfigurationError,
@@ -215,6 +217,8 @@ class CodexInvocationResult:
     stderr_truncated: bool = False
     execution_abort_reason: ExecutionAbortReason | None = None
     native_failure: CodexJsonFailure | None = None
+    output_observation: NativeOutputObservation | None = None
+    observation_persisted: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,7 +413,12 @@ class SubprocessCodexCommandRunner:
                     if self._output_protocol == "codex_json"
                     else None
                 )
-                output = _NativeOutputDrain(process.stdout, process.stderr, codex_events=events)
+                output = _NativeOutputDrain(
+                    process.stdout,
+                    process.stderr,
+                    codex_events=events,
+                    started_at=started,
+                )
             return output.poll(process, timeout=timeout)
 
         def stop() -> tuple[str, str]:
@@ -464,6 +473,12 @@ class SubprocessCodexCommandRunner:
                 result = replace(result, stderr_truncated=True)
             if output is not None and result.process_stop is not None:
                 result = replace(result, native_failure=output.native_failure)
+                # Diagnostics must never erase a proven stop or change the
+                # existing failure classifier if their own validation fails.
+                try:
+                    result = replace(result, output_observation=output.observation())
+                except Exception:
+                    result = replace(result, output_observation=None)
             # Cleanup can fail too. Do not clear the Host's live observation or
             # publish a stop until both proven EOF pipes are locally released.
             close_output()
@@ -859,6 +874,8 @@ class CodexCliAgentAdapter:
                 )
             run = self._runner.run
             recorder = native_stop_recorder(self._interruption_control)
+            observation_recorder = native_observation_recorder(self._interruption_control)
+            observation_persisted = False
             if (
                 isinstance(self._runner, SubprocessCodexCommandRunner)
                 and recorder is not None
@@ -867,6 +884,7 @@ class CodexCliAgentAdapter:
                 runner = self._runner
 
                 def record_stop(result: CodexInvocationResult) -> None:
+                    nonlocal observation_persisted
                     if result.process_stop is None:
                         return
                     code, transient = _classify_cli_failure(result)
@@ -898,6 +916,19 @@ class CodexCliAgentAdapter:
                         else (code if result.returncode != 0 else None),
                         execution_abort_reason=result.execution_abort_reason,
                     )
+                    # Mandatory capture-stop failures propagate unchanged. Only
+                    # the independent body-free diagnostic write is optional.
+                    if observation_recorder is not None and result.output_observation is not None:
+                        try:
+                            observation_recorder.record_native_observation(
+                                request,
+                                self._workspace_root,
+                                output=result.output_observation,
+                            )
+                        except Exception:
+                            observation_persisted = False
+                        else:
+                            observation_persisted = True
 
                 def run_owned(
                     argv: tuple[str, ...],
@@ -907,13 +938,20 @@ class CodexCliAgentAdapter:
                     stdin: str,
                     timeout_seconds: float,
                 ) -> CodexInvocationResult:
-                    return runner.run_observed(
+                    result = runner.run_observed(
                         argv,
                         cwd=cwd,
                         environment=environment,
                         stdin=stdin,
                         timeout_seconds=timeout_seconds,
                         observer=record_stop,
+                    )
+                    return replace(
+                        result,
+                        observation_persisted=observation_persisted,
+                        output_observation=result.output_observation
+                        if observation_persisted
+                        else None,
                     )
 
                 run = run_owned
@@ -1276,6 +1314,11 @@ class CodexCliAgentAdapter:
                 "平台已核验现场。将通过新的执行记录继续。"
                 if observed is InterruptionObservation.CAPTURED
                 else "现场不满足自动继续条件。需要工程处理。"
+            )
+            + (
+                "执行活动统计不可用 (UNAVAILABLE)。"
+                if invocation.observation_persisted is False
+                else ""
             ),
             transient=False,
             duration_ms=_elapsed_ms(started),

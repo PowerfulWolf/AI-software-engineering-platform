@@ -11,9 +11,22 @@ from typing import Literal
 
 from ai_software_engineer.agents.diagnostics import safe_diagnostic
 from ai_software_engineer.agents.models import AgentErrorCode
+from ai_software_engineer.agents.native_observation import (
+    MAX_OBSERVATION_COUNT,
+    NativeEventObservation,
+)
 
 _EVENT_LINE_BYTES = 65_536
 _MAX_JSON_DEPTH = 32
+_EVENT_COUNTS = {
+    "thread.started": "thread_started",
+    "turn.started": "turn_started",
+    "turn.completed": "turn_completed",
+    "turn.failed": "turn_failed",
+    "item.started": "item_started",
+    "item.completed": "item_completed",
+    "error": "error",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,8 +129,35 @@ class CodexJsonEventObserver:
         self._finished = False
         self._ordinal = 0
         self._candidate: CodexJsonFailure | None = None
+        self._counts = dict.fromkeys(
+            (
+                "observed_lines",
+                "thread_started",
+                "turn_started",
+                "turn_completed",
+                "turn_failed",
+                "item_started",
+                "item_completed",
+                "error",
+                "other",
+                "invalid_lines",
+            ),
+            0,
+        )
+        self._counts_saturated = False
+        self._partial_line = False
+        self._has_partial = False
+
+    def _count(self, name: str) -> None:
+        value = self._counts[name]
+        if value == MAX_OBSERVATION_COUNT:
+            self._counts_saturated = True
+        else:
+            self._counts[name] = value + 1
 
     def _reject(self) -> None:
+        if not self._invalid:
+            self._count("invalid_lines")
         self._invalid = True
         self._candidate = None
         self._line.clear()
@@ -125,6 +165,8 @@ class CodexJsonEventObserver:
     def feed(self, data: bytes) -> None:
         if self._finished:
             raise ValueError("native event observation already finished")
+        if data:
+            self._has_partial = not data.endswith(b"\n")
         start = 0
         while start < len(data):
             end = data.find(b"\n", start)
@@ -138,6 +180,7 @@ class CodexJsonEventObserver:
             if end < 0:
                 break
             self._ordinal += 1
+            self._count("observed_lines")
             if not self._invalid and not self._discarding:
                 self._observe(bytes(self._line))
             self._line.clear()
@@ -163,6 +206,9 @@ class CodexJsonEventObserver:
             self._reject()
             return
         event_type = event.get("type")
+        self._count(
+            _EVENT_COUNTS.get(event_type, "other") if isinstance(event_type, str) else "other"
+        )
         if event_type in ("turn.started", "turn.completed", "thread.started"):
             self._candidate = None
             return
@@ -206,7 +252,8 @@ class CodexJsonEventObserver:
         )
 
     def finish(self) -> None:
-        if self._line or self._discarding:
+        if self._has_partial:
+            self._partial_line = True
             self._reject()
         self._finished = True
 
@@ -214,3 +261,16 @@ class CodexJsonEventObserver:
         if not self._finished:
             raise ValueError("native event stdout has not reached EOF")
         return None if self._invalid else self._candidate
+
+    def observation(self) -> NativeEventObservation:
+        if not self._finished:
+            raise ValueError("native event stdout has not reached EOF")
+        return NativeEventObservation.model_validate(
+            {
+                **self._counts,
+                "saturated": self._counts_saturated,
+                "stream_valid": not self._invalid,
+                "stdout_eof": True,
+                "partial_line": self._partial_line,
+            }
+        )

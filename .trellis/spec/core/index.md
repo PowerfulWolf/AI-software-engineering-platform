@@ -38,6 +38,9 @@
 
 ## Files
 
+- [Native execution activity diagnostics](native-safe-observation.md): bounded body-free
+  original pipe/root-event counters, exact private capture binding and unavailable semantics.
+
 - [Exact knowledge assessment citations](exact-knowledge-citations.md): complete READ object transport constraints and exact historical request compatibility.
 
 - [HTTP knowledge rejection recovery](http-knowledge-rejection-recovery.md): exact route-aware
