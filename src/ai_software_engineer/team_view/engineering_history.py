@@ -781,6 +781,9 @@ def _engineering_history(
                             else "工程授权者已批准保留容量等待的完整进度, "
                             "原代码版本保持不变并暂停原需求。"
                             if baseline_plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                            else "工程授权者批准接续未接纳报告的已有代码候选, "
+                            "原产品与代码基线保持; 消耗一次普通工作额度并暂停。"
+                            if baseline_plan.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE
                             else "原分支执行基线更新的精确工程授权已记录。"
                         ),
                         source_uri=(
@@ -813,6 +816,9 @@ def _engineering_history(
                             else "容量等待的保留进度处理已开始, 原代码版本保持不变; "
                             "尚未启动新的开发执行。"
                             if baseline_plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                            else "已有代码候选的精确报告恢复已开始, "
+                            "原成功调用和拒绝历史保留; 尚未启动新的开发执行。"
+                            if baseline_plan.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE
                             else "原需求分支执行基线更新已开始, 完成结果以后续绑定记录为准。"
                         ),
                         source_uri=(
@@ -841,6 +847,7 @@ def _engineering_history(
             binding.require_task(task)
             if binding.scope != scope:
                 raise ValueError("baseline history belongs to another registered repository")
+            candidate_output_digest = binding.rejected_candidate_output_sha256
             entries.append(
                 TimelineEntry(
                     id="baseline_" + binding.binding_sha256,
@@ -857,6 +864,9 @@ def _engineering_history(
                         else "容量等待的完整进度和工程决定已保存, 原代码版本保持; "
                         "原需求暂停, 需单独明确继续后才安排新执行。"
                         if binding.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                        else "已有代码候选与工程决定已保存, 原产品与代码基线保持; "
+                        "需求暂停, 需单独明确继续后提交合规报告并进行独立 QA 和 Review。"
+                        if binding.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE
                         else "完整进度和工程决定已保存, 原需求保持暂停; 可先更新基线, 再明确继续。"
                         if binding.continuation_mode is BaselineContinuationMode.PAUSE
                         else (
@@ -878,6 +888,11 @@ def _engineering_history(
                         "execution_source_revision": binding.execution_source_revision,
                         "continuation_mode": binding.continuation_mode.value,
                         "native_rule_epoch_sha256": binding.native_rule_epoch_sha256,
+                        **(
+                            {"rejected_candidate_output_sha256": candidate_output_digest}
+                            if candidate_output_digest is not None
+                            else {}
+                        ),
                     },
                 )
             )

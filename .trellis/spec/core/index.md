@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`rejected-candidate-owner-expiry.md`](rejected-candidate-owner-expiry.md): exact stopped
+  unsupported-report owner settlement, renewed expiry, held Task lock and physical cleanup.
+
 - [Native execution activity diagnostics](native-safe-observation.md): bounded body-free
   original pipe/root-event counters, exact private capture binding and unavailable semantics.
 

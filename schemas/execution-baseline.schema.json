@@ -21,6 +21,7 @@
         "source_rebind",
         "legacy_workspace_rescue",
         "completed_output_rescue",
+        "rejected_candidate_rescue",
         "stopped_provider_retry",
         "stopped_failure_retry",
         "stopped_execution_rescue",
@@ -154,6 +155,19 @@
       ],
       "default": null,
       "title": "Stopped Execution Sha256"
+    },
+    "rejected_candidate_output_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rejected Candidate Output Sha256"
     },
     "completed_output_sha256": {
       "anyOf": [
@@ -793,6 +807,72 @@
       "else": {
         "properties": {
           "knowledge_isolation_sha256": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "purpose"
+        ],
+        "properties": {
+          "purpose": {
+            "const": "rejected_candidate_rescue"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "rejected_candidate_output_sha256",
+          "continuation_mode"
+        ],
+        "properties": {
+          "rejected_candidate_output_sha256": {
+            "type": "string"
+          },
+          "continuation_mode": {
+            "const": "pause"
+          },
+          "authority_source": {
+            "const": "engineering_operator_decision"
+          },
+          "input_mode": {
+            "const": "preserve_draft"
+          },
+          "legacy_containment_sha256": {
+            "type": "null"
+          },
+          "completed_output_sha256": {
+            "type": "null"
+          },
+          "stopped_provider_failure_sha256": {
+            "type": "null"
+          },
+          "stopped_failure_sha256": {
+            "type": "null"
+          },
+          "stopped_execution_sha256": {
+            "type": "null"
+          },
+          "knowledge_isolation_sha256": {
+            "type": "null"
+          },
+          "context_capacity_receipt_sha256": {
+            "type": "null"
+          },
+          "service_pause_outcome_sha256": {
+            "type": "null"
+          },
+          "superseded_implementation_artifact_id": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "rejected_candidate_output_sha256": {
             "type": "null"
           }
         }

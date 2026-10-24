@@ -49,6 +49,7 @@ from ai_software_engineer.manager.preparation import (
 )
 from ai_software_engineer.manager.python_verification import PytestSelection
 from ai_software_engineer.manager.python_verification_runner import MAX_PYTEST_SELECTIONS
+from ai_software_engineer.manager.rejected_candidate_reentry import RejectedCandidateReentryProof
 from ai_software_engineer.manager.stopped_execution_checkpoint import StoppedCoderExecutionProof
 from ai_software_engineer.multi_directory.attachments import RequirementAttachmentId
 from ai_software_engineer.orchestration.retry import (
@@ -845,6 +846,57 @@ class UnifiedProjectEntryService:
             DeliveryStage.WAITING_PRODUCT_APPROVAL,
         }:
             return ProjectDeliveryResult(checkpoint=reopened)
+        return self.resume(command)
+
+    def retry_rejected_candidate_baseline(
+        self,
+        command: ResumeProjectDelivery,
+        *,
+        proof_scope: Callable[
+            [ProjectDeliveryCheckpoint],
+            AbstractContextManager[RejectedCandidateReentryProof | None],
+        ],
+    ) -> ProjectDeliveryResult:
+        """Reenter a proven released candidate rescue, never generic BLOCKED retry."""
+        store, current = self._current(command.delivery_id)
+        if (
+            current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or current.failed_stage is not DeliveryStage.DELIVERING
+            or current.failure_code is not DeliveryFailureCode.INVARIANT_VIOLATION
+            or current.task_id is None
+            or current.task_status is not TaskStatus.IMPLEMENTING
+            or current.task_revision is None
+            or current.candidate_revision is not None
+        ):
+            return ProjectDeliveryResult(checkpoint=current)
+        self._backend.reconcile(current)
+        with proof_scope(current) as proof:
+            if proof is None:
+                return ProjectDeliveryResult(checkpoint=current)
+            if command != ResumeProjectDelivery(
+                delivery_id=command.delivery_id, submitted_at=command.submitted_at
+            ):
+                raise DeliveryCommandRejected("候选精确继续不能混用其他恢复或范围授权")
+            try:
+                proof.require_for(current)
+            except ValueError as error:
+                raise DeliveryCommandRejected("已释放候选恢复的需求绑定校验未通过") from error
+            if self._current(command.delivery_id)[1] != current:
+                raise DeliveryCommandRejected("候选恢复前需求记录已变化, 原现场保留")
+            if proof.release is None:
+                return ProjectDeliveryResult(
+                    checkpoint=current,
+                    diagnostic="候选与原历史已保留并暂停。请对当前精确工程输入单独明确继续。",
+                )
+            self._next(
+                store,
+                current,
+                stage=DeliveryStage.DELIVERING,
+                next_action=DeliveryNextAction.RUN_DELIVERY,
+                at=command.submitted_at,
+            )
+        # The normal Supervisor needs the same Task lock and SQL authority.
+        # Release both proof fences before entering ordinary claim/admission.
         return self.resume(command)
 
     def begin_continuation(

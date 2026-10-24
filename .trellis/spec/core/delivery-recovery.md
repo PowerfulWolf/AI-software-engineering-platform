@@ -3318,3 +3318,119 @@ released wait, the controller attaches it before the first-attempt interruption 
 or handle that original typed wait through the public entry. Missing facts remain refused, without
 new requirements, synthetic receipts or additional approval consumption. Rollback while idle must
 retain the appended cursor and all original dispatch/invocation/Task/queue records.
+
+## Rejected successful candidate report rescue (2026-10-25)
+
+### 1. Scope / Trigger
+
+A native Coder can truthfully finish and create a clean committed candidate while its
+implementation report uses an unsupported artifact schema version. An immutable
+`SUCCEEDED` invocation, a committed Git candidate and an accepted implementation are
+three separate facts. Preserve the original result, version, claim and stop unchanged.
+This case does not qualify as a FAILED result without an artifact, UNKNOWN execution,
+rejected progress, accepted candidate verification, or a generic source rebind.
+
+### 2. Signatures
+
+```python
+RejectedCandidateOutputProof.create(
+    scope, task, task_revision, task_intent_sha256, step, outcome,
+    capture_start, capture_stop, candidate_revision, candidate_parent_revision,
+    complete_capture, inventory, publication_absent=True,
+) -> RejectedCandidateOutputProof
+proof.validate_for(task, step, scope, permissions, denied_paths=()) -> None
+validate_rejected_candidate_inventory(before, after) -> None
+ExecutionBaselineService.propose(
+    None, purpose=BaselinePurpose.REJECTED_CANDIDATE_RESCUE,
+) -> ExecutionBaselinePlan
+```
+
+The proof and inventory functions perform no filesystem, Git, database or process I/O.
+`publication_absent` seals freshly checked trusted-collector facts; it is not an absence
+claim supplied by an Agent. A proof digest alone never establishes current readiness.
+
+### 3. Contracts
+
+- Only an original `SUCCEEDED` Coder `implementation-report` rejected by the frozen
+  v0.1 schema-version gate qualifies. Freeze `rejected_supported_version=v0.1` in the
+  proof, so future supported-version changes cannot invalidate historical decoding.
+  Require the original assignment's Agent, exact request/Task/attempt/context, expected
+  parent and supersedes lineage, complete owned-session rc0 stop, output present, and
+  no interruption cause. The native Task must still be `IMPLEMENTING`.
+- Under the Task lock and idle queue fence, the trusted collector freshly verifies
+  the original sealed invocation and claim, actual stopped processes, exact candidate
+  HEAD, its single parent equal to the original request source, clean tracked/index/
+  untracked state, complete ignored-file inventory, lawful paths and no accepted
+  artifact, receipt or subsequent adoption. An expired RUNNING lease proves none of
+  these prerequisites; only this exact stopped execution can be settled.
+- Capture the full original-source-to-candidate diff and regular before/after bodies:
+  `complete_capture.source_revision=candidate` and `base_revision=original source`.
+  The candidate-to-working-tree dirty capture is empty. For the complete capture,
+  Git's cached diff is also measured against its explicit original base, so a clean
+  candidate has `index_diff_sha256=SHA256(complete_capture.patch UTF-8)`, not the empty
+  digest. Match all reported paths/types and actual final file fingerprints. Reject
+  protected/native rules, out-of-scope files, special files and uncaptured ignored
+  mutations. Only regular 0644/0755 files in explicit execution cache paths may differ
+  outside the candidate. The same pure inventory gate protects a later report-only run.
+- `rejected_candidate_rescue` is target-free and only `preserve_draft`. The plan's
+  target base and binding's execution base retain the prior base; only execution source
+  advances to the existing proved candidate. No rebase, reset, reapply, artificial
+  commit, Task intent change, Product baseline change or native-rule epoch change occurs.
+- Optional proof/digest fields are omitted when absent, retaining all historical wire
+  hashes. Proofs are mutually exclusive with every older rescue family. The reservation
+  binds exact original start/outcome/proof digests, current attempt + 1, ordinary frozen
+  work and no refund. Replaying an accepted decision cannot reserve another execution.
+- A precise ENGINEERING decision must choose PAUSE. A separate latest-binding RESUME
+  permits the new claimed Coder. A narrow consumed-binding admission can authorize a
+  new compliant report about the unchanged retained candidate after checking its full
+  original-base diff and final inventory. Ordinary no-change Coder runs remain refused.
+  Every newly accepted artifact is v0.1 and still requires native independent QA/Review.
+- Console operation contract 11 advertises this purpose. The frontend may display its
+  exact sealed proposal even when an old Requirement checkpoint makes the read-side
+  `terminal` flag true, provided the actual Task remains `IMPLEMENTING` and all proof/
+  checkpoint/queue/scope/candidate facts match. This dedicated gate does not relax any
+  older terminal or source-rebind gate. An expired lease without a sealed proposal
+  exposes no recovery approval. Display the old blocker as history and the current
+  exact proposal as the next action; stale callbacks revalidate before submission.
+
+### 4. Validation / Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Exact stopped unsupported success + clean lawful candidate | Target-free proposal, exact PAUSE, separate RESUME |
+| Supported version, failed result, missing owned stop or publication present | Reject; preserve original facts |
+| Wrong Agent/parent/claim/Task/checkpoint or candidate parent | Reject stale or foreign authority |
+| Dirty index, ignored source, native rule, cache symlink/special mode | Reject; retain workspace |
+| Another rescue proof, refund, reused reservation or automatic RESUME | Reject cross-family/budget bypass |
+| Old blocked projection plus exact current proposal | Show candidate report approval; historical blocker stays readable |
+| Terminal Task, live lease, changed checkpoint or older Console contract | No recovery submission |
+
+### 5. Good / Base / Bad Cases
+
+Good: preserve original source A and successful candidate B (single parent A), approve
+the exact plan with PAUSE, separately resume a new claim, then obtain a fresh compliant
+report and independent QA/Review. Base: pure typed fixtures test the protocol but never
+claim real Git/process/database provenance. Bad: rewrite an old report's version, reset
+the Task, infer stop from lease expiry, or create an irrelevant edit just to get a commit.
+
+### 6. Tests Required
+
+- `tests/manager/test_rejected_candidate_output.py`: pure wire/hash, exact identity,
+  historical version stability, complete inventory and regular cache exceptions.
+- `tests/contracts/test_rejected_candidate_rescue_schema.py`: standalone and embedded
+  success/stop gates, cross-family digest exclusion, target-free proposal and PAUSE.
+- Actual Git collector/service and isolated MySQL queue tests: before/after HEAD,
+  complete inventory, old immutable bytes, ordinary work, idempotence, live-owner
+  rejection and independent later execution.
+- `tests/team_view/rejected-candidate-rescue.test.cjs`: old blocked projection, exact
+  new-purpose approval, stale controls, current capability and old-family isolation.
+
+### 7. Existing Data / Rollback
+
+No DDL or historical outcome/status/artifact rewrite is required. Prepare the exact
+new-purpose plan through the original Requirement's public API, record its delegated
+ENGINEERING PAUSE decision, inspect the append-only binding/reservation, then separately
+RESUME the current binding and follow the normal Coder/QA/Review chain. Keep original
+unsupported output as history and check its bytes before and after. Roll back while idle
+without deleting the appended proof, authority, binding or queue records; readers must
+retain the additive fields, and older writers must fail closed on the new purpose.

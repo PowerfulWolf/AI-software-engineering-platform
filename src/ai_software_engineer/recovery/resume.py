@@ -284,6 +284,34 @@ class DeliveryResumeController:
                 if completion is not None:
                     return self._continue_completion(verification_plan, completion)
 
+        if not terminal_candidate and current.task_status is TaskStatus.IMPLEMENTING:
+            # A released rejected-candidate baseline is an exact same-Task
+            # continuation. Let its dedicated proof scope reopen the public
+            # cursor before generic terminal recovery (which intentionally
+            # rejects ordinary IMPLEMENTING Tasks).
+            rejected = self._entry.retry_rejected_candidate_baseline(
+                command,
+                proof_scope=self._backend.rejected_candidate_reentry_scope,
+            )
+            if rejected.checkpoint != current or rejected.diagnostic is not None:
+                outcome = (
+                    DeliveryResumeOutcome.WAITING_HUMAN
+                    if rejected.diagnostic is not None
+                    or rejected.checkpoint.stage
+                    in {
+                        DeliveryStage.WAITING_PRODUCT_REPLY,
+                        DeliveryStage.WAITING_PRODUCT_APPROVAL,
+                        DeliveryStage.WAITING_HUMAN,
+                        DeliveryStage.BLOCKED,
+                        DeliveryStage.FAILED,
+                    }
+                    else DeliveryResumeOutcome.CONTINUED
+                )
+                return self._result(
+                    outcome,
+                    rejected,
+                    next_action=rejected.diagnostic or _checkpoint_next_action(rejected.checkpoint),
+                )
         if not terminal_candidate:
             retried = self._entry.retry_rejected_knowledge_preparation(
                 command, proof_scope=self._backend.rejected_knowledge_retry_scope

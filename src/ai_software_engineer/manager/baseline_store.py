@@ -27,10 +27,15 @@ from ai_software_engineer.manager.baseline_models import (
     ExecutionBaselinePlan,
     require_context_capacity_binding,
     require_knowledge_isolation_binding,
+    require_rejected_candidate_binding,
 )
 from ai_software_engineer.manager.baseline_native_rules import load_native_rule_epoch
 from ai_software_engineer.manager.completed_output_checkpoint import CompletedCoderOutputReason
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
+from ai_software_engineer.manager.rejected_candidate_owner import (
+    EXPIRED_OWNER_NAMESPACE,
+    RejectedCandidateExpiredOwnerSettlement,
+)
 from ai_software_engineer.redaction import source_inspection_scope
 
 
@@ -44,6 +49,25 @@ class FileExecutionBaselineStore:
             raise ValueError("baseline store must be private")
         self.records = KnowledgeRecordStore(root, read_only=read_only)
         self.root, self.read_only = root, read_only
+
+    def put_expired_owner_settlement(self, record: RejectedCandidateExpiredOwnerSettlement) -> str:
+        record.validate_integrity()
+        sealed = self.records.put(EXPIRED_OWNER_NAMESPACE, record.settlement_sha256, record)
+        if (
+            sealed != record
+            or self.records.get(
+                EXPIRED_OWNER_NAMESPACE,
+                record.settlement_sha256,
+                RejectedCandidateExpiredOwnerSettlement,
+            )
+            != record
+        ):
+            raise ValueError("拒绝候选owner收尾没有完整不可变封存")
+        return (
+            (self.root / self.records._name(EXPIRED_OWNER_NAMESPACE, record.settlement_sha256))
+            .absolute()
+            .as_uri()
+        )
 
     @contextmanager
     def execution_lock(self) -> Iterator[None]:
@@ -225,8 +249,19 @@ class FileExecutionBaselineStore:
     ) -> None:
         require_context_capacity_binding(plan, binding)
         require_knowledge_isolation_binding(plan, binding)
+        require_rejected_candidate_binding(plan, binding)
         if binding.purpose != plan.purpose:
             raise ValueError("工程绑定与批准方案的处置目的不同")
+        rejected = plan.facts.rejected_candidate_output
+        if rejected is not None:
+            rejected.validate_integrity()
+            authority = self.records.get(
+                "baseline-authorities", plan.plan_sha256, BaselineOperatorAuthorization
+            )
+            authority.validate_integrity()
+            authority.require_plan_confirmation(plan)
+            if authority.authorization_sha256 != binding.authority_sha256:
+                raise ValueError("原版本拒绝候选恢复没有对应的精确人工工程暂停确认")
         stopped = plan.facts.stopped_execution
         if binding.stopped_execution_sha256 != (stopped.proof_sha256 if stopped else None):
             raise ValueError("未知结果停止绑定缺少对应完整原执行证明")
@@ -327,12 +362,21 @@ class FileExecutionBaselineStore:
         binding.validate_integrity()
         plan = self.plan(binding.plan_sha256)
         require_knowledge_isolation_binding(plan, binding)
+        require_rejected_candidate_binding(plan, binding)
         patch = self._required_patch(binding, plan)
         return (
             (
                 "平台按人工工程决定保留了完整当前草稿, 代码基线和需求分支保持。"
                 "原调用结果仍是未知; 这些草稿是新执行的工程输入, 不是原调用进度或候选通过证明。\n"
                 if binding.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
+                else (
+                    "原 Coder 执行已真实结束, 原 SUCCEEDED 结果及不支持版本的报告完整保留且未接纳。"
+                    "精确原候选及完整补丁只作为本次新执行的工程输入, 原批准代码基线保持。"
+                    "新 Run 消费一次普通工作额度, 不退款或复用原结果; "
+                    "必须重新产出当前版本的合法报告。"
+                    "已有候选不代表实现、测试或验收通过, 独立 QA 与 Review 仍须正常完成。\n"
+                )
+                if binding.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE
                 else (
                     "平台按精确人工工程决定确认当前知识执行已隔离, 原代码基线和完整进度保持。"
                     "旧知识传输历史仍为 UNKNOWN; 当前隔离不证明历史未启动或已停止。"

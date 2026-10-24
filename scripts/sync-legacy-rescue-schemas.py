@@ -21,6 +21,10 @@ from ai_software_engineer.manager.completed_output_checkpoint import (
 )
 from ai_software_engineer.manager.knowledge_invocation_proof import ReplayGuardedClaimObservation
 from ai_software_engineer.manager.knowledge_isolation import KnowledgePreparationIsolationProof
+from ai_software_engineer.manager.rejected_candidate_output import RejectedCandidateOutputProof
+from ai_software_engineer.manager.rejected_candidate_owner import (
+    RejectedCandidateExpiredOwnerSettlement,
+)
 from ai_software_engineer.manager.stopped_execution_checkpoint import StoppedCoderExecutionProof
 from ai_software_engineer.manager.stopped_failure_checkpoint import StoppedFailureProof
 from ai_software_engineer.manager.stopped_provider_checkpoint import StoppedProviderFailureProof
@@ -57,6 +61,8 @@ MODELS = (
     ReplayGuardedClaimObservation,
     DeliveryWaitInvestigation,
     KnowledgePreparationIsolationProof,
+    RejectedCandidateOutputProof,
+    RejectedCandidateExpiredOwnerSettlement,
 )
 UPDATED = {
     "ExecutionBaselineBinding",
@@ -90,6 +96,8 @@ UPDATED = {
     "ReplayGuardedClaimObservation",
     "DeliveryWaitInvestigation",
     "KnowledgePreparationIsolationProof",
+    "RejectedCandidateOutputProof",
+    "RejectedCandidateExpiredOwnerSettlement",
 }
 
 
@@ -115,6 +123,8 @@ def main() -> None:
         ("stopped-coder-execution", StoppedCoderExecutionProof),
         ("replay-guarded-claim-observation", ReplayGuardedClaimObservation),
         ("knowledge-preparation-isolation", KnowledgePreparationIsolationProof),
+        ("rejected-candidate-output", RejectedCandidateOutputProof),
+        ("rejected-candidate-owner-settlement", RejectedCandidateExpiredOwnerSettlement),
     )
     standalone_names = {f"{filename}.schema.json" for filename, _ in standalone}
     for filename, model in standalone:
@@ -431,6 +441,7 @@ def guards(node: dict[str, object]) -> None:
                                 "stopped_execution_rescue",
                                 "context_capacity_resume",
                                 "knowledge_preparation_isolation",
+                                "rejected_candidate_rescue",
                             ]
                         }
                     },
@@ -1071,6 +1082,7 @@ def guards(node: dict[str, object]) -> None:
     stopped_guards(node)
     stopped_failure_guards(node)
     knowledge_isolation_guards(node)
+    rejected_candidate_guards(node)
 
     # Runtime-only capacity recovery is an independent purpose. These local
     # wire gates supplement the complete plan/binding/queue association in code.
@@ -1473,12 +1485,13 @@ def knowledge_isolation_guards(node: dict[str, object]) -> None:
                                 "approved_native_rule_change_sha256",
                             )
                         },
-                    }
+                    },
                 },
             }
         )
     elif title in {"ExecutionBaselinePlan", "ExecutionBaselineBinding"}:
-        shared = {"input_mode": {"const": "preserve_draft"}}
+        shared: dict[str, object] = {"input_mode": {"const": "preserve_draft"}}
+        otherwise: dict[str, object]
         if title == "ExecutionBaselinePlan":
             shared.update(
                 {
@@ -1532,6 +1545,234 @@ def knowledge_isolation_guards(node: dict[str, object]) -> None:
         # unrelated policy gates keep their complete existing bytes and order.
         retained = [guard for guard in existing if guard.get("if") not in conditions]
         node["allOf"] = [*retained, *guards_to_add]
+
+
+def rejected_candidate_guards(node: dict[str, object]) -> None:
+    """Keep unsupported successful candidates separate from every old rescue family."""
+    title = node.get("title")
+    purpose = {
+        "required": ["purpose"],
+        "properties": {"purpose": {"const": "rejected_candidate_rescue"}},
+    }
+    facts_nulls = {
+        name: {"type": "null"}
+        for name in (
+            "legacy_containment",
+            "completed_output",
+            "stopped_provider_failure",
+            "stopped_failure",
+            "stopped_execution",
+            "knowledge_isolation",
+            "native_rule_change",
+            "context_capacity_receipt_sha256",
+            "implementation_artifact_id",
+        )
+    }
+    binding_nulls = {
+        name: {"type": "null"}
+        for name in (
+            "legacy_containment_sha256",
+            "completed_output_sha256",
+            "stopped_provider_failure_sha256",
+            "stopped_failure_sha256",
+            "stopped_execution_sha256",
+            "knowledge_isolation_sha256",
+            "context_capacity_receipt_sha256",
+            "service_pause_outcome_sha256",
+            "superseded_implementation_artifact_id",
+        )
+    }
+    cause = {
+        "required": ["retry_cause"],
+        "properties": {"retry_cause": {"const": "rejected_candidate_output"}},
+    }
+    gates: list[dict[str, object]] = []
+    if title == "RejectedCandidateOutputProof":
+        gates = [
+            {
+                "properties": {
+                    "task": {"properties": {"status": {"const": "IMPLEMENTING"}}},
+                    "outcome": {
+                        "properties": {
+                            "service_pause": {"type": "null"},
+                            "start": {
+                                "properties": {
+                                    "request": {"properties": {"role": {"const": "coder"}}}
+                                }
+                            },
+                            "result": {
+                                "required": ["artifact"],
+                                "properties": {
+                                    "status": {"const": "SUCCEEDED"},
+                                    "error": {"type": "null"},
+                                    "artifact": {
+                                        "type": "object",
+                                        "required": ["kind", "schema_version"],
+                                        "properties": {
+                                            "kind": {"const": "implementation-report"},
+                                            "schema_version": {"not": {"const": "v0.1"}},
+                                            "content": {
+                                                "properties": {"blocked_reason": {"type": "null"}}
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    },
+                    "capture_stop": {
+                        "properties": {
+                            "output_present": {"const": True},
+                            "cause": {"type": "null"},
+                            "original_error_code": {"type": "null"},
+                            "execution_abort_reason": {"type": "null"},
+                            "process_stop": {
+                                "required": ["session_proof"],
+                                "properties": {
+                                    "kind": {"const": "completed"},
+                                    "returncode": {"const": 0},
+                                    "session_proof": {
+                                        "type": "object",
+                                        "properties": {
+                                            "proof_scope": {"const": "owned_session_empty"}
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    },
+                }
+            }
+        ]
+    elif title == "BaselineExecutionReservation":
+        required = [
+            "rejected_candidate_output_sha256",
+            "original_run_id",
+            "current_invocation_start_sha256",
+            "current_invocation_outcome_sha256",
+        ]
+        gates = [
+            {
+                "if": cause,
+                "then": {
+                    "required": required,
+                    "properties": {
+                        **{name: {"type": "string"} for name in required},
+                        **{
+                            name: {"type": "null"}
+                            for name in (
+                                "containment_sha256",
+                                "completed_output_sha256",
+                                "stopped_provider_failure_sha256",
+                                "stopped_failure_sha256",
+                                "stopped_execution_sha256",
+                                "knowledge_isolation_sha256",
+                                "interruption_receipt_sha256",
+                                "retry_failure",
+                            )
+                        },
+                        "reservation_already_applied": {"const": False},
+                    },
+                },
+                "else": {"properties": {"rejected_candidate_output_sha256": {"type": "null"}}},
+            }
+        ]
+    elif title == "BaselineExecutionFacts":
+        gates = [
+            {
+                "if": {
+                    "required": ["continuation"],
+                    "properties": {"continuation": {"type": "object", **cause}},
+                },
+                "then": {
+                    "required": ["rejected_candidate_output"],
+                    "properties": {
+                        "rejected_candidate_output": {"type": "object"},
+                        **facts_nulls,
+                    },
+                },
+                "else": {"properties": {"rejected_candidate_output": {"type": "null"}}},
+            },
+            {
+                "if": {
+                    "required": ["rejected_candidate_output"],
+                    "properties": {"rejected_candidate_output": {"type": "object"}},
+                },
+                "then": {
+                    "required": ["continuation"],
+                    "properties": {"continuation": {"type": "object", **cause}, **facts_nulls},
+                },
+            },
+        ]
+    elif title == "ExecutionBaselinePlan":
+        gates = [
+            {
+                "if": purpose,
+                "then": {
+                    "properties": {
+                        "input_mode": {"const": "preserve_draft"},
+                        "conflicted": {"const": False},
+                        "facts": {
+                            "required": ["rejected_candidate_output"],
+                            "properties": {
+                                "rejected_candidate_output": {"type": "object"},
+                                **facts_nulls,
+                            },
+                        },
+                    }
+                },
+                "else": {
+                    "properties": {
+                        "facts": {"properties": {"rejected_candidate_output": {"type": "null"}}}
+                    }
+                },
+            }
+        ]
+    elif title == "ExecutionBaselineBinding":
+        gates = [
+            {
+                "if": purpose,
+                "then": {
+                    "required": ["rejected_candidate_output_sha256", "continuation_mode"],
+                    "properties": {
+                        "rejected_candidate_output_sha256": {"type": "string"},
+                        "continuation_mode": {"const": "pause"},
+                        "authority_source": {"const": "engineering_operator_decision"},
+                        "input_mode": {"const": "preserve_draft"},
+                        **binding_nulls,
+                    },
+                },
+                "else": {"properties": {"rejected_candidate_output_sha256": {"type": "null"}}},
+            }
+        ]
+    elif title == "BaselineQueueConsumption":
+        gates = [
+            {
+                "if": {"required": ["plan"], "properties": {"plan": purpose}},
+                "then": {
+                    "properties": {
+                        "binding": {
+                            "required": [
+                                "purpose",
+                                "rejected_candidate_output_sha256",
+                                "continuation_mode",
+                            ],
+                            "properties": {
+                                "purpose": {"const": "rejected_candidate_rescue"},
+                                "rejected_candidate_output_sha256": {"type": "string"},
+                                "continuation_mode": {"const": "pause"},
+                                "authority_source": {"const": "engineering_operator_decision"},
+                                **binding_nulls,
+                            },
+                        }
+                    }
+                },
+            }
+        ]
+    existing = node.get("allOf", [])
+    assert isinstance(existing, list)
+    if gates:
+        node["allOf"] = [*existing, *(gate for gate in gates if gate not in existing)]
 
 
 if __name__ == "__main__":

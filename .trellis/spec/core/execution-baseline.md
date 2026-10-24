@@ -1,5 +1,133 @@
 # Same-Task execution baseline contract
 
+## Unaccepted committed candidate recovery (2026-10-25)
+
+### Scope / Trigger
+
+Use only for an original completed `SUCCEEDED` Coder invocation whose
+`implementation-report` was rejected for an unsupported artifact version after
+a real clean candidate was committed. This is distinct from an accepted candidate,
+a failed output, rejected progress or an unknown execution. Full contracts also
+appear in `delivery-recovery.md` under rejected successful candidate report rescue.
+
+### Signatures
+
+`BaselineProposeCommand(purpose="rejected_candidate_rescue", target_base_ref=None,
+input_mode="preserve_draft", expected_task_revision=..., expected_work_item_id=...,
+expected_source_revision=...)` is target-free. The trusted collector derives
+candidate, single parent, original claim, true owned stop and full patch.
+
+`require_rejected_candidate_binding(plan, binding)` checks task/intent/base/branch,
+scope, predecessor/sequence, original worktree, complete source artifact IDs,
+resolved interruption receipts, previous task revision, superseded progress,
+native-rule epoch, unchanged inventory, candidate/base and exact plan/facts.
+Rehashing a contradictory binding grants no authority.
+
+`BaselineInitialWorkspaceAdmission.retained_candidate_report_base(request,
+workspace_root, artifact) -> str` returns the original execution base only after
+reopening the latest trusted binding, actual SQL consumption and the current real
+Coder claim. It rechecks the complete original-base candidate diff and bounded
+unfiltered inventory. Ordinary Coder runs still require a new candidate commit.
+
+`ProductionProjectDeliveryBackend.rejected_candidate_reentry_scope(checkpoint)
+-> ContextManager[RejectedCandidateReentryProof | None]` seals current rescue facts
+under the real Task process lock and unchanged idle queue fence.
+`UnifiedProjectEntryService.retry_rejected_candidate_baseline(command, *, proof_scope)`
+appends the missing Delivery cursor only for this exact public recovery route.
+
+### Contracts
+
+- Original Task/base, approved product/native rules, branch and immutable outcomes
+  remain unchanged. Only append-only execution source advances to the existing
+  candidate; no Git reset, rebase, reapply, new artificial commit or report rewrite.
+- Exact ENGINEERING approval must PAUSE. Consumption closes the original work item
+  and reserves one normal-work successor. A separate exact latest-bound RESUME is
+  needed before a fresh claim/Run/Context; no transient refund or repeated debit.
+- A rejected report can leave its child Delivery `BLOCKED/FAILED` while its original
+  Task remains `IMPLEMENTING`. The public resume controller first checks the narrow
+  rejected-candidate seam before the legacy stopped-execution route. It is never a
+  generic terminal Task retry: Task `BLOCKED/FAILED/DONE`, accepted candidates,
+  unrelated failures and mixed approval/recovery commands remain ineligible.
+- A read-only latest-purpose check precedes all Task/queue fences. An absent or
+  non-rescue latest binding returns no proof and preserves the existing route even
+  when that route still owns an ACTIVE claim. The rescue path then rereads complete
+  bindings under its lock and unchanged idle fence; this preflight grants no authority.
+- `RejectedCandidateReentryProof` binds exact checkpoint digest, Task/revision,
+  requirement/dispatch/repository, original parent WorkItem, next attempt and unchanged
+  retry history, complete plan/binding and current successor. A still-paused successor
+  returns an explicit continue diagnostic without appending a cursor or calling a model.
+  Only the unique READY, unclaimed successor with its committed exact engineering
+  release may append `DELIVERING`. Changed cursor/source/inventory or old release refuses.
+- The cursor append occurs while Task/SQL proof fences are held. Both fences must be
+  released before ordinary `resume()` invokes Supervisor admission/claim; fresh Coder,
+  QA and Reviewer retain independent claims and artifact lineage.
+- `idle_task_scope` continues to reject every ACTIVE claim. The specialized typed
+  expired-owner settlement is possible only under the actual Task process lock,
+  queue authority and locked Task/claim rows, with two complete current stop/proof
+  readings. Initial immutable claim expiry and real renewed lease expiry are
+  separate facts. Expiry alone does not prove stop. Settlement preserves the
+  WorkItem, dispatch, Task and budget and appends its own immutable audit record.
+- `WorkerExecutionGuard.check_task_scope(task_id)` checks the exact private held
+  descriptor, visible path, task identity and inode. It grants no Worker execution
+  authority; ordinary `check()` still requires a live Worker lease.
+- Allowed report-only inventory differences are explicit bounded execution caches,
+  each a regular file with mode 0644 or 0755. Symlinks, special permissions, source,
+  index or full candidate changes refuse. SHA agreement does not replace these gates.
+
+### Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Exact unsupported completed success, clean lawful candidate, true stop | Prepare target-free plan |
+| Valid live claim, wrong task lock, missing stop, dirty candidate or publication | Refuse; preserve original facts |
+| Renewed then actually expired original lease | Compare original snapshot with actual renewed lease, then audited settlement |
+| Rehashed foreign scope/source/receipt/worktree/revision/predecessor | Refuse binding read and consumption |
+| PAUSE consumed, no separate RESUME | Work item remains unclaimable |
+| BLOCKED child, still-paused exact rescue successor | Diagnostic only; same child checkpoint and no model call |
+| BLOCKED child, unique released unclaimed successor, Task still IMPLEMENTING | Append DELIVERING under proof fences, release fences, ordinary Supervisor |
+| Non-rescue latest baseline with an ACTIVE old claim | No rescue proof; preserve original recovery route and strict idle policy |
+| Terminal Task, foreign/old release, changed checkpoint or inventory | Refuse; no cursor append or dispatch |
+| Unique consumed latest binding plus fresh current Coder claim | Revalidate full candidate before accepting a newly compliant report |
+| Ordinary no-change Coder output | Reject unchanged |
+
+### Good / Base / Bad Cases
+
+Console protocol 11 uses `engineeringRejectedCandidatePauses(request)` to keep the
+separate RESUME visible when the native Delivery still projects its historical
+terminal failure. A successful exact EXECUTE result must contain the same typed
+rejected-candidate PAUSE binding referenced by the current Coder
+`EXECUTION_BASELINE_PAUSED` work item. Project/team/root, Task intent/revision,
+source, plan/binding/disposition and unchanged inventory must agree. The click
+handler reopens those current facts and capability/control gates. It never opens
+the ordinary terminal recovery families or infers authority from lease expiry.
+`rejected-candidate-rescue.test.cjs` checks stale clicks and binding/scope/wait drift.
+
+Good: original base A and clean candidate B remain, a stopped old owner is audited,
+one normal-work attempt is approved and separately resumed, then independent
+QA/Review judge the fresh report. Base: no new proof fields means historical wire
+hashes remain unchanged. Bad: fix the old JSON version, infer stop from a stale
+heartbeat, restore an old claim or use a proposal as report-only permission.
+
+### Tests Required / Wrong vs Correct
+
+`test_rejected_candidate_baseline_service.py` uses actual Git and owned stop facts,
+checks complete before/after preservation and rehashed cross-record rejection.
+`test_rejected_candidate_baseline_mysql.py` checks real claim renewal, specialized
+expiry, rollback, strict idle, single debit and PAUSE idempotence.
+`test_rejected_candidate_admission_mysql.py` consumes, separately releases, dispatches
+and starts a real new Worker before invoking the real admission checker; a stale
+binding or changed source refuses. Adapter tests preserve ordinary no-change refusal.
+`test_rejected_candidate_reentry.py` checks controller precedence, released/paused proof
+gates, foreign Task/revision/dispatch/claim, changed cursor, mixed commands, terminal
+Task refusal and non-rescue ACTIVE route preservation. Public
+`test_public_rejected_candidate_recovery.py` covers both `pending_child` and
+`blocked_child` with real Git/native stop/MySQL claims through exact PAUSE and separate
+RESUME to fresh Coder, independent QA/Review and DONE, retaining original history.
+
+Wrong: bypass the idle check because `expires_at < now` or require the maintenance
+collector to invent a Worker lease. Correct: verify a real Task lock and exact stopped
+execution in the narrow audited settlement, then enter the unchanged idle fence.
+
 ## Claimed final-input capacity and same-Task PAUSE/RESUME (2026-10-12)
 
 `BaselineExecutionFacts.context_capacity_receipt_sha256: Sha256 | None` is an additive,

@@ -19,7 +19,12 @@ from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents.execution import ExecutionStop, SynchronousToolLoopStop
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, RouteAttemptOutcome
-from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentRunStatus
+from ai_software_engineer.agents.models import (
+    AgentErrorCode,
+    AgentOutputContractError,
+    AgentRequest,
+    AgentRunStatus,
+)
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.artifacts.ordering import latest_accepted_artifact
 from ai_software_engineer.domain.agent import AgentPermissions
@@ -28,6 +33,7 @@ from ai_software_engineer.domain.artifact import (
     ImplementationReportArtifact,
     PlanArtifact,
     Sha256,
+    validate_current_artifact_version,
 )
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.engineering_authority import EngineeringScope
@@ -65,6 +71,8 @@ from ai_software_engineer.manager.baseline_models import (
     require_knowledge_isolation_confirmation,
     require_provider_confirmation_shape,
     require_provider_prerequisite_confirmation,
+    require_rejected_candidate_binding,
+    require_rejected_candidate_confirmation,
     require_rescue_confirmation,
     require_stopped_failure_confirmation,
     require_stopped_failure_confirmation_shape,
@@ -116,6 +124,7 @@ from ai_software_engineer.manager.local_survey_observation import (
     IsolatedLegacyLocalExecutionObserver,
 )
 from ai_software_engineer.manager.owned_session_boot_bridge import ScopedNativeStopVerifier
+from ai_software_engineer.manager.rejected_candidate_output import RejectedCandidateOutputProof
 from ai_software_engineer.manager.stopped_execution_checkpoint import (
     StoppedCoderExecutionProof,
     read_stopped_coder_execution,
@@ -132,6 +141,7 @@ from ai_software_engineer.manager.stopped_provider_checkpoint import (
 from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCollector
 from ai_software_engineer.orchestration.capture_reconciliation import validate_capture_stop
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
+from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.orchestration.continuation_models import (
     ContinuationRecordMissing,
     ContinuationScope,
@@ -173,6 +183,7 @@ class BaselineProposeCommand(DomainModel):
     def distinct_preparation(self) -> Self:
         if self.purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+            BaselinePurpose.REJECTED_CANDIDATE_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
             BaselinePurpose.STOPPED_FAILURE_RETRY,
             BaselinePurpose.STOPPED_EXECUTION_RESCUE,
@@ -219,7 +230,11 @@ class BaselineProposeCommand(DomainModel):
             task_intent_sha256(facts.task),
             facts.task_revision,
             facts.work_item_id,
-            plan.dirty_capture.source_revision,
+            (
+                facts.rejected_candidate_output.request.source_revision
+                if facts.rejected_candidate_output is not None
+                else plan.dirty_capture.source_revision
+            ),
             plan.target_base_ref,
             plan.input_mode,
             plan.purpose,
@@ -233,6 +248,7 @@ class BaselineProposeCommand(DomainModel):
             if self.purpose
             in {
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+                BaselinePurpose.REJECTED_CANDIDATE_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
                 BaselinePurpose.STOPPED_FAILURE_RETRY,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
@@ -318,6 +334,7 @@ class BaselineExecuteCommand(DomainModel):
         )
         plan.validate_integrity()
         require_completed_output_confirmation(plan, self.continuation_mode)
+        require_rejected_candidate_confirmation(plan, self.continuation_mode)
         if (
             plan.facts.context_capacity_receipt_sha256 is not None
             and self.continuation_mode is not BaselineContinuationMode.PAUSE
@@ -644,6 +661,7 @@ class ProductionBaselineFactCollector:
                 command.purpose
                 not in {
                     BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+                    BaselinePurpose.REJECTED_CANDIDATE_RESCUE,
                     BaselinePurpose.STOPPED_PROVIDER_RETRY,
                     BaselinePurpose.STOPPED_FAILURE_RETRY,
                     BaselinePurpose.STOPPED_EXECUTION_RESCUE,
@@ -753,17 +771,54 @@ class ProductionBaselineFactCollector:
     def execution_scope(self) -> Iterator[None]:
         if self._scope_held:
             raise ValueError("执行基线调查不允许嵌套执行")
-        with (
-            self.guard.task_scope(self.locks_root, self.allocation.task_id),
-            self.queue.idle_task_scope(self.allocation.task_id) as cursor,
-        ):
-            self._scope_held = True
-            self._idle_cursor = cursor
-            try:
-                yield
-            finally:
-                self._scope_held = False
-                self._idle_cursor = None
+        with self.guard.task_scope(self.locks_root, self.allocation.task_id):
+            if getattr(self, "purpose", None) is BaselinePurpose.REJECTED_CANDIDATE_RESCUE:
+                if self.inputs.store is None:
+                    raise ValueError("原拒绝候选owner收尾缺少可信完整封存位置")
+
+                def collect_current() -> RejectedCandidateOutputProof:
+                    task = self.repository.get(self.allocation.task_id)
+                    unfinished = tuple(
+                        item
+                        for item in self.queue.items_for_task(task.id)
+                        if item.status is not WorkItemStatus.CLOSED
+                    )
+                    if len(unfinished) != 1:
+                        raise ValueError("原拒绝候选owner收尾缺少唯一未结束工作")
+                    item = unfinished[0]
+                    step = self.queue.step(item.id)
+                    command = self._proposal_command
+                    if command is not None:
+                        command.require_current(
+                            task,
+                            self.repository.current_revision(task.id),
+                            item.id,
+                            step.boundary.source_revision,
+                        )
+                        if (
+                            command.delivery_id != self.requirement_id
+                            or command.purpose != self.purpose
+                        ):
+                            raise ValueError("工程执行基线事实已变化, 请刷新后重新调查")
+                    proof = self._rejected_candidate_output(task, item, step)
+                    if proof is None:
+                        raise ValueError("原拒绝候选owner收尾缺少完整已停止版本拒绝证明")
+                    return proof
+
+                self.queue.settle_rejected_candidate_expired_owner(
+                    task_id=self.allocation.task_id,
+                    task_lock=self.guard,
+                    collect_current=collect_current,
+                    seal=self.inputs.store.put_expired_owner_settlement,
+                )
+            with self.queue.idle_task_scope(self.allocation.task_id) as cursor:
+                self._scope_held = True
+                self._idle_cursor = cursor
+                try:
+                    yield
+                finally:
+                    self._scope_held = False
+                    self._idle_cursor = None
 
     def publish_completion(
         self, plan: ExecutionBaselinePlan, binding: ExecutionBaselineBinding
@@ -772,6 +827,7 @@ class ProductionBaselineFactCollector:
             raise ValueError("基线队列接续缺少原持锁执行范围和 SQL 屏障")
         if binding.task_id != self.allocation.task_id or binding.scope != self.scope:
             raise ValueError("基线队列接续不属于当前需求和原批准范围")
+        require_rejected_candidate_binding(plan, binding)
         from ai_software_engineer.work_queue.baseline import consume_baseline
 
         def validate_new_consumption() -> None:
@@ -943,6 +999,29 @@ class ProductionBaselineFactCollector:
                         or capture_mutation_inventory(Path(binding.worktree_path)) != inventory
                     ):
                         raise ValueError("未接纳产出基线更新后的源版本、完整草稿或 index 已变化")
+
+            if plan.facts.rejected_candidate_output is not None:
+                task = self.repository.get(plan.facts.task.id)
+                item = self.queue.get(plan.facts.work_item_id)
+                rejected_proof = plan.facts.rejected_candidate_output
+                if (
+                    self._rejected_candidate_output(task, item, self.queue.step(item.id))
+                    != rejected_proof
+                ):
+                    raise ValueError("原版本拒绝候选、执行停止或发布事实已变化, 原现场保留")
+                for capture in (plan.dirty_capture, plan.complete_capture):
+                    self.git.verify_mutations(
+                        capture.to_capture(),
+                        plan.facts.permissions,
+                        denied_paths=plan.facts.denied_paths,
+                    )
+                inventory = capture_mutation_inventory(Path(binding.worktree_path))
+                if (
+                    inventory != plan.before_inventory
+                    or inventory != rejected_proof.inventory
+                    or inventory.sha256 != binding.after_inventory_sha256
+                ):
+                    raise ValueError("原版本拒绝候选的完整干净现场已变化, 恢复尚未安排")
 
             if plan.facts.stopped_provider_failure is not None:
                 task = self.repository.get(plan.facts.task.id)
@@ -1124,7 +1203,18 @@ class ProductionBaselineFactCollector:
         if len(current) != 1:
             raise ValueError("执行基线必须对应唯一尚未结束的 Coder 工作项")
         item = current[0]
-        if item.status in {WorkItemStatus.LEASED, WorkItemStatus.RUNNING} or (
+        if (
+            self.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE
+            and item.status is not WorkItemStatus.RUNNING
+        ):
+            raise ValueError("原版本拒绝候选恢复需要精确原运行工作项")
+        if (
+            item.status in {WorkItemStatus.LEASED, WorkItemStatus.RUNNING}
+            and not (
+                item.status is WorkItemStatus.RUNNING
+                and self.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE
+            )
+        ) or (
             item.task_id,
             item.repository_id,
             item.role,
@@ -1160,6 +1250,7 @@ class ProductionBaselineFactCollector:
             raise ValueError("Coder 队列源版本与当前已接纳输入不一致")
         if self.purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+            BaselinePurpose.REJECTED_CANDIDATE_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
             BaselinePurpose.STOPPED_FAILURE_RETRY,
             BaselinePurpose.STOPPED_EXECUTION_RESCUE,
@@ -1223,6 +1314,16 @@ class ProductionBaselineFactCollector:
             if assignment.task_id == task.id
         )
         receipts = self._receipts(task)
+        rejected_candidate_output = (
+            self._rejected_candidate_output(task, item, step)
+            if self.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE
+            else None
+        )
+        if (
+            self.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE
+            and rejected_candidate_output is None
+        ):
+            raise ValueError("原执行不符合精确已停止且版本拒绝的完整候选恢复前提")
         legacy = (
             self._legacy_containment(task, item)
             if self.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
@@ -1252,6 +1353,7 @@ class ProductionBaselineFactCollector:
         completed_output = (
             self._completed_output(task, item, step)
             if not any(receipt.original_work_item_id == item.id for receipt in receipts)
+            and rejected_candidate_output is None
             else None
         )
         if self.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE and completed_output is None:
@@ -1285,6 +1387,7 @@ class ProductionBaselineFactCollector:
             receipts,
             legacy=legacy,
             completed_output=completed_output,
+            rejected_candidate_output=rejected_candidate_output,
             stopped_provider_failure=stopped_provider_failure,
             stopped_failure=stopped_failure,
             stopped_execution=stopped_execution,
@@ -1329,6 +1432,7 @@ class ProductionBaselineFactCollector:
             legacy_containment=legacy,
             knowledge_isolation=knowledge_isolation,
             completed_output=completed_output,
+            rejected_candidate_output=rejected_candidate_output,
             stopped_provider_failure=stopped_provider_failure,
             stopped_failure=stopped_failure,
             stopped_execution=stopped_execution,
@@ -1359,6 +1463,26 @@ class ProductionBaselineFactCollector:
     def source_worktree(self, facts: BaselineExecutionFacts) -> WorktreeRef:
         if not self._scope_held or facts.task.id != self.allocation.task_id:
             raise ValueError("执行基线工作区不属于当前持锁需求")
+        if facts.rejected_candidate_output is not None:
+            proof = facts.rejected_candidate_output
+            proof.validate_for(
+                facts.task,
+                self.queue.step(facts.work_item_id),
+                self.scope,
+                facts.permissions,
+                facts.denied_paths,
+            )
+            reference = self.git.recover(
+                WorktreeSpec(
+                    task_id=facts.task.id,
+                    role=AgentRole.CODER,
+                    attempt=1,
+                    source_revision=proof.candidate_revision,
+                )
+            )
+            if str(reference.path) != proof.capture_start.worktree_path:
+                raise ValueError("原拒绝候选工作区位置已变化")
+            return reference
         artifacts = self.artifacts.list_for_task(facts.task.id)
         previous_source = self.inputs.current(facts.task, implementation=None, progress=None)
         implementation = latest_accepted_artifact(
@@ -1862,6 +1986,110 @@ class ProductionBaselineFactCollector:
         self._validate_stopped_proof(task, item, step, proof)
         return proof
 
+    def _rejected_candidate_output(
+        self, task: Task, item: QueuedWorkItem, step: QueuedRoleStep
+    ) -> RejectedCandidateOutputProof | None:
+        """Reopen exact original unsupported output; no acceptance or Git mutation."""
+        records = KnowledgeRecordStore(self.state / "invocations", read_only=True)
+        outcome = records.find("invocation-outcomes", item.id, DeliveryInvocationOutcome)
+        if outcome is None or outcome.result.status is not AgentRunStatus.SUCCEEDED:
+            return None
+        report = outcome.result.artifact
+        if not isinstance(report, ImplementationReportArtifact):
+            return None
+        try:
+            validate_current_artifact_version(report)
+        except ValueError as error:
+            expected_rejection = str(error)
+        else:
+            return None
+        try:
+            outcome.result.validate_current_output()
+        except AgentOutputContractError as error:
+            if str(error) != expected_rejection:
+                raise ValueError("原候选输出不是单一精确版本契约拒绝") from error
+        else:
+            raise ValueError("原候选输出未命中当前精确版本拒绝")
+        start = records.get("invocation-starts", item.id, DeliveryInvocationStart)
+        ledger = FileContinuationStore(self.state / "continuations" / task.id, task_id=task.id)
+        capture_start = ledger.capture_start(start.request.run_id)
+        capture_stop = ledger.capture_stop(start.request.run_id)
+        reference = self.git.recover(
+            WorktreeSpec(
+                task_id=task.id,
+                role=AgentRole.CODER,
+                attempt=1,
+                source_revision=report.content.commit_sha,
+            )
+        )
+        if str(reference.path) != capture_start.worktree_path or self.git._run_git_bytes(
+            ("status", "--porcelain=v1", "--untracked-files=all", "-z"), cwd=reference.path
+        ):
+            raise ValueError("原未接纳候选工作区已变化或不是完整干净现场")
+        parent = self.git._run_git(
+            ("rev-parse", report.content.commit_sha + "^@"), cwd=reference.path
+        )
+        complete = CapturedMutations.from_capture(
+            self.git.capture_mutations(
+                reference,
+                self.permissions,
+                denied_paths=task.constraints.denied_paths if task.constraints else (),
+                base_revision=start.request.source_revision,
+                include_ignored=True,
+            )
+        )
+        proof = RejectedCandidateOutputProof.create(
+            scope=self.scope,
+            task=task,
+            task_revision=self.repository.current_revision(task.id),
+            task_intent_sha256=task_intent_sha256(task),
+            step=step,
+            outcome=outcome,
+            capture_start=capture_start,
+            capture_stop=capture_stop,
+            candidate_revision=report.content.commit_sha,
+            candidate_parent_revision=parent,
+            complete_capture=complete,
+            inventory=capture_mutation_inventory(reference.path),
+            publication_absent=True,
+        )
+        self._validate_stopped_proof(task, item, step, proof)
+        proof.validate_for(
+            task,
+            step,
+            self.scope,
+            self.permissions,
+            task.constraints.denied_paths if task.constraints else (),
+        )
+        return proof
+
+    def _validate_rejected_candidate_publications(
+        self, task: Task, proof: RejectedCandidateOutputProof
+    ) -> None:
+        request, start = proof.request, proof.outcome.start
+        if proof.capture_start.scope != ContinuationScope(
+            team_id=self.scope.team_id,
+            project_id=self.scope.project_id,
+            repository_id=self.scope.repository_id,
+            requirement_id=self.requirement_id,
+            dispatch_sha256=self.allocation.dispatch_sha256,
+        ) or any(
+            artifact.producer.run_id == request.run_id
+            for artifact in self.capacity_artifacts.list_for_task(task.id)
+        ):
+            raise ValueError("原拒绝候选已有发布产物或不属于精确需求分配")
+        if any(
+            accepted.work_item_id == start.work_item_id
+            or accepted.checkpoint_sequence >= start.checkpoint_sequence
+            for accepted in self.queue.accepted(task.id)
+        ) or any(
+            event.artifact_ids
+            for event in self.repository.list_events(task.id)[proof.capture_start.task_revision :]
+        ):
+            raise ValueError("原拒绝候选之后已有产物接纳, 不能覆盖交付历史")
+        if any(receipt.request.run_id == request.run_id for receipt in self._receipts(task)):
+            raise ValueError("原拒绝候选已有中断接续收据, 不能混用恢复路径")
+
     def _stopped_provider_failure(
         self, task: Task, item: QueuedWorkItem, step: QueuedRoleStep
     ) -> StoppedProviderFailureProof | None:
@@ -1967,7 +2195,8 @@ class ProductionBaselineFactCollector:
         step: QueuedRoleStep,
         proof: CompletedCoderOutputUnavailableProof
         | StoppedProviderFailureProof
-        | StoppedFailureProof,
+        | StoppedFailureProof
+        | RejectedCandidateOutputProof,
     ) -> None:
         proof.validate_integrity()
         outcome, capture_start, capture_stop = (
@@ -1991,6 +2220,8 @@ class ProductionBaselineFactCollector:
         def validate_inputs(request: AgentRequest) -> None:
             if isinstance(proof, StoppedFailureProof):
                 self._validate_stopped_failure_publications(task, proof)
+            if isinstance(proof, RejectedCandidateOutputProof):
+                self._validate_rejected_candidate_publications(task, proof)
             if (
                 request != start.request
                 or request.permissions != self.permissions
@@ -2036,6 +2267,7 @@ class ProductionBaselineFactCollector:
         *,
         legacy: LegacyExecutionContainment | None = None,
         completed_output: CompletedCoderOutputUnavailableProof | None = None,
+        rejected_candidate_output: RejectedCandidateOutputProof | None = None,
         stopped_provider_failure: StoppedProviderFailureProof | None = None,
         stopped_failure: StoppedFailureProof | None = None,
         stopped_execution: StoppedCoderExecutionProof | None = None,
@@ -2047,6 +2279,7 @@ class ProductionBaselineFactCollector:
                 for value in (
                     legacy,
                     completed_output,
+                    rejected_candidate_output,
                     stopped_provider_failure,
                     stopped_failure,
                     stopped_execution,
@@ -2080,6 +2313,7 @@ class ProductionBaselineFactCollector:
                 for value in (
                     legacy,
                     completed_output,
+                    rejected_candidate_output,
                     stopped_provider_failure,
                     stopped_failure,
                     stopped_execution,
@@ -2106,9 +2340,37 @@ class ProductionBaselineFactCollector:
         receipt = next(
             (entry for entry in receipts if entry.request.run_id == start.request.run_id), None
         )
-        if outcome is not None and outcome.result.status is AgentRunStatus.SUCCEEDED:
+        if (
+            outcome is not None
+            and outcome.result.status is AgentRunStatus.SUCCEEDED
+            and rejected_candidate_output is None
+        ):
             raise ValueError("原调用已有成功结果, 需要先接纳封存结果, 不能用基线更新覆盖")
         failure = None
+        if rejected_candidate_output is not None:
+            rejected_candidate_output.validate_integrity()
+            if (
+                self.purpose is not BaselinePurpose.REJECTED_CANDIDATE_RESCUE
+                or rejected_candidate_output.task != task
+                or rejected_candidate_output.work_item_id != item.id
+                or rejected_candidate_output.request.attempt != item.attempt
+                or rejected_candidate_output.outcome != outcome
+                or rejected_candidate_output.outcome.start != start
+                or receipt is not None
+                or task.attempts != start.request.attempt
+                or task.work_budget_exhausted
+                or start.request.attempt + 1 > task.max_attempts
+            ):
+                raise ValueError("原拒绝候选恢复没有剩余普通工作额度或精确原调用身份")
+            return BaselineExecutionReservation(
+                current_attempt=start.request.attempt,
+                next_execution_attempt=start.request.attempt + 1,
+                retry_cause="rejected_candidate_output",
+                original_run_id=start.request.run_id,
+                current_invocation_start_sha256=start.start_sha256,
+                current_invocation_outcome_sha256=outcome.outcome_sha256,
+                rejected_candidate_output_sha256=rejected_candidate_output.proof_sha256,
+            )
         if stopped_execution is not None:
             stopped_execution.validate_integrity()
             if (

@@ -841,6 +841,9 @@ function consoleSupportsStoppedExecutionRescue() {
 function consoleSupportsStoppedFailureRetry() {
   return consoleOperationContractVersion >= 10 && consoleSupportsPausedBaseline();
 }
+function consoleSupportsRejectedCandidateRescue() {
+  return consoleOperationContractVersion >= 11 && consoleSupportsPausedBaseline();
+}
 const configurationApplyStorageKey = "ase-configuration-apply";
 const configurationApplyTimeoutMs = 30000;
 let configurationApplyPending = readConfigurationApplyPending();
@@ -2798,6 +2801,208 @@ function engineeringCurrentProviderPlan(request, task, step) {
     b.operation.operation_id.localeCompare(a.operation.operation_id));
   return candidates[0]?.plan || null;
 }
+function engineeringRejectedCandidatePlans(request) {
+  if (["DONE", "CLOSED"].includes(request.stage)) return [];
+  return operations.filter(operation => operation.status === "SUCCEEDED" &&
+    operationAction(operation) === "PROPOSE_EXECUTION_BASELINE" &&
+    operation.intent?.purpose === "rejected_candidate_rescue" && operationProject(operation) === request.project_id &&
+    operation.intent.delivery_id === request.id).flatMap(operation => {
+    const plan = operationResult(operation)?.execution_baseline_plan;
+    const proof = plan?.facts?.rejected_candidate_output;
+    const task = currentRequestTasks(request).find(item => item.task_id === operation.intent.task_id);
+    const step = task?.role_queue?.find(item => item.work_item_id === plan?.facts?.work_item_id);
+    if (!task || !step || !matchingRejectedCandidateRescuePlan(request, task, step, plan, operation)) return [];
+    return [{task, step, plan, operation, proof, bound: {
+      project_id: request.project_id, delivery_id: request.id, expected_checkpoint_sha256: request.checkpoint_sha256,
+      task_id: task.task_id, expected_task_intent_sha256: task.task_intent_sha256,
+      expected_task_revision: task.task_revision, expected_work_item_id: step.work_item_id,
+      expected_source_revision: proof.outcome.start.request.source_revision,
+    }}];
+  }).sort((a, b) => b.operation.updated_at.localeCompare(a.operation.updated_at) ||
+    b.operation.operation_id.localeCompare(a.operation.operation_id));
+}
+function matchingRejectedCandidateRescuePlan(request, task, step, plan, operation) {
+  const proof = plan?.facts?.rejected_candidate_output;
+  const original = proof?.outcome?.start;
+  const input = original?.request;
+  const output = proof?.outcome?.result;
+  const report = output?.artifact;
+  const start = proof?.capture_start;
+  const stop = proof?.capture_stop;
+  const reservation = plan?.facts?.continuation;
+  const scope = plan?.facts?.scope;
+  const intent = operation.intent;
+  const base = plan?.previous_binding?.execution_base_ref || plan?.facts?.task?.base_ref;
+  const sha = value => /^[a-f0-9]{64}$/.test(value || "");
+  const revision = value => /^[a-f0-9]{40}$/.test(value || "");
+  if (!proof || !input || !start || !scope || !proof.scope || !report?.producer || !reservation) return false;
+  return plan?.purpose === "rejected_candidate_rescue" && sha(plan.plan_sha256) &&
+    operationResult(operation)?.checkpoint_sha256 === request.checkpoint_sha256 &&
+    task.project_id === request.project_id && task.request_id === request.id && task.status === "IMPLEMENTING" &&
+    Number.isInteger(task.task_revision) && task.task_revision === plan.facts.task_revision &&
+    sha(task.task_intent_sha256) && task.task_intent_sha256 === proof?.task_intent_sha256 &&
+    proof.task?.id === task.task_id && proof.task.status === "IMPLEMENTING" && proof.task_revision === task.task_revision &&
+    scope?.team_id === snapshot?.team_id && scope.project_id === request.project_id &&
+    scope.repository_id === proof.scope?.repository_id && scope.repository_root === proof.scope?.repository_root &&
+    proof.scope.team_id === scope.team_id && proof.scope.project_id === scope.project_id &&
+    (!task.scope?.root || scope.repository_root === task.scope.root) &&
+    proof.kind === "rejected_candidate_output" && proof.rejection_reason === "unsupported_schema_version" &&
+    proof.rejected_supported_version === "v0.1" && proof.publication_absent === true && sha(proof.proof_sha256) &&
+    input?.task_id === task.task_id && input.role === "coder" && revision(input.source_revision) &&
+    step.role === "coder" && step.attempt === input.attempt &&
+    ["RUNNING", "READY", "WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(step.status) && step.lease_liveness !== "LEASE_VALID" &&
+    original.work_item_id === step.work_item_id && original.checkpoint_sequence === task.task_revision &&
+    start?.request?.run_id === input.run_id && start.request.task_id === input.task_id &&
+    start.request.source_revision === input.source_revision && start.task_revision === task.task_revision &&
+    start.claim?.work_item?.id === step.work_item_id && start.claim.assignment?.agent_id === report?.producer?.agent_id &&
+    stop?.task_id === input.task_id && stop.run_id === input.run_id && stop.capture_start_sha256 === start.start_sha256 &&
+    stop.process_stop?.kind === "completed" && stop.process_stop.returncode === 0 &&
+    stop.process_stop.session_proof?.proof_scope === "owned_session_empty" && sha(stop.process_stop.session_proof.proof_sha256) &&
+    stop.output_present === true && !stop.cause && !stop.original_error_code && !stop.execution_abort_reason &&
+    output?.status === "SUCCEEDED" && output.run_id === input.run_id && output.task_id === input.task_id &&
+    output.source_revision === input.source_revision && output.context_manifest_id === input.context_manifest_id &&
+    report?.kind === "implementation-report" && typeof report.schema_version === "string" &&
+    report.schema_version !== "v0.1" && !report.content?.blocked_reason &&
+    report.producer.run_id === input.run_id && report.context_manifest_id === input.context_manifest_id &&
+    revision(proof.candidate_revision) && proof.candidate_revision !== input.source_revision &&
+    proof.candidate_parent_revision === input.source_revision && report.source_revision === proof.candidate_revision &&
+    report.content.commit_sha === proof.candidate_revision &&
+    plan.target_base_ref === base && plan.prepared_source_revision === proof.candidate_revision &&
+    plan.dirty_capture?.source_revision === proof.candidate_revision && plan.dirty_capture.patch === "" &&
+    Array.isArray(plan.dirty_capture.mutations) && !plan.dirty_capture.mutations.length &&
+    plan.complete_capture?.source_revision === proof.candidate_revision && plan.complete_capture.base_revision === input.source_revision &&
+    plan.complete_capture.capture_sha256 === proof.complete_capture?.capture_sha256 &&
+    start.worktree_path === plan.dirty_capture.worktree_path && start.worktree_path === plan.complete_capture.worktree_path &&
+    reservation?.retry_cause === "rejected_candidate_output" && reservation.rejected_candidate_output_sha256 === proof.proof_sha256 &&
+    reservation.original_run_id === input.run_id && reservation.current_invocation_outcome_sha256 === proof.outcome.outcome_sha256 &&
+    reservation.current_invocation_start_sha256 === original.start_sha256 && reservation.current_attempt === input.attempt &&
+    reservation.next_execution_attempt === input.attempt + 1 && !reservation.retry_failure && !reservation.reservation_already_applied &&
+    !["legacy_containment", "completed_output", "stopped_provider_failure", "stopped_failure", "stopped_execution",
+      "knowledge_isolation", "native_rule_change", "context_capacity_receipt_sha256", "implementation_artifact_id"].some(key => plan.facts[key]) &&
+    plan.input_mode === "preserve_draft" && plan.conflicted === false && intent.target_base_ref == null &&
+    intent.input_mode === "preserve_draft" && intent.expected_task_revision === task.task_revision &&
+    intent.expected_task_intent_sha256 === task.task_intent_sha256 && intent.expected_work_item_id === step.work_item_id &&
+    intent.expected_source_revision === input.source_revision && intent.expected_checkpoint_sha256 === request.checkpoint_sha256;
+}
+async function submitEngineeringRejectedCandidateRescue(intent, planSha256) {
+  const request = requestById(intent.delivery_id);
+  const current = request && engineeringRejectedCandidatePlans(request)[0];
+  if (!current || current.plan.plan_sha256 !== planSha256 ||
+      !canControlCurrentTeam() || !consoleSupportsRejectedCandidateRescue() ||
+      request.project_id !== snapshot?.selected_project_id || activeOperation(request.id, request.project_id) ||
+      intent.project_id !== request.project_id || intent.task_id !== current.task.task_id ||
+      intent.expected_checkpoint_sha256 !== request.checkpoint_sha256 ||
+      !["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"].includes(intent.action) ||
+      intent.action === "PROPOSE_EXECUTION_BASELINE" && (intent.purpose !== "rejected_candidate_rescue" ||
+        intent.input_mode !== "preserve_draft" || intent.target_base_ref != null || !sameEngineeringWaitIntent(intent, current.bound)) ||
+      intent.action === "EXECUTE_EXECUTION_BASELINE" && (intent.expected_plan_sha256 !== planSha256 || intent.continuation_mode !== "pause")) {
+    operationNotice = {kind: "error", title: "候选报告恢复方案已变化", message: "请重新核对同一需求的精确候选、停止证明和剩余额度，再批准当前方案。"};
+    renderDetail(); renderNotification(); return null;
+  }
+  return submitOperation(intent);
+}
+function engineeringRejectedCandidatePauses(request) {
+  if (["DONE", "CLOSED"].includes(request.stage)) return [];
+  const sha = value => /^[a-f0-9]{64}$/.test(value || "");
+  const revision = value => /^[a-f0-9]{40}$/.test(value || "");
+  return operations.filter(operation => operation.status === "SUCCEEDED" &&
+    operationAction(operation) === "EXECUTE_EXECUTION_BASELINE" &&
+    operationProject(operation) === request.project_id && operation.intent?.delivery_id === request.id &&
+    operation.intent.continuation_mode === "pause").flatMap(operation => {
+    const binding = operationResult(operation)?.execution_baseline_binding;
+    const task = currentRequestTasks(request).find(item => item.task_id === operation.intent.task_id);
+    if (!binding || !task || task.status !== "IMPLEMENTING" || task.project_id !== request.project_id ||
+        task.request_id !== request.id || binding.purpose !== "rejected_candidate_rescue" ||
+        binding.continuation_mode !== "pause" || binding.input_mode !== "preserve_draft" ||
+        binding.authority_source !== "engineering_operator_decision" ||
+        binding.task_id !== task.task_id || binding.task_intent_sha256 !== task.task_intent_sha256 ||
+        binding.prior_task_revision !== task.task_revision || !Number.isInteger(task.task_revision) ||
+        !sha(task.task_intent_sha256) || !sha(binding.binding_sha256) || !sha(binding.rejected_candidate_output_sha256) ||
+        !sha(binding.authority_sha256) || binding.plan_sha256 !== operation.intent.expected_plan_sha256 ||
+        !sha(binding.plan_sha256) || binding.scope?.team_id !== snapshot?.team_id ||
+        binding.scope.project_id !== request.project_id ||
+        !task.scope?.root || binding.scope.repository_root !== task.scope.root ||
+        !revision(binding.execution_source_revision) || !revision(binding.execution_base_ref) ||
+        binding.execution_base_ref !== binding.prior_execution_base_ref ||
+        binding.execution_source_revision === binding.prior_source_revision ||
+        !sha(binding.after_inventory_sha256) || binding.before_inventory_sha256 !== binding.after_inventory_sha256 ||
+        operationResult(operation)?.delivery_id !== request.id ||
+        operationResult(operation)?.project_id !== request.project_id) return [];
+    return (task.role_queue || []).flatMap(step => {
+      const disposition = step.wait_disposition;
+      const facts = disposition?.facts;
+      if (step.role !== "coder" || step.status !== "WAITING_HUMAN" || step.lease_liveness === "LEASE_VALID" ||
+          disposition?.responsibility !== "engineering" || disposition.action !== "RESUME_EXECUTION_BASELINE" ||
+          !facts || facts.classification !== "EXECUTION_BASELINE_PAUSED" || facts.task_id !== task.task_id ||
+          facts.work_item_id !== step.work_item_id || facts.checkpoint_sequence !== task.task_revision ||
+          facts.task_intent_sha256 !== task.task_intent_sha256 ||
+          facts.source_revision !== binding.execution_source_revision ||
+          facts.execution_baseline_sha256 !== binding.binding_sha256 || !sha(step.wait_disposition_sha256)) return [];
+      return [{task, step, binding, bound: {project_id: request.project_id, delivery_id: request.id,
+        expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id,
+        expected_task_intent_sha256: task.task_intent_sha256, expected_task_revision: task.task_revision,
+        expected_work_item_id: step.work_item_id, expected_source_revision: binding.execution_source_revision,
+        expected_execution_baseline_sha256: binding.binding_sha256, expected_disposition_sha256: step.wait_disposition_sha256}}];
+    });
+  });
+}
+async function submitEngineeringRejectedCandidateContinuation(bound) {
+  const request = requestById(bound.delivery_id);
+  const current = request && engineeringRejectedCandidatePauses(request).find(item => sameEngineeringWaitIntent(item.bound, bound));
+  if (!current || !canControlCurrentTeam() || !consoleSupportsRejectedCandidateRescue() || !consoleSupportsPausedBaseline() ||
+      request.project_id !== snapshot?.selected_project_id || activeOperation(request.id, request.project_id)) {
+    operationNotice = {kind: "error", title: "保留候选的暂停已变化", message: "请重新查看原需求的精确执行输入和暂停记录，再继续。"};
+    renderDetail(); renderNotification(); return null;
+  }
+  return submitOperation({...bound, action: "RESUME_EXECUTION_BASELINE",
+    reference: "工程授权者单独明确继续已批准的完整候选，原产品与代码基线保留，后续独立QA和Review"});
+}
+function appendEngineeringRejectedCandidateRescue(target, request) {
+  const paused = engineeringRejectedCandidatePauses(request)[0];
+  if (paused) {
+    const panel = viewGroup(el("section", undefined, "engineering-baseline-panel engineering-baseline-pause"),
+      "rejected-candidate-pause:" + paused.binding.binding_sha256);
+    panel.append(el("h3", "候选已保留，等待继续"), el("p", "精确工程决定已保存，原需求与完整代码候选保持暂停。单独继续后由新 Coder 完成剩余开发，再进行独立 QA 和 Review。"),
+      el("p", "已保存候选 · " + paused.binding.execution_source_revision, "paths"));
+    const active = activeOperation(request.id, request.project_id);
+    if (active) panel.append(engineeringActiveOperationBox(request, active));
+    else if (canControlCurrentTeam() && consoleSupportsRejectedCandidateRescue() && consoleSupportsPausedBaseline())
+      panel.append(deliveryButton("继续原需求", () => submitEngineeringRejectedCandidateContinuation(paused.bound), "primary"));
+    target.append(panel);
+    return;
+  }
+  const current = engineeringRejectedCandidatePlans(request)[0];
+  if (!current) return;
+  const {task, plan, proof, bound} = current;
+  const panel = viewGroup(el("section", undefined, "engineering-baseline-panel engineering-baseline-pending"), "rejected-candidate:" + plan.plan_sha256);
+  panel.append(el("h3", "候选报告恢复待确认"), engineeringGuidanceList([
+    "原 Coder 已真实完成并保留代码候选；报告使用了不受支持的版本，因此没有成为已接纳的实现报告。原成功调用、停止和拒绝历史均保留。",
+    "精确方案仅把下一轮执行输入接续到已有候选。产品范围、原代码基线和项目规范保持；不会重建需求或重放旧审批。",
+    "批准后消耗 1 次剩余开发额度并保持暂停；之后需单独继续，由新 Coder 提交合规报告，再进行独立 QA 和 Review。",
+  ]));
+  const details = engineeringDetails("精确候选与工程方案", plan.plan_sha256);
+  details.append(el("p", "原执行基线 · " + plan.target_base_ref, "paths"),
+    el("p", "保留代码候选 · " + proof.candidate_revision, "paths"),
+    el("p", "原执行 · " + proof.outcome.start.request.run_id, "paths"),
+    el("p", "方案摘要 · " + plan.plan_sha256, "paths"));
+  panel.append(details);
+  const active = activeOperation(request.id, request.project_id);
+  const unavailable = deliveryControlUnavailableReason();
+  if (unavailable) panel.append(deliveryControlUnavailableNotice(unavailable));
+  else if (!consoleSupportsRejectedCandidateRescue()) panel.append(el("p", "当前服务不支持此候选报告恢复入口。请在服务空闲时更新并刷新原需求。", "muted"));
+  else if (active) panel.append(engineeringActiveOperationBox(request, active));
+  else if (canControlCurrentTeam()) {
+    panel.append(deliveryButton("批准保留候选，保持暂停", () => submitEngineeringRejectedCandidateRescue({
+      action: "EXECUTE_EXECUTION_BASELINE", project_id: request.project_id, delivery_id: request.id,
+      expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id,
+      expected_plan_sha256: plan.plan_sha256, continuation_mode: "pause",
+      reference: "批准精确已有候选的报告恢复，原基线保持，消耗普通工作额度并暂停，之后单独继续",
+    }, plan.plan_sha256), "primary"), deliveryButton("重新检查候选恢复", () => submitEngineeringRejectedCandidateRescue({
+      ...bound, action: "PROPOSE_EXECUTION_BASELINE", purpose: "rejected_candidate_rescue", input_mode: "preserve_draft",
+    }, plan.plan_sha256), "secondary"));
+  }
+  target.append(panel);
+}
 function engineeringProviderPlanNextAction(plan) {
   if (plan.purpose === "source_rebind") return plan.conflicted
     ? "查看当前基线方案的冲突，点击“提出 Coder 适配完整旧补丁的计划”，再审阅新方案并确认原认证与执行器配置前提。"
@@ -3771,6 +3976,11 @@ function operationBaselinePurpose(operation) {
 }
 function operationPurpose(operation) {
   if (["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"].includes(operationAction(operation)) &&
+      operationBaselinePurpose(operation) === "rejected_candidate_rescue")
+    return operationAction(operation) === "EXECUTE_EXECUTION_BASELINE"
+      ? "保存精确候选报告恢复决定，原代码基线保持，交付暂停；单独继续后提交新报告并进行独立 QA 和 Review。"
+      : "核验原成功调用、真实停止与未接纳的已有候选，准备同一需求的精确工程方案；检查不启动 Coder。";
+  if (["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"].includes(operationAction(operation)) &&
       operationBaselinePurpose(operation) === "context_capacity_resume")
     return operationAction(operation) === "EXECUTE_EXECUTION_BASELINE"
       ? "保存精确恢复决定及完整开发进度，代码版本保持，交付保持暂停；之后需要另行继续原需求。"
@@ -3792,6 +4002,10 @@ function operationPurpose(operation) {
   }[operationAction(operation)] || null;
 }
 function operationActionLabel(operation) {
+  if (["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"].includes(operationAction(operation)) &&
+      operationBaselinePurpose(operation) === "rejected_candidate_rescue")
+    return operationAction(operation) === "EXECUTE_EXECUTION_BASELINE"
+      ? "批准保留候选，保持暂停" : "检查候选报告恢复";
   if (["PROPOSE_EXECUTION_BASELINE", "EXECUTE_EXECUTION_BASELINE"].includes(operationAction(operation)) &&
       operationBaselinePurpose(operation) === "context_capacity_resume")
     return operationAction(operation) === "EXECUTE_EXECUTION_BASELINE"
@@ -4160,6 +4374,13 @@ function requestNodeExecution(request) {
     return {state: "blocked", label: "待确认", status: request.stage, reason: request.blocker};
   if (approvedKnowledge(request))
     return {state: "blocked", label: "已确认的知识 · 待继续", status: "KNOWLEDGE_APPROVED"};
+  if (engineeringRejectedCandidatePauses(request).length && !active)
+    return {state: "paused", label: "候选已保留，等待继续", status: "REJECTED_CANDIDATE_PAUSED", currentApproval: true,
+      reason: "精确候选恢复已批准并保存，原需求保持暂停。", nextAction: "单独点击“继续原需求”，完成剩余开发及独立 QA 和 Review。"};
+  if (engineeringRejectedCandidatePlans(request).length && !active)
+    return {state: "blocked", label: "候选报告待确认", status: "REJECTED_CANDIDATE_APPROVAL", currentApproval: true,
+      reason: "未接纳报告的已有代码候选已完成精确核验，等待工程确认。",
+      nextAction: "核对已有候选与原基线，批准后保持暂停，再单独继续原需求。"};
   const decision = requestRecoveryDecision(request);
   if (decision) return decision;
   if (operation?.status === "RUNNING" && operationAction(operation) === "CONTINUE_DELIVERY" &&
@@ -4897,6 +5118,16 @@ function humanizeBlockingText(value) {
   return text;
 }
 function requestBlockerSection(request) {
+  const candidate = engineeringRejectedCandidatePauses(request)[0] || engineeringRejectedCandidatePlans(request)[0];
+  if (candidate) {
+    const panel = viewGroup(el("section", undefined, "detail-section request-blocking-section"), "request-blockers");
+    appendEngineeringRejectedCandidateRescue(panel, request);
+    const history = engineeringDetails("原执行停止记录", request.id + ":rejected-candidate-history");
+    history.append(el("p", humanizeBlockingText(candidate.task.blocker || request.blocker || "原报告未被接纳。"), "muted"),
+      el("p", "这是原执行停止时的记录。当前操作以已核验的精确候选恢复方案为准。", "muted"));
+    panel.append(history);
+    return panel;
+  }
   const summary = requestBlockingSummary(request);
   if (!summary) return null;
   const section = viewGroup(el(
@@ -6234,6 +6465,8 @@ async function submitOperation(intent) {
     if ((intent.continuation_mode === "pause" || intent.action === "RESUME_EXECUTION_BASELINE") &&
         !consoleSupportsPausedBaseline())
       throw new Error("本次保留进度暂停或继续请求未被受理，不是原需求新增的阻塞。" + consoleOperationVersionMismatchMessage);
+    if (intent.purpose === "rejected_candidate_rescue" && !consoleSupportsRejectedCandidateRescue())
+      throw new Error("本次候选报告恢复请求未被受理。" + consoleOperationVersionMismatchMessage);
     requireProductApprovalRead(intent, productReadBinding);
     await recheckOperationWriteFacts(intent);
     if (owner !== operationWriteOwnerSignature() || !canControlCurrentTeam() ||

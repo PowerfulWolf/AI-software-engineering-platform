@@ -10,7 +10,6 @@ from ai_software_engineer.domain.execution_baseline import (
     BaselineInputMode,
     ExecutionBaselineBinding,
 )
-from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge.models import KnowledgeError, digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
@@ -27,18 +26,16 @@ def test_complete_binding_read_reads_plan_once_but_context_remains_fresh(
     expected_context = store.required_context(binding)
     before = {path.name: path.read_bytes() for path in store.root.iterdir()}
     calls: Counter[str] = Counter()
-    original = KnowledgeRecordStore._read_name
+    original = KnowledgeRecordStore._read_payload
 
-    def counted[T: DomainModel](
-        records: KnowledgeRecordStore, name: str, model: type[T]
-    ) -> T | None:
+    def counted(records: KnowledgeRecordStore, name: str) -> bytes | None:
         if records.root == store.root:
             for namespace in ("baseline-plans", "baseline-starts", "baseline-authorities"):
                 if name.startswith(namespace + "-"):
                     calls[namespace] += 1
-        return original(records, name, model)
+        return original(records, name)
 
-    monkeypatch.setattr(KnowledgeRecordStore, "_read_name", counted)
+    monkeypatch.setattr(KnowledgeRecordStore, "_read_payload", counted)
     assert store.bindings_for_task(binding.task_id) == (binding,)
     assert calls == Counter({"baseline-plans": 1, "baseline-starts": 1, "baseline-authorities": 1})
     for expected_reads in (2, 3):

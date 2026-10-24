@@ -45,6 +45,7 @@ from ai_software_engineer.manager.baseline_models import (
     ExecutionBaselinePlan,
     require_context_capacity_binding,
     require_knowledge_isolation_binding,
+    require_rejected_candidate_binding,
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.completed_output_checkpoint import (
@@ -117,6 +118,7 @@ class ExecutionBaselineService:
     ) -> ExecutionBaselinePlan:
         if purpose in {
             BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+            BaselinePurpose.REJECTED_CANDIDATE_RESCUE,
             BaselinePurpose.STOPPED_PROVIDER_RETRY,
             BaselinePurpose.STOPPED_FAILURE_RETRY,
             BaselinePurpose.STOPPED_EXECUTION_RESCUE,
@@ -134,6 +136,10 @@ class ExecutionBaselineService:
         with source_inspection_scope(), self.store.execution_lock(), self.facts.execution_scope():
             facts = self.facts.collect(target_base_ref)
             self._require_facts(facts)
+            if (purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE) != (
+                facts.rejected_candidate_output is not None
+            ):
+                raise ValueError("候选报告恢复只能使用独立精确方案")
             if (purpose is BaselinePurpose.STOPPED_FAILURE_RETRY) != (
                 facts.stopped_failure is not None
             ):
@@ -194,6 +200,14 @@ class ExecutionBaselineService:
                 if facts.stopped_execution is None:
                     raise ValueError("原执行不符合已停止但结果未知的精确恢复前提, 原现场保留")
                 target_base_ref = expected_base
+            elif purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE:
+                proof = facts.rejected_candidate_output
+                if proof is None or proof.candidate_parent_revision != expected_base:
+                    raise ValueError("原候选没有精确拒绝报告和完整停止证明, 原现场保留")
+                prior_source = binding.execution_source_revision if binding else facts.task.base_ref
+                if proof.request.source_revision != prior_source:
+                    raise ValueError("原候选拒绝证明与先前执行源不同")
+                target_base_ref = expected_base
             elif purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
                 if facts.completed_output is None or facts.legacy_containment is not None:
                     raise ValueError("原执行不符合已结束且报告未接纳的精确恢复前提, 原现场保留")
@@ -234,6 +248,22 @@ class ExecutionBaselineService:
                 retained_source_paths=retained_paths,
             )
             before = capture_mutation_inventory(worktree.path)
+            if facts.rejected_candidate_output is not None:
+                proof = facts.rejected_candidate_output
+                proof.validate_for(
+                    task=facts.task,
+                    step=proof.step,
+                    scope=facts.scope,
+                    permissions=facts.permissions,
+                    denied_paths=facts.denied_paths,
+                )
+                if (
+                    CapturedMutations.from_capture(complete) != proof.complete_capture
+                    or before != proof.inventory
+                    or dirty.changed_paths
+                    or worktree.head_revision != proof.candidate_revision
+                ):
+                    raise ValueError("原候选、完整差异或干净现场已经变化")
             if facts.stopped_execution is not None:
                 require_stopped_coder_workspace(
                     facts.stopped_execution,
@@ -276,6 +306,7 @@ class ExecutionBaselineService:
             )
             if same_paused_base or purpose in {
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+                BaselinePurpose.REJECTED_CANDIDATE_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
                 BaselinePurpose.STOPPED_FAILURE_RETRY,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
@@ -400,6 +431,10 @@ class ExecutionBaselineService:
             authority.require_plan_confirmation(plan)
         elif plan.facts.native_rule_change is not None:
             raise ValueError("项目规范变化需要精确人工确认, 原源码更新能力不能自动批准")
+        if plan.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE:
+            if not isinstance(authority, BaselineOperatorAuthorization):
+                raise ValueError("候选报告恢复需要精确 ENGINEERING 决定, 不得自动批准")
+            authority.require_plan_confirmation(plan)
         if plan.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE:
             if not isinstance(authority, BaselineOperatorAuthorization):
                 raise ValueError("未知结果停止恢复需要精确人工工程确认, 不能自动审批")
@@ -534,6 +569,7 @@ class ExecutionBaselineService:
             if plan.preserves_paused_baseline or plan.purpose in {
                 BaselinePurpose.LEGACY_WORKSPACE_RESCUE,
                 BaselinePurpose.COMPLETED_OUTPUT_RESCUE,
+                BaselinePurpose.REJECTED_CANDIDATE_RESCUE,
                 BaselinePurpose.STOPPED_PROVIDER_RETRY,
                 BaselinePurpose.STOPPED_FAILURE_RETRY,
                 BaselinePurpose.STOPPED_EXECUTION_RESCUE,
@@ -553,7 +589,23 @@ class ExecutionBaselineService:
                 inventory = capture_mutation_inventory(Path(plan.dirty_capture.worktree_path))
                 if inventory != plan.before_inventory:
                     raise ValueError("救援方案封存后现场已变化, 请重新准备方案; 原文件保留")
-                if plan.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE:
+                if plan.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE:
+                    proof = current.rejected_candidate_output
+                    if proof is None or (
+                        plan.complete_capture != proof.complete_capture
+                        or inventory != proof.inventory
+                        or plan.dirty_capture.source_revision != proof.candidate_revision
+                        or plan.dirty_capture.to_capture().changed_paths
+                    ):
+                        raise ValueError("原候选现场与精确恢复证明不同")
+                    proof.validate_for(
+                        task=current.task,
+                        step=proof.step,
+                        scope=current.scope,
+                        permissions=current.permissions,
+                        denied_paths=current.denied_paths,
+                    )
+                elif plan.purpose is BaselinePurpose.STOPPED_EXECUTION_RESCUE:
                     assert current.stopped_execution is not None
                     require_stopped_coder_workspace(
                         current.stopped_execution,
@@ -645,6 +697,11 @@ class ExecutionBaselineService:
                 stopped_execution_sha256=current.stopped_execution.proof_sha256
                 if current.stopped_execution
                 else None,
+                rejected_candidate_output_sha256=(
+                    current.rejected_candidate_output.proof_sha256
+                    if current.rejected_candidate_output is not None
+                    else None
+                ),
                 completed_output_sha256=(
                     current.completed_output.proof_sha256
                     if current.completed_output is not None
@@ -673,7 +730,11 @@ class ExecutionBaselineService:
                 prior_execution_base_ref=previous.execution_base_ref
                 if previous is not None
                 else current.task.base_ref,
-                prior_source_revision=plan.dirty_capture.source_revision,
+                prior_source_revision=(
+                    current.rejected_candidate_output.request.source_revision
+                    if current.rejected_candidate_output is not None
+                    else plan.dirty_capture.source_revision
+                ),
                 execution_base_ref=plan.target_base_ref,
                 execution_source_revision=reference.head_revision,
                 input_mode=plan.input_mode,
@@ -724,6 +785,7 @@ class ExecutionBaselineService:
                 after_inventory_sha256=after_inventory,
                 completed_at=datetime.now(UTC),
             )
+            require_rejected_candidate_binding(plan, binding)
             require_knowledge_isolation_binding(plan, binding)
             require_context_capacity_binding(plan, binding)
             completed = self.store.put_binding(binding)

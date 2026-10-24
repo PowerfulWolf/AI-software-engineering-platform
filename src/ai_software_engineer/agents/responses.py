@@ -59,6 +59,7 @@ from ai_software_engineer.agents.workspace_admission import (
     InitialWorkspaceAdmission,
     WorkspaceAdmissionRejected,
     authorize_workspace_admission,
+    retained_candidate_report_base,
     workspace_admission_for_request,
 )
 from ai_software_engineer.domain import AgentDefinition, AgentRole
@@ -762,6 +763,7 @@ class ResponsesAgentAdapter:
                     initial_head,
                     artifact,
                     self._candidate_commit,
+                    self._initial_admission,
                 )
             window.remaining()
             result = result.model_copy(
@@ -1116,6 +1118,7 @@ def _validate_git_result(
     initial_head: str,
     artifact: Artifact,
     skill: CandidateCommitSkill,
+    initial_admission: InitialWorkspaceAdmission | None = None,
 ) -> None:
     final_head = _git(root, "rev-parse", "HEAD")
     if request.role is not AgentRole.CODER:
@@ -1137,11 +1140,17 @@ def _validate_git_result(
         return
     if _git(root, "status", "--porcelain"):
         raise WorkspacePolicyError("role left uncommitted worktree changes")
-    if final_head == initial_head or not isinstance(artifact, ImplementationReportArtifact):
+    comparison_base = initial_head
+    if not isinstance(artifact, ImplementationReportArtifact):
         raise ValueError("Coder did not produce a candidate commit and implementation report")
+    if final_head == initial_head:
+        retained_base = retained_candidate_report_base(initial_admission, request, root, artifact)
+        if retained_base is None:
+            raise ValueError("Coder did not produce a candidate commit and implementation report")
+        comparison_base = retained_base
     if artifact.source_revision != final_head or artifact.content.commit_sha != final_head:
         raise ValueError("implementation report does not bind the candidate commit")
-    changed = _git_lines(root, "diff", "--name-only", f"{initial_head}..{final_head}")
+    changed = _git_lines(root, "diff", "--name-only", f"{comparison_base}..{final_head}")
     reported = tuple(sorted(item.path for item in artifact.content.changed_files))
     if not changed or tuple(sorted(changed)) != reported:
         raise ValueError("implementation report changed_files do not match Git diff")

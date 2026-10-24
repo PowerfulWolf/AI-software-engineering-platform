@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import stat
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -279,6 +280,43 @@ class WorkerExecutionGuard:
     def __init__(self) -> None:
         self.lease: WorkerLease | None = None
         self.inherited_fds: tuple[int, ...] = ()
+        self._task_scope_binding: tuple[str, int, Path, int, int] | None = None
+
+    def check_task_scope(self, task_id: str) -> None:
+        """Check a real owned process lock without granting Worker execution authority."""
+        binding = self._task_scope_binding
+        if binding is None or binding[0] != task_id or self.inherited_fds != (binding[1],):
+            raise QueueConflict("engineering action requires the exact held Task process lock")
+        _, fd, path, device, inode = binding
+        try:
+            opened, visible = os.fstat(fd), path.lstat()
+            if (
+                any(parent.is_symlink() for parent in path.parents)
+                or (opened.st_dev, opened.st_ino) != (device, inode)
+                or (visible.st_dev, visible.st_ino) != (device, inode)
+                or not stat.S_ISREG(opened.st_mode)
+                or not stat.S_ISREG(visible.st_mode)
+                or opened.st_uid != os.getuid()
+                or opened.st_nlink != 1
+                or stat.S_IMODE(opened.st_mode) & 0o077
+            ):
+                raise QueueConflict("Task process lock descriptor or ownership changed")
+            probe = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+            try:
+                probed = os.fstat(probe)
+                if (probed.st_dev, probed.st_ino) != (device, inode):
+                    raise QueueConflict("Task process lock changed during ownership observation")
+                try:
+                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    fcntl.flock(probe, fcntl.LOCK_UN)
+                    raise QueueConflict("Task process lock is no longer held")
+            finally:
+                os.close(probe)
+        except OSError as error:
+            raise QueueConflict("Task process lock descriptor is no longer live") from error
 
     def check(self) -> None:
         if self.lease is None:
@@ -294,6 +332,8 @@ class WorkerExecutionGuard:
 
     @contextmanager
     def task_scope(self, root: Path, task_id: str) -> Iterator[None]:
+        if self._task_scope_binding is not None:
+            raise QueueConflict("Task process lock scope cannot be nested")
         if any(path.is_symlink() for path in (root, *root.parents)):
             raise QueueConflict("Worker lock root contains a symlink")
         root.mkdir(parents=True, exist_ok=True)
@@ -302,16 +342,25 @@ class WorkerExecutionGuard:
 
         name = hashlib.sha256(task_id.encode()).hexdigest() + ".lock"
         fd = os.open(root / name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        identity = os.fstat(fd)
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise DeliveryQueuePending("Task still has a live execution process") from error
             self.inherited_fds = (fd,)
+            self._task_scope_binding = (task_id, fd, root / name, identity.st_dev, identity.st_ino)
+            self.check_task_scope(task_id)
             yield
         finally:
             self.inherited_fds = ()
-            os.close(fd)
+            self._task_scope_binding = None
+            try:
+                current = os.fstat(fd)
+                if (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino):
+                    os.close(fd)
+            except OSError:
+                pass
 
 
 class AcceptedArtifactStore:

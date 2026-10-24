@@ -394,6 +394,11 @@ class ManagerConsoleAdapter:
                             else "调用前容量停止和完整进度已核验, 原代码版本保持。"
                             "请核对精确容量恢复方案, 批准后保持暂停, 再单独明确继续原需求。"
                             if plan.purpose is BaselinePurpose.CONTEXT_CAPACITY_RESUME
+                            else "原成功调用和真实停止已核验, 已有代码候选保留, 原报告未被接纳。"
+                            "请核对精确候选恢复方案, 原产品范围与代码基线保持; "
+                            "批准后消耗普通工作额度并暂停, 再单独明确继续提交新报告, "
+                            "仍需独立 QA 和 Review。"
+                            if plan.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE
                             else "旧改动与目标代码存在冲突, 请提出明确的 Coder 适配计划。"
                             if plan.conflicted
                             else "工程基线计划已封存, 工程人员可决定在原分支继续。"

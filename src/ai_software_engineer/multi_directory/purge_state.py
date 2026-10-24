@@ -343,6 +343,7 @@ def validate_declared_scopes(wire: WirePayload, expected: StateDeletionScope) ->
             "lease",
             "legacy_containment",
             "completed_output",
+            "rejected_candidate_output",
             "stopped_provider_failure",
             "stopped_failure",
             "native_rule_change",
@@ -378,6 +379,10 @@ def task_state_directories(sidecar: Path, expected: StateDeletionScope) -> tuple
     )
     from ai_software_engineer.manager.baseline_production import BaselineQuiescenceProof
     from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+    from ai_software_engineer.manager.rejected_candidate_owner import (
+        EXPIRED_OWNER_NAMESPACE,
+        RejectedCandidateExpiredOwnerSettlement,
+    )
     from ai_software_engineer.manager.workspace_admission_contract import (
         WorkspaceAdmissionAdapterContractStore,
     )
@@ -448,6 +453,7 @@ def task_state_directories(sidecar: Path, expected: StateDeletionScope) -> tuple
                 "baseline-native-rules": NativeRuleEpoch,
                 "baseline-quiescence": BaselineQuiescenceProof,
                 "baseline-continuations": BaselineContinueAuthorization,
+                EXPIRED_OWNER_NAMESPACE: RejectedCandidateExpiredOwnerSettlement,
             }
             for path in sorted(baseline.iterdir()):
                 if path.name == "execution.lock":
@@ -491,6 +497,18 @@ def task_state_directories(sidecar: Path, expected: StateDeletionScope) -> tuple
                     key = record.plan.plan_sha256
                     if store.plan(key) != record.plan:
                         raise ValueError("baseline start plan differs")
+                elif isinstance(record, RejectedCandidateExpiredOwnerSettlement):
+                    if record.task_id != task_id:
+                        raise ValueError("expired-owner settlement Task differs")
+                    validate_declared_scopes(record.proof.to_wire(), expected)
+                    validate_declared_scopes(record.current_claim.to_wire(), expected)
+                    record.proof.validate_for(
+                        record.proof.task,
+                        record.proof.step,
+                        record.proof.scope,
+                        record.proof.request.permissions,
+                    )
+                    key = record.settlement_sha256
                 else:
                     key = str(record.to_wire()["plan_sha256"])
                     if namespace == "baseline-authorities":

@@ -68,6 +68,11 @@ from ai_software_engineer.work_queue.ports import (
 if TYPE_CHECKING:
     from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
     from ai_software_engineer.manager.baseline_models import BaselineContinueAuthorization
+    from ai_software_engineer.manager.rejected_candidate_output import RejectedCandidateOutputProof
+    from ai_software_engineer.manager.rejected_candidate_owner import (
+        RejectedCandidateExpiredOwnerSettlement,
+        TaskProcessLockGuard,
+    )
     from ai_software_engineer.manager.verifier_preparation import VerifierPreparationIntent
 
 
@@ -425,6 +430,20 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     "baseline action requires all owned role claims to be released"
                 )
             yield cursor
+
+    def settle_rejected_candidate_expired_owner(
+        self,
+        *,
+        task_id: str,
+        task_lock: TaskProcessLockGuard,
+        collect_current: Callable[[], RejectedCandidateOutputProof],
+        seal: Callable[[RejectedCandidateExpiredOwnerSettlement], str],
+    ) -> bool:
+        from ai_software_engineer.work_queue.baseline import settle_rejected_candidate_expired_owner
+
+        return settle_rejected_candidate_expired_owner(
+            self, task_id=task_id, task_lock=task_lock, collect_current=collect_current, seal=seal
+        )
 
     def settle_stopped_budget(
         self, cursor: DictCursor, settlement: StoppedFailureBudgetSettlement

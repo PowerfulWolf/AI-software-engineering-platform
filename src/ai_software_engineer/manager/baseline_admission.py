@@ -8,13 +8,25 @@ from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.artifacts.ordering import latest_accepted_artifact
 from ai_software_engineer.domain.artifact import CoderProgressArtifact, ImplementationReportArtifact
 from ai_software_engineer.domain.enums import AgentRole
-from ai_software_engineer.domain.execution_baseline import BaselineInputMode, CoderExecutionInput
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineInputMode,
+    BaselinePurpose,
+    CoderExecutionInput,
+)
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import GitWorktreeManager, WorktreeSpec
-from ai_software_engineer.git.mutation import capture_mutation_inventory
+from ai_software_engineer.git.mutation import (
+    capture_mutation_inventory,
+)
 from ai_software_engineer.git.mutation_capture import WorktreeMutationCapture
-from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
+from ai_software_engineer.manager.baseline_models import (
+    ExecutionBaselinePlan,
+    require_rejected_candidate_binding,
+)
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
+from ai_software_engineer.manager.rejected_candidate_output import (
+    validate_rejected_candidate_inventory,
+)
 from ai_software_engineer.orchestration.retry import _active_progress
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
@@ -122,6 +134,110 @@ class BaselineInitialWorkspaceAdmission:
         elif capture.changed_paths:
             raise ValueError("后续候选返工必须从已接纳的干净输入开始")
         self.guard.check()
+
+    def retained_candidate_report_base(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        artifact: ImplementationReportArtifact,
+    ) -> str:
+        """Reopen an exactly consumed candidate rescue under its fresh Coder claim.
+
+        Only this unchanged retained candidate may be reported without a new commit.
+        Actual test caches may change; every noncache byte and the full Git capture
+        must still match the independently sealed original candidate.
+        """
+        from ai_software_engineer.work_queue.baseline import consumptions
+
+        self.guard.check()
+        task = self.task_reader()
+        source = self.inputs.current(task, implementation=None, progress=None)
+        binding, store = source.baseline, self.inputs.store
+        lease = self.guard.lease
+        if (
+            binding is None
+            or store is None
+            or lease is None
+            or binding.purpose is not BaselinePurpose.REJECTED_CANDIDATE_RESCUE
+            or request.role is not AgentRole.CODER
+            or request.task_id != task.id
+            or request.source_revision != binding.execution_source_revision
+            or request.execution_baseline_sha256 != binding.binding_sha256
+            or request.execution_base_ref != binding.execution_base_ref
+            or artifact.source_revision != binding.execution_source_revision
+            or artifact.content.commit_sha != binding.execution_source_revision
+            or (
+                lease.claim.work_item.task_id,
+                lease.claim.work_item.role,
+                lease.claim.work_item.attempt,
+            )
+            != (request.task_id, request.role, request.attempt)
+        ):
+            raise ValueError("保留候选报告缺少最新精确工程绑定和真实 Coder claim")
+        self.inputs.require_current(binding, task)
+        plan = store.plan(binding.plan_sha256)
+        require_rejected_candidate_binding(plan, binding)
+        proof = plan.facts.rejected_candidate_output
+        assert proof is not None
+        if request.permissions != plan.facts.permissions:
+            raise ValueError("保留候选报告不能改变原冻结的执行权限")
+        matching = tuple(
+            item
+            for item in consumptions(lease.queue, task.id)
+            if item.binding.binding_sha256 == binding.binding_sha256
+        )
+        if len(matching) != 1 or (
+            matching[0].binding != binding
+            or matching[0].plan != plan
+            or matching[0].next_work_item_id != lease.claim.work_item.id
+            or plan.facts.continuation is None
+            or plan.facts.continuation.next_execution_attempt != request.attempt
+        ):
+            raise ValueError("保留候选报告没有当前 claim 对应的唯一已消费普通工作决定")
+        accepted = self.artifacts.list_for_task(task.id)
+        if (
+            latest_accepted_artifact(
+                accepted,
+                ImplementationReportArtifact,
+                excluded_artifact_ids=source.superseded_artifact_ids,
+            )
+            is not None
+        ):
+            raise ValueError("已接纳实现报告不能再次使用未接纳候选恢复入口")
+        worktree = self.git.recover(
+            WorktreeSpec(
+                task_id=task.id,
+                role=AgentRole.CODER,
+                attempt=1,
+                source_revision=binding.execution_source_revision,
+            )
+        )
+        if workspace_root != worktree.path or str(worktree.path) != binding.worktree_path:
+            raise ValueError("保留候选报告不在原需求的精确工作区")
+        retained_paths = self.inputs.retained_source_paths(
+            task,
+            workspace_root=workspace_root,
+            permissions=request.permissions,
+        )
+        dirty = self.git.capture_mutations(
+            worktree,
+            request.permissions,
+            denied_paths=plan.facts.denied_paths,
+            retained_source_paths=retained_paths,
+        )
+        complete = self.git.capture_mutations(
+            worktree,
+            request.permissions,
+            denied_paths=plan.facts.denied_paths,
+            base_revision=binding.execution_base_ref,
+            retained_source_paths=retained_paths,
+        )
+        current_inventory = capture_mutation_inventory(worktree.path)
+        if dirty.changed_paths or complete != proof.complete_capture.to_capture():
+            raise ValueError("保留候选的完整代码、索引或非缓存现场已经变化")
+        validate_rejected_candidate_inventory(proof.inventory, current_inventory)
+        self.guard.check()
+        return binding.execution_base_ref
 
 
 def require_preserved_progress_capture(

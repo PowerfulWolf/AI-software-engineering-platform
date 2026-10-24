@@ -720,6 +720,17 @@
           ],
           "default": null
         },
+        "rejected_candidate_output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedCandidateOutputProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "completed_output": {
           "anyOf": [
             {
@@ -1237,6 +1248,127 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "rejected_candidate_output"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "rejected_candidate_output"
+            ],
+            "properties": {
+              "rejected_candidate_output": {
+                "type": "object"
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "completed_output": {
+                "type": "null"
+              },
+              "stopped_provider_failure": {
+                "type": "null"
+              },
+              "stopped_failure": {
+                "type": "null"
+              },
+              "stopped_execution": {
+                "type": "null"
+              },
+              "knowledge_isolation": {
+                "type": "null"
+              },
+              "native_rule_change": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "rejected_candidate_output": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "rejected_candidate_output"
+            ],
+            "properties": {
+              "rejected_candidate_output": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "continuation"
+            ],
+            "properties": {
+              "continuation": {
+                "type": "object",
+                "required": [
+                  "retry_cause"
+                ],
+                "properties": {
+                  "retry_cause": {
+                    "const": "rejected_candidate_output"
+                  }
+                }
+              },
+              "legacy_containment": {
+                "type": "null"
+              },
+              "completed_output": {
+                "type": "null"
+              },
+              "stopped_provider_failure": {
+                "type": "null"
+              },
+              "stopped_failure": {
+                "type": "null"
+              },
+              "stopped_execution": {
+                "type": "null"
+              },
+              "knowledge_isolation": {
+                "type": "null"
+              },
+              "native_rule_change": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -1266,6 +1398,7 @@
             "legacy_execution_abandoned",
             "completed_output_unavailable",
             "completed_output_rejected",
+            "rejected_candidate_output",
             "provider_prerequisite_repaired",
             "stopped_failure_retry",
             "stopped_execution_unknown"
@@ -1298,6 +1431,19 @@
           ],
           "default": null,
           "title": "Stopped Execution Sha256"
+        },
+        "rejected_candidate_output_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rejected Candidate Output Sha256"
         },
         "completed_output_sha256": {
           "anyOf": [
@@ -1772,6 +1918,74 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "retry_cause"
+            ],
+            "properties": {
+              "retry_cause": {
+                "const": "rejected_candidate_output"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "rejected_candidate_output_sha256",
+              "original_run_id",
+              "current_invocation_start_sha256",
+              "current_invocation_outcome_sha256"
+            ],
+            "properties": {
+              "rejected_candidate_output_sha256": {
+                "type": "string"
+              },
+              "original_run_id": {
+                "type": "string"
+              },
+              "current_invocation_start_sha256": {
+                "type": "string"
+              },
+              "current_invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "containment_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_execution_sha256": {
+                "type": "null"
+              },
+              "knowledge_isolation_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
+              "reservation_already_applied": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "rejected_candidate_output_sha256": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -1788,6 +2002,7 @@
         "source_rebind",
         "legacy_workspace_rescue",
         "completed_output_rescue",
+        "rejected_candidate_rescue",
         "stopped_provider_retry",
         "stopped_failure_retry",
         "stopped_execution_rescue",
@@ -3107,6 +3322,19 @@
           "default": null,
           "title": "Stopped Execution Sha256"
         },
+        "rejected_candidate_output_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rejected Candidate Output Sha256"
+        },
         "completed_output_sha256": {
           "anyOf": [
             {
@@ -3755,6 +3983,72 @@
             ],
             "properties": {
               "purpose": {
+                "const": "rejected_candidate_rescue"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "rejected_candidate_output_sha256",
+              "continuation_mode"
+            ],
+            "properties": {
+              "rejected_candidate_output_sha256": {
+                "type": "string"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_execution_sha256": {
+                "type": "null"
+              },
+              "knowledge_isolation_sha256": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "service_pause_outcome_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "rejected_candidate_output_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
                 "const": "context_capacity_resume"
               }
             }
@@ -4206,6 +4500,76 @@
               "facts": {
                 "properties": {
                   "knowledge_isolation": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "rejected_candidate_rescue"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "preserve_draft"
+              },
+              "conflicted": {
+                "const": false
+              },
+              "facts": {
+                "required": [
+                  "rejected_candidate_output"
+                ],
+                "properties": {
+                  "rejected_candidate_output": {
+                    "type": "object"
+                  },
+                  "legacy_containment": {
+                    "type": "null"
+                  },
+                  "completed_output": {
+                    "type": "null"
+                  },
+                  "stopped_provider_failure": {
+                    "type": "null"
+                  },
+                  "stopped_failure": {
+                    "type": "null"
+                  },
+                  "stopped_execution": {
+                    "type": "null"
+                  },
+                  "knowledge_isolation": {
+                    "type": "null"
+                  },
+                  "native_rule_change": {
+                    "type": "null"
+                  },
+                  "context_capacity_receipt_sha256": {
+                    "type": "null"
+                  },
+                  "implementation_artifact_id": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "facts": {
+                "properties": {
+                  "rejected_candidate_output": {
                     "type": "null"
                   }
                 }
@@ -7482,6 +7846,213 @@
       ],
       "type": "string"
     },
+    "RejectedCandidateOutputProof": {
+      "additionalProperties": false,
+      "description": "Original successful output and a separately observed lawful candidate.\n\n``publication_absent`` seals the trusted collector's fresh absence checks. It\nis not an absence proof derived from the Agent's report or a database query.\nThe fixed rejection contract keeps historical decoding independent of future\nchanges to the platform's currently supported artifact version.",
+      "properties": {
+        "kind": {
+          "const": "rejected_candidate_output",
+          "default": "rejected_candidate_output",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "rejection_reason": {
+          "const": "unsupported_schema_version",
+          "default": "unsupported_schema_version",
+          "title": "Rejection Reason",
+          "type": "string"
+        },
+        "rejected_supported_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Rejected Supported Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "step": {
+          "$ref": "#/$defs/QueuedRoleStep"
+        },
+        "outcome": {
+          "$ref": "#/$defs/DeliveryInvocationOutcome"
+        },
+        "capture_start": {
+          "$ref": "#/$defs/ExecutionCaptureStart"
+        },
+        "capture_stop": {
+          "$ref": "#/$defs/ExecutionCaptureStop"
+        },
+        "candidate_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Candidate Revision",
+          "type": "string"
+        },
+        "candidate_parent_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Candidate Parent Revision",
+          "type": "string"
+        },
+        "complete_capture": {
+          "$ref": "#/$defs/CapturedMutations"
+        },
+        "inventory": {
+          "$ref": "#/$defs/WorkspaceMutationInventory"
+        },
+        "publication_absent": {
+          "const": true,
+          "title": "Publication Absent",
+          "type": "boolean"
+        },
+        "proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proof Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "task",
+        "task_revision",
+        "task_intent_sha256",
+        "step",
+        "outcome",
+        "capture_start",
+        "capture_stop",
+        "candidate_revision",
+        "candidate_parent_revision",
+        "complete_capture",
+        "inventory",
+        "publication_absent",
+        "proof_sha256"
+      ],
+      "title": "RejectedCandidateOutputProof",
+      "type": "object",
+      "allOf": [
+        {
+          "properties": {
+            "task": {
+              "properties": {
+                "status": {
+                  "const": "IMPLEMENTING"
+                }
+              }
+            },
+            "outcome": {
+              "properties": {
+                "service_pause": {
+                  "type": "null"
+                },
+                "start": {
+                  "properties": {
+                    "request": {
+                      "properties": {
+                        "role": {
+                          "const": "coder"
+                        }
+                      }
+                    }
+                  }
+                },
+                "result": {
+                  "required": [
+                    "artifact"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "SUCCEEDED"
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "artifact": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "schema_version"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "implementation-report"
+                        },
+                        "schema_version": {
+                          "not": {
+                            "const": "v0.1"
+                          }
+                        },
+                        "content": {
+                          "properties": {
+                            "blocked_reason": {
+                              "type": "null"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "capture_stop": {
+              "properties": {
+                "output_present": {
+                  "const": true
+                },
+                "cause": {
+                  "type": "null"
+                },
+                "original_error_code": {
+                  "type": "null"
+                },
+                "execution_abort_reason": {
+                  "type": "null"
+                },
+                "process_stop": {
+                  "required": [
+                    "session_proof"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "completed"
+                    },
+                    "returncode": {
+                      "const": 0
+                    },
+                    "session_proof": {
+                      "type": "object",
+                      "properties": {
+                        "proof_scope": {
+                          "const": "owned_session_empty"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "RetainedExecutionPatch": {
       "additionalProperties": false,
       "description": "Reference to complete old execution-base → candidate + dirty mutation bodies.\n\nTrusted collection must validate the body and URI before this reference is\npublished. A digest alone never permits discarding a dirty worktree.",
@@ -9172,6 +9743,77 @@
               },
               "authority_source": {
                 "const": "engineering_operator_decision"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "plan"
+        ],
+        "properties": {
+          "plan": {
+            "required": [
+              "purpose"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "rejected_candidate_rescue"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "binding": {
+            "required": [
+              "purpose",
+              "rejected_candidate_output_sha256",
+              "continuation_mode"
+            ],
+            "properties": {
+              "purpose": {
+                "const": "rejected_candidate_rescue"
+              },
+              "rejected_candidate_output_sha256": {
+                "type": "string"
+              },
+              "continuation_mode": {
+                "const": "pause"
+              },
+              "authority_source": {
+                "const": "engineering_operator_decision"
+              },
+              "legacy_containment_sha256": {
+                "type": "null"
+              },
+              "completed_output_sha256": {
+                "type": "null"
+              },
+              "stopped_provider_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_failure_sha256": {
+                "type": "null"
+              },
+              "stopped_execution_sha256": {
+                "type": "null"
+              },
+              "knowledge_isolation_sha256": {
+                "type": "null"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "service_pause_outcome_sha256": {
+                "type": "null"
+              },
+              "superseded_implementation_artifact_id": {
+                "type": "null"
               }
             }
           }

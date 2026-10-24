@@ -79,6 +79,7 @@ from ai_software_engineer.agents.workspace_admission import (
 from ai_software_engineer.agents.workspace_admission import (
     WorkspaceAdmissionRejected,
     authorize_workspace_admission,
+    retained_candidate_report_base,
     workspace_admission_for_request,
 )
 from ai_software_engineer.config.codex_proxy import (
@@ -1397,10 +1398,16 @@ class CodexCliAgentAdapter:
             return
         if _git(self._workspace_root, "status", "--porcelain"):
             raise WorkspacePolicyError("Coder left uncommitted worktree changes")
-        if final_head == initial_head:
-            raise ValueError("Coder did not produce a candidate commit")
+        comparison_base = initial_head
         if not isinstance(artifact, ImplementationReportArtifact):
             raise ValueError("Coder did not return an implementation report")
+        if final_head == initial_head:
+            retained_base = retained_candidate_report_base(
+                self._initial_admission, request, self._workspace_root, artifact
+            )
+            if retained_base is None:
+                raise ValueError("Coder did not produce a candidate commit")
+            comparison_base = retained_base
         if artifact.content.commit_sha != final_head or artifact.source_revision != final_head:
             raise ValueError("implementation report does not bind the candidate commit")
         policy = WorkspacePolicy(self._workspace_root, request.permissions)
@@ -1408,7 +1415,7 @@ class CodexCliAgentAdapter:
             self._workspace_root,
             "diff",
             "--name-only",
-            f"{initial_head}..{final_head}",
+            f"{comparison_base}..{final_head}",
         )
         if not changed:
             raise ValueError("Coder candidate contains no changed files")

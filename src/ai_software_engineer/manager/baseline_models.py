@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from typing import Literal, Self
 
@@ -35,6 +36,7 @@ from ai_software_engineer.manager.completed_output_checkpoint import (
 )
 from ai_software_engineer.manager.knowledge_isolation import KnowledgePreparationIsolationProof
 from ai_software_engineer.manager.legacy_containment import LegacyExecutionContainment
+from ai_software_engineer.manager.rejected_candidate_output import RejectedCandidateOutputProof
 from ai_software_engineer.manager.stopped_execution_checkpoint import (
     StoppedCoderExecutionProof,
     validate_stopped_coder_capture,
@@ -65,6 +67,7 @@ class BaselineExecutionReservation(DomainModel):
         "legacy_execution_abandoned",
         "completed_output_unavailable",
         "completed_output_rejected",
+        "rejected_candidate_output",
         "provider_prerequisite_repaired",
         "stopped_failure_retry",
         "stopped_execution_unknown",
@@ -73,6 +76,9 @@ class BaselineExecutionReservation(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     stopped_execution_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    rejected_candidate_output_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     completed_output_sha256: Sha256 | None = Field(
@@ -94,6 +100,10 @@ class BaselineExecutionReservation(DomainModel):
 
     @model_validator(mode="after")
     def validate_reservation(self) -> Self:
+        if (self.retry_cause == "rejected_candidate_output") != (
+            self.rejected_candidate_output_sha256 is not None
+        ):
+            raise ValueError("候选报告拒绝证明不能混入其它工作预留")
         if (self.retry_cause == "knowledge_isolation") != (
             self.knowledge_isolation_sha256 is not None
         ):
@@ -167,6 +177,28 @@ class BaselineExecutionReservation(DomainModel):
                 raise ValueError(
                     "legacy disposition must consume new work without invented results"
                 )
+        elif self.retry_cause == "rejected_candidate_output":
+            if (
+                self.original_run_id is None
+                or self.current_invocation_start_sha256 is None
+                or self.current_invocation_outcome_sha256 is None
+                or self.next_execution_attempt != self.current_attempt + 1
+                or self.reservation_already_applied
+                or any(
+                    value is not None
+                    for value in (
+                        self.interruption_receipt_sha256,
+                        self.retry_failure,
+                        self.containment_sha256,
+                        self.completed_output_sha256,
+                        self.stopped_provider_failure_sha256,
+                        self.stopped_failure_sha256,
+                        self.stopped_execution_sha256,
+                        self.knowledge_isolation_sha256,
+                    )
+                )
+            ):
+                raise ValueError("候选报告恢复必须消费普通工作额度并保留精确原成功结果")
         elif self.retry_cause in {"completed_output_unavailable", "completed_output_rejected"}:
             if (
                 self.original_run_id is None
@@ -273,6 +305,9 @@ class BaselineExecutionFacts(DomainModel):
     stopped_execution: StoppedCoderExecutionProof | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    rejected_candidate_output: RejectedCandidateOutputProof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     completed_output: CompletedCoderOutputUnavailableProof | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -296,6 +331,7 @@ class BaselineExecutionFacts(DomainModel):
                 value is not None
                 for value in (
                     self.knowledge_isolation,
+                    self.rejected_candidate_output,
                     self.stopped_execution,
                     self.completed_output,
                     self.stopped_provider_failure,
@@ -307,6 +343,34 @@ class BaselineExecutionFacts(DomainModel):
             > 1
         ):
             raise ValueError("不同执行恢复证明不能混用")
+        candidate, reservation = self.rejected_candidate_output, self.continuation
+        if candidate is not None:
+            candidate.validate_integrity()
+            request = candidate.request
+            if (
+                candidate.scope != self.scope
+                or candidate.task.to_wire() != self.task.to_wire()
+                or candidate.task_revision != self.task_revision
+                or candidate.work_item_id != self.work_item_id
+                or candidate.checkpoint_sequence != self.checkpoint_sequence
+                or request.permissions != self.permissions
+                or request.attempt != self.task.attempts
+                or self.implementation_artifact_id is not None
+                or self.native_rule_change is not None
+                or self.source_native_rules_sha256 != self.target_native_rules_sha256
+                or not set(request.input_artifact_ids).issubset(self.source_artifact_ids)
+                or reservation is None
+                or reservation.retry_cause != "rejected_candidate_output"
+                or reservation.rejected_candidate_output_sha256 != candidate.proof_sha256
+                or reservation.original_run_id != request.run_id
+                or reservation.current_attempt != request.attempt
+                or reservation.current_invocation_start_sha256
+                != candidate.outcome.start.start_sha256
+                or reservation.current_invocation_outcome_sha256 != candidate.outcome.outcome_sha256
+            ):
+                raise ValueError("候选报告恢复事实与原 Task、精确执行或普通工作预留不同")
+        elif reservation is not None and reservation.retry_cause == "rejected_candidate_output":
+            raise ValueError("候选报告恢复预留缺少完整精确候选证明")
         isolation, reservation = self.knowledge_isolation, self.continuation
         if isolation is not None:
             isolation.validate_integrity()
@@ -550,6 +614,20 @@ class ExecutionBaselinePlan(DomainModel):
         self.facts.validate_integrity()
         CapturedMutations.model_validate(self.dirty_capture.to_wire())
         CapturedMutations.model_validate(self.complete_capture.to_wire())
+        if (self.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE) != (
+            self.facts.rejected_candidate_output is not None
+        ):
+            raise ValueError("候选报告拒绝证明只能属于独立精确恢复方案")
+        candidate = self.facts.rejected_candidate_output
+        if candidate is not None and (
+            self.complete_capture != candidate.complete_capture
+            or self.before_inventory != candidate.inventory
+            or self.dirty_capture.source_revision != candidate.candidate_revision
+            or self.dirty_capture.to_capture().changed_paths
+            or self.dirty_capture.patch
+            or self.dirty_capture.index_diff_sha256 != hashlib.sha256(b"").hexdigest()
+        ):
+            raise ValueError("候选报告恢复方案必须绑定完整原候选及干净现场")
         if self.facts.stopped_execution is not None:
             validate_stopped_coder_capture(
                 self.facts.stopped_execution,
@@ -646,6 +724,18 @@ class ExecutionBaselinePlan(DomainModel):
                 or self.conflicted
             ):
                 raise ValueError("未知结果停止恢复必须使用原基线和完整合法草稿")
+        elif self.purpose is BaselinePurpose.REJECTED_CANDIDATE_RESCUE:
+            candidate = self.facts.rejected_candidate_output
+            if (
+                candidate is None
+                or self.target_base_ref != expected_base
+                or candidate.candidate_parent_revision != expected_base
+                or self.input_mode is not BaselineInputMode.PRESERVE_DRAFT
+                or self.prepared_source_revision != candidate.candidate_revision
+                or self.prepared_dirty_patch
+                or self.conflicted
+            ):
+                raise ValueError("候选报告恢复必须保留原基线, 仅推进到可信既存候选")
         elif self.purpose is BaselinePurpose.COMPLETED_OUTPUT_RESCUE:
             if (
                 self.facts.completed_output is None
@@ -1043,6 +1133,7 @@ def require_completed_output_confirmation(
     plan: ExecutionBaselinePlan, continuation_mode: BaselineContinuationMode
 ) -> None:
     """Rejected output is reproduced under exact human PAUSE, never auto-adopted."""
+    require_rejected_candidate_confirmation(plan, continuation_mode)
     proof = plan.facts.completed_output
     if (
         plan.purpose
@@ -1164,3 +1255,60 @@ def require_knowledge_isolation_binding(
     ):
         raise ValueError("当前知识隔离绑定必须保持完整原现场、人工批准暂停和普通工作接续")
     proof.validate_integrity()
+
+
+def require_rejected_candidate_confirmation(
+    plan: ExecutionBaselinePlan,
+    continuation_mode: BaselineContinuationMode,
+) -> None:
+    if plan.facts.rejected_candidate_output is not None and (
+        continuation_mode is not BaselineContinuationMode.PAUSE
+    ):
+        raise ValueError("候选报告恢复需要精确工程确认后保持暂停, 再明确继续")
+
+
+def require_rejected_candidate_binding(
+    plan: ExecutionBaselinePlan,
+    binding: ExecutionBaselineBinding,
+) -> None:
+    proof = plan.facts.rejected_candidate_output
+    if proof is None:
+        if binding.rejected_candidate_output_sha256 is not None:
+            raise ValueError("候选报告恢复绑定缺少原证明")
+        return
+    plan.validate_integrity()
+    binding.validate_integrity()
+    proof.validate_integrity()
+    binding.require_task(plan.facts.task)
+    previous = plan.previous_binding
+    binding.require_predecessor(previous)
+    if (
+        plan.purpose is not BaselinePurpose.REJECTED_CANDIDATE_RESCUE
+        or binding.purpose is not plan.purpose
+        or binding.scope != plan.facts.scope
+        or binding.sequence != (previous.sequence + 1 if previous else 1)
+        or binding.previous_binding_sha256 != (previous.binding_sha256 if previous else None)
+        or binding.worktree_path != proof.complete_capture.worktree_path
+        or binding.branch_name != proof.complete_capture.branch_name
+        or binding.input_mode is not plan.input_mode
+        or binding.source_artifact_ids != plan.facts.source_artifact_ids
+        or binding.resolved_interruption_receipt_sha256s
+        != plan.facts.resolved_interruption_receipt_sha256s
+        or binding.prior_task_revision != plan.facts.task_revision
+        or binding.superseded_progress_artifact_id != plan.facts.progress_artifact_id
+        or binding.superseded_implementation_artifact_id is not None
+        or binding.rejected_candidate_output_sha256 != proof.proof_sha256
+        or binding.execution_source_revision != proof.candidate_revision
+        or binding.prior_source_revision != proof.request.source_revision
+        or binding.execution_base_ref != proof.candidate_parent_revision
+        or binding.prior_execution_base_ref != binding.execution_base_ref
+        or binding.before_inventory_sha256 != proof.inventory.sha256
+        or binding.after_inventory_sha256 != binding.before_inventory_sha256
+        or binding.native_rule_epoch_sha256
+        != (plan.previous_binding.native_rule_epoch_sha256 if plan.previous_binding else None)
+        or binding.plan_sha256 != plan.plan_sha256
+        or binding.facts_sha256 != plan.facts.facts_sha256
+        or binding.continuation_mode is not BaselineContinuationMode.PAUSE
+        or binding.authority_source != "engineering_operator_decision"
+    ):
+        raise ValueError("候选报告恢复绑定偏离精确候选、原基线或工程确认")

@@ -22,13 +22,21 @@ from ai_software_engineer.domain.execution_baseline import (
 )
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.task import Task
+from ai_software_engineer.domain.workforce import TaskLease
 from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
     ExecutionBaselinePlan,
     require_context_capacity_binding,
     require_knowledge_isolation_binding,
+    require_rejected_candidate_binding,
 )
 from ai_software_engineer.manager.completed_output_checkpoint import CompletedCoderOutputReason
+from ai_software_engineer.manager.rejected_candidate_output import RejectedCandidateOutputProof
+from ai_software_engineer.manager.rejected_candidate_owner import (
+    EXPIRED_OWNER_EVENT,
+    RejectedCandidateExpiredOwnerSettlement,
+    TaskProcessLockGuard,
+)
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.store.mysql_repository import _decode_task, _encode, open_mysql_connection
@@ -54,6 +62,118 @@ TABLE = "work_queue_execution_baselines"
 RELEASE_TABLE = "work_queue_baseline_releases"
 
 
+def settle_rejected_candidate_expired_owner(
+    queue: MySqlRoleQueue,
+    *,
+    task_id: str,
+    task_lock: TaskProcessLockGuard,
+    collect_current: Callable[[], RejectedCandidateOutputProof],
+    seal: Callable[[RejectedCandidateExpiredOwnerSettlement], str],
+) -> bool:
+    """Expire only one actually stopped original owner, without rescheduling work.
+
+    A caller must hold the real Task process lock. Complete current proof is
+    independently reopened twice under queue authority and the Task/claim SQL
+    fence. Expiry alone never proves that an external process has stopped.
+    """
+    if not task_lock.inherited_fds:
+        raise QueueLeaseLost("拒绝候选owner收尾缺少真实Task进程锁")
+    task_lock.check_task_scope(task_id)
+    with _consumption_cursor(queue, None) as cursor:
+        queue._lock_authority(cursor)
+        cursor.execute("SELECT payload_json,revision FROM tasks WHERE id=%s FOR UPDATE", (task_id,))
+        task_row = cursor.fetchone()
+        if task_row is None:
+            raise QueueCorruption("拒绝候选owner收尾的Task不存在")
+        task = _decode_task(task_id, str(task_row["payload_json"]))
+        cursor.execute(
+            "SELECT lease_id,work_item_id,expires_at,lease_json FROM work_queue_claims "
+            "WHERE task_id=%s AND state='ACTIVE' FOR UPDATE",
+            (task_id,),
+        )
+        active = cursor.fetchall()
+        if not active:
+            return False
+        if len(active) != 1:
+            raise QueueLeaseLost("拒绝候选owner收尾不能覆盖多个ACTIVE执行身份")
+        row = active[0]
+        current = queue._get_locked(cursor, str(row["work_item_id"]), lock=True)
+        cursor.execute(
+            "SELECT id FROM work_queue_items WHERE task_id=%s AND status<>'CLOSED' FOR UPDATE",
+            (task_id,),
+        )
+        unfinished = cursor.fetchall()
+        if (
+            len(unfinished) != 1
+            or unfinished[0]["id"] != current.id
+            or current.status is not WorkItemStatus.RUNNING
+            or current.role is not AgentRole.CODER
+        ):
+            raise QueueConflict("拒绝候选owner收尾需要唯一原RUNNING Coder工作项")
+        before = queue._clock()
+        queue._require_aware(before, "rejected candidate owner observation")
+        expires_at = queue._parse_time(str(row["expires_at"]))
+        if expires_at > before:
+            raise QueueLeaseLost("拒绝候选owner仍在有效租约内, 不允许工程收尾")
+        proof = collect_current()
+        proof.validate_for(task, queue.step(current.id), proof.scope, proof.request.permissions)
+        original = queue.original_claim(proof.original_claim.lease.id)
+        require_claim_snapshot(proof.original_claim, original)
+        live_lease = queue._decode_model(row, "lease_json", TaskLease)
+        current_claim = original.model_copy(update={"lease": live_lease})
+        require_claim_snapshot(original, current_claim)
+        if (
+            proof.task_revision != task_row["revision"]
+            or proof.work_item_id != current.id
+            or proof.original_claim.lease.id != row["lease_id"]
+            or live_lease.expires_at != expires_at
+        ):
+            raise QueueConflict("拒绝候选owner收尾与精确原Task、claim或真实到期事实不同")
+        task_lock.check_task_scope(task_id)
+        if collect_current() != proof:
+            raise QueueConflict("拒绝候选owner收尾前完整原执行事实变化")
+        observed = queue._clock()
+        queue._require_aware(observed, "rejected candidate owner confirmation")
+        if observed < before or observed < expires_at:
+            raise QueueLeaseLost("拒绝候选owner收尾期间可信时钟回退")
+        record = RejectedCandidateExpiredOwnerSettlement.create(
+            task_id=task_id,
+            task_revision=task_row["revision"],
+            proof=proof,
+            current_claim=current_claim,
+            original_claim_sha256=record_digest(proof.original_claim),
+            current_claim_sha256=record_digest(current_claim),
+            observed_at=observed,
+        )
+        uri = seal(record)
+        record.validate_integrity()
+        if not uri.startswith("file://"):
+            raise QueueConflict("拒绝候选owner收尾缺少真实不可变封存引用")
+        committed = queue._clock()
+        queue._require_aware(committed, "rejected candidate owner commit")
+        if committed < observed or committed < expires_at:
+            raise QueueLeaseLost("拒绝候选owner收尾提交前可信时钟回退")
+        task_lock.check_task_scope(task_id)
+        queue._release_claim(cursor, original.lease.id, state="EXPIRED", ended_at=committed)
+        queue._append_event(
+            cursor,
+            current,
+            from_status=current.status,
+            event_type=EXPIRED_OWNER_EVENT,
+            lease_id=original.lease.id,
+            occurred_at=committed,
+            detail={
+                "settlement_sha256": record.settlement_sha256,
+                "settlement_uri": uri,
+                "rejected_candidate_output_sha256": proof.proof_sha256,
+                "original_outcome_sha256": proof.outcome.outcome_sha256,
+                "budget_refund": False,
+                "work_item_changed": False,
+            },
+        )
+        return True
+
+
 class BaselineQueueConsumption(DomainModel):
     kind: Literal["baseline_queue_consumption"] = "baseline_queue_consumption"
     task_id: NonEmptyStr
@@ -69,6 +189,10 @@ class BaselineQueueConsumption(DomainModel):
         self.binding.require_task(self.plan.facts.task)
         require_context_capacity_binding(self.plan, self.binding)
         require_knowledge_isolation_binding(self.plan, self.binding)
+        require_rejected_candidate_binding(self.plan, self.binding)
+        rejected = self.plan.facts.rejected_candidate_output
+        if rejected is not None and self.next_work_item_id == self.work_item_id:
+            raise ValueError("版本拒绝候选恢复必须消费独立的新普通工作身份")
         if self.plan.facts.knowledge_isolation is not None and (
             self.next_work_item_id == self.work_item_id
         ):
@@ -84,7 +208,12 @@ class BaselineQueueConsumption(DomainModel):
             or self.binding.facts_sha256 != self.plan.facts.facts_sha256
             or self.binding.execution_source_revision != self.plan.prepared_source_revision
             or self.binding.execution_base_ref != self.plan.target_base_ref
-            or self.binding.prior_source_revision != self.plan.dirty_capture.source_revision
+            or self.binding.prior_source_revision
+            != (
+                rejected.request.source_revision
+                if rejected is not None
+                else self.plan.dirty_capture.source_revision
+            )
             or self.binding.service_pause_outcome_sha256
             != (
                 self.plan.facts.continuation.current_invocation_outcome_sha256
@@ -377,6 +506,7 @@ def consume_baseline(
     plan.validate_integrity()
     binding.require_task(plan.facts.task)
     require_knowledge_isolation_binding(plan, binding)
+    require_rejected_candidate_binding(plan, binding)
     now = queue._clock()
     with _consumption_cursor(queue, cursor) as cursor:
         queue._lock_authority(cursor)
@@ -403,6 +533,36 @@ def consume_baseline(
         task = _decode_task(binding.task_id, str(row["payload_json"]))
         binding.require_task(task)
         reservation = plan.facts.continuation
+        rejected = plan.facts.rejected_candidate_output
+        if rejected is not None:
+            original = rejected.original_claim
+            try:
+                rejected.validate_for(
+                    task, step, binding.scope, plan.facts.permissions, plan.facts.denied_paths
+                )
+                require_claim_snapshot(original, queue.original_claim(original.lease.id))
+            except ValueError as error:
+                raise QueueConflict("版本拒绝候选的原执行归属已变化") from error
+            if (
+                current.id != original.work_item.id
+                or current.task_id != original.work_item.task_id
+                or current.repository_id != original.work_item.repository_id
+                or current.repository_scopes != original.work_item.repository_scopes
+                or current.role is not AgentRole.CODER
+                or current.attempt != original.work_item.attempt
+                or current.dispatch_sequence != original.work_item.dispatch_sequence
+                or current.checkpoint_sequence != original.work_item.checkpoint_sequence
+                or rejected.step.boundary != step.boundary
+                or rejected.step.allocation_sha256 != step.allocation_sha256
+                or current.status is not WorkItemStatus.RUNNING
+                or reservation is None
+                or reservation.reservation_already_applied
+                or reservation.retry_cause != "rejected_candidate_output"
+                or reservation.retry_failure is not None
+                or binding.authority_source != "engineering_operator_decision"
+                or binding.continuation_mode is not BaselineContinuationMode.PAUSE
+            ):
+                raise QueueConflict("版本拒绝候选恢复必须精确绑定原运行工作及新普通工作预留")
         isolation = plan.facts.knowledge_isolation
         if isolation is not None:
             original = isolation.original_claim
@@ -496,6 +656,7 @@ def consume_baseline(
                 WorkItemStatus.WAITING_HUMAN,
                 WorkItemStatus.WAITING_DEPENDENCY,
                 WorkItemStatus.RETRY_SCHEDULED,
+                *({WorkItemStatus.RUNNING} if rejected is not None else set()),
             }
             or current.checkpoint_sequence != plan.facts.checkpoint_sequence
             or current.attempt != reservation.current_attempt
@@ -592,7 +753,9 @@ def consume_baseline(
             settled,
             from_status=current.status,
             event_type=(
-                "KNOWLEDGE_PREPARATION_ISOLATED"
+                "REJECTED_CANDIDATE_RESCUED"
+                if rejected is not None
+                else "KNOWLEDGE_PREPARATION_ISOLATED"
                 if isolation is not None
                 else "LEGACY_EXECUTION_RESCUED"
                 if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE
@@ -605,6 +768,17 @@ def consume_baseline(
                 "next_work_item_id": next_item.id,
                 "plan_sha256": plan.plan_sha256,
                 "budget_refund": False,
+                **(
+                    {
+                        "original_outcome": "SUCCEEDED",
+                        "original_outcome_sha256": rejected.outcome.outcome_sha256,
+                        "rejected_candidate_output_sha256": rejected.proof_sha256,
+                        "rejection_reason": rejected.rejection_reason,
+                        "purpose": plan.purpose.value,
+                    }
+                    if rejected is not None
+                    else {}
+                ),
                 **(
                     {"original_outcome": "UNKNOWN", "purpose": plan.purpose.value}
                     if plan.purpose is BaselinePurpose.LEGACY_WORKSPACE_RESCUE

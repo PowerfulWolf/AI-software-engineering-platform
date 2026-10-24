@@ -144,6 +144,7 @@ from ai_software_engineer.manager.production_delivery import (
     DeliveryRouteAdapterFactory,
     DispatchDeliveryAgentAdapter,
 )
+from ai_software_engineer.manager.rejected_candidate_reentry import RejectedCandidateReentryProof
 from ai_software_engineer.manager.stages import (
     ProjectStage,
     ProjectStageAdvancer,
@@ -2413,6 +2414,170 @@ class ProductionProjectDeliveryBackend:
                 != active
             ):
                 raise ValueError("知识拒绝调查期间事实已变化, 原现场保留")
+            yield proof
+
+    @contextmanager
+    def rejected_candidate_reentry_scope(
+        self, checkpoint: ProjectDeliveryCheckpoint
+    ) -> Iterator[RejectedCandidateReentryProof | None]:
+        """Hold real Task/queue fences through one released rescue cursor append."""
+        from ai_software_engineer.domain.execution_baseline import BaselinePurpose
+        from ai_software_engineer.domain.task import task_matches_dispatch
+        from ai_software_engineer.git import GitWorktreeManager
+        from ai_software_engineer.git.mutation import capture_mutation_inventory
+        from ai_software_engineer.manager.baseline_models import BaselineContinueAuthorization
+        from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+        from ai_software_engineer.manager.queue_capacity import production_role_queue
+        from ai_software_engineer.work_queue.baseline import BaselineQueueRelease
+        from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
+
+        if (
+            checkpoint.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or checkpoint.failed_stage is not DeliveryStage.DELIVERING
+            or checkpoint.failure_code is not DeliveryFailureCode.INVARIANT_VIOLATION
+            or checkpoint.task_id is None
+            or checkpoint.task_status is not TaskStatus.IMPLEMENTING
+            or checkpoint.task_revision is None
+            or checkpoint.candidate_revision is not None
+            or checkpoint.dispatch_commit_id is None
+        ):
+            yield None
+            return
+        facts = self._sealed_facts_for_checkpoint(checkpoint)
+        state = facts.workspace.directory("state")
+        root = state / "execution-baselines" / checkpoint.task_id
+        if not root.is_dir():
+            yield None
+            return
+        store = FileExecutionBaselineStore(root, read_only=True)
+        # Do this cheap, read-only discriminator before taking the queue idle
+        # fence.  A normal stopped-execution/knowledge retry may share the
+        # same checkpoint shape, but it must keep its existing recovery route;
+        # entering the idle scope first would turn that normal route into a
+        # spurious rescue error when its latest baseline has another purpose.
+        initial_bindings = store.bindings_for_task(checkpoint.task_id)
+        if (
+            not initial_bindings
+            or initial_bindings[-1].purpose is not BaselinePurpose.REJECTED_CANDIDATE_RESCUE
+        ):
+            yield None
+            return
+        queue = self._role_queue or production_role_queue(self._dsn)
+        authority = MySqlDispatchAuthority(
+            self._dsn, request_revisions=facts.product, planner_records=facts.planning
+        )
+        allocation = authority.get_allocation(checkpoint.dispatch_commit_id)
+        guard = WorkerExecutionGuard()
+        with (
+            guard.task_scope(state / "queue-worker-locks", checkpoint.task_id),
+            queue.idle_task_scope(checkpoint.task_id) as cursor,
+            closing(MySqlTaskRepository(self._dsn)) as repository,
+        ):
+            bindings = store.bindings_for_task(checkpoint.task_id)
+            if (
+                not bindings
+                or bindings[-1].purpose is not BaselinePurpose.REJECTED_CANDIDATE_RESCUE
+            ):
+                yield None
+                return
+            binding = bindings[-1]
+            continuation = store.records.find(
+                "baseline-continuations", binding.binding_sha256, BaselineContinueAuthorization
+            )
+            task = repository.get(checkpoint.task_id)
+            plan = store.plan(binding.plan_sha256)
+            pending = tuple(
+                item
+                for item in queue.items_for_task(task.id)
+                if item.status is not WorkItemStatus.CLOSED
+            )
+            if len(pending) != 1:
+                raise ValueError("候选恢复缺少唯一保留后继工作项")
+            (ready,) = pending
+            release = None
+            if ready.status is WorkItemStatus.READY:
+                if continuation is None or not queue.pending_baseline_release(
+                    binding, continuation, cursor=cursor
+                ):
+                    raise ValueError("候选恢复READY后继缺少已提交的精确继续决定")
+                release = BaselineQueueRelease(
+                    task_id=task.id,
+                    binding=binding,
+                    authorization=continuation,
+                    ready_work_item=ready,
+                )
+            proof = RejectedCandidateReentryProof(
+                checkpoint_sha256=checkpoint.checkpoint_sha256,
+                plan=plan,
+                binding=binding,
+                work_item=ready,
+                release=release,
+                task=task,
+                task_revision=repository.current_revision(task.id),
+            )
+            proof.require_for(checkpoint)
+            admission = queue.admission(task.id)
+            step = queue.step(ready.id)
+            rejected = plan.facts.rejected_candidate_output
+            assert rejected is not None
+            if (
+                allocation.task_id != task.id
+                or allocation.repository_id != checkpoint.repository_id
+                or allocation.dispatch_sha256 != checkpoint.dispatch_commit_sha256
+                or not task_matches_dispatch(task, allocation.task)
+                or binding.scope.team_id != self._config.team_id
+                or binding.scope.project_id != facts.workspace.manifest.project_id
+                or task.repository != str(facts.workspace.repository_root)
+                or task.metadata.get("repository_id") != checkpoint.repository_id
+                or admission is None
+                or admission.allocation_sha256 != allocation.dispatch_sha256
+                or admission.repository_id != checkpoint.repository_id
+                or pending != (ready,)
+                or step.allocation_sha256 != allocation.dispatch_sha256
+                or step.boundary.source_revision != binding.execution_source_revision
+                or queue.claims_for_work_item(ready.id)
+                or queue.get(rejected.work_item_id).status is not WorkItemStatus.CLOSED
+                or any(
+                    isinstance(artifact, ImplementationReportArtifact)
+                    for artifact in FileArtifactStore(
+                        facts.workspace.directory("artifacts"), read_only=True
+                    ).list_for_task(task.id)
+                )
+            ):
+                raise ValueError("已释放候选恢复缺少精确原分配或未领取的唯一后继")
+            manager = GitWorktreeManager(
+                facts.workspace.repository_root,
+                Path(self._config.platform_root).expanduser().resolve()
+                / "worktrees"
+                / allocation.repository_id,
+                branch_names={task.id: task.branch_name},
+            )
+            manager.verify_mutations(
+                plan.dirty_capture.to_capture(),
+                plan.facts.permissions,
+                denied_paths=plan.facts.denied_paths,
+            )
+            manager.verify_mutations(
+                plan.complete_capture.to_capture(),
+                plan.facts.permissions,
+                denied_paths=plan.facts.denied_paths,
+            )
+            if (
+                capture_mutation_inventory(Path(binding.worktree_path)).sha256
+                != binding.after_inventory_sha256
+                or repository.get(task.id) != task
+                or repository.current_revision(task.id) != proof.task_revision
+                or store.bindings_for_task(task.id) != bindings
+                or queue.get(ready.id) != ready
+                or (
+                    release is not None
+                    and (
+                        continuation is None
+                        or not queue.pending_baseline_release(binding, continuation, cursor=cursor)
+                    )
+                )
+            ):
+                raise ValueError("候选恢复重新进入交付前现场或精确继续事实已变化")
             yield proof
 
     @contextmanager

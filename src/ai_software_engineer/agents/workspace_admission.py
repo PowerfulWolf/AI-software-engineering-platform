@@ -7,6 +7,8 @@ from typing import Protocol, runtime_checkable
 
 from ai_software_engineer.agents.continuation import InterruptionAdmissionRejected
 from ai_software_engineer.agents.models import AgentRequest
+from ai_software_engineer.domain.artifact import ImplementationReportArtifact
+from ai_software_engineer.domain.enums import AgentRole
 
 
 class WorkspaceAdmissionRejected(InterruptionAdmissionRejected):
@@ -78,3 +80,36 @@ def authorize_workspace_admission(
         admission.authorize(request, workspace_root)
     except ValueError as error:
         raise WorkspaceAdmissionRejected("恢复工作区的准入条件校验未通过") from error
+
+
+@runtime_checkable
+class RetainedCandidateReportAdmission(InitialWorkspaceAdmission, Protocol):
+    """A trusted consumed recovery, never an Agent-provided comparison revision."""
+
+    def retained_candidate_report_base(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        artifact: ImplementationReportArtifact,
+    ) -> str: ...
+
+
+def retained_candidate_report_base(
+    admission: InitialWorkspaceAdmission | None,
+    request: AgentRequest,
+    workspace_root: Path,
+    artifact: ImplementationReportArtifact,
+) -> str | None:
+    if (
+        request.role is not AgentRole.CODER
+        or request.execution_baseline_sha256 is None
+        or request.execution_base_ref is None
+    ):
+        return None
+    selected = workspace_admission_for_request(admission, request)
+    if not isinstance(selected, RetainedCandidateReportAdmission):
+        return None
+    base = selected.retained_candidate_report_base(request, workspace_root, artifact)
+    if base != request.execution_base_ref or base == request.source_revision:
+        raise WorkspaceAdmissionRejected("保留候选报告缺少精确原执行基线")
+    return base
