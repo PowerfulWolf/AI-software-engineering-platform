@@ -193,6 +193,20 @@ _CAPABILITY_DETAIL_ACTIONS: dict[NativeVerificationCapabilityDetail, str] = {
         "Python 运行时依赖无法完成完整指纹校验"
     ),
     NativeVerificationCapabilityDetail.RUNNER_UNAVAILABLE: "受控验证 runner 不可用",
+    NativeVerificationCapabilityDetail.BROWSER_EXECUTOR_UNREGISTERED: (
+        "计划的真实浏览器验证尚无已验证隔离边界并获授权注册的执行器; 平台维护需完成真实 "
+        "Chrome/Playwright 正例、拒绝边界、候选及独立 claim 绑定和清理验证后注册; 安装 "
+        "Node 或浏览器不能建立该能力"
+    ),
+    NativeVerificationCapabilityDetail.LIVE_EXECUTOR_UNREGISTERED: (
+        "计划的真实 A→B 验证尚无获授权注册的生产路径执行器; 平台维护需建立可信 Configured "
+        "路径、隔离 Host/SQL、真实独立 claims 与原计划要求的发布、查询、读取及引用验证后注册; "
+        "Scripted 或 composition 结果不能替代"
+    ),
+    NativeVerificationCapabilityDetail.REQUIREMENT_EXECUTOR_UNREGISTERED: (
+        "原计划的精确验证入口尚无对应的已授权注册执行能力; 维护者需核对该项的 argv、准则及 "
+        "level, 补齐并独立验收能力后注册; 仅安装执行文件或再次批准不能补齐该能力"
+    ),
 }
 
 

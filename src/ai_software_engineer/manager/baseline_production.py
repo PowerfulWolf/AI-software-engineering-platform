@@ -17,7 +17,7 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 from pymysql.cursors import DictCursor
 
-from ai_software_engineer.agents.execution import SynchronousToolLoopStop
+from ai_software_engineer.agents.execution import ExecutionStop, SynchronousToolLoopStop
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, RouteAttemptOutcome
 from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
@@ -88,6 +88,7 @@ from ai_software_engineer.manager.delivery_preflight import (
 from ai_software_engineer.manager.dispatch import DeliveryAllocation
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.manager.knowledge_invocation_proof import (
+    KnowledgeNativeStopChecker,
     KnowledgeOnlyClaimProof,
     ReplayGuardedClaimObservation,
     read_capacity_claim_snapshot,
@@ -114,6 +115,7 @@ from ai_software_engineer.manager.legacy_snapshot import require_complete_legacy
 from ai_software_engineer.manager.local_survey_observation import (
     IsolatedLegacyLocalExecutionObserver,
 )
+from ai_software_engineer.manager.owned_session_boot_bridge import ScopedNativeStopVerifier
 from ai_software_engineer.manager.stopped_execution_checkpoint import (
     StoppedCoderExecutionProof,
     read_stopped_coder_execution,
@@ -574,6 +576,7 @@ class ProductionBaselineFactCollector:
         local_execution_observer: LegacyLocalExecutionObserver | None = None,
         route_root: Path | None = None,
         knowledge_requirement_id: str | None = None,
+        native_stop_verifier: ScopedNativeStopVerifier | None = None,
     ) -> None:
         allocation.validate_integrity()
         self.allocation, self.scope, self.requirement_id = allocation, scope, requirement_id
@@ -601,6 +604,18 @@ class ProductionBaselineFactCollector:
         self._sealed_legacy_observation: LegacyExecutionContainment | None = None
         self.route_root = route_root
         self._proposal_command: BaselineProposeCommand | None = None
+        self.native_stop_verifier = native_stop_verifier
+
+    def _require_stopped(self, stop: ExecutionStop, request: AgentRequest | None = None) -> None:
+        verifier = getattr(self, "native_stop_verifier", None)
+        if verifier is None:
+            NativeCoderContinuation._require_stopped(stop, request)
+        else:
+            verifier.require_stopped(stop, request)
+
+    def _knowledge_stop_checker(self) -> KnowledgeNativeStopChecker | None:
+        verifier = getattr(self, "native_stop_verifier", None)
+        return verifier.require_knowledge if verifier is not None else None
 
     def bind_proposal(self, command: BaselineProposeCommand) -> None:
         """Bind one explicit preparation, never an execute/continue recollection."""
@@ -1462,7 +1477,7 @@ class ProductionBaselineFactCollector:
                 or receipt.policy_sha256 != policy.policy_sha256
             ):
                 raise ValueError("原停机记录未绑定原需求、分配和冻结权限")
-            NativeCoderContinuation._require_stopped(receipt.process_stop, receipt.request)
+            self._require_stopped(receipt.process_stop, receipt.request)
         return receipts
 
     def _invocations(
@@ -1572,6 +1587,7 @@ class ProductionBaselineFactCollector:
                     no_start_reader=self._capacity_input_reader(),
                     fence=fence,
                     isolated_lease_ids=isolated_lease_ids,
+                    native_stop_checker=self._knowledge_stop_checker(),
                 )
                 if fence is not None
                 else ()
@@ -1667,9 +1683,7 @@ class ProductionBaselineFactCollector:
                                 )
                             ):
                                 raise ValueError("历史未知结果停止证明与原封存执行不一致")
-                            NativeCoderContinuation._require_stopped(
-                                prior.capture_stop.process_stop, start.request
-                            )
+                            self._require_stopped(prior.capture_stop.process_stop, start.request)
                             stopped = prior
                 if outcome is not None:
                     outcome.validate_integrity()
@@ -2011,6 +2025,7 @@ class ProductionBaselineFactCollector:
             historical_claim=self.queue.original_claim(start.lease_id),
             task_lock=self.guard,
             validate_inputs=validate_inputs,
+            stop_checker=self._require_stopped,
         )
 
     def _reservation(
@@ -2638,6 +2653,7 @@ class ProductionBaselineFactCollector:
             require_step=self._require_step,
             no_start_reader=self._capacity_input_reader(),
             isolated_lease_ids=isolated_lease_ids,
+            native_stop_checker=self._knowledge_stop_checker(),
         )
 
     def _preflight_markers(
@@ -2809,6 +2825,7 @@ class ProductionBaselineFactCollector:
             queue=self.queue,
             require_step=self._require_step,
             isolated_lease_ids=isolated_lease_ids,
+            native_stop_checker=self._knowledge_stop_checker(),
         )
 
     def _require_capacity_identity(

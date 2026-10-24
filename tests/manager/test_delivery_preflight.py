@@ -41,7 +41,7 @@ from ai_software_engineer.manager.production_backend import (
 )
 from ai_software_engineer.manager.python_verification_discovery import PythonMysqlDiscoveryError
 from tests.domain.factories import NOW, make_agent, make_task
-from tests.manager.test_native_verification import _fixture
+from tests.manager.test_native_verification import _fake_ports, _fixture
 
 _SCOPE = DeliveryPreflightScope(
     team_id="team_preflight",
@@ -877,4 +877,288 @@ def test_planned_existing_file_needs_only_verifier_read_permission(
     assert (
         _inspect(task, definitions, environment, requirement=missing).status == "WAIT_ENGINEERING"
     )
+    assert not sentinel.exists()
+
+
+def test_accepted_mixed_plan_projects_61_original_observations_not_122_fallback_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.manager.test_native_verification_partition import mixed_requirements
+
+    fixture = _fixture(tmp_path)
+    resources, executions, _ = _fake_ports(monkeypatch, fixture)
+    rows = mixed_requirements()
+    assert rows[-1].inspection is not None
+    document = rows[-1].model_copy(
+        update={
+            "inspection": rows[-1].inspection.model_copy(update={"paths": ("tests/test_case.py",)})
+        }
+    )
+    rows = (*rows[:-1], document)
+    plan = fixture.plan.model_copy(
+        update={
+            "content": fixture.plan.content.model_copy(update={"verification_requirements": rows})
+        }
+    )
+    coder = make_agent().model_copy(
+        update={
+            "permissions": make_agent().permissions.model_copy(
+                update={"read_paths": ("**",), "write_paths": ("tests/**",)}
+            )
+        }
+    )
+    qa = coder.model_copy(
+        update={
+            "role": AgentRole.QA,
+            "permissions": coder.permissions.model_copy(
+                update={"write_paths": (), "commands": ("pytest", "python", "node --test")}
+            ),
+        }
+    )
+    backend = cast(
+        ProductionProjectDeliveryBackend,
+        SimpleNamespace(
+            _config=ProductionConfig(
+                platform_root=str(tmp_path / "platform"),
+                model_routes=(
+                    ProviderRouteConfig(
+                        provider="codex", model="fixture", kind=ModelProviderKind.CODEX_CLI
+                    ),
+                ),
+            ),
+            _environment={"PATH": "/usr/bin:/bin"},
+            _clock=lambda: NOW,
+        ),
+    )
+    receipt = ProductionProjectDeliveryBackend._inspect_native_prerequisites(
+        backend,
+        cast(_ProjectFacts, None),
+        fixture.task,
+        plan,
+        {AgentRole.CODER: coder, AgentRole.QA: qa},
+        fixture.registry,
+        fixture.task.base_ref,
+    )
+    receipt.validate_integrity()
+    assert len(receipt.observations) == 61
+    assert tuple(item.requirement_id for item in receipt.observations) == tuple(
+        item.id for item in rows
+    )
+    assert sum(item.status == "READY" for item in receipt.observations) == 56
+    missing = [item for item in receipt.observations if item.status == "WAIT_ENGINEERING"]
+    assert len(missing) == 5
+    assert all(
+        item.native_wait_detail
+        is NativeVerificationCapabilityDetail.REQUIREMENT_EXECUTOR_UNREGISTERED
+        for item in missing
+    )
+    assert (
+        receipt.requirements_sha256
+        == hashlib.sha256(
+            json.dumps(
+                [item.to_wire() for item in rows],
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    )
+    assert not resources and not executions
+
+
+@pytest.mark.parametrize("change", ["foreign", "duplicate", "role", "argv", "levels", "ready"])
+def test_per_row_prerequisites_reject_foreign_stale_and_contradictory_identity_before_git(
+    change: str,
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.manager.native_verification_partition import (
+        NativeRequirementPrerequisite,
+    )
+
+    check = _requirement(capability=_CAPABILITY)
+    fact = NativeRequirementPrerequisite.for_requirement(
+        check,
+        effective_role=AgentRole.QA,
+        reason=NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE,
+        detail=NativeVerificationCapabilityDetail.REQUIREMENT_EXECUTOR_UNREGISTERED,
+    )
+    facts: tuple[NativeRequirementPrerequisite, ...] = (fact,)
+    capabilities: tuple[DiscoveredControlledCapability, ...] = ()
+    if change == "foreign":
+        facts = (fact.model_copy(update={"requirement_id": "foreign"}),)
+    elif change == "duplicate":
+        facts = (fact, fact)
+    elif change == "role":
+        facts = (fact.model_copy(update={"effective_role": AgentRole.REVIEWER}),)
+    elif change == "argv":
+        assert check.argv is not None
+        check = check.model_copy(update={"argv": (*check.argv, "--changed")})
+    elif change == "levels":
+        check = check.model_copy(update={"verification_levels": ()})
+    else:
+        capabilities = (
+            DiscoveredControlledCapability(
+                kind=_CAPABILITY,
+                role=AgentRole.QA,
+                source_revision="a" * 40,
+                discovery_sha256="b" * 64,
+                requirement_ids=(check.id,),
+            ),
+        )
+    # This path does not exist: original-row validation must reject before Git/host probes.
+    task = make_task().model_copy(
+        update={"repository": str(tmp_path / "not_created"), "base_ref": "a" * 40}
+    )
+    with pytest.raises(ValueError, match=r"identity|prerequisites|contradictory"):
+        inspect_delivery_prerequisites(
+            scope=_SCOPE,
+            task=task,
+            plan_sha256="b" * 64,
+            requirements=(check,),
+            definitions={},
+            route_kinds={},
+            environment={},
+            controlled_prerequisites=facts,
+            controlled_capabilities=capabilities,
+            checked_at=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("pytest", "tests/test_case.py::test_models", "-q"),
+        ("go", "test", "./pkg/foo", "-run", "TestFoo"),
+        ("npm", "test", "--", "tests/test_case.py"),
+        ("mvn", "test", "-Dtest=FocusedTest"),
+        ("python", "-m", "unittest", "tests.test_case.Case.test_models"),
+    ],
+)
+def test_production_partition_does_not_block_ordinary_responses_on_native_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv: tuple[str, ...]
+) -> None:
+    fixture = _fixture(tmp_path)
+    resources, executions, _ = _fake_ports(monkeypatch, fixture)
+    assert fixture.plan.content.verification_requirements is not None
+    rows = tuple(
+        item.model_copy(update={"argv": argv, "controlled_capability_kind": None})
+        for item in fixture.plan.content.verification_requirements
+    )
+    plan = fixture.plan.model_copy(
+        update={
+            "content": fixture.plan.content.model_copy(update={"verification_requirements": rows})
+        }
+    )
+    coder = make_agent()
+    qa = make_agent().model_copy(
+        update={
+            "role": AgentRole.QA,
+            "permissions": make_agent().permissions.model_copy(
+                update={"read_paths": ("**",), "commands": (argv[0],)}
+            ),
+        }
+    )
+    tool = tmp_path / "tools"
+    tool.mkdir()
+    executable = tool / argv[0]
+    executable.write_text("#!/bin/sh\nexit 99\n")
+    executable.chmod(0o755)
+
+    def unavailable(**kwargs: object) -> Never:
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+        )
+
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.native_verification.discover_python_mysql_host_prerequisites",
+        unavailable,
+    )
+    backend = cast(
+        ProductionProjectDeliveryBackend,
+        SimpleNamespace(
+            _config=ProductionConfig(
+                platform_root=str(tmp_path / "platform"),
+                model_routes=(
+                    ProviderRouteConfig(
+                        provider="responses",
+                        model="fixture",
+                        kind=ModelProviderKind.RESPONSES,
+                        endpoint="https://example.invalid/v1/responses",
+                        api_key_env="TEST_ONLY_NOT_SET",
+                    ),
+                ),
+            ),
+            _environment={"PATH": str(tool)},
+            _clock=lambda: NOW,
+        ),
+    )
+    receipt = ProductionProjectDeliveryBackend._inspect_native_prerequisites(
+        backend,
+        cast(_ProjectFacts, None),
+        fixture.task,
+        plan,
+        {AgentRole.CODER: coder, AgentRole.QA: qa},
+        fixture.registry,
+        fixture.task.base_ref,
+    )
+    receipt.validate_integrity()
+    assert receipt.status == "READY"
+    assert all(item.native_wait_reason is None for item in receipt.observations)
+    assert not resources and not executions
+
+
+def test_ordinary_row_cannot_hide_a_mixed_registered_role_group(tmp_path: Path) -> None:
+    from ai_software_engineer.manager.native_verification_partition import (
+        NativeRequirementPrerequisite,
+    )
+
+    task, definitions, environment, sentinel = _prepare(tmp_path)
+    go = _requirement(("go", "test", "./pkg/foo", "-run", "TestFoo"))
+    python = _requirement(
+        ("pytest", "tests/test_present.py::test_models"), capability=_CAPABILITY
+    ).model_copy(update={"id": "verify_controlled"})
+    qa = definitions[AgentRole.QA]
+    definitions[AgentRole.QA] = qa.model_copy(
+        update={
+            "permissions": qa.permissions.model_copy(
+                update={"commands": (*qa.permissions.commands, "go")}
+            )
+        }
+    )
+    executable = Path(environment["PATH"]) / "go"
+    executable.write_text("#!/bin/sh\nexit 99\n")
+    executable.chmod(0o755)
+    missing = NativeRequirementPrerequisite.for_requirement(
+        go,
+        effective_role=AgentRole.QA,
+        reason=NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE,
+        detail=NativeVerificationCapabilityDetail.REQUIREMENT_EXECUTOR_UNREGISTERED,
+    )
+    receipt = inspect_delivery_prerequisites(
+        scope=_SCOPE,
+        task=task,
+        plan_sha256="b" * 64,
+        requirements=(go, python),
+        definitions=definitions,
+        route_kinds={AgentRole.QA: "responses"},
+        environment=environment,
+        controlled_capabilities=(
+            DiscoveredControlledCapability(
+                kind=_CAPABILITY,
+                role=AgentRole.QA,
+                source_revision=task.base_ref,
+                discovery_sha256="c" * 64,
+                requirement_ids=(python.id,),
+            ),
+        ),
+        controlled_prerequisites=(missing,),
+        checked_at=NOW,
+    )
+    assert receipt.status == "WAIT_ENGINEERING"
+    assert (
+        receipt.observations[0].native_wait_detail
+        is NativeVerificationCapabilityDetail.REQUIREMENT_EXECUTOR_UNREGISTERED
+    )
+    assert receipt.observations[1].status == "READY"
     assert not sentinel.exists()

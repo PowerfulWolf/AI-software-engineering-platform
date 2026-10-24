@@ -15,7 +15,7 @@ import stat
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
@@ -30,6 +30,11 @@ from ai_software_engineer.domain.native_verification import (
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
 from ai_software_engineer.manager.verification_process import bounded_verification_command
+
+if TYPE_CHECKING:
+    from ai_software_engineer.manager.native_verification_partition import (
+        NativeRequirementPrerequisite,
+    )
 
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 
@@ -145,6 +150,59 @@ def _resolve_executable(root: Path, argv: tuple[str, ...], environment: Mapping[
     return resolved
 
 
+def _is_incremental_test_entrypoint(argv: tuple[str, ...]) -> bool:
+    from ai_software_engineer.multi_directory.integration_commands import (
+        TEST_PREFIXES,
+        is_test_command,
+    )
+    from ai_software_engineer.swift_verification import is_restricted_swift_command
+
+    normalized = (Path(argv[0]).name, *argv[1:])
+    filtered_swift = (
+        normalized[:2] == ("swift", "test")
+        and "--filter" in normalized
+        and is_restricted_swift_command(normalized)
+    )
+    return (
+        (is_test_command(argv) or is_test_command(normalized) or filtered_swift)
+        and normalized not in TEST_PREFIXES
+        and not any(
+            token
+            in {
+                "tests",
+                "tests/",
+                ".",
+                "./",
+                "./...",
+                "...",
+                "discover",
+                "--all",
+                "--all-packages",
+                "*",
+                ".*",
+            }
+            for token in normalized
+        )
+    )
+
+
+def is_ordinary_verification_requirement(requirement: PlannedVerificationRequirement) -> bool:
+    """Select existing ordinary semantics; policy/tools/current facts remain separate gates.
+
+    Registered-host failures cannot block an unrelated ordinary Responses runner.
+    An explicit capability or unmarked e2e/acceptance obligation cannot acquire
+    ordinary permissions through this selector.
+    """
+    if requirement.controlled_capability_kind is not None or any(
+        level.casefold() in {"e2e", "acceptance"} for level in requirement.verification_levels or ()
+    ):
+        return False
+    if requirement.inspection is not None:
+        return requirement.inspection.kind in {"source", "document"}
+    assert requirement.argv is not None
+    return _is_incremental_test_entrypoint(requirement.argv)
+
+
 def inspect_delivery_prerequisites(
     *,
     scope: DeliveryPreflightScope,
@@ -157,10 +215,32 @@ def inspect_delivery_prerequisites(
     controlled_capabilities: tuple[DiscoveredControlledCapability, ...] = (),
     controlled_discovery_failure: NativeVerificationWaitReason | None = None,
     controlled_discovery_detail: NativeVerificationCapabilityDetail | None = None,
+    controlled_prerequisites: tuple[NativeRequirementPrerequisite, ...] = (),
     checked_at: datetime,
     source_revision: str | None = None,
 ) -> DeliveryPreflightReceipt:
     source = source_revision or task.base_ref
+    # Validate exact original rows before touching Git/tools. Reviewer fallback
+    # belongs to independent role preparation, not this original-row receipt.
+    ensure_unique((item.id for item in requirements), "preflight requirements")
+    ensure_unique(
+        (item.requirement_id for item in controlled_prerequisites), "preflight prerequisites"
+    )
+    originals = {item.id: item for item in requirements}
+    missing = {}
+    for item in controlled_prerequisites:
+        original = originals.get(item.requirement_id)
+        if original is None:
+            raise ValueError("foreign prerequisite requirement identity")
+        item.validate_requirement(original, effective_role=original.role)
+        if any(
+            capability.role is original.role
+            and capability.source_revision == source
+            and original.id in capability.requirement_ids
+            for capability in controlled_capabilities
+        ):
+            raise ValueError("contradictory ready and unavailable prerequisite")
+        missing[item.requirement_id] = item
     root = Path(task.repository)
     if root.resolve(strict=True) != root or not root.is_dir():
         raise ValueError("preflight requires the exact canonical registered repository")
@@ -229,13 +309,23 @@ def inspect_delivery_prerequisites(
                 reason_code="VERIFICATION_ENTRYPOINTS_REQUIRED",
             )
         )
+    ordinary_roles = {
+        role
+        for role, route in route_kinds.items()
+        if route == "responses"
+        and all(
+            is_ordinary_verification_requirement(item) for item in requirements if item.role is role
+        )
+    }
     for requirement in requirements:
+        ordinary = requirement.role in ordinary_roles
+        prerequisite = None if ordinary else missing.get(requirement.id)
         definition = definitions[requirement.role]
         policy = WorkspacePolicy(
             root,
             definition.permissions,
             denied_paths=task.constraints.denied_paths if task.constraints else (),
-            require_focused_tests=True,
+            require_focused_tests=prerequisite is None,
         )
         if requirement.inspection is not None:
             inspection = requirement.inspection
@@ -299,10 +389,14 @@ def inspect_delivery_prerequisites(
                         controlled_discovery_sha256=capability.discovery_sha256
                         if capability
                         else None,
-                        native_wait_reason=controlled_discovery_failure
+                        native_wait_reason=(
+                            prerequisite.reason if prerequisite else controlled_discovery_failure
+                        )
                         if capability is None
                         else None,
-                        native_wait_detail=controlled_discovery_detail
+                        native_wait_detail=(
+                            prerequisite.detail if prerequisite else controlled_discovery_detail
+                        )
                         if capability is None
                         else None,
                     )
@@ -319,43 +413,9 @@ def inspect_delivery_prerequisites(
         assert requirement.argv is not None
         try:
             # A broad interpreter allowlist is not a verification entry point.
-            # Reuse the same typed command predicate advertised to joint Planner.
-            from ai_software_engineer.multi_directory.integration_commands import (
-                TEST_PREFIXES,
-                is_test_command,
-            )
-            from ai_software_engineer.swift_verification import is_restricted_swift_command
-
-            normalized = (Path(requirement.argv[0]).name, *requirement.argv[1:])
-            filtered_swift = (
-                normalized[:2] == ("swift", "test")
-                and "--filter" in normalized
-                and is_restricted_swift_command(normalized)
-            )
-            if (
-                not is_test_command(requirement.argv)
-                and not is_test_command(normalized)
-                and not filtered_swift
-            ):
-                raise WorkspacePolicyError("验证计划必须使用已支持的测试入口")
-            if normalized in TEST_PREFIXES or any(
-                token
-                in {
-                    "tests",
-                    "tests/",
-                    ".",
-                    "./",
-                    "./...",
-                    "...",
-                    "discover",
-                    "--all",
-                    "--all-packages",
-                    "*",
-                    ".*",
-                }
-                for token in normalized
-            ):
-                raise WorkspacePolicyError("验证计划必须提供明确的增量测试范围")
+            # Diagnostics may describe unsupported entries without authorizing them.
+            if prerequisite is None and not _is_incremental_test_entrypoint(requirement.argv):
+                raise WorkspacePolicyError("验证计划必须使用明确的增量测试入口")
             policy.authorize_command(requirement.argv)
             for token in requirement.argv:
                 if token.startswith("tests/"):
@@ -392,9 +452,21 @@ def inspect_delivery_prerequisites(
                 )
             )
             continue
+        if prerequisite is not None:
+            observations.append(
+                DeliveryPreflightObservation(
+                    requirement_id=requirement.id,
+                    status="WAIT_ENGINEERING",
+                    reason_code="CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED",
+                    native_wait_reason=prerequisite.reason,
+                    native_wait_detail=prerequisite.detail,
+                )
+            )
+            continue
         if (
             requirement.controlled_capability_kind is not None
             or route_kinds[requirement.role] == "codex_cli"
+            or not ordinary
         ):
             capability = next(
                 (

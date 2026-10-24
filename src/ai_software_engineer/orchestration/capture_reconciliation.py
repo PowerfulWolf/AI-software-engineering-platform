@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ai_software_engineer.agents.execution import ExecutionGuard
+from ai_software_engineer.agents.execution import ExecutionGuard, ExecutionStop
 from ai_software_engineer.agents.models import AgentRequest
 from ai_software_engineer.domain import AgentRole, TaskStatus
 from ai_software_engineer.domain.continuation import task_intent_sha256
@@ -44,6 +44,7 @@ def validate_capture_stop(
     historical_claim: QueueClaim,
     task_lock: ExecutionGuard,
     validate_inputs: Callable[[AgentRequest], None],
+    stop_checker: Callable[[ExecutionStop, AgentRequest | None], None] | None = None,
 ) -> None:
     """Verify the original owned stop; it proves no outcome or checkpoint readiness."""
     start.validate_integrity()
@@ -76,7 +77,8 @@ def validate_capture_stop(
         raise ContinuationRejected("原执行事实不足以安全保存接续现场, 原记录与草稿保留")
     validate_inputs(request)
     try:
-        NativeCoderContinuation._require_stopped(stop.process_stop, request)
+        checker = stop_checker or NativeCoderContinuation._require_stopped
+        checker(stop.process_stop, request)
     except ContinuationRejected as error:
         raise CaptureStopProcessUncertain("原执行进程组仍在运行或状态未知, 暂不能处理") from error
 

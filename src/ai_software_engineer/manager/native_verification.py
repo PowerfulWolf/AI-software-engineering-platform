@@ -43,6 +43,18 @@ from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
 from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightScope,
     DiscoveredControlledCapability,
+    is_ordinary_verification_requirement,
+)
+from ai_software_engineer.manager.native_verification_partition import (
+    PYTHON_MYSQL_CAPABILITY_KIND,
+    NativeEntrypointDiagnosticHint,
+    NativeRequirementPrerequisite,
+    NativeVerificationPartitionDiscovery,
+    partition_verification_requirements,
+    validate_verification_requirement_scope,
+)
+from ai_software_engineer.manager.native_verification_partition import (
+    exact_python_selections as exact_python_selections,
 )
 from ai_software_engineer.manager.native_verification_store import (
     NativeRoleVerificationBinding,
@@ -62,14 +74,13 @@ from ai_software_engineer.manager.python_verification_discovery import (
     discover_python_mysql_capability,
     discover_python_mysql_host_prerequisites,
 )
-from ai_software_engineer.manager.python_verification_runner import MAX_PYTEST_SELECTIONS
 from ai_software_engineer.manager.verification_process import bounded_verification_command
 from ai_software_engineer.recovery.store import RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_execution import VerificationEvidence
 from ai_software_engineer.recovery.verification_records import VerificationExecutionRecord
 from ai_software_engineer.work_queue.models import QueueClaim
 
-_PYTHON_CAPABILITY = "codex_sandbox_pytest_mysql_v1"
+_PYTHON_CAPABILITY = PYTHON_MYSQL_CAPABILITY_KIND
 VerifierRole = Literal[AgentRole.QA, AgentRole.REVIEWER]
 
 if TYPE_CHECKING:
@@ -169,59 +180,6 @@ def native_verification_requirements(
     return direct if direct else tuple(item for item in requirements if item.role is AgentRole.QA)
 
 
-def exact_python_selections(
-    requirements: tuple[PlannedVerificationRequirement, ...],
-) -> tuple[PytestSelection, ...]:
-    nodes: dict[str, set[str]] = {}
-    for requirement in requirements:
-        if requirement.inspection is not None:
-            if requirement.inspection.kind == "native_ui":
-                raise NativeVerificationWaiting(NativeVerificationWaitReason.NATIVE_UI_PREREQUISITE)
-            continue
-        argv = requirement.argv
-        assert argv is not None
-        normalized = (Path(argv[0]).name, *argv[1:])
-        if normalized[0] == "swift":
-            reason = (
-                NativeVerificationWaitReason.UNSUPPORTED_SWIFT_FILTER
-                if "--filter" in normalized
-                else NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT
-            )
-            raise NativeVerificationWaiting(reason)
-        # Older immutable Plans predate the explicit capability field.  A
-        # precise Python pytest argv is enough to derive the same registered
-        # capability for compatibility; new Plans are rejected earlier by the
-        # Planning feasibility gate unless they declare it explicitly.
-        if requirement.controlled_capability_kind not in {None, _PYTHON_CAPABILITY}:
-            raise NativeVerificationWaiting(NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT)
-        if normalized[:3] in (
-            ("python", "-m", "pytest"),
-            ("python3", "-m", "pytest"),
-        ) or normalized[:3] == ("uv", "run", "pytest"):
-            arguments = normalized[3:]
-        elif normalized[0] == "pytest":
-            arguments = normalized[1:]
-        else:
-            raise NativeVerificationWaiting(NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT)
-        selected = tuple(value for value in arguments if value not in {"-q", "--disable-warnings"})
-        if not selected:
-            raise NativeVerificationWaiting(NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT)
-        for node in selected:
-            try:
-                selection = PytestSelection(node_id=node, criterion_ids=requirement.criterion_ids)
-            except ValueError:
-                raise NativeVerificationWaiting(
-                    NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT
-                ) from None
-            nodes.setdefault(selection.node_id, set()).update(selection.criterion_ids)
-    if len(nodes) > MAX_PYTEST_SELECTIONS:
-        raise NativeVerificationWaiting(NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT)
-    return tuple(
-        PytestSelection(node_id=node, criterion_ids=tuple(sorted(criteria)))
-        for node, criteria in nodes.items()
-    )
-
-
 @dataclass(frozen=True)
 class _PreparedNativeVerification:
     request: AgentRequest
@@ -249,6 +207,7 @@ class RegisteredNativePythonVerifier:
         mysql_image: str = "mysql:8.0",
         clock: Callable[[], datetime] = _now,
         inputs_reader: NativeRoleVerificationInputsReader | None = None,
+        diagnostic_hints: tuple[NativeEntrypointDiagnosticHint, ...] = (),
     ) -> None:
         if (scope.team_id, scope.project_id, scope.repository_id) != (
             engineering_scope.team_id,
@@ -266,6 +225,7 @@ class RegisteredNativePythonVerifier:
         )
         self._clock = clock
         self._inputs_reader = inputs_reader
+        self._diagnostic_hints = diagnostic_hints
         self._prepared: dict[tuple[str, bool], _PreparedNativeVerification] = {}
         self._prepared_routes: dict[tuple[str, str], bool] = {}
 
@@ -315,6 +275,21 @@ class RegisteredNativePythonVerifier:
                 groups.append((role, requirements, selections))
         if not groups:
             return ()
+        return self._discover_groups(task, plan, source, groups)
+
+    def _discover_groups(
+        self,
+        task: Task,
+        plan: PlanArtifact,
+        source: str,
+        groups: list[
+            tuple[
+                VerifierRole,
+                tuple[PlannedVerificationRequirement, ...],
+                tuple[PytestSelection, ...],
+            ]
+        ],
+    ) -> tuple[DiscoveredControlledCapability, ...]:
         self._validate_task_authority(task)
         try:
             host = discover_python_mysql_host_prerequisites(
@@ -355,6 +330,96 @@ class RegisteredNativePythonVerifier:
             )
             for role, requirements, selections in groups
         )
+
+    def discover_partitioned(
+        self,
+        task: Task,
+        plan: PlanArtifact,
+        scope: DeliveryPreflightScope,
+        source_revision: str | None = None,
+    ) -> NativeVerificationPartitionDiscovery:
+        """Discover exact supported subsets, retaining every unavailable original row.
+
+        This result does not prepare a role or permit executing a subset of an
+        incomplete group. Old supported homogeneous discovery hashes stay exact.
+        """
+        source = task.base_ref if source_revision is None else source_revision
+        requirements = plan.content.verification_requirements
+        if (
+            scope != self.scope
+            or plan.task_id != task.id
+            or re.fullmatch(r"[a-f0-9]{40}", source) is None
+        ):
+            raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED)
+        if requirements is None:
+            raise NativeVerificationWaiting(NativeVerificationWaitReason.LEGACY_AUTHORITY)
+        from ai_software_engineer.domain.model import ensure_unique
+
+        ensure_unique((item.id for item in requirements), "verification requirement IDs")
+        roles: tuple[VerifierRole, ...] = (AgentRole.QA, AgentRole.REVIEWER)
+        partitions = tuple(
+            partition_verification_requirements(
+                native_verification_requirements(plan, role),
+                effective_role=role,
+                criterion_ids=tuple(item.id for item in task.acceptance_criteria),
+                hints=self._diagnostic_hints,
+            )
+            for role in roles
+        )
+        prerequisites = [item for group in partitions for item in group.unavailable_requirements]
+        groups = [
+            (
+                group.effective_role,
+                group.python_v1_requirements,
+                exact_python_selections(group.python_v1_requirements),
+            )
+            for group in partitions
+            if group.python_v1_requirements
+        ]
+        try:
+            if not prerequisites:
+                capabilities = self.discover(task, plan, scope, source_revision=source)
+            elif groups:
+                capabilities = self._discover_groups(task, plan, source, groups)
+            else:
+                capabilities = ()
+        except NativeVerificationWaiting as error:
+            # A failed host probe only describes rows that need that host. It
+            # cannot overwrite an unrelated browser/live prerequisite.
+            capabilities = ()
+            prerequisites.extend(
+                NativeRequirementPrerequisite.for_requirement(
+                    item, effective_role=role, reason=error.reason, detail=error.detail_code
+                )
+                for role, rows, _ in groups
+                for item in rows
+            )
+        return NativeVerificationPartitionDiscovery(
+            scope=scope,
+            task_id=task.id,
+            source_revision=source,
+            plan_sha256=artifact_digest(plan),
+            policy_sha256=task.engineering_policy.policy_sha256
+            if task.engineering_policy
+            else None,
+            requirements_sha256=role_verification_digest([item.to_wire() for item in requirements]),
+            partitions=partitions,
+            capabilities=capabilities,
+            prerequisites=tuple(prerequisites),
+        )
+
+    def _require_supported_group(self, task: Task, plan: PlanArtifact, role: AgentRole) -> None:
+        if role not in (AgentRole.QA, AgentRole.REVIEWER):
+            raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED)
+        group = partition_verification_requirements(
+            native_verification_requirements(plan, role),
+            effective_role=role,
+            criterion_ids=tuple(item.id for item in task.acceptance_criteria),
+            hints=self._diagnostic_hints,
+        )
+        if group.unavailable_requirements:
+            first = group.unavailable_requirements[0]
+            raise NativeVerificationWaiting(first.reason, detail_code=first.detail)
 
     def provider_for(
         self,
@@ -455,6 +520,7 @@ class RegisteredNativePythonVerifier:
             and task.work_attempt > task.retry_policy.max_work_attempts
         ):
             raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED)
+        self._require_supported_group(task, plan_artifact, role)
         requirements = native_verification_requirements(plan_artifact, role)
         selections = exact_python_selections(requirements)
         if not selections:
@@ -623,10 +689,42 @@ class _RegisteredNativeVerificationEvidence:
         inputs = self._read_inputs(request, workspace_root)
         requirements = native_verification_requirements(inputs.plan_artifact, request.role)
         ordinary = self._ordinary and all(
-            requirement.controlled_capability_kind is None
-            and (requirement.inspection is None or requirement.inspection.kind != "native_ui")
-            for requirement in requirements
+            is_ordinary_verification_requirement(requirement) for requirement in requirements
         )
+        if ordinary:
+            if request.role not in (AgentRole.QA, AgentRole.REVIEWER):
+                raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED)
+            validate_verification_requirement_scope(
+                requirements,
+                effective_role=request.role,
+                criterion_ids=tuple(item.id for item in inputs.task.acceptance_criteria),
+            )
+            # The whole original group must qualify. A valid ordinary runner is
+            # independent of registered host discovery, but keeps the same role policy.
+            policy = WorkspacePolicy(
+                workspace_root,
+                request.permissions,
+                denied_paths=inputs.task.constraints.denied_paths
+                if inputs.task.constraints
+                else (),
+                require_focused_tests=True,
+            )
+            try:
+                for requirement in requirements:
+                    if requirement.argv is not None:
+                        policy.authorize_command(requirement.argv)
+                        for token in requirement.argv:
+                            if token.startswith("tests/"):
+                                policy.authorize_read(token.split("::", 1)[0])
+                    elif requirement.inspection is not None:
+                        for path in requirement.inspection.paths:
+                            policy.authorize_read(path)
+            except WorkspacePolicyError:
+                raise NativeVerificationWaiting(
+                    NativeVerificationWaitReason.FACTS_CHANGED
+                ) from None
+        else:
+            self._registry._require_supported_group(inputs.task, inputs.plan_artifact, request.role)
         request_sha256 = role_verification_digest(request.to_wire())
         key = (request_sha256, ordinary)
         route_key = None if self._route_sha256 is None else (request_sha256, self._route_sha256)

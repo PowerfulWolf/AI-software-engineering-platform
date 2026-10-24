@@ -825,24 +825,41 @@ def test_evidence_revalidation_preserves_host_discovery_detail(
     assert failure.value.detail_code is detail
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("pytest", "tests/test_case.py::test_models", "-q"),
+        ("go", "test", "./pkg/foo", "-run", "TestFoo"),
+        ("npm", "test", "--", "tests/test_case.py"),
+        ("mvn", "test", "-Dtest=FocusedTest"),
+        ("python", "-m", "unittest", "tests.test_case.Case.test_models"),
+    ],
+)
 def test_ordinary_responses_plan_uses_original_tools_without_registered_command_execution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv: tuple[str, ...]
 ) -> None:
     fixture = _fixture(tmp_path)
     resources, executions, _ = _fake_ports(monkeypatch, fixture)
     assert fixture.plan.content.verification_requirements is not None
+    request = fixture.request.model_copy(
+        update={
+            "permissions": fixture.request.permissions.model_copy(update={"commands": (argv[0],)})
+        }
+    )
     ordinary = fixture.plan.model_copy(
         update={
             "content": fixture.plan.content.model_copy(
                 update={
                     "verification_requirements": tuple(
-                        item.model_copy(update={"controlled_capability_kind": None})
+                        item.model_copy(update={"controlled_capability_kind": None, "argv": argv})
                         for item in fixture.plan.content.verification_requirements
                     ),
                 }
             )
         }
     )
+
+    expected_request = request
 
     class Reader:
         def read(
@@ -853,7 +870,7 @@ def test_ordinary_responses_plan_uses_original_tools_without_registered_command_
             guard: ExecutionGuard,
         ) -> NativeRoleVerificationInputs:
             if (
-                request != fixture.request
+                request != expected_request
                 or workspace_root != fixture.root
                 or guard is not fixture.guard
             ):
@@ -864,7 +881,7 @@ def test_ordinary_responses_plan_uses_original_tools_without_registered_command_
 
     monkeypatch.setattr(fixture.registry, "_inputs_reader", Reader())
     fixture.registry.prepare_verifier(
-        request=fixture.request,
+        request=request,
         workspace_root=fixture.root,
         guard=fixture.guard,
         allow_ordinary_commands=True,
@@ -875,7 +892,7 @@ def test_ordinary_responses_plan_uses_original_tools_without_registered_command_
         allow_ordinary_commands=True,
         require_prepared=True,
     )
-    text = provider.evidence_for(fixture.request, fixture.root, fixture.guard).text
+    text = provider.evidence_for(request, fixture.root, fixture.guard).text
     assert "普通受限验证工具" in text and "不得把本准备说明当作测试结果" in text
     assert not resources and not executions
     # The ordinary-tool grant cannot leak into a Codex route of the same Run.
@@ -883,7 +900,7 @@ def test_ordinary_responses_plan_uses_original_tools_without_registered_command_
         workspace_root=fixture.root, guard=fixture.guard, require_prepared=True
     )
     with pytest.raises(NativeVerificationWaiting):
-        codex.evidence_for(fixture.request, fixture.root, fixture.guard)
+        codex.evidence_for(request, fixture.root, fixture.guard)
 
 
 def test_interrupted_native_preparation_cannot_become_a_ready_cached_receipt(
@@ -930,3 +947,225 @@ def test_legacy_exact_pytest_uses_registered_bound_without_mutating_plan(count: 
         assert len(exact_python_selections((check,))) == count
     assert check.to_wire() == original
     assert check.controlled_capability_kind is None
+
+
+def test_partitioned_discovery_keeps_original_rows_and_reviewer_fallback_separate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.manager.test_native_verification_partition import mixed_requirements
+
+    fixture = _fixture(tmp_path)
+    resources, executions, _ = _fake_ports(monkeypatch, fixture)
+    rows = mixed_requirements()
+    plan = fixture.plan.model_copy(
+        update={
+            "content": fixture.plan.content.model_copy(update={"verification_requirements": rows})
+        }
+    )
+    before = plan.to_wire()
+    discovery = fixture.registry.discover_partitioned(fixture.task, plan, fixture.registry.scope)
+    assert len(discovery.partitions) == 2
+    assert len(discovery.prerequisites) == 10
+    assert len(discovery.original_prerequisites(rows)) == 5
+    assert {item.role for item in discovery.capabilities} == {AgentRole.QA, AgentRole.REVIEWER}
+    assert all(len(item.requirement_ids) == 55 for item in discovery.capabilities)
+    assert plan.to_wire() == before and not resources and not executions
+
+
+def test_supported_partition_discovery_preserves_exact_v1_hashes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path)
+    _fake_ports(monkeypatch, fixture)
+    legacy = fixture.registry.discover(fixture.task, fixture.plan, fixture.registry.scope)
+    discovery = fixture.registry.discover_partitioned(
+        fixture.task, fixture.plan, fixture.registry.scope
+    )
+    assert discovery.capabilities == legacy and discovery.prerequisites == ()
+
+
+def test_failed_python_host_discovery_does_not_erase_unregistered_mixed_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.manager.test_native_verification_partition import mixed_requirements
+
+    fixture = _fixture(tmp_path)
+    rows = mixed_requirements()
+    plan = fixture.plan.model_copy(
+        update={
+            "content": fixture.plan.content.model_copy(update={"verification_requirements": rows})
+        }
+    )
+
+    def unavailable(**kwargs: object) -> Never:
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+        )
+
+    monkeypatch.setattr(_PREFIX + "discover_python_mysql_host_prerequisites", unavailable)
+    discovery = fixture.registry.discover_partitioned(fixture.task, plan, fixture.registry.scope)
+    missing = discovery.original_prerequisites(rows)
+    assert len(missing) == 60 and discovery.capabilities == ()
+    assert (
+        sum(
+            item.detail is NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+            for item in missing
+        )
+        == 55
+    )
+    assert (
+        sum(
+            item.detail is NativeVerificationCapabilityDetail.REQUIREMENT_EXECUTOR_UNREGISTERED
+            for item in missing
+        )
+        == 5
+    )
+
+
+@pytest.mark.parametrize("role", [AgentRole.QA, AgentRole.REVIEWER])
+def test_mixed_direct_binder_does_not_execute_a_supported_subset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: AgentRole,
+) -> None:
+    from tests.manager.test_native_verification_partition import mixed_requirements
+
+    fixture = _fixture(tmp_path, role)
+    resources, executions, _ = _fake_ports(monkeypatch, fixture)
+    rows = mixed_requirements()
+    plan = fixture.plan.model_copy(
+        update={
+            "content": fixture.plan.content.model_copy(update={"verification_requirements": rows})
+        }
+    )
+    with pytest.raises(NativeVerificationWaiting) as failure:
+        fixture.registry.bind(
+            task=fixture.task,
+            request=fixture.request,
+            plan_artifact=plan,
+            implementation=fixture.implementation,
+            claim=fixture.claim,
+            facts=fixture.facts,
+            workspace_root=fixture.root,
+            guard=fixture.guard,
+        )
+    assert failure.value.reason is NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE
+    assert (
+        failure.value.detail_code
+        is NativeVerificationCapabilityDetail.REQUIREMENT_EXECUTOR_UNREGISTERED
+    )
+    assert not resources and not executions and not fixture.registry._prepared
+
+
+@pytest.mark.parametrize(
+    "tamper", ["foreign", "fallback_sha", "fallback_role", "partition", "omitted", "detail"]
+)
+def test_partitioned_discovery_rejects_unselected_foreign_or_changed_fallback_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str,
+) -> None:
+    from tests.manager.test_native_verification_partition import mixed_requirements
+
+    fixture = _fixture(tmp_path)
+    _fake_ports(monkeypatch, fixture)
+    rows = mixed_requirements()
+    plan = fixture.plan.model_copy(
+        update={
+            "content": fixture.plan.content.model_copy(update={"verification_requirements": rows})
+        }
+    )
+    discovery = fixture.registry.discover_partitioned(fixture.task, plan, fixture.registry.scope)
+    fact = next(
+        item for item in discovery.prerequisites if item.effective_role is AgentRole.REVIEWER
+    )
+    changed = fact.model_copy(
+        update={"requirement_id": "foreign"}
+        if tamper == "foreign"
+        else {"requirement_sha256": "0" * 64}
+        if tamper == "fallback_sha"
+        else {"effective_role": AgentRole.QA}
+    )
+    if tamper == "partition":
+        group = discovery.partitions[1].model_copy(update={"requirements_sha256": "0" * 64})
+        altered = discovery.model_copy(update={"partitions": (discovery.partitions[0], group)})
+    elif tamper == "omitted":
+        altered = discovery.model_copy(
+            update={
+                "prerequisites": tuple(item for item in discovery.prerequisites if item is not fact)
+            }
+        )
+    elif tamper == "detail":
+        changed = fact.model_copy(
+            update={"detail": NativeVerificationCapabilityDetail.BROWSER_EXECUTOR_UNREGISTERED}
+        )
+        altered = discovery.model_copy(
+            update={
+                "prerequisites": tuple(
+                    changed if item is fact else item for item in discovery.prerequisites
+                )
+            }
+        )
+    else:
+        altered = discovery.model_copy(
+            update={
+                "prerequisites": tuple(
+                    changed if item is fact else item for item in discovery.prerequisites
+                )
+            }
+        )
+    with pytest.raises(ValueError, match=r"identity|duplicate|changed"):
+        altered.original_prerequisites(rows)
+
+
+@pytest.mark.parametrize(
+    "change", ["unknown_command", "unknown_capability", "e2e", "scope", "command_policy"]
+)
+def test_ordinary_responses_cannot_skip_whole_group_or_current_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    resources, executions, _ = _fake_ports(monkeypatch, fixture)
+    assert fixture.plan.content.verification_requirements is not None
+    row = fixture.plan.content.verification_requirements[0].model_copy(
+        update={"controlled_capability_kind": None}
+    )
+    changes: dict[str, dict[str, object]] = {
+        "unknown_command": {"argv": ("python", "-m", "unknown_module")},
+        "unknown_capability": {"controlled_capability_kind": "unknown_executor_v1"},
+        "e2e": {"verification_levels": ("e2e",)},
+        "scope": {"criterion_ids": ("ac_foreign",)},
+    }
+    if change != "command_policy":
+        row = row.model_copy(update=changes[change])
+    request = fixture.request
+    if change == "command_policy":
+        request = request.model_copy(
+            update={"permissions": request.permissions.model_copy(update={"commands": ("go",)})}
+        )
+    plan = fixture.plan.model_copy(
+        update={
+            "content": fixture.plan.content.model_copy(update={"verification_requirements": (row,)})
+        }
+    )
+
+    class Reader:
+        def read(
+            self, *, request: AgentRequest, workspace_root: Path, guard: ExecutionGuard
+        ) -> NativeRoleVerificationInputs:
+            return NativeRoleVerificationInputs(
+                fixture.task, plan, fixture.implementation, fixture.claim, fixture.facts
+            )
+
+    monkeypatch.setattr(fixture.registry, "_inputs_reader", Reader())
+    with pytest.raises((ValueError, NativeVerificationWaiting)):
+        fixture.registry.prepare_verifier(
+            request=request,
+            workspace_root=fixture.root,
+            guard=fixture.guard,
+            allow_ordinary_commands=True,
+        )
+    assert not resources and not executions and not fixture.registry._prepared

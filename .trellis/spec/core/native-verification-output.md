@@ -104,3 +104,43 @@ channel. Its sealed test declarations alone are not machine Evidence; missing hi
 cannot be recovered from a claimed digest. This admission fix binds existing independent
 controlled-verification receipts. It does not claim complete native Coder command capture or
 retroactively satisfy that broader evidence requirement.
+
+
+## Invocation scope and untrusted test summaries (2026-10-22)
+
+`receipt_covered_required_criterion_ids` pins approved invocation scope for exact receipt citation;
+it does not authenticate execution of every candidate test body. Candidate plugins/conftest run
+in the same process as pytest observers and can spoof collected/passed counters or remove tests.
+`test_native_verification_summary_trust.py` preserves an actual offline counterexample: no tests
+ran and the test-body marker is absent, yet rc0 and a unique complete summary claim passed1.
+Schema, index, nonce or candidate-writable result-file checks cannot establish independent test
+coverage. Such summaries remain bounded diagnostics. Independent QA/Reviewer evaluate actual
+coverage and can honestly return FAIL/REJECT despite rc0. Existing nonzero contradiction and
+current candidate/claim/receipt gates remain intact; no verdict or artifact is rewritten.
+
+
+## Complete mixed prerequisites and ordinary Responses compatibility (2026-10-24)
+
+`RegisteredNativePythonVerifier.discover_partitioned` retains every original row and its
+identity digest under each independent effective role. Original-Plan preflight projects each
+original row once; QA fallback is not duplicated into the public receipt. A mixed Python subset
+above the unchanged64-selector limit becomes per-original-row `UNSUPPORTED_ENTRYPOINT` facts
+while browser/live missing-capability details and inspections remain present. No partial group
+is prepared; homogeneous v1 global-limit behavior and hashes stay unchanged.
+
+`is_ordinary_verification_requirement(requirement)` selects existing precise ordinary Responses
+semantics before applying registered-host prerequisites. It allows only source/document
+inspection or already-supported incremental test commands without an explicit capability or
+unmarked e2e/acceptance obligation. This selector grants no permissions or result: whole-group
+role/criterion coverage, current command/read/deny policy, exact candidate and actual executable
+checks still apply. A native host-discovery failure cannot block unrelated ordinary Go/npm/
+Maven/unittest/legacy focused pytest. Unknown entries, explicit unsupported capability, e2e or
+any mixed unsupported row cannot fall back to ordinary tools; Codex/fallback retains independent
+registered preparation. Cache reads recheck the same complete mode and current facts.
+
+Executable checks include ordinary non-Python production preflight and pre-model preparation,
+failed unrelated host discovery, unknown/e2e/explicit capability and foreign-scope refusals,
+Codex mode separation, mixed65-selector discovery and public wait/handle preserving all exact
+browser/live remedies without starting resources/models or consuming recovery authority.
+No existing Task/Plan/receipt/approval is rewritten. Existing waits require a fresh public
+investigation after reviewed deployment; original browser/live acceptance remains required.

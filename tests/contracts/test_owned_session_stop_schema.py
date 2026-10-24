@@ -114,6 +114,7 @@ def test_all_known_embeddings_and_fresh_repair_regeneration_keep_exact_stop_grap
         "knowledge-invocation-outcome.schema.json",
         "knowledge-preparation-isolation.schema.json",
         "rejected-coder-output-checkpoint.schema.json",
+        "rejected-knowledge-current-draft.schema.json",
         "service-pause-stop.schema.json",
         "stopped-failure-budget-settlement.schema.json",
         "stopped-failure.schema.json",

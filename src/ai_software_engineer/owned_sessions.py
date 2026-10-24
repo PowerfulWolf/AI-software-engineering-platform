@@ -19,6 +19,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal, Protocol, Self
+from uuid import UUID
 
 from pydantic import AwareDatetime, Field, StrictInt, model_validator
 
@@ -175,10 +176,6 @@ class _BsdInfo(ctypes.Structure):
     ]
 
 
-class _Timeval(ctypes.Structure):
-    _fields_ = [("seconds", ctypes.c_long), ("microseconds", ctypes.c_int32)]
-
-
 class _DarwinInspector:
     def __init__(self) -> None:
         self._libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
@@ -203,19 +200,28 @@ class _DarwinInspector:
         self._libc.sysctlbyname.restype = ctypes.c_int
 
     def boot_identity(self) -> str:
-        value = _Timeval()
-        size = ctypes.c_size_t(ctypes.sizeof(value))
+        # kern.boottime is derived from adjustable wall time, including its
+        # microseconds. Only the boot-session UUID is stable across clock drift.
+        value = ctypes.create_string_buffer(37)
+        size = ctypes.c_size_t(len(value))
         if self._libc.sysctlbyname(
-            b"kern.boottime",
-            ctypes.byref(value),
+            b"kern.bootsessionuuid",
+            value,
             ctypes.byref(size),
             None,
             0,
         ):
             raise OwnedSessionUnknown("OS boot identity is unavailable")
-        if size.value != ctypes.sizeof(value) or value.seconds <= 0:
+        if size.value != 37 or value.raw[-1:] != b"\0":
             raise OwnedSessionUnknown("OS boot identity is incomplete")
-        return f"darwin:{value.seconds}:{value.microseconds}"
+        try:
+            original = value.raw[:-1].decode("ascii", errors="strict")
+            session = str(UUID(original))
+            if session != original.lower():
+                raise ValueError("noncanonical boot-session UUID")
+        except (UnicodeError, ValueError) as error:
+            raise OwnedSessionUnknown("OS boot identity is incomplete") from error
+        return "darwin-session:" + hashlib.sha256(session.encode("ascii")).hexdigest()
 
     def identity(self, pid: int) -> OwnedProcessIdentity | None:
         try:
@@ -335,12 +341,26 @@ def current_process_birth_at(identity: OwnedProcessIdentity) -> datetime:
     raise OwnedSessionUnknown("kernel birth timestamp is unavailable")
 
 
-def require_recorded_session_empty(proof: OwnedSessionStopProof) -> None:
+class RecordedBootContinuity(Protocol):
+    """Trusted exact-record continuity; this grants no process or signal authority."""
+
+    def require_current(
+        self, proof: OwnedSessionStopProof, observed_boot_identity: str
+    ) -> None: ...
+
+
+def require_recorded_session_empty(
+    proof: OwnedSessionStopProof, *, boot_continuity: RecordedBootContinuity | None = None
+) -> None:
     """Read-only current-fact recheck of a new proof; grants no signal capability."""
     proof.validate_integrity()
     inspector = _inspector()
-    if inspector.boot_identity() != proof.boot_identity:
-        raise OwnedSessionUnknown("recorded owned-session boot identity is no longer current")
+    current_boot = inspector.boot_identity()
+    bridged = current_boot != proof.boot_identity
+    if bridged:
+        if boot_continuity is None:
+            raise OwnedSessionUnknown("recorded owned-session boot identity is no longer current")
+        boot_continuity.require_current(proof, current_boot)
     for _ in range(2):
         deadline = time.monotonic() + _SCAN_SECONDS
         if inspector.identity(proof.leader.process_id) is not None:
@@ -353,6 +373,11 @@ def require_recorded_session_empty(proof: OwnedSessionStopProof) -> None:
                 raise OwnedSessionUnknown("an observed owned process birth remains alive")
         if inspector.members(proof.leader.session_id):
             raise OwnedSessionUnknown("recorded owned session is no longer empty")
+    if inspector.boot_identity() != current_boot:
+        raise OwnedSessionUnknown("recorded owned-session boot identity changed during recheck")
+    if bridged:
+        assert boot_continuity is not None
+        boot_continuity.require_current(proof, current_boot)
 
 
 class OwnedSessionController:

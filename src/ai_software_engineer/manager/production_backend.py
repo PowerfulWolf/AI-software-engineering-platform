@@ -2042,11 +2042,17 @@ class ProductionProjectDeliveryBackend:
         discovery_failure = None
         discovery_detail = None
         try:
-            capabilities = registry.discover(task, plan, registry.scope, source_revision=source)
+            discovery = registry.discover_partitioned(
+                task, plan, registry.scope, source_revision=source
+            )
+            capabilities = discovery.capabilities
+            assert plan.content.verification_requirements is not None
+            prerequisites = discovery.original_prerequisites(plan.content.verification_requirements)
         except NativeVerificationWaiting as error:
             discovery_failure = error.reason
             discovery_detail = error.detail_code
             capabilities = ()
+            prerequisites = ()
         if plan.content.verification_requirements is None:
             raise ValueError(
                 "new engineering-policy Task requires planned verification requirements"
@@ -2069,6 +2075,7 @@ class ProductionProjectDeliveryBackend:
             controlled_capabilities=capabilities,
             controlled_discovery_failure=discovery_failure,
             controlled_discovery_detail=discovery_detail,
+            controlled_prerequisites=prerequisites,
             checked_at=self._clock(),
             source_revision=source,
         )
@@ -2649,7 +2656,23 @@ class ProductionProjectDeliveryBackend:
             / dispatch.repository_id,
             branch_names={task.id: task.branch_name},
         )
+        from ai_software_engineer.manager.owned_session_boot_bridge import ScopedNativeStopVerifier
+
+        boot_scope = EngineeringScope(
+            team_id=self._config.team_id,
+            project_id=project_id,
+            repository_id=dispatch.repository_id,
+            repository_root=str(facts.workspace.repository_root),
+        )
         collector = ProductionBaselineFactCollector(
+            native_stop_verifier=ScopedNativeStopVerifier(
+                state=facts.workspace.directory("state"),
+                task=task,
+                scope=boot_scope,
+                requirement_id=checkpoint.delivery_id,
+                knowledge_requirement_id=knowledge_requirement_id,
+                repository=repository,
+            ),
             purpose=purpose,
             route_root=model_route_root(facts.workspace.root),
             allocation=dispatch,

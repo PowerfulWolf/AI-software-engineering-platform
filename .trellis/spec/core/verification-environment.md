@@ -696,3 +696,106 @@ Required regression: a Python candidate with selectors embedded in Plan test str
 selection per exact node with the union of its criterion IDs; an incomplete or file-only mapping
 returns no capability. Swift selection continues to depend only on a regular top-level candidate
 `Package.swift`.
+
+
+## Verification statistics and isolated browser feasibility (2026-10-22)
+
+`python_verification_runner._SelectionGuard.summary` executes in the same Python process as
+candidate conftest/plugins. A candidate can mutate its counters and pytest collection/exit status.
+A complete unique ASE_PYTEST_SUMMARY marker, selector-index schema and rc0 therefore do not
+independently authenticate that any test ran. Retain this bounded summary as untrusted diagnostic
+input for independent QA/Reviewer. Trusted receipts establish candidate, approved argv/selectors,
+real supervised process result and resource cleanup; actual coverage still requires independent
+judgment. Do not promote summary counts into machine-certified per-requirement coverage. A future
+trusted execution observer needs its own explicit isolation/trust design and real tampering negatives.
+
+Good: preserve every original verification row and let independent roles assess test source/results.
+Base: existing v1 Python receipts and diagnostic parsing retain their current wire/hash semantics.
+Bad: combine one successful Python receipt or candidate-emitted counts into browser/live e2e coverage.
+A real regression counterexample must be able to remove all items, forge counts and force rc0 while
+the verifier refuses to call that authenticated test coverage. This documentation does not introduce
+new verdict logic, a registry, aggregate receipt schema or historical migration.
+
+The fixed synthetic Docker browser experiment recorded in the10-22 coder-verification-boundary
+verification log proves actual rendering/click/PNG and network/file negatives for its exact frozen
+image, nonroot user, readonly rootfs/fixture, dropped capabilities, no-new-privileges, AppArmor,
+private namespaces and bounded resources. Chromium inner sandbox was explicitly disabled; Docker
+contained the whole Node/Chromium tree. Network=none alone previously allowed localhost sockets;
+the accepted experimental profile additionally narrowed the exact Docker-default seccomp profile
+to deny AF_INET/AF_INET6 creation and socketcall. Do not describe either renderer failures as a
+separate renderer OS sandbox or synthetic success as registered production capability.
+
+Before production registration, bind exact candidate/role read-allow and deny inventory, exclude
+Git metadata/link escapes/credentials, sanitize arguments/environment, use a real independent claim,
+seal trusted host process/resource receipts, and test restart/uncertain ownership/cleanup. Keep
+original browser binary/channel semantics explicit. A capability exception belongs to that versioned
+executor; it does not expand Agent command policy or reinterpret existing native_ui authorization.
+No production state or source baseline changes are authorized by these research observations.
+
+
+## Lossless mixed verification discovery (2026-10-22)
+
+`RegisteredNativePythonVerifier.discover_partitioned(task, plan, scope, source_revision=None)`
+returns internal `NativeVerificationPartitionDiscovery`. It preserves the ordered complete raw
+requirements and canonical full-group SHA, then partitions each effective role into exact Python
+v1 rows, source/document inspections and unavailable rows. Duplicate argv never deduplicates
+original requirement IDs. Each missing row pins complete wire, argv, criterion tuple and levels
+SHA; omitted levels and an empty tuple remain distinct. Unknown or unmarked e2e entrypoints
+remain unavailable, even when their prefix is pytest. An explicit registered Python capability
+keeps its existing execution semantics. Old supported homogeneous discovery delegates to v1;
+no binding/admission/receipt wire or hash changes.
+
+`NativeEntrypointDiagnosticHint` is code-owned, optional and exact argv+levels+digest bound.
+The empty default produces generic-unregistered diagnostics; installed binaries, filenames,
+prose, e2e labels and model text never infer browser/live capability. A matching browser/live
+hint only selects a finite remedy. It does not register, authorize or prepare an executor.
+
+Internal identities retain `(effective_role, original row identity)`. QA-only Plans also have an
+independent Reviewer fallback partition with unchanged QA row wire. The old accepted preflight
+receipt projects each original Plan row once under its explicit role: 61 original rows remain
+61 observations, not 122. `original_prerequisites()` validates every partition and fallback fact,
+rejecting foreign, duplicate, missing, stale or contradictory rows before that projection.
+`inspect_delivery_prerequisites(..., controlled_prerequisites=())` independently validates exact
+per-row identity before Git/tool probes; missing facts cannot silently attach to another row.
+
+Read-only host discovery only describes the relevant Python subset. Its failure must not erase
+browser/live missing facts. No subset readiness can prepare an incomplete mixed role: both
+direct `bind()` and every ordinary/native `evidence_for()` path check the complete original role
+group before cache, resource creation or model start. Reviewer fallback uses its own real claim
+and the full original tuple. Existing STARTED-without-final uncertainty and independent verdict
+gates remain unchanged. The new finite enum values are published only in delivery-preflight;
+public engineering inspection/handling deduplicates concrete Chinese remedies, preserves process
+uncertainty precedence and grants no retry while that role's capabilities remain unavailable.
+
+A real offline negative fixture demonstrates that candidate conftest/plugin code can mutate
+`_SelectionGuard`, remove all tests and force rc0 while emitting a unique valid passed1 summary.
+Candidate stdout, counters and test-produced files are untrusted diagnostics. Receipt citation
+coverage describes the approved invocation scope, not authenticated execution of every test body.
+Return code0 does not write PASS/APPROVE. QA/Reviewer must independently judge actual adequacy.
+
+Good: retain every original mapping and explain each exact missing executor. Base: a supported
+v1 group keeps its original discovery and controlled execution. Bad: ordinary Python fallback
+absorbs an unmarked live e2e row or an in-process summary authenticates coverage.
+
+Verification: `test_native_verification_partition.py`, `test_native_verification_summary_trust.py`,
+`test_delivery_preflight.py`, `test_native_verification.py`, `test_verifier_preparation.py` and
+`test_delivery_wait.py` cover lossless rows, original-role projection, tampered fallback facts,
+no-subset execution, public receipt linkage and unchanged budgets. Stage1 adds no heterogeneous
+executor/registry, aggregate journal/schema, resource/deadline contract or browser/live verdict.
+
+存量数据处置: no SQL migration, history rewrite, budget reset, changed Plan/Product/source or new
+Requirement. After reviewed idle deployment, a fresh public engineering investigation may append
+truthful current prerequisite receipts. Preserve old waits and all drafts. Original K1 still
+needs real candidate, independent QA/Review, true browser and true live A-to-B acceptance. Rollback
+code and finite enum readers together before new records; once new details exist, retain compatible
+readers and repair forward. Never erase receipts to make an older reader appear compatible.
+
+A mixed Python subset above the unchanged64-selector bound becomes exact per-original-row
+UNSUPPORTED_ENTRYPOINT prerequisites without discarding browser/live facts or probing the host.
+Supported homogeneous v1 rejection remains unchanged. Existing precise ordinary Responses
+Go/npm/Maven/unittest/legacy focused pytest groups remain independent of registered Docker/Codex
+host discovery. The shared ordinary selector is applied only to a complete original role group;
+current role/criterion/command/read/deny/candidate checks still apply before cache/model start.
+Any explicit capability, unknown command, unmarked e2e/acceptance obligation or unsupported mixed
+row prevents ordinary fallback. Original-role preflight and final preparation choose the same
+whole-group mode; a single ordinary row cannot conceal a missing member of a registered group.

@@ -4,7 +4,7 @@ import json
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,6 +60,7 @@ from ai_software_engineer.domain.enums import (
     TaskStatus,
     WorkItemStatus,
 )
+from ai_software_engineer.domain.execution_window import PlannedVerificationRequirement
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.native_verification import (
     NativeVerificationCapabilityDetail,
@@ -91,6 +92,7 @@ from ai_software_engineer.manager.delivery_wait import (
     _preflight_detail_action,
 )
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
+from ai_software_engineer.manager.native_verification import NativeRoleVerificationInputs
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.manager.verifier_preparation import VerifierPreparationCheckpoint
 from ai_software_engineer.orchestration.continuation_models import ContinuationRejected
@@ -1693,11 +1695,41 @@ def _native_preparation_wait(
     monkeypatch: pytest.MonkeyPatch,
     *,
     state: Literal["NOT_STARTED", "FINISHED", "FINISHED_SUCCESS", "UNCERTAIN"],
+    requirements: tuple[PlannedVerificationRequirement, ...] | None = None,
 ) -> Iterator[_PreparationWaitFixture]:
     native = _fixture(tmp_path)
+    if requirements is not None:
+        plan = native.plan.model_copy(
+            update={
+                "content": native.plan.content.model_copy(
+                    update={"verification_requirements": requirements}
+                )
+            }
+        )
+        native = replace(native, plan=plan)
+
+        class MixedReader:
+            def read(
+                self, *, request: AgentRequest, workspace_root: Path, guard: object
+            ) -> NativeRoleVerificationInputs:
+                assert (
+                    request == native.request
+                    and workspace_root == native.root
+                    and guard is native.guard
+                )
+                return NativeRoleVerificationInputs(
+                    native.task, plan, native.implementation, native.claim, native.facts
+                )
+
+        monkeypatch.setattr(native.registry, "_inputs_reader", MixedReader())
     _fake_ports(monkeypatch, native)
 
     def unavailable(request: AgentRequest) -> Never:
+        if requirements is not None:
+            native.registry.prepare_verifier(
+                request=request, workspace_root=native.root, guard=native.guard
+            )
+            raise AssertionError("unsupported mixed group was prepared")
         # A genuine admitted native binding exists, but no command has begun.
         assert request == native.request and native.bind() is not None
         raise NativeVerificationWaiting(NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE)
@@ -2074,3 +2106,189 @@ def test_native_preparation_finished_success_before_model_requires_new_work_with
         assert resolution.verifier_preparation == evidence
         assert resolution.retry_failure is None and resolution.retry_cause is None
         assert fixture.queue.consumed == [resolution]
+
+
+@pytest.mark.parametrize("unknown_process", [False, True])
+@pytest.mark.parametrize("python_overflow", [False, True])
+def test_public_mixed_prerequisite_investigation_preserves_rows_and_requires_capability_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unknown_process: bool,
+    python_overflow: bool,
+) -> None:
+    browser = PlannedVerificationRequirement(
+        id="browser_entry",
+        role=AgentRole.QA,
+        criterion_ids=("ac_models_01",),
+        argv=("node", "--test", "tests/browser.test.cjs"),
+        planned_new_files=("tests/browser.test.cjs",),
+        verification_levels=("e2e",),
+    )
+    live = tuple(
+        PlannedVerificationRequirement(
+            id=f"live_entry_{index}",
+            role=AgentRole.QA,
+            criterion_ids=("ac_models_01",),
+            argv=("python", "-m", "pytest", "tests/test_live.py::test_round_trip"),
+            planned_new_files=("tests/test_live.py",),
+            verification_levels=("e2e",),
+        )
+        for index in range(4)
+    )
+    python_rows = (
+        tuple(
+            PlannedVerificationRequirement(
+                id=f"python_overflow_{index}",
+                role=AgentRole.QA,
+                criterion_ids=("ac_models_01",),
+                argv=("python", "-m", "pytest", f"tests/test_case.py::test_{index}"),
+                controlled_capability_kind="codex_sandbox_pytest_mysql_v1",
+                verification_levels=("unit",),
+            )
+            for index in range(65)
+        )
+        if python_overflow
+        else ()
+    )
+    rows = (*python_rows, browser, *live)
+    with _native_preparation_wait(
+        tmp_path, monkeypatch, state="NOT_STARTED", requirements=rows
+    ) as fixture:
+        _assert_public_mixed_prerequisites(fixture, tmp_path, browser, live, unknown_process)
+
+
+def _assert_public_mixed_prerequisites(
+    fixture: _PreparationWaitFixture,
+    tmp_path: Path,
+    browser: PlannedVerificationRequirement,
+    live: tuple[PlannedVerificationRequirement, ...],
+    unknown_process: bool,
+) -> None:
+    from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
+    from ai_software_engineer.manager.native_verification import RegisteredNativePythonVerifier
+    from ai_software_engineer.manager.native_verification_partition import (
+        NativeEntrypointDiagnosticHint,
+    )
+    from ai_software_engineer.manager.production_backend import (
+        ProductionProjectDeliveryBackend,
+        _ProjectFacts,
+    )
+
+    native, queue, entry = fixture.native, fixture.queue, fixture.entry
+    task = fixture.repository.get(native.task.id)
+    scope = native.registry.scope
+    hints = tuple(
+        NativeEntrypointDiagnosticHint.create(
+            argv=item.argv or (),
+            verification_levels=item.verification_levels,
+            detail=NativeVerificationCapabilityDetail.BROWSER_EXECUTOR_UNREGISTERED
+            if item is browser
+            else NativeVerificationCapabilityDetail.LIVE_EXECUTOR_UNREGISTERED,
+        )
+        for item in (browser, live[0])
+    )
+    registry = RegisteredNativePythonVerifier(
+        scope=scope,
+        engineering_scope=entry.scope,
+        repository_workspace_root=tmp_path / "unused_registry",
+        codex_executable="not_executed",
+        diagnostic_hints=hints,
+    )
+    plan = native.plan
+    coder = make_agent().model_copy(
+        update={
+            "permissions": make_agent().permissions.model_copy(
+                update={"read_paths": ("**",), "write_paths": ("src/**", "tests/**")}
+            )
+        }
+    )
+    qa = coder.model_copy(
+        update={
+            "role": AgentRole.QA,
+            "permissions": coder.permissions.model_copy(
+                update={"write_paths": (), "commands": ("node --test", "python -m pytest")}
+            ),
+        }
+    )
+    backend = cast(
+        ProductionProjectDeliveryBackend,
+        SimpleNamespace(
+            _config=ProductionConfig(
+                platform_root=str(tmp_path / "platform"),
+                model_routes=(
+                    ProviderRouteConfig(
+                        provider="codex", model="fixture", kind=ModelProviderKind.CODEX_CLI
+                    ),
+                ),
+            ),
+            _environment={"PATH": "/usr/bin:/bin"},
+            _clock=lambda: NOW,
+        ),
+    )
+    receipt = ProductionProjectDeliveryBackend._inspect_native_prerequisites(
+        backend,
+        cast(_ProjectFacts, None),
+        task,
+        plan,
+        {AgentRole.CODER: coder, AgentRole.QA: qa},
+        registry,
+        task.base_ref,
+    )
+    if unknown_process:
+        receipt = receipt.model_copy(
+            update={
+                "observations": tuple(
+                    item.model_copy(
+                        update={
+                            "native_wait_detail": (
+                                NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED
+                            )
+                        }
+                    )
+                    if item.requirement_id == browser.id
+                    else item
+                    for item in receipt.observations
+                )
+            }
+        )
+        receipt = receipt.model_copy(
+            update={
+                "receipt_sha256": digest(
+                    receipt.model_dump(mode="json", exclude={"receipt_sha256"})
+                )
+            }
+        )
+    receipt.validate_integrity()
+    entry.prerequisite_collector = lambda current, step: receipt
+    before = fixture.repository.get(task.id).to_wire()
+    proof = entry.inspect(queue.command())
+    assert proof.prerequisite_receipt_sha256 == receipt.receipt_sha256
+    assert proof.prerequisite_facts_sha256 == digest(
+        receipt.model_dump(mode="json", exclude={"checked_at", "receipt_sha256"})
+    )
+    assert proof.permitted_resolutions == ()
+    assert plan.content.verification_requirements is not None
+    assert len(receipt.observations) == len(plan.content.verification_requirements)
+    assert tuple(item.requirement_id for item in receipt.observations) == tuple(
+        item.id for item in plan.content.verification_requirements
+    )
+    if len(receipt.observations) > 5:
+        assert all(
+            item.native_wait_reason is NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT
+            for item in receipt.observations[:65]
+        )
+    assert DeliveryProofMissing.PREREQUISITES_UNVERIFIED in proof.missing
+    handling = entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire()))
+    assert handling.resolution is None
+    assert entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire())) == handling
+    assert proof.next_action.count("真实 A→B") == 1
+    assert "Scripted 或 composition 结果不能替代" in proof.next_action
+    if unknown_process:
+        assert "补齐原执行结束事实后再重新调查工程等待" in proof.next_action
+        assert "工程负责人处理后" not in proof.next_action
+    else:
+        assert proof.next_action.count("真实浏览器") == 1
+        assert "安装 Node 或浏览器不能建立该能力" in proof.next_action
+    assert not queue.consumed and fixture.repository.get(task.id).to_wire() == before
+    assert not list((tmp_path / "unused_registry").glob("native-role-verification/**"))
+    assert not (tmp_path / "delivery-wait-authority").exists()

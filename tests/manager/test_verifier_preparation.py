@@ -506,3 +506,61 @@ def test_service_pause_in_final_input_seals_no_start_identity(tmp_path: Path) ->
     assert gate.prepare(fixture.request) == fixture.request
     assert delegate.calls == 1 and discarded == [fixture.request]
     assert not failure.events
+
+
+@pytest.mark.parametrize("role", [AgentRole.QA, AgentRole.REVIEWER])
+@pytest.mark.parametrize("ordinary", [False, True])
+def test_mixed_group_waits_before_model_and_resources_on_every_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: AgentRole,
+    ordinary: bool,
+) -> None:
+    from ai_software_engineer.agents.execution import ExecutionGuard
+    from ai_software_engineer.manager.native_verification import NativeRoleVerificationInputs
+    from tests.manager.test_native_verification_partition import mixed_requirements
+
+    fixture = _fixture(tmp_path, role)
+    resources, executions, _ = _fake_ports(monkeypatch, fixture)
+    rows = mixed_requirements()
+    # Ordinary fallback must not absorb unmarked e2e into a generic interpreter.
+    if ordinary:
+        rows = tuple(item.model_copy(update={"controlled_capability_kind": None}) for item in rows)
+    plan = fixture.plan.model_copy(
+        update={
+            "content": fixture.plan.content.model_copy(update={"verification_requirements": rows})
+        }
+    )
+
+    class Reader:
+        def read(
+            self, *, request: AgentRequest, workspace_root: Path, guard: ExecutionGuard
+        ) -> NativeRoleVerificationInputs:
+            assert (
+                request == fixture.request
+                and workspace_root == fixture.root
+                and guard is fixture.guard
+            )
+            return NativeRoleVerificationInputs(
+                fixture.task, plan, fixture.implementation, fixture.claim, fixture.facts
+            )
+
+    monkeypatch.setattr(fixture.registry, "_inputs_reader", Reader())
+
+    def prepare(request: AgentRequest) -> None:
+        fixture.registry.prepare_verifier(
+            request=request,
+            workspace_root=fixture.root,
+            guard=fixture.guard,
+            allow_ordinary_commands=ordinary,
+        )
+
+    gate, delegate, failure, records = _gate(fixture, tmp_path, prepare=prepare)
+    before = fixture.task.to_wire()
+    with pytest.raises(_Wait):
+        gate.prepare(fixture.request)
+    assert delegate.calls == 0 and len(failure.events) == 1
+    assert not resources and not executions and not fixture.registry._prepared
+    assert fixture.task.to_wire() == before
+    marker = _marker(records)
+    assert marker.result == "WAIT" and marker.observation.native_execution_state == "NOT_STARTED"

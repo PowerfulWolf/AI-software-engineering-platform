@@ -56,6 +56,7 @@ from ai_software_engineer.orchestration.continuation_models import (
     ExecutionInterruptionReceipt,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
+from ai_software_engineer.owned_sessions import RecordedBootContinuity
 from ai_software_engineer.recovery.models import CapturedChanges
 from ai_software_engineer.store.ports import TaskRepository
 from ai_software_engineer.work_queue.models import QueueClaim
@@ -819,7 +820,12 @@ class NativeCoderContinuation:
         return InterruptionObservation.PRESERVED
 
     @staticmethod
-    def _require_stopped(stop: ExecutionStop, request: AgentRequest | None = None) -> None:
+    def _require_stopped(
+        stop: ExecutionStop,
+        request: AgentRequest | None = None,
+        *,
+        boot_continuity: RecordedBootContinuity | None = None,
+    ) -> None:
         if isinstance(stop, SynchronousToolLoopStop):
             if request is None:
                 raise ContinuationRejected("synchronous stop requires the original exact request")
@@ -832,7 +838,7 @@ class NativeCoderContinuation:
             )
 
             try:
-                require_recorded_session_empty(stop.session_proof)
+                require_recorded_session_empty(stop.session_proof, boot_continuity=boot_continuity)
             except (OSError, ValueError, OwnedSessionUnknown) as error:
                 raise ContinuationRejected("原执行会话的完整停止状态无法确认") from error
             return

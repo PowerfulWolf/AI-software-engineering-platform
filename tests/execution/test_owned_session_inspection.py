@@ -2,6 +2,7 @@
 
 import ctypes
 import errno
+import hashlib
 import os
 import platform
 import subprocess
@@ -10,6 +11,7 @@ from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from uuid import UUID
 
 import pytest
 
@@ -39,6 +41,106 @@ class Inspector:
 
     def members(self, sid: int) -> tuple[OwnedProcessIdentity, ...]:
         return ()
+
+
+def _darwin_boot_query(body: bytes, *, status: int = 0) -> _DarwinInspector:
+    inspector = _DarwinInspector.__new__(_DarwinInspector)
+
+    def query(*arguments: object) -> int:
+        assert arguments[0] == b"kern.bootsessionuuid"
+        size = ctypes.cast(cast(ctypes.c_void_p, arguments[2]), ctypes.POINTER(ctypes.c_size_t))
+        if status == 0:
+            assert size.contents.value >= len(body)
+            ctypes.memmove(cast(ctypes.c_void_p, arguments[1]), body, len(body))
+            size.contents.value = len(body)
+        return status
+
+    inspector._libc = cast(ctypes.CDLL, SimpleNamespace(sysctlbyname=query))
+    return inspector
+
+
+def test_darwin_boot_uses_stable_canonical_session_uuid() -> None:
+    session = UUID("ABABCDEF-0000-4000-8000-0123456789AB")
+    inspector = _darwin_boot_query((str(session).upper() + "\0").encode("ascii"))
+    expected = "darwin-session:" + hashlib.sha256(str(session).encode("ascii")).hexdigest()
+    assert inspector.boot_identity() == expected
+    assert inspector.boot_identity() == expected
+
+
+@pytest.mark.parametrize("body", [b"not-a-uuid\0", b"", b"123\0extra", b"\xff\0"])
+def test_darwin_boot_rejects_malformed_session_uuid(body: bytes) -> None:
+    with pytest.raises(OwnedSessionUnknown):
+        _darwin_boot_query(body).boot_identity()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"\xff" + b"0" * 35 + b"\0",
+        b"00000000-0000-4000-8000-00000000000\0\0",
+        b"00000000-0000-4000-8000-000000000000x",
+        b"00000000000040008000000000000000    \0",
+    ],
+)
+def test_darwin_boot_rejects_full_size_invalid_uuid(body: bytes) -> None:
+    assert len(body) == 37
+    with pytest.raises(OwnedSessionUnknown):
+        _darwin_boot_query(body).boot_identity()
+
+
+def test_darwin_boot_denial_never_falls_back_to_adjustable_time() -> None:
+    with pytest.raises(OwnedSessionUnknown):
+        _darwin_boot_query(b"", status=-1).boot_identity()
+
+
+def test_recorded_boot_bridge_checks_before_and_after_full_empty_sweeps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proof = _proof()
+    calls: list[str] = []
+
+    class CurrentInspector(Inspector):
+        def boot_identity(self) -> str:
+            return "darwin-session:" + "a" * 64
+
+        def members(self, sid: int) -> tuple[OwnedProcessIdentity, ...]:
+            calls.append("sweep")
+            return ()
+
+    class Bridge:
+        def require_current(self, original: OwnedSessionStopProof, current: str) -> None:
+            assert original == proof
+            assert current == "darwin-session:" + "a" * 64
+            calls.append("bridge")
+
+    monkeypatch.setattr(
+        "ai_software_engineer.owned_sessions._inspector",
+        lambda: CurrentInspector(proof, None),
+    )
+    with pytest.raises(OwnedSessionUnknown, match="boot identity"):
+        require_recorded_session_empty(proof)
+    require_recorded_session_empty(proof, boot_continuity=Bridge())
+    assert calls == ["bridge", "sweep", "sweep", "bridge"]
+
+
+def test_recorded_session_rejects_boot_change_during_sweeps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proof = _proof()
+
+    class ChangedInspector(Inspector):
+        count = 0
+
+        def boot_identity(self) -> str:
+            self.count += 1
+            return proof.boot_identity if self.count == 1 else "different-boot"
+
+    monkeypatch.setattr(
+        "ai_software_engineer.owned_sessions._inspector",
+        lambda: ChangedInspector(proof, None),
+    )
+    with pytest.raises(OwnedSessionUnknown, match="boot identity"):
+        require_recorded_session_empty(proof)
 
 
 @pytest.mark.parametrize("same_birth", [False, True])

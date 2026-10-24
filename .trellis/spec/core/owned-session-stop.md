@@ -76,7 +76,16 @@ before leader reap. Missing/failing capture can clean the actual `Popen` leader,
 session ownership or publish a stronger stop. Capture errors retain only a failure flag, not an
 Exception/traceback that could keep a complete caller payload alive.
 
-Darwin uses `libproc.proc_listallpids`, exact `PROC_PIDTBSDINFO` birth records and `kern.boottime`;
+Darwin uses `libproc.proc_listallpids`, exact `PROC_PIDTBSDINFO` birth records and the stable
+`kern.bootsessionuuid`. The fixed 37-byte query requires exactly 36 ASCII canonical UUID characters
+followed by one NUL. Its normalized lowercase UUID is hashed into `darwin-session:<sha256>`;
+denial, partial/oversized output, embedded NUL, malformed or noncanonical UUID fails closed.
+There is no `kern.boottime` fallback: that wall-clock-derived value can change during the same boot.
+Historical `darwin:<sec>:<usec>` proofs keep their original bytes, model and digest. A mismatch still
+rejects unless trusted composition supplies an exact-record, independently validated continuity
+witness; no user/Agent flag can skip the boot check. That witness must surround the unchanged full
+leader/birth/SID double scan, and the inspector also rereads boot identity after both sweeps.
+
 Linux uses `/proc` kernel start ticks, boot UUID and SID membership. Enumeration is bounded to 16,384
 processes and one second per scan; saturated/partial/denied inspection is unknown. System/kernel
 processes with zero SID are excluded before constructing a positive owned identity. The controller
@@ -171,11 +180,13 @@ occupancy, every observed original birth (including a living birth now in anothe
 SID absence twice. This read never signals. Legacy proof reads retain the old group check.
 
 `scripts/sync-owned-session-schemas.py` synchronizes only `NativeProcessStop` and its new definition
-closure in the eleven explicitly named embedded Schemas, including
-`execution-baseline-queue-consumption.schema.json` added by same-source capacity recovery.
+closure in the nineteen explicitly named embedded Schemas, including
+`execution-baseline-queue-consumption.schema.json` added by same-source capacity recovery and
+`rejected-knowledge-current-draft.schema.json` added by current-draft recovery.
 Both the synchronizer and independent golden contract test require the exact file-name set;
 missing, additional or same-count replaced embeddings fail before any schema write. This repairs
-the stale ten-file generator inventory left after `d4d6f32`; it changes no published schema bytes.
+stale generator inventories as new consumers are added; the 2026-10-24 inventory repair changes
+no published schema bytes (all 177 Schema hashes remain unchanged after two synchronizations).
 Enclosing handwritten guards remain unchanged. Fresh repair generation obtains the same canonical
 stop guards; repeated generation must be byte stable.
 
@@ -280,3 +291,67 @@ Rollback the implementation before starting new invocations, after verified cont
 all optional proof bytes and original evidence/history; do not strip a proof to change its digest.
 A reverted binary must not read new proof-bearing records unless its reader supports the extension.
 No `src/templates/markdown/spec` template tree exists here; no parallel template sync applies.
+
+## Exact legacy Darwin boot continuity
+
+`ScopedNativeStopVerifier` is a trusted production baseline composition seam, not a Console or
+Agent argument. Its `require_knowledge(receipt, outcome, context_sha256)` reopens the exact original
+knowledge outcome, independent native execution records and full Context. The existing reader first
+validates every original intent/claim/step/snapshot and all lane observations; a bridge does not
+filter away old or foreign calls. `require_stopped(stop, request=None)` reopens the original capture
+start/stop for the exact request. Neither method publishes or changes a historical fact.
+
+`NativeCoderContinuation._require_stopped(..., boot_continuity=None)` and
+`require_recorded_session_empty(proof, *, boot_continuity=None)` retain strict default rejection.
+`RecordedBootContinuity.require_current(proof, observed_boot_identity)` is an internal read port.
+Production supplies it only for the exact original legacy Darwin proof in a validated native
+envelope; no boot override, tolerance, skip flag, arbitrary proof selector or ambient registry exists.
+
+The provenance boundary is the current single local Host's actual Codex Popen runner, private
+sidecar journal, original real claim/context and scope-exact recovery lineage. Remote runners,
+receipt import and sidecar migration are not supported by this bridge. A bare receipt copied from
+another machine or an arbitrary same-boot string cannot enter this trusted construction path.
+If deployment adds migration or remote execution, first add explicit producer host identity; do not
+extend this inference to that architecture. An old operator's statement is never reused for another
+execution, and the anchor's ENGINEERING approval does not authorize a new retry.
+
+For each boundary the verifier reopens the current Task and follows only its approved immutable
+recovery edges to an exact ancestor with a real accepted knowledge-isolation binding. It validates
+plan, start, authority, complete retained patch, isolation proof/surveys, parent Task hash/revision,
+Task intent, native/joint Requirement, Team/Project/Repository and repository path. The traversal is
+bounded and cycle checked. A proposal without a binding cannot be an anchor. This needs the whole
+current-to-approved-anchor chain; it does not search unrelated Tasks for a convenient UUID.
+
+Before and after the unchanged complete leader/birth/SID double scan, fresh trusted OS observations
+must match the anchor's machine hash, boot-session UUID hash and account. The native admission must
+follow every anchor survey and precede its original observed stop. `booted_at` and parsed old
+seconds/microseconds are only conservative negative time checks, never positive boot identity.
+Invalid microseconds, a boot later than execution, impossible Darwin birth order, or old boot time
+before both trusted boot-time bounds refuses. That last conservative condition can reject a lawful
+legacy proof affected by whole-second clock drift; it never grants a clock-drift tolerance. New
+UUID-based proofs do not need this legacy inference. Any OS query failure or boundary change refuses.
+
+| Case | Required result |
+|---|---|
+| Exact original local native envelope, approved ancestor, same current stable identity, empty original session | Current read succeeds; historical proof bytes/digest remain unchanged |
+| No anchor, proposal only, missing authority/start/patch, foreign scope or broken/cyclic/oversized ancestry | Refuse before allowing recovery |
+| Substituted receipt/proof/Context/claim/source, absent or extra independent route record | Refuse; do not skip another invocation |
+| Anchor after admission, impossible old boot/birth time, current account/machine/UUID differs or query fails | Refuse; no old statement or second-level equality substitutes |
+| Original leader PID occupied (including reused PID), same original birth alive outside SID, nonempty SID or incomplete scan | Original stop reader refuses; bridge cannot change the result |
+| UUID changes between scans or witness/anchor changes between boundary reads | Refuse current recovery; retain all records and drafts |
+| Public PAUSE succeeds, then service restarts | Rebuild and revalidate the same exact reader for a separate RESUME; obtain a new claim/Run/Context |
+
+Executable tests: `test_owned_session_inspection.py` covers strict UUID parsing, denied sysctl,
+legacy default refusal, ordered continuity boundaries, final boot drift and unchanged PID/birth
+checks; `test_owned_session_boot_bridge.py` covers original file-store anchors, real approved
+recovery edges, scope/authorization/revision drift, exact envelopes and refusal cases. Existing
+knowledge-claim, capture-reconciliation, stopped-failure and public recovery fixtures must also pass.
+
+存量数据处置: no migration or SQL writes, proof rewrite, status reset, refund or replacement
+Requirement. First perform an exact read-only inventory and original envelope/lineage/OS diagnosis.
+After independently reviewed idle deployment, prepare a fresh public stopped-failure plan; review
+its complete unchanged draft/source/budget, execute exact PAUSE, verify one ordinary reservation and
+unchanged old history, then separately RESUME with current stop/inventory facts. New execution still
+requires a candidate and independent QA/Review on that same candidate. If any fact is absent, retain
+the wait. Do not force a stopped record into existence. Roll back at a verified controlled stop,
+retaining compatible readers for all already-published proof strings and all immutable history.

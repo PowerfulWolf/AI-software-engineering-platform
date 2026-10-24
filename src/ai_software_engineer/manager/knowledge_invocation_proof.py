@@ -42,6 +42,10 @@ from ai_software_engineer.work_queue.claim_snapshot import (
 from ai_software_engineer.work_queue.execution_store import QueuedRoleStep
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
 
+KnowledgeNativeStopChecker = Callable[
+    [StructuredNativeStopReceipt, KnowledgeInvocationOutcome, str], None
+]
+
 
 class KnowledgeOnlyClaimProof(DomainModel):
     """Quiescence summary, never a verdict, refund or remote process-stop receipt."""
@@ -89,6 +93,7 @@ def read_failed_knowledge_claims(
     require_step: Callable[[QueuedWorkItem, QueuedRoleStep], None],
     no_start_reader: CapacityInputReader,
     isolated_lease_ids: frozenset[str] = frozenset(),
+    native_stop_checker: KnowledgeNativeStopChecker | None = None,
 ) -> tuple[KnowledgeOnlyClaimProof, ...]:
     """Cover only exact failed read-only preparations; unknown claims stay unknown."""
     if not claims:
@@ -118,6 +123,7 @@ def read_failed_knowledge_claims(
         queue=queue,
         require_step=require_step,
         isolated_lease_ids=isolated_lease_ids,
+        native_stop_checker=native_stop_checker,
     ):
         historical, outcome = value.historical, value.outcome
         if historical.lease.id not in by_lease:
@@ -175,6 +181,7 @@ def read_replay_guarded_claims(
     no_start_reader: CapacityInputReader,
     fence: PriorInvocationFence,
     isolated_lease_ids: frozenset[str] = frozenset(),
+    native_stop_checker: KnowledgeNativeStopChecker | None = None,
 ) -> tuple[ReplayGuardedClaimObservation, ...]:
     """Observe complete returned preparation behind an earlier mandatory call fence.
 
@@ -198,6 +205,7 @@ def read_replay_guarded_claims(
         queue=queue,
         require_step=require_step,
         isolated_lease_ids=isolated_lease_ids,
+        native_stop_checker=native_stop_checker,
     ):
         historical = value.historical
         if historical.lease.id not in by_lease:
@@ -338,6 +346,7 @@ def _validated_knowledge_invocations(
     queue: KnowledgeProofQueue,
     require_step: Callable[[QueuedWorkItem, QueuedRoleStep], None],
     isolated_lease_ids: frozenset[str] = frozenset(),
+    native_stop_checker: KnowledgeNativeStopChecker | None = None,
 ) -> tuple[_CompletedKnowledgeInvocation, ...]:
     result: list[_CompletedKnowledgeInvocation] = []
     snapshots = KnowledgeRecordStore(state.parent / "knowledge" / "runs", read_only=True)
@@ -365,14 +374,17 @@ def _validated_knowledge_invocations(
             require_claim_snapshot(claimed, historical)
             if not outcome.executions:
                 raise ValueError("知识准备原调用缺少独立执行观察, 不能证明主岗位未启动")
-            for execution in outcome.executions:
-                if isinstance(execution.observation, StructuredNativeStopReceipt):
-                    NativeCoderContinuation._require_stopped(execution.observation.process_stop)
             step = queue.step_for_claim(historical)
             require_step(historical.work_item, step)
             context_sha256 = require_knowledge_claim_context(
                 state, task, historical.work_item, historical, step, intent, snapshots, scope
             )
+            for execution in outcome.executions:
+                if isinstance(execution.observation, StructuredNativeStopReceipt):
+                    if native_stop_checker is None:
+                        NativeCoderContinuation._require_stopped(execution.observation.process_stop)
+                    else:
+                        native_stop_checker(execution.observation, outcome, context_sha256)
             result.append(_CompletedKnowledgeInvocation(historical, outcome, context_sha256))
     return tuple(result)
 
@@ -388,6 +400,7 @@ def read_capacity_claim_snapshot(
     queue: KnowledgeProofQueue,
     require_step: Callable[[QueuedWorkItem, QueuedRoleStep], None],
     isolated_lease_ids: frozenset[str] = frozenset(),
+    native_stop_checker: KnowledgeNativeStopChecker | None = None,
 ) -> QueueClaim:
     """Recover exact legacy raw claim bytes; successful knowledge grants no failure authority."""
     marker.validate_integrity()
@@ -410,6 +423,7 @@ def read_capacity_claim_snapshot(
         queue=queue,
         require_step=require_step,
         isolated_lease_ids=isolated_lease_ids,
+        native_stop_checker=native_stop_checker,
     )
     selected = tuple(
         value.outcome for value in completed if value.historical.lease.id == historical.lease.id

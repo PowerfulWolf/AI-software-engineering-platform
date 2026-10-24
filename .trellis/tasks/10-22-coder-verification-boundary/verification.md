@@ -213,3 +213,169 @@ All13 files match frozen-v2 hashes; applied Ruff check/format pass. The patch ne
 rewrites historical causes or grants recovery authority. The automatic permission reviewer
 still intermittently returns capacity errors: the first fresh GET was NOT_RUN; a normal
 retry succeeded. No permission review was bypassed and no recurring automation was created.
+
+
+## Diagnostics release and actual original-K1 continuation
+
+Reviewed maintenance commit1ec4edd6f08bb09e8709f2c3e7519d734ee98f46 was fast-forwarded
+to main and pushed to origin/main. Applied Ruff check/format passed; applied strict Mypy
+passed for all8 changed Python files. Prior red/green real-child and independent review
+results remain recorded in the native-json-failure-diagnostics task. No new dependency,
+Schema or database migration was introduced.
+
+The old Host completed public controlled SHUTDOWN: current operations/writes saved,
+executors/index stopped, lifecycle READY confirmed, and the old process exited normally.
+The service script started the replacement Host PID44153 from the released main checkout.
+No force kill, lifecycle deletion, secret output or automatic recurring task was used.
+K1 stayed at its exact approved pause through maintenance. Registered target clone HEAD
+was separately rechecked as5547815464a04991f50a2e0532d6f2f13d8daa69 before RESUME.
+
+Fresh post-restart public summary and full Task detail matched binding45a0a025...,
+new waiting work item and disposition532cc517... . The independently checked temporary
+typed client submitted ResumeExecutionBaselineIntent once through POST/api/v1/operations,
+fixed key k1-recovery6-stopped-failure-resume-20261022. Resulting Operation is
+operation_ce817eb979874d7d6f29a533dfeac64f; it was RUNNING during the live role.
+This control action is distinct from the earlier PAUSE and is not delivery completion.
+
+Attempt2 knowledge intent genuinely returned. Its assessment failed at10:41:38.053262Z,
+outcome ef3525ab3d35b9e91cdfc3f609abf77e0c4ac69dec74eaaf44595cc4d5cf5ee9,
+PROVIDER_UNAVAILABLE/transient=true, with actual native-stop and HTTP observation records.
+The local-proxy diagnostic body was deliberately hidden; no underlying cause is invented.
+Its lease was RELEASED at10:41:39.588167Z. Normal frozen transient policy closed that
+queue generation and created execution attempt3 with a new claim; root did not submit a
+second Continue/RESUME or change policy. SELECT-only consistent snapshot at10:51:32Z
+confirmed Task IMPLEMENTING/revision2, execution attempts3, ordinary work_attempt2/max10,
+max_attempts40, source unchanged and an ACTIVE new claim. Thus transient execution identity
+is not an extra ordinary work reservation or refund of the original stopped failure.
+
+Attempt3 knowledge intent and assessment both returned through actual model calls.
+The new main Coder started at2026-10-22T10:50:03.619668Z, Run
+run_cac817b0ee234eb790c3eadb73705b52, Context
+ctx_dea4a0d9b4012175102d6be3816ae62451c4fe4c141ea8217facf96d7f9ab707,
+lease_9b7eda6efab256b04a0616d2, WorkItem
+work_99a5e2ecaf8c87506feb702eb8b90a35b0d8072e17f970a325d7a6cdcde425d7.
+Start SHAba0cb8d44cf166bcc9dec03d0f6d3a73077c09a910107e058814fc45561ecb8a
+binds the unchanged Task/source. At10:50:15Z no main outcome was sealed. The original
+Requirement is now genuinely executing, while candidate, independent same-candidate QA,
+Review and Handoff remain required. No DONE or future verdict is asserted.
+
+Later at10:54:32Z the same new main Run had a sealed FAILED outcome,
+SHAa351f0d45e35a1adc9c6eea3890eef86debdf950b06405eac2fd4cb0f5aca8b5,
+PROVIDER_UNAVAILABLE/transient=false, rc1, no artifact. The new safe native message
+preserves: stream disconnected before completion: stream closed before response.completed.
+Thus diagnosis visibility is deployed, while the underlying stream problem is unresolved.
+The RESUME Operation subsequently SUCCEEDED at stage DELIVERING with new parent checkpoint
+bc9443b92968a6fbcf085bb574e9d24bf7a11bb3ad059a141bb8f94029c25f64;
+this reports the control action, not a successful Coder result or completed delivery.
+Root is investigating local-proxy/upstream SSE and exact route facts before approving
+another ordinary attempt; no blind additional reservation or failure rewrite is performed.
+
+Stock-data handling: all old Task/outcome/claim/approval/stop/patch bytes remain; exact
+public PAUSE/RESUME and ordinary work accounting restored the same Task/source/draft.
+No production SQL writes or baseline rebase/replacement Requirement were used. On a future
+failure, preserve its own facts and use the applicable fresh public recovery gate. Runtime
+rollback must start with a controlled stop and retain all published diagnostics/readers.
+
+
+## Retained attempt3 facts and verification feasibility follow-through
+
+A fresh public InspectDeliveryWait operation operation_d7f60a8977c1069e83cca08f593e9290
+SUCCEEDED at ENGINEERING_INVESTIGATION, without retry/resolution. The old generic
+CHECKPOINT_UNAVAILABLE/OUTCOME_REJECTED report was preserved; it is not an execution permit.
+SELECT-only consistent snapshot at2026-10-22T11:03:42Z showed Task IMPLEMENTING/revision2,
+execution attempts3, ordinary work2/max10, source5547815464a04991f50a2e0532d6f2f13d8daa69;
+all three original claims were RELEASED. No SQL write or counter refund occurred.
+
+Independent read-only original capture/outcome checks at11:19:33Z validated stopped failure
+proof a9d4024d8bee3903a745211f613f98f29535c8de38acc4f9410a604758a98975,
+stop observation0950ad5cec58b1d1e0501dee096ce4cef02cc1941de35c598448c02cec4c348d,
+actual failed rc1 and owned_session_empty. Complete current inventory has2990 entries and
+SHA85859671974fa3ffc9c7c8139c9154b58ef2818771a51801dded6ef265b9a54d,
+identical to the original capture-start inventory. All5 modified and24 new source drafts
+remain; no file changed during that invocation. This temporary read-only report is a diagnostic,
+not a replacement public recovery authorization or a production artifact.
+
+The actual selected Coder route was codex_cli/proxy/gpt-6.1-sol/xhigh, one route attempt,
+not a Responses failure followed by fallback. Recovery composition currently selects a single
+CLI provider and freezes dispatch policy. Settings reordering cannot amend a retained Run.
+No routing, ModelPolicy, old dispatch or failure classification was altered. New recovery
+Task admission also requires a genuinely terminal source; do not force a nonterminal Task
+into BLOCKED merely to select another provider.
+
+A real CLI0.162.1, binary SHA74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0,
+ran three credential-free synthetic loopback SSE cases. Complete and7-byte-chunked completion
+succeeded with rc0/one request. EOF before response.completed reproduced the exact production
+message, rc1/real failed stop/no watchdog; CLI made6 requests before failure. Results SHA
+f49d235a621fddfaf686bffebeaddfdbcd1b8decc726547a5af7028b249298f7.
+This proves a protocol-incomplete stream can cause the symptom, not why the production proxy
+or upstream ended it. No real provider or K1 Context was used for these three cases.
+
+A separately approved Docker browser synthetic experiment v1 actually rendered, clicked and
+captured a960x640 PNG, but a second-page crash prevented its host-file negative. It stays FAILED,
+root cause UNKNOWN, result SHA3d522811c78ae55ed6ea9f750b553ebac821f1c2e5850049a07179d9f70b602f.
+Independent review accepted v2, planbe80c8ea2316dbb5173132b1351c950ce37fb5ec85974c2b857c36140b995e77,
+with the same permissions/resource/profile and an existing-page file negative. V2 actually passed
+render/pointer click/PNG, Node EROFS/ENOENT/EPERM negatives, NoNewPrivs1/Seccomp2/CapEff0/AppArmor,
+renderer failed fetches and explicit ERR_FILE_NOT_FOUND. Its result SHA is
+7bf3688d5194526fcadf40ddbf9d6159507155e845e3e19c6780296801271d35;
+output index SHA b1c3faea2525feb3cf821070170369a3f24cc4d103ca6e6e0b34d319ed4f3766.
+Owned containers and synthetic host sentinel/socket were removed with exact absence checks;
+cleanup_errors was empty. No shared image/cache prune occurred. Docker is the isolation boundary;
+Chromium inner sandbox=false was explicit. This is feasibility research, not a production
+capability registration, candidate acceptance or K1 QA/Review.
+
+Independent mixed-verification design review rejected promoting an in-process pytest summary to
+trusted per-selector coverage. Its real synthetic conftest counterexample ran no tests with rc0
+while emitting a forged collected1/passed1 summary. The proposed aggregate was not implemented.
+Revised staged design keeps all61 original mappings, original Python receipt execution and exact
+missing-capability discovery, with browser/live requirements still outstanding. See the reusable
+trust boundary in verification-environment.md. No source/Plan/permission/QA verdict was changed.
+
+Stock-data handling: existing Requirement, original Task/history, current stopped Task, all29 drafts,
+full inherited patches, exact approvals and budgets remain intact. Current K1 has no candidate,
+QA, Review or Handoff. A future continuation requires fresh public exact preparation and decision;
+no partial experiment or diagnostic success waives original real-browser and real A-to-B acceptance.
+
+
+## Final integrated verification and independent review (2026-10-24)
+
+Root integrated the exact independently accepted Stage1 patch314601299e4aa5fc077cfdf8f9d16a74171273fc3531c48eee7dbe19ac6f2400
+and legacy bridge code, preserving both production_backend hunks and all prior audit text.
+The original bridge manifest's spec body was superseded only by independently read documentation
+SHA90c6c4325113d497731dfe74d6b466b951808ba3b4016ee109c64814bc73adbe;
+no stale whole-bundle byte-match is claimed. The exact schema-inventory guard repair has its own
+red/green and unchanged177-schema evidence in schema-inventory.md. Independent Standards/Spec
+reviews accepted both implementations; a final separate review accepted the combined factory
+SHAca28471be46f7fe41ec5c4b887d17c697f78b96f6b6dc7347743cacc01dd21ca and inventory guards.
+
+Actual final integrated checks, under normal approved sandbox-external execution:
+
+- Ruff check, format check and strict Mypy on all22 changed Python files: PASS.
+- git diff --check: PASS.
+- Final21-module suite: **516 passed,11 skipped in286.96s**, no failure/setup error.
+  The11 skips are existing v1 capture-reconciliation cases that require the separately
+  tested v2 mutation capability (4+6+1 cases); no OS/DB rejection was counted as a skip.
+- The suite includes lossless partition/summary trust/preflight/native/verifier preparation,
+  public waiting, planning feasibility/capacity, output composition; exact boot bridge,
+  knowledge isolation/claim/capacity/replay facts, capture reconciliation and the real public
+  stopped-failure PAUSE/RESUME fixture; exact schema inventory and three real Darwin
+  owned-session/finalization modules. MySQL safety hooks checked the isolated test DB;
+  no production DB/model was used.
+
+Original K1 read-only diagnostic independently reopened its exact approved recovery chain,
+anchor plan3cf975409719c9614e4bae771cd72da4db17e8ba5a7d3155bc0c1e4bd6e0a95a,
+bindingbff4531e8fcec28f28443a7677a876aa597feaff192c86400b1dbe3493547b3f,
+four native knowledge receipts and current main capture-stop. All five current OS rechecks
+passed. Diagnostic JSON SHAc258362af5e56f22b4443d15d0bd42b08431fbc4db8e4843b201e712300fe3a6
+is evidence of a read-only check, not an authorization, historical rewrite or released retry.
+The initial automatic review misread capture_start/capture_stop getter names as writes;
+source evidence showed their read-only implementation and normal re-review approved the
+same script. The check actually executed; there is no unresolved permission block for it.
+
+Stock-data treatment remains public fresh exact proposal, delegated ENGINEERING PAUSE,
+one ordinary work reservation (execution3→4, work2→3), then separate current-fact RESUME.
+Keep source5547815464a04991f50a2e0532d6f2f13d8daa69, all29 drafts and every old failure,
+proof, approval and Task. No direct SQL writes, source rebase, provider-restoration claim,
+candidate or future independent QA/Review verdict is inferred from these maintenance checks.
+Stage1 still adds no production browser/live executor; actual browser and live A→B acceptance
+remain required after a real candidate. No automation or recurring task was created.
