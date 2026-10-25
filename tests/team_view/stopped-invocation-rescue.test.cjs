@@ -16,7 +16,7 @@ const descendants = node => [node, ...node.children.filter(child => typeof child
 const text = node => descendants(node).map(child => child.textContent).join(" ");
 const button = (node, name) => descendants(node).find(child => child.tagName === "BUTTON" && child.textContent === name);
 
-function fixture(planReady = false) {
+function fixture(planReady = false, schemaVersion = "v1") {
   const facts = {task_id: "task_current", work_item_id: "work_current", role: "coder", task_intent_sha256: "b".repeat(64),
     source_revision: "c".repeat(40), checkpoint_sequence: 4, classification: "EXECUTION_UNCERTAIN"};
   const step = {work_item_id: facts.work_item_id, role: "coder", status: "WAITING_DEPENDENCY", lease_liveness: "UNKNOWN",
@@ -29,12 +29,12 @@ function fixture(planReady = false) {
     original_run_id: "run_original", process_stop_sha256: "1".repeat(64),
     missing: ["OUTCOME_UNKNOWN", "CHECKPOINT_UNAVAILABLE"], permitted_resolutions: []};
   const original = {task_id: task.task_id, run_id: "run_original", role: "coder", source_revision: facts.source_revision};
-  const stopped = {kind: "stopped_coder_execution_without_outcome", proof_sha256: "2".repeat(64),
+  const stopped = {kind: "stopped_coder_execution_without_outcome", schema_version: schemaVersion, proof_sha256: "2".repeat(64),
     invocation_start: {request: original, work_item_id: step.work_item_id, checkpoint_sequence: 4},
     capture_start: {request: original, task_revision: 4, start_sha256: "3".repeat(64), worktree_path: "/fixture/coder"},
     capture_stop: {task_id: task.task_id, run_id: original.run_id, capture_start_sha256: "3".repeat(64),
-      process_stop: {kind: "failed", returncode: -15, session_proof: {proof_scope: "owned_session_empty", proof_sha256: "5".repeat(64)}},
-      output_present: false, original_error_code: "PROVIDER_ERROR", cause: null}};
+    process_stop: {kind: schemaVersion === "v2" ? "completed" : "failed", returncode: schemaVersion === "v2" ? 0 : -15, session_proof: {proof_scope: "owned_session_empty", proof_sha256: "5".repeat(64)}},
+      output_present: schemaVersion === "v2", original_error_code: schemaVersion === "v2" ? null : "PROVIDER_ERROR", cause: null}};
   const plan = {purpose: "stopped_execution_rescue", plan_sha256: "4".repeat(64), input_mode: "preserve_draft", conflicted: false,
     target_base_ref: "c".repeat(40), prepared_source_revision: "c".repeat(40),
     dirty_capture: {source_revision: facts.source_revision, worktree_path: "/fixture/coder"},
@@ -72,6 +72,33 @@ test("known stop and absent outcome offers a target-free check, not a provider r
   assert.equal(h.run("submitted[0].purpose"), "stopped_execution_rescue");
   assert.equal(h.run('Object.hasOwn(submitted[0], "target_base_ref")'), false);
   assert.equal(h.run("submitted[0].input_mode"), "preserve_draft");
+});
+
+test("completed native stop with output is admitted only as the additive v2 proof", async () => {
+  const h = fixture(false, "v2");
+  const panel = render(h);
+  assert.match(text(panel), /真实停止/);
+  await button(panel, "检查停止后的保留进度").events.click();
+  assert.equal(h.run("submitted[0].purpose"), "stopped_execution_rescue");
+  h.run('data.plan.facts.stopped_execution.schema_version = "v1"');
+  assert.equal(h.run('matchingStoppedExecutionRescuePlan(data.plan, engineeringBaselineFacts(data.request, data.task, data.step), null)'), false);
+});
+
+test("historical v1 rescue defaults an omitted schema version", () => {
+  const h = fixture(true, "v1");
+  h.run('delete data.plan.facts.stopped_execution.schema_version');
+  assert.equal(h.run('matchingStoppedExecutionRescuePlan(data.plan, engineeringBaselineFacts(data.request, data.task, data.step), {intent: {}})'), true);
+});
+
+test("v2 rescue refuses raw error or abort facts", () => {
+  for (const mutation of [
+    'data.plan.facts.stopped_execution.capture_stop.original_error_code = "PROVIDER_ERROR"',
+    'data.plan.facts.stopped_execution.capture_stop.execution_abort_reason = {kind: "lease_authority_unconfirmed"}',
+  ]) {
+    const h = fixture(true, "v2");
+    h.run(mutation);
+    assert.equal(h.run('matchingStoppedExecutionRescuePlan(data.plan, engineeringBaselineFacts(data.request, data.task, data.step), null)'), false);
+  }
 });
 
 test("exact stopped plan requires PAUSE and keeps missing historical result and work debit", async () => {

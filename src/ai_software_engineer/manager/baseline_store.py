@@ -364,6 +364,13 @@ class FileExecutionBaselineStore:
         require_knowledge_isolation_binding(plan, binding)
         require_rejected_candidate_binding(plan, binding)
         patch = self._required_patch(binding, plan)
+        stopped = plan.facts.stopped_execution
+        stopped_context = (
+            "原 Coder 进程已真实完成并留下输出文件, 但最终调用结果未封存; "
+            "结果内容和成功与否仍未知, 不把输出文件当作候选或已完成证明。"
+            if stopped is not None and stopped.schema_version == "v2"
+            else "原执行已真实停止, 原结果及原因仍未知且原历史不变。"
+        )
         return (
             (
                 "平台按人工工程决定保留了完整当前草稿, 代码基线和需求分支保持。"
@@ -385,7 +392,7 @@ class FileExecutionBaselineStore:
                 )
                 if binding.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION
                 else (
-                    "原执行已真实停止, 原结果及原因仍未知且原历史不变。"
+                    stopped_context +
                     "完整合法草稿仅作为新执行输入; "
                     "本次消费普通工作额度, 不补造结果或退款。新Run须独立领取并重新产出, "
                     "独立QA和Review不可跳过。\n"

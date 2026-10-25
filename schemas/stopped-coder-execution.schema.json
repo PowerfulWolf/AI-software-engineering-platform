@@ -1715,8 +1715,11 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "v1",
       "default": "v1",
+      "enum": [
+        "v1",
+        "v2"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
@@ -1747,34 +1750,110 @@
   "$id": "https://ai-software-engineer.local/schemas/stopped-coder-execution.schema.json",
   "allOf": [
     {
-      "properties": {
-        "capture_stop": {
-          "properties": {
-            "output_present": {
-              "const": false
-            },
-            "cause": {
-              "type": "null"
-            },
-            "process_stop": {
+      "if": {
+        "anyOf": [
+          {
+            "not": {
               "required": [
-                "session_proof"
-              ],
-              "properties": {
-                "kind": {
-                  "const": "failed"
-                },
-                "returncode": {
-                  "not": {
-                    "const": 0
-                  }
-                },
-                "session_proof": {
-                  "type": "object",
-                  "properties": {
-                    "proof_scope": {
-                      "const": "owned_session_empty"
+                "schema_version"
+              ]
+            }
+          },
+          {
+            "required": [
+              "schema_version"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": "v1"
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "capture_stop": {
+            "properties": {
+              "output_present": {
+                "const": false
+              },
+              "cause": {
+                "type": "null"
+              },
+              "process_stop": {
+                "required": [
+                  "session_proof"
+                ],
+                "properties": {
+                  "session_proof": {
+                    "type": "object",
+                    "properties": {
+                      "proof_scope": {
+                        "const": "owned_session_empty"
+                      }
                     }
+                  },
+                  "kind": {
+                    "const": "failed"
+                  },
+                  "returncode": {
+                    "not": {
+                      "const": 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "schema_version"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "v2"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capture_stop": {
+            "properties": {
+              "output_present": {
+                "const": true
+              },
+              "cause": {
+                "type": "null"
+              },
+              "original_error_code": {
+                "type": "null"
+              },
+              "execution_abort_reason": {
+                "type": "null"
+              },
+              "process_stop": {
+                "required": [
+                  "session_proof"
+                ],
+                "properties": {
+                  "session_proof": {
+                    "type": "object",
+                    "properties": {
+                      "proof_scope": {
+                        "const": "owned_session_empty"
+                      }
+                    }
+                  },
+                  "kind": {
+                    "const": "completed"
+                  },
+                  "returncode": {
+                    "const": 0
                   }
                 }
               }

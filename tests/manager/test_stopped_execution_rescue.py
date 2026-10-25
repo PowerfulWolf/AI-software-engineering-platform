@@ -25,6 +25,7 @@ from ai_software_engineer.manager.baseline_store import FileExecutionBaselineSto
 from ai_software_engineer.manager.execution_baseline import ExecutionBaselineService
 from ai_software_engineer.manager.stopped_execution_checkpoint import StoppedCoderExecutionProof
 from ai_software_engineer.orchestration.continuation_models import ContinuationRejected
+from ai_software_engineer.owned_sessions import OwnedProcessIdentity, OwnedSessionStopProof
 from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.web_console.models import ProposeExecutionBaselineIntent
 from ai_software_engineer.work_queue.execution_store import RoleQueueAdmission
@@ -53,6 +54,177 @@ def proof_for(f: CompletedFixture) -> StoppedCoderExecutionProof:
     return StoppedCoderExecutionProof.create(
         invocation_start=f.start, capture_start=f.capture_start, capture_stop=f.capture_stop
     )
+
+
+@pytest.mark.parametrize("completed", ["named"], indirect=True)
+def test_stopped_proof_v2_preserves_completed_output_without_outcome(
+    completed: CompletedFixture,
+) -> None:
+    """A completed native process with no published outcome uses the additive v2 proof."""
+    f = completed
+    stop = f.capture_stop
+    process = stop.process_stop
+    leader = OwnedProcessIdentity(
+        process_id=process.process_id,
+        group_id=process.process_id,
+        session_id=process.process_id,
+        birth_identity="fixture:leader",
+    )
+    child = OwnedProcessIdentity(
+        process_id=process.process_id + 1,
+        group_id=process.process_id + 1,
+        session_id=process.process_id,
+        birth_identity="fixture:child",
+    )
+    session = OwnedSessionStopProof.create(
+        boot_identity="fixture:boot",
+        leader=leader,
+        observed_processes=(leader, child),
+        observation_count=2,
+        observations_sha256="a" * 64,
+        observed_at=process.stopped_at,
+    )
+    completed_process = process.create(
+        process_id=process.process_id,
+        group_id=process.group_id,
+        returncode=0,
+        kind="completed",
+        stopped_at=process.stopped_at,
+        session_proof=session,
+    )
+    capture_stop = stop.create(
+        task_id=stop.task_id,
+        run_id=stop.run_id,
+        capture_start_sha256=stop.capture_start_sha256,
+        process_stop=completed_process,
+        output_present=True,
+        cause=None,
+        original_error_code=None,
+    )
+    proof = StoppedCoderExecutionProof.create(
+        schema_version="v2",
+        invocation_start=f.start,
+        capture_start=f.capture_start,
+        capture_stop=capture_stop,
+    )
+    proof.validate_integrity()
+    Draft202012Validator(
+        json.loads(
+            (Path(__file__).parents[2] / "schemas/stopped-coder-execution.schema.json").read_text()
+        )
+    ).validate(proof.to_wire())
+    assert proof.schema_version == "v2"
+    assert proof.capture_stop.output_present is True
+    with pytest.raises(ValueError):
+        StoppedCoderExecutionProof.create(
+            schema_version="v1",
+            invocation_start=f.start,
+            capture_start=f.capture_start,
+            capture_stop=capture_stop,
+        )
+
+
+@pytest.mark.parametrize("completed", ["named"], indirect=True)
+def test_stopped_schema_omitted_version_keeps_historical_v1_guard(
+    completed: CompletedFixture,
+) -> None:
+    f = completed
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/stopped-coder-execution.schema.json").read_text()
+    )
+    validator = Draft202012Validator(schema)
+    process = f.capture_stop.process_stop
+    leader = OwnedProcessIdentity(
+        process_id=process.process_id,
+        group_id=process.process_id,
+        session_id=process.process_id,
+        birth_identity="fixture:legacy-v1-leader",
+    )
+    child = OwnedProcessIdentity(
+        process_id=process.process_id + 1,
+        group_id=process.process_id + 1,
+        session_id=process.process_id,
+        birth_identity="fixture:legacy-v1-child",
+    )
+    session = OwnedSessionStopProof.create(
+        boot_identity="fixture:legacy-v1-boot",
+        leader=leader,
+        observed_processes=(leader, child),
+        observation_count=2,
+        observations_sha256="c" * 64,
+        observed_at=process.stopped_at,
+    )
+    failed_process = process.create(
+        process_id=process.process_id,
+        group_id=process.group_id,
+        returncode=-1,
+        kind="failed",
+        stopped_at=process.stopped_at,
+        session_proof=session,
+    )
+    failed_stop = f.capture_stop.create(
+        task_id=f.capture_stop.task_id,
+        run_id=f.capture_stop.run_id,
+        capture_start_sha256=f.capture_stop.capture_start_sha256,
+        process_stop=failed_process,
+        output_present=False,
+        cause=None,
+        original_error_code=None,
+    )
+    legacy = StoppedCoderExecutionProof.create(
+        invocation_start=f.start, capture_start=f.capture_start, capture_stop=failed_stop
+    ).to_wire()
+    assert isinstance(legacy, dict)
+    legacy.pop("schema_version", None)
+    validator.validate(legacy)
+
+    process = f.capture_stop.process_stop
+    leader = OwnedProcessIdentity(
+        process_id=process.process_id,
+        group_id=process.process_id,
+        session_id=process.process_id,
+        birth_identity="fixture:legacy-v2-leader",
+    )
+    child = OwnedProcessIdentity(
+        process_id=process.process_id + 1,
+        group_id=process.process_id + 1,
+        session_id=process.process_id,
+        birth_identity="fixture:legacy-v2-child",
+    )
+    session = OwnedSessionStopProof.create(
+        boot_identity="fixture:legacy-v2-boot",
+        leader=leader,
+        observed_processes=(leader, child),
+        observation_count=2,
+        observations_sha256="b" * 64,
+        observed_at=process.stopped_at,
+    )
+    completed_process = process.create(
+        process_id=process.process_id,
+        group_id=process.group_id,
+        returncode=0,
+        kind="completed",
+        stopped_at=process.stopped_at,
+        session_proof=session,
+    )
+    completed_stop = f.capture_stop.create(
+        task_id=f.capture_stop.task_id,
+        run_id=f.capture_stop.run_id,
+        capture_start_sha256=f.capture_stop.capture_start_sha256,
+        process_stop=completed_process,
+        output_present=True,
+        cause=None,
+        original_error_code=None,
+    )
+    unqualified = StoppedCoderExecutionProof.create(
+        schema_version="v2",
+        invocation_start=f.start,
+        capture_start=f.capture_start,
+        capture_stop=completed_stop,
+    ).to_wire()
+    assert isinstance(unqualified, dict)
+    unqualified.pop("schema_version", None)
+    assert not validator.is_valid(unqualified)
 
 
 def service_for(

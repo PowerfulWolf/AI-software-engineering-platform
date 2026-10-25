@@ -1,5 +1,24 @@
 # Stopped invocation without a published outcome
 
+## Completed native stop with missing durable outcome (v2)
+
+The original `StoppedCoderExecutionProof` (`schema_version=v1`) remains the
+strict failed-exit/no-output proof. A trusted runner may emit the additive
+`schema_version=v2` proof when the exact native process has completed with
+return code `0`, `output_present=true`, and a complete
+`owned_session_empty` observation, but the durable invocation outcome was
+never published. The output file is an observed fact only; it is not a model
+result, accepted artifact, candidate, or success verdict.
+
+The v2 proof binds the same invocation start, capture start/stop, historical
+claim, Task, scope, permissions, and later full inventory checks as v1. It
+must have no cause, model route, outcome, receipt, artifact, or publication.
+It consumes the same exact ENGINEERING PAUSE followed by a separate latest
+binding RESUME and one ordinary work reservation. The successor Coder must
+produce a fresh valid report before independent QA and Review. Existing v1
+wire bytes and all failed/no-output guards remain unchanged; a v1 reader must
+reject the completed/output combination.
+
 ## Repeated recovery with a historical incoming admission (2026-10-16)
 
 A replay-guarded fresh claim can follow an original Coder that itself entered through a native

@@ -275,22 +275,81 @@ def stopped_guards(node: dict[str, object]) -> None:
         )
     }
     if title == "StoppedCoderExecutionProof":
-        stop_properties = {
-            "output_present": {"const": False},
-            "cause": {"type": "null"},
-            "process_stop": {
-                "required": ["session_proof"],
-                "properties": {
-                    "kind": {"const": "failed"},
-                    "returncode": {"not": {"const": 0}},
-                    "session_proof": {
-                        "type": "object",
-                        "properties": {"proof_scope": {"const": "owned_session_empty"}},
-                    },
+        session = {
+            "required": ["session_proof"],
+            "properties": {
+                "session_proof": {
+                    "type": "object",
+                    "properties": {"proof_scope": {"const": "owned_session_empty"}},
                 },
             },
         }
-        extra = [{"properties": {"capture_stop": {"properties": stop_properties}}}]
+        # Keep the historical v1 wire contract strict while admitting the
+        # additive v2 variant for a completed native process with no durable
+        # invocation outcome.  The variant is selected by the sealed proof,
+        # never inferred from a browser payload.
+        # Pydantic defaults an omitted schema_version to v1.  Keep that
+        # historical wire shape guarded as v1 in JSON Schema as well; an
+        # unqualified `properties` condition would otherwise match neither
+        # branch and silently admit an unguarded stop.
+        v1_selector = {
+            "anyOf": [
+                {"not": {"required": ["schema_version"]}},
+                {
+                    "required": ["schema_version"],
+                    "properties": {"schema_version": {"const": "v1"}},
+                },
+            ]
+        }
+        extra = [
+            {
+                "if": v1_selector,
+                "then": {
+                    "properties": {
+                        "capture_stop": {
+                            "properties": {
+                                "output_present": {"const": False},
+                                "cause": {"type": "null"},
+                                "process_stop": {
+                                    **session,
+                                    "properties": {
+                                        **session["properties"],
+                                        "kind": {"const": "failed"},
+                                        "returncode": {"not": {"const": 0}},
+                                    },
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+            {
+                "if": {
+                    "required": ["schema_version"],
+                    "properties": {"schema_version": {"const": "v2"}},
+                },
+                "then": {
+                    "properties": {
+                        "capture_stop": {
+                            "properties": {
+                                "output_present": {"const": True},
+                                "cause": {"type": "null"},
+                                "original_error_code": {"type": "null"},
+                                "execution_abort_reason": {"type": "null"},
+                                "process_stop": {
+                                    **session,
+                                    "properties": {
+                                        **session["properties"],
+                                        "kind": {"const": "completed"},
+                                        "returncode": {"const": 0},
+                                    },
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+        ]
     elif title == "BaselineExecutionReservation":
         properties = {
             "original_run_id": {"type": "string"},

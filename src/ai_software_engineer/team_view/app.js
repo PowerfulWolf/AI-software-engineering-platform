@@ -3364,6 +3364,17 @@ function matchingStoppedExecutionRescuePlan(plan, bound, operation) {
   const stop = proof?.capture_stop;
   const reservation = plan.facts.continuation;
   const base = plan.previous_binding?.execution_base_ref || plan.facts.task.base_ref;
+  // Historical v1 proofs may omit the defaulted schema_version on the wire;
+  // normalize that absence before applying the same strict v1 guard.  v2
+  // additionally keeps the UI from presenting a rescue action when a raw
+  // operation carries an error/abort fact that the sealed proof forbids.
+  const schemaVersion = proof?.schema_version ?? "v1";
+  const v1Stop = schemaVersion === "v1" &&
+    stop.process_stop?.kind === "failed" && Number.isInteger(stop.process_stop.returncode) && stop.process_stop.returncode !== 0 &&
+    stop.output_present === false;
+  const v2Stop = schemaVersion === "v2" &&
+    stop.process_stop?.kind === "completed" && stop.process_stop.returncode === 0 &&
+    stop.output_present === true && stop.original_error_code == null && stop.execution_abort_reason == null;
   return proof?.kind === "stopped_coder_execution_without_outcome" &&
     /^[a-f0-9]{64}$/.test(proof.proof_sha256 || "") && request?.task_id === bound.task_id &&
     request.role === "coder" && request.source_revision === bound.expected_source_revision &&
@@ -3373,10 +3384,10 @@ function matchingStoppedExecutionRescuePlan(plan, bound, operation) {
     capture.request.source_revision === bound.expected_source_revision && capture.task_revision === bound.expected_task_revision &&
     capture.worktree_path === plan.dirty_capture.worktree_path &&
     stop?.task_id === bound.task_id && stop.run_id === request.run_id && stop.capture_start_sha256 === capture.start_sha256 &&
-    stop.process_stop?.kind === "failed" && Number.isInteger(stop.process_stop.returncode) && stop.process_stop.returncode !== 0 &&
+    (v1Stop || v2Stop) &&
     stop.process_stop.session_proof?.proof_scope === "owned_session_empty" &&
     /^[a-f0-9]{64}$/.test(stop.process_stop.session_proof.proof_sha256 || "") &&
-    stop.output_present === false && !stop.cause &&
+    !stop.cause &&
     reservation?.retry_cause === "stopped_execution_unknown" && reservation.stopped_execution_sha256 === proof.proof_sha256 &&
     !plan.facts.legacy_containment && !plan.facts.completed_output && !plan.facts.stopped_provider_failure && !plan.facts.stopped_failure &&
     !plan.facts.implementation_artifact_id && !plan.facts.native_rule_change &&

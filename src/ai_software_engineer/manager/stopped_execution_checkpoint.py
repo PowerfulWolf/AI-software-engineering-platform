@@ -45,7 +45,11 @@ class StoppedCoderExecutionProof(DomainModel):
     kind: Literal["stopped_coder_execution_without_outcome"] = (
         "stopped_coder_execution_without_outcome"
     )
-    schema_version: Literal["v1"] = "v1"
+    # v1 is the historical failed/no-output proof.  v2 is an additive
+    # admission for a real completed native process whose durable invocation
+    # outcome was never published; it never changes the meaning or bytes of
+    # existing v1 proofs.
+    schema_version: Literal["v1", "v2"] = "v1"
     invocation_start: DeliveryInvocationStart
     capture_start: ExecutionCaptureStart
     capture_stop: ExecutionCaptureStop
@@ -59,7 +63,7 @@ class StoppedCoderExecutionProof(DomainModel):
         stop.validate_integrity()
         request = invocation.request
         session = stop.process_stop.session_proof
-        if (
+        common_invalid = (
             request.role is not AgentRole.CODER
             or start.request != request
             or start.claim.work_item.id != invocation.work_item_id
@@ -68,15 +72,29 @@ class StoppedCoderExecutionProof(DomainModel):
             or stop.capture_start_sha256 != start.start_sha256
             or stop.task_id != request.task_id
             or stop.run_id != request.run_id
-            or stop.process_stop.kind != "failed"
-            or stop.process_stop.returncode in {None, 0}
             or stop.process_stop.stopped_at < start.started_at
-            or stop.output_present
             or stop.cause is not None
             or session is None
             or session.proof_scope != "owned_session_empty"
-        ):
+        )
+        if common_invalid:
             raise ValueError("已停止但结果未知的证明必须绑定精确原调用和完整owned-session停止")
+        if self.schema_version == "v1" and (
+            stop.process_stop.kind != "failed"
+            or stop.process_stop.returncode in {None, 0}
+            or stop.output_present
+        ):
+            raise ValueError("v1停止证明必须是失败退出且没有输出")
+        if self.schema_version == "v2" and (
+            stop.process_stop.kind != "completed"
+            or stop.process_stop.returncode != 0
+            or not stop.output_present
+            or stop.original_error_code is not None
+            or stop.execution_abort_reason is not None
+        ):
+            raise ValueError("v2停止证明必须是无错误完成退出且保留真实输出事实")
+        if session is None:  # narrowed explicitly for strict static checking
+            raise ValueError("已停止但结果未知的证明缺少owned-session停止证明")
         session.validate_integrity()
         return self
 
@@ -123,8 +141,24 @@ def read_stopped_coder_execution(
         capture_stop = ledger.capture_stop(start.request.run_id)
     except ContinuationRecordMissing:
         return None
+    # The sealed native stop chooses the proof variant.  A completed, zero
+    # exit with output is still missing the durable invocation outcome, but it
+    # must retain those facts in the additive v2 proof; all historical failed
+    # and no-output observations remain v1.
+    proof_schema_version = (
+        "v2"
+        if (
+            capture_stop.process_stop.kind == "completed"
+            and capture_stop.process_stop.returncode == 0
+            and capture_stop.output_present
+        )
+        else "v1"
+    )
     proof = StoppedCoderExecutionProof.create(
-        invocation_start=start, capture_start=capture_start, capture_stop=capture_stop
+        schema_version=proof_schema_version,
+        invocation_start=start,
+        capture_start=capture_start,
+        capture_stop=capture_stop,
     )
     if capture_start.scope != expected_scope:
         raise ValueError("未知结果停止证明不属于当前需求和分配")
