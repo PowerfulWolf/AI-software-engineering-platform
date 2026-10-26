@@ -25,6 +25,7 @@ from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.read_record_scope import recovery_record_read_scope
 from ai_software_engineer.recovery.context_capacity import LegacyContextCapacitySourceReader
 from ai_software_engineer.recovery.models import (
+    CapturedChanges,
     RecoveryPlan,
     RecoveryRejected,
     RecoveryScopeSupplement,
@@ -118,8 +119,21 @@ class NativeRecoveryFactsVerifier:
         original = self._read_source(plan)
         target = self._target_preflight(plan, original)
         if plan.source.stopped_unknown_settlement_sha256 is not None:
-            require_stopped_unknown_capture(original, plan.capture)
-            return self._target_facts(plan, target)
+            current_capture = CapturedChanges.from_capture(
+                target.manager.capture_legacy_changes(
+                    plan.capture.to_capture().worktree,
+                    plan.permissions,
+                    denied_paths=original.denied_paths,
+                )
+            )
+            require_stopped_unknown_capture(original, plan.capture, current_capture)
+            facts = self._target_facts(plan, target)
+            target.manager.verify_legacy_capture(
+                current_capture.to_capture(),
+                plan.permissions,
+                denied_paths=original.denied_paths,
+            )
+            return facts
         if plan.context_capacity_input is not None:
             if original.capacity_input != plan.context_capacity_input:
                 raise ValueError("capacity recovery lost its complete retained patch")

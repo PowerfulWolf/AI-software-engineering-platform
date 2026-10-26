@@ -89,6 +89,47 @@ After an idle release, use a new public recovery proposal/approval against the
 same Requirement; neither replaying the old handling nor extending its budget
 is required.
 
+## Separate final-Run draft from complete Task history
+
+The settled `CapturedMutations` is relative to the final Coder Run's input HEAD,
+not the original Task base. A Coder may have committed earlier progress before
+that UNKNOWN Run. `NativeRecoveryEntry._propose` must preserve **both** facts:
+
+- `GitWorktreeManager.capture_legacy_changes(old, ..., base_revision=Task base)`
+  provides the complete Task-base-to-current `RecoveryPlan.capture`, including
+  earlier Coder commits and any final dirty work. Its exact patch remains the
+  successor seed or required Coder reapply input.
+- A separate `capture_legacy_changes(old, ...)` observes HEAD-to-working-tree.
+  `require_stopped_unknown_capture(original, full, current)` binds only this
+  Run-local patch, index digest and ordered after-file hashes to the immutable
+  settlement; every Run-local after-file SHA must also occur in the full capture.
+  It checks Task/attempt/HEAD/worktree/branch identity and the full capture's
+  original Task base. Deletion or other unsupported mutation remains rejected.
+
+Proposal rechecks the full source after the Run-local capture. The current-facts
+gate used at proposal, approval and execution repeats the Run-local capture,
+verifies the full plan capture against live source, and rechecks the Run-local
+capture again. Existing source reader independently revalidates the sealed
+stopped execution and full mutation inventory. No Plan, approval or Task field
+is added; old UNKNOWN facts, attempts, budgets and Operation failures remain
+unchanged.
+
+| Source / drift | Required result |
+| --- | --- |
+| Prior committed code, final Run clean (K1: 37 files from Task base, zero Run-local dirty paths) | Retain the full 37-file patch; accept the separately verified empty Run-local capture |
+| Prior committed code plus final Run dirty modification | Retain complete final bytes; match Run-local patch/index/after hashes and their inclusion in the full capture |
+| Missing final file from full capture, wrong base/HEAD/branch, changed current draft or later writer | Reject before approval/execution; preserve original stop and draft |
+| Final Run reverses an earlier commit exactly to the Task-base file, so the full net diff omits its Run-local changed path | The legacy capture gate rejects the index-only difference; a separate exact base-blob proof contract would be required to support it. Never silently drop the stopped mutation |
+| Deletion, mode change or ignored-only Run-local mutation not representable by the normal recovery patch | Reject; request a separate authorized recovery contract |
+
+`tests/recovery/test_stopped_unknown_source.py` uses real Git for clean and
+dirty final Runs after an earlier commit, and checks tampering and live drift.
+No stored data migration is needed. After an idle release, a fresh public
+Continue on the same Requirement prepares a new exact Plan; approve that Plan
+only after its complete patch and target revision are reviewed. Rollback to the
+previous verifier will again refuse this legitimate mixed-history source but
+cannot reinterpret UNKNOWN as a successful model result.
+
 ## Public wait settlement and recovery operation boundary
 
 `TeamHost.handle_delivery_wait` returns the durable `BUDGET_EXHAUSTED` handling

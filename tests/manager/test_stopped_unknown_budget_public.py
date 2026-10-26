@@ -192,11 +192,15 @@ def test_public_unknown_budget_settlement_retains_history_and_requires_exact_rec
     monkeypatch.setattr(openai_compatible, "urlopen", forbid_live_provider)
     monkeypatch.setattr(_ScriptedStructuredClient, "complete", source_inspection)
     monkeypatch.setattr(
-        production_backend, "ConfiguredStructuredClientFactory", lambda *_: _ScriptedClientFactory()
+        production_backend,
+        "ConfiguredStructuredClientFactory",
+        lambda *_, **__: _ScriptedClientFactory(),
     )
 
     monkeypatch.setattr(
-        production_host, "ConfiguredStructuredClientFactory", lambda *_: _ScriptedClientFactory()
+        production_host,
+        "ConfiguredStructuredClientFactory",
+        lambda *_, **__: _ScriptedClientFactory(),
     )
 
     class LostCompletionRunner(SubprocessCodexCommandRunner):
@@ -446,9 +450,9 @@ def test_public_unknown_budget_settlement_retains_history_and_requires_exact_rec
         assert tasks.get(original.id) == settled
         assert tasks.list_events(original.id) == settled_events
     current = service.status(created.delivery_id).checkpoint
-    assert current.stage is JointStage.BLOCKED
+    assert current.stage is JointStage.DELIVERING
     assert current.children[0].checkpoint.task_id == original.id
-    assert current.children[0].checkpoint.task_status is TaskStatus.BLOCKED
+    assert current.children[0].checkpoint.task_status is TaskStatus.IMPLEMENTING
     assert (
         invocation_records.find("invocation-outcomes", item.id, DeliveryInvocationOutcome) is None
     )
@@ -462,6 +466,16 @@ def test_public_unknown_budget_settlement_retains_history_and_requires_exact_rec
     _git("commit", "-m", "independent latest main", cwd=repository)
     latest_main = _git_output("rev-parse", "HEAD", cwd=repository)
     assert latest_main != original_source
+    synchronized = host.resume_delivery(
+        ResumeProjectDelivery(delivery_id=created.delivery_id), project_id="project_test"
+    )
+    assert isinstance(synchronized, JointDeliveryResult)
+    assert not isinstance(synchronized, JointDeliveryResumeResult)
+    assert synchronized.checkpoint.stage is JointStage.BLOCKED
+    assert synchronized.checkpoint.children[0].checkpoint.task_status is TaskStatus.BLOCKED
+    with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+        assert tasks.get(original.id) == settled
+        assert tasks.list_events(original.id) == settled_events
     proposed = host.resume_delivery(
         ResumeProjectDelivery(delivery_id=created.delivery_id), project_id="project_test"
     )

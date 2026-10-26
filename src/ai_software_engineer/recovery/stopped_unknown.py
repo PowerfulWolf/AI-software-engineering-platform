@@ -109,24 +109,49 @@ class _ReadOnlyRoleQueue(MySqlRoleQueue):
 
 
 def require_stopped_unknown_capture(
-    original: NativeRecoverySource, capture: CapturedChanges
+    original: NativeRecoverySource,
+    capture: CapturedChanges,
+    current_capture: CapturedChanges,
 ) -> None:
-    """Bind the existing complete recovery patch to the separately sealed mutation facts."""
+    """Bind the full Task-base patch and exact final Run-local stopped draft.
+
+    The stopped mutation proof is relative to the final Coder Run's input HEAD.
+    The successor needs the complete Task-base-to-current patch, which may also
+    contain earlier committed Coder work.  Those patches have different bases
+    and must never be compared as if they were the same observation.
+    """
     retained = original.stopped_unknown_capture
     if retained is None:
         raise RecoveryRejected("stopped unknown source lost its full retained mutation capture")
     expected_files = tuple(
         (item.path, item.after.sha256) for item in retained.mutations if item.after is not None
     )
+    complete_files = {(file.path, file.sha256) for file in capture.files}
     if (
         any(item.after is None for item in retained.mutations)
-        or capture.task_id != retained.task_id
-        or capture.source_revision != retained.source_revision
-        or capture.worktree_path != retained.worktree_path
-        or capture.branch_name != retained.branch_name
-        or capture.patch != retained.patch
-        or capture.index_diff_sha256 != retained.index_diff_sha256
-        or tuple((item.path, item.sha256) for item in capture.files) != expected_files
+        or capture.base_revision != original.source.effective_base_revision
+        or current_capture.base_revision is not None
+        or any(
+            (
+                observed.task_id,
+                observed.attempt,
+                observed.source_revision,
+                observed.worktree_path,
+                observed.branch_name,
+            )
+            != (
+                retained.task_id,
+                retained.attempt,
+                retained.source_revision,
+                retained.worktree_path,
+                retained.branch_name,
+            )
+            for observed in (capture, current_capture)
+        )
+        or current_capture.patch != retained.patch
+        or current_capture.index_diff_sha256 != retained.index_diff_sha256
+        or tuple((item.path, item.sha256) for item in current_capture.files) != expected_files
+        or any((item.path, item.sha256) not in complete_files for item in current_capture.files)
     ):
         raise RecoveryRejected("恢复计划必须包含已封存的完整未知结果开发草稿")
 

@@ -411,7 +411,17 @@ class NativeRecoveryEntry:
         )
         captured = CapturedChanges.from_capture(capture)
         if original.source.stopped_unknown_settlement_sha256 is not None:
-            require_stopped_unknown_capture(original, captured)
+            current_capture = CapturedChanges.from_capture(
+                manager.capture_legacy_changes(
+                    old, source_permissions, denied_paths=original.denied_paths
+                )
+            )
+            require_stopped_unknown_capture(original, captured, current_capture)
+            # The two captures have distinct bases. Recheck the complete source
+            # after the Run-local observation before publishing either as a Plan.
+            manager.verify_legacy_capture(
+                capture, source_permissions, denied_paths=original.denied_paths
+            )
             workspace_snapshot = None
         elif original.capacity_input is not None:
             if captured.patch or captured.files:
