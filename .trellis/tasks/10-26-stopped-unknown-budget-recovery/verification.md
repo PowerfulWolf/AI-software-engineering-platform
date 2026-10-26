@@ -60,3 +60,35 @@ live verification capabilities; isolated tests never count as K1 E2E evidence.
 Rollback point before new record consumption: ec67fb4545499cb08402579342cdbfbb03942a54.
 After consumption keep compatible UNKNOWN settlement/recovery readers and controlled pause;
 never delete sealed records, rewrite old Task budgets/outcomes or reset dirty worktrees.
+
+## Follow-up: independent investigation publication
+
+The first real public HANDLE succeeded but exposed a producer omission: the
+`delivery-waits` handling referenced an investigation only embedded in the
+`delivery-preflight` settlement. The complete Team reader correctly refused it
+with 503/RECORD_NOT_FOUND. Four red tests reproduced the exact
+`engineering_history.py:485` path for initial/replayed v1/v2 stop facts.
+
+Both initial publication and exact replay now seal the unchanged independent
+investigation before its handling. No read fallback, schema change, SQL repair,
+refund or history rewrite is introduced. The existing immutable store refuses
+conflicting proof bytes. The first recovery/read regression run passed85 tests;
+final validation and public stock recovery are recorded below after execution.
+
+Stock procedure: controlled release while execution is idle, read current parent
+journal checkpoint, submit a new public HANDLE operation with the original exact
+five fields and a new Console idempotency key. It revalidates settlement/current
+stop/Git facts before restoring the missing proof. Then verify public summary and
+continue the same Requirement. Reusing the earlier operation key does not repair
+the dependency because it returns the cached result.
+
+Rollback: preserve the newly published immutable dependency and all settlement
+facts. It is readable by the preceding release; reverting only this producer
+change would reintroduce the omission for future settlements.
+
+Final follow-up checks before release:
+- Complete UNKNOWN / read-history / snapshot / recovery-source regression:85 passed.
+- UNKNOWN group including new conflicting-proof negative:14 passed.
+- Ruff check and formatting, strict Mypy(two Python files), git diff --check passed.
+- Independent read-only review found no blocking correctness/permission issue;
+  import ordering was corrected and the suggested conflicting-proof test added.

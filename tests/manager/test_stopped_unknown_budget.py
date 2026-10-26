@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from shutil import copytree
 from typing import cast
 
 import pytest
@@ -14,9 +15,13 @@ from ai_software_engineer.domain.delivery_disposition import (
     DeliveryFailureFacts,
     decide_delivery_disposition,
 )
-from ai_software_engineer.domain.delivery_resolution import HandleDeliveryWait
+from ai_software_engineer.domain.delivery_resolution import (
+    DeliveryWaitInvestigation,
+    HandleDeliveryWait,
+)
 from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal
 from ai_software_engineer.domain.stopped_unknown_budget import StoppedUnknownBudgetSettlement
+from ai_software_engineer.knowledge.models import KnowledgeError
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery_wait import DeliveryWaitService
 from ai_software_engineer.manager.stopped_unknown_budget import (
@@ -24,6 +29,7 @@ from ai_software_engineer.manager.stopped_unknown_budget import (
 )
 from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCollector
 from ai_software_engineer.orchestration.continuation_models import ContinuationRejected
+from ai_software_engineer.team_view.engineering_history import engineering_history
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationOutcome
 from tests.domain.factories import make_coder_progress_artifact
@@ -244,3 +250,70 @@ def test_final_fence_refuses_late_original_facts_or_draft_changes(
     assert f.native.repository.list_events(f.task.id) == events
     assert cast(UnknownQueue, f.queue).commits == 0
     assert f.queue.item.status is WorkItemStatus.WAITING_DEPENDENCY
+
+
+@pytest.mark.parametrize(
+    "completed", ["stopped_unknown_exhausted", "stopped_unknown_completed_exhausted"], indirect=True
+)
+@pytest.mark.parametrize("legacy_missing_proof", [False, True])
+def test_unknown_handling_publishes_complete_read_only_history_and_repairs_exact_replay(
+    completed: CompletedFixture, legacy_missing_proof: bool
+) -> None:
+    f = completed
+    service = service_for(f)
+    command = HandleDeliveryWait.model_validate(f.queue.command().to_wire())
+    result = service.handle(command)
+    events = f.native.repository.list_events(f.task.id)
+    records = KnowledgeRecordStore(f.root / "delivery-waits", read_only=True)
+    proof_path = records.root / records._name(
+        "wait-investigations", result.investigation.proof_sha256
+    )
+    if legacy_missing_proof:
+        # Reproduce the released writer omission while keeping the actual sealed
+        # settlement and handling intact. Public exact replay must repair only
+        # this immutable reference, after rechecking original execution facts.
+        proof_path.unlink(missing_ok=True)
+        before = f.sealed_bytes()
+        assert service.handle(command) == result
+        assert all(path.read_bytes() == data for path, data in before.items())
+    sidecar = f.root / "history-sidecar"
+    copytree(records.root, sidecar / "state" / "delivery-waits")
+    sealed = f.sealed_bytes()
+    entries = engineering_history(sidecar, f.task, f.collector.scope, f.native.scope.requirement_id)
+    assert any(entry.id == "handling_" + result.handling_sha256 for entry in entries)
+    assert any(
+        entry.id == "investigation_" + result.investigation.proof_sha256 for entry in entries
+    )
+    assert (
+        records.get(
+            "wait-investigations", result.investigation.proof_sha256, DeliveryWaitInvestigation
+        )
+        == result.investigation
+    )
+    assert f.sealed_bytes() == sealed
+    assert f.native.repository.list_events(f.task.id) == events
+    assert cast(UnknownQueue, f.queue).commits == 1
+
+
+@pytest.mark.parametrize("completed", ["stopped_unknown_completed_exhausted"], indirect=True)
+def test_unknown_exact_replay_refuses_conflicting_independent_proof_without_overwrite(
+    completed: CompletedFixture,
+) -> None:
+    f = completed
+    service = service_for(f)
+    command = HandleDeliveryWait.model_validate(f.queue.command().to_wire())
+    result = service.handle(command)
+    records = KnowledgeRecordStore(f.root / "delivery-waits")
+    key = result.investigation.proof_sha256
+    conflict = result.investigation.model_copy(update={"next_action": "conflicting history"})
+    conflict = conflict.model_copy(update={"proof_sha256": conflict.recompute_sha256()})
+    conflict.validate_integrity()
+    (records.root / records._name("wait-investigations", key)).unlink()
+    records.put("wait-investigations", key, conflict)
+    before = f.sealed_bytes()
+    events = f.native.repository.list_events(f.task.id)
+    with pytest.raises(KnowledgeError, match="RECORD_CONFLICT"):
+        service.handle(command)
+    assert f.sealed_bytes() == before
+    assert f.native.repository.list_events(f.task.id) == events
+    assert cast(UnknownQueue, f.queue).commits == 1

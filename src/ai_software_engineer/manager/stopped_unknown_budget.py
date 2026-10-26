@@ -206,10 +206,19 @@ class StoppedUnknownBudgetSettlementService:
 
             verify()
             self.queue.settle_stopped_budget(cursor, settlement, validate_current=verify)
-        KnowledgeRecordStore(self.collector.state / "delivery-waits").put(
-            "wait-handlings", result.record_key, result
-        )
+        self._publish_handling(result)
         return result
+
+    def _publish_handling(self, result: DeliveryWaitHandling) -> None:
+        """Publish the immutable dependency before its read-side reference.
+
+        Exact replay reaches this only after validating the original settlement
+        and current stopped facts, and can repair the released missing-reference
+        omission without changing any existing result or execution history.
+        """
+        records = KnowledgeRecordStore(self.collector.state / "delivery-waits")
+        records.put("wait-investigations", result.investigation.proof_sha256, result.investigation)
+        records.put("wait-handlings", result.record_key, result)
 
     def _require_observation(
         self, settlement: StoppedUnknownBudgetSettlement, guard: WorkerExecutionGuard
@@ -319,9 +328,7 @@ class StoppedUnknownBudgetSettlementService:
                 settlement,
                 validate_current=lambda: self._require_observation(settlement, guard),
             )
-        KnowledgeRecordStore(self.collector.state / "delivery-waits").put(
-            "wait-handlings", result.record_key, result
-        )
+        self._publish_handling(result)
         return result
 
 

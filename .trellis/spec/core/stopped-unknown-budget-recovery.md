@@ -80,3 +80,26 @@ Run MySQL test groups serially against an identity-checked dedicated test databa
 The current normal legacy recovery capture supports regular modifications/additions; deletion
 and mode-change drafts remain sealed but are refused by this successor path. No new unsupported
 capture behavior is inferred from a complete stopped mutation inventory.
+
+## Read-side reference publication and legacy exact replay
+
+The UNKNOWN settlement/capture store is `delivery-preflight`, while complete Team
+history reopens `delivery-waits/wait-investigations` independently from its handling.
+Both initial handling and fully verified exact replay must publish the original
+immutable investigation there before `wait-handlings`. An embedded proof alone
+does not satisfy that reference. Do not weaken the reader or return partial Team
+data when it is missing.
+
+A released omission could settle the Task correctly but make summary/detail return
+503 because only the handling was published. Restore this exact missing reference
+through a new public HANDLE operation with the original command fingerprint and
+current parent checkpoint. Replay must first reverify the settlement, terminal
+reducer, queue closure, stopped process and full retained capture; then append the
+unchanged original proof. Existing Task attempts/events, result bytes and history
+remain unchanged. Existing conflicting/corrupt records fail closed and are never
+overwritten. Reusing the old Console idempotency key only reads its cached result
+and does not execute this repair.
+
+Regression: `test_unknown_handling_publishes_complete_read_only_history_and_repairs_exact_replay`
+executes the real initial/replay producer and complete `engineering_history` reader
+for v1/v2 stop facts, including the historical missing-reference state.
