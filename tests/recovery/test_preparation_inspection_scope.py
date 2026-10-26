@@ -1,6 +1,7 @@
 """Synchronous recovery preparation shares scans, never fresh facts or authority."""
 
 import hashlib
+import json
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -32,12 +33,16 @@ from ai_software_engineer.recovery.models import (
     RecoveryRejected,
 )
 from ai_software_engineer.recovery.native import NativeRecoverySource
-from ai_software_engineer.recovery.records import RecoveryInvocationRecord, RecoverySeedRecord
+from ai_software_engineer.recovery.records import (
+    RecoveryInvocationRecord,
+    RecoverySeedRecord,
+    RecoveryTaskRecord,
+)
 from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
 from ai_software_engineer.recovery.seed import RecoverySeedService
 from ai_software_engineer.recovery.service import RecoveryAuthorizationService
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
-from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
+from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder, RecoveryTaskDraft
 from ai_software_engineer.repository_profile import RepositoryProfile
 from tests.manager.test_contracts import stage_chain
 from tests.manager.test_dispatch import _agents, _policy
@@ -311,6 +316,7 @@ class OfflineAuthority:
         self.snapshot: DispatchWorkforceSnapshot | None = None
         self.record: RecoveryDispatchRecord | None = None
         self.drift = False
+        self.after_build: Callable[[], None] | None = None
 
     def seed_snapshot(self, snapshot: DispatchWorkforceSnapshot) -> None:
         self.fixture.observe("snapshot")
@@ -334,6 +340,8 @@ class OfflineAuthority:
             return self.record
         record = build(self.snapshot)
         record.validate_integrity()
+        if self.after_build is not None:
+            self.after_build()
         if self.drift:
             self.fixture.body.write_text(SOURCE + "CHANGED = 1\n")
         self.fixture.reads["fence_after"] += 1
@@ -377,21 +385,45 @@ def test_allocator_shares_scans_across_both_fenced_fresh_checks(
     )
     record = allocator.allocate(f.plan.plan_sha256)
     assert f.reads == {
-        "facts": 32,
-        "capture": 8,
+        "facts": 16,
+        "capture": 4,
         "snapshot": 1,
         "fence_before": 1,
         "fence_after": 1,
     }
-    assert f.getters == {"plan": 33, "authorization": 14}
+    assert f.getters == {"plan": 23, "authorization": 10}
     assert scans == Scans(source=1, generic=6, patch=1)
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
     f.reads.clear()
     f.getters.clear()
     assert allocator.allocate(f.plan.plan_sha256) == record
-    assert f.reads == {"facts": 24, "capture": 6, "snapshot": 1, "fence_before": 1}
-    assert f.getters == {"plan": 24, "authorization": 10}
+    assert f.reads == {"facts": 12, "capture": 3, "snapshot": 1, "fence_before": 1}
+    assert f.getters == {"plan": 16, "authorization": 7}
     assert scans == Scans(source=2, generic=12, patch=2)
+
+
+def test_allocator_keeps_two_fresh_fences_without_rebuilding_the_same_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    f.sealing.seal(f.plan.plan_sha256)
+    f.reads.clear()
+    authority = OfflineAuthority(f)
+    allocator = RecoveryAllocator(
+        sealing=f.sealing,
+        builder=f.builder,
+        authority=cast(MySqlDispatchAuthority, authority),
+        agents=_agents(),
+        policies=(_policy(),),
+    )
+    allocator.allocate(f.plan.plan_sha256)
+    assert f.reads == {
+        "facts": 16,
+        "capture": 4,
+        "snapshot": 1,
+        "fence_before": 1,
+        "fence_after": 1,
+    }
 
 
 def test_allocator_second_fence_rejects_changed_complete_body_and_releases_scope(
@@ -407,6 +439,96 @@ def test_allocator_second_fence_rejects_changed_complete_body_and_releases_scope
     with pytest.raises(RecoveryRejected):
         f.builder.build(f.plan.plan_sha256)
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
+
+
+def test_allocator_second_fence_rejects_changed_sealed_task_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    authority = OfflineAuthority(f)
+    task_record_path = f.store._root / f"task-{f.plan.plan_sha256}.json"
+
+    def change_record() -> None:
+        envelope = json.loads(task_record_path.read_text())
+        envelope["record"]["authorization_sha256"] = "0" * 64
+        task_record_path.write_text(json.dumps(envelope))
+
+    authority.after_build = change_record
+    with pytest.raises(RecoveryRejected):
+        allocate(f, authority)
+    assert authority.record is None and f.reads["fence_after"] == 1
+
+
+def test_allocator_custom_builder_keeps_fenced_full_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    authority = OfflineAuthority(f)
+    original_build = f.builder.build
+
+    def stronger_build(plan_sha256: str) -> RecoveryTaskDraft:
+        original_build(plan_sha256)
+        raise RecoveryRejected("custom builder rejected inside dispatch fence")
+
+    authority.after_build = lambda: monkeypatch.setattr(f.builder, "build", stronger_build)
+    with pytest.raises(RecoveryRejected, match="custom builder rejected inside dispatch fence"):
+        allocate(f, authority)
+    assert authority.record is None and f.reads["fence_after"] == 1
+
+
+def test_allocator_custom_sealing_keeps_fenced_custom_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    authority = OfflineAuthority(f)
+    original_require = f.sealing.require_current
+
+    def stronger_require(plan_sha256: str) -> RecoveryTaskRecord:
+        original_require(plan_sha256)
+        raise RecoveryRejected("custom sealing rejected inside dispatch fence")
+
+    authority.after_build = lambda: monkeypatch.setattr(
+        f.sealing, "require_current", stronger_require
+    )
+    with pytest.raises(RecoveryRejected, match="custom sealing rejected inside dispatch fence"):
+        allocate(f, authority)
+    assert authority.record is None and f.reads["fence_after"] == 1
+
+
+def test_allocator_does_not_skip_separately_injected_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    f.sealing.seal(f.plan.plan_sha256)
+    separate = AuthorizedRecoveryTaskBuilder(f.builder._authorization, f.builder._facts)
+
+    def stronger_build(_plan_sha256: str) -> RecoveryTaskDraft:
+        raise RecoveryRejected("separate builder rejected")
+
+    monkeypatch.setattr(separate, "build", stronger_build)
+    authority = OfflineAuthority(f)
+    allocator = RecoveryAllocator(
+        sealing=f.sealing,
+        builder=separate,
+        authority=cast(MySqlDispatchAuthority, authority),
+        agents=_agents(),
+        policies=(_policy(),),
+    )
+    with pytest.raises(RecoveryRejected, match="separate builder rejected"):
+        allocator.allocate(f.plan.plan_sha256)
+    assert authority.snapshot is None and authority.record is None
+
+
+def test_allocator_rejects_drift_when_custom_fast_validator_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    authority = OfflineAuthority(f)
+    authority.drift = True
+    monkeypatch.setattr(f.builder, "validate_current_against", lambda _draft: None)
+    with pytest.raises(RecoveryRejected):
+        allocate(f, authority)
+    assert authority.record is None and f.reads["fence_after"] == 1
 
 
 @pytest.mark.parametrize("change", ["safe", "secret"])
@@ -577,7 +699,7 @@ def test_authorize_releases_scope_before_provider_and_replay_is_still_rejected(
     f.reads.clear()
     scans = count_scans(monkeypatch)
     seed.authorize(request, target.path)
-    assert f.reads == {"facts": 8, "capture": 2, "seed_verify": 1}
+    assert f.reads == {"facts": 4, "capture": 1, "seed_verify": 1}
     assert scans == Scans(source=1, generic=6, patch=1)
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
 
@@ -592,6 +714,50 @@ def test_authorize_releases_scope_before_provider_and_replay_is_still_rejected(
     with pytest.raises(ContinuationExecutionUncertain, match="恢复种子已准入"):
         seed.authorize(request, target.path)
     assert redaction._SOURCE_INSPECTION_CACHE.get() is None
+
+
+def test_seed_authorize_rechecks_dispatch_once_without_rebuilding_frozen_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    seed, target, request = seed_fixture(f)
+    seed.seed(target)
+    f.reads.clear()
+    seed.authorize(request, target.path)
+    assert f.reads == {"facts": 4, "capture": 1, "seed_verify": 1}
+
+
+def test_seed_authorize_rejects_changed_sealed_record_before_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    seed, target, request = seed_fixture(f)
+    seed.seed(target)
+    task_record_path = f.store._root / f"task-{f.plan.plan_sha256}.json"
+    envelope = json.loads(task_record_path.read_text())
+    envelope["record"]["authorization_sha256"] = "0" * 64
+    task_record_path.write_text(json.dumps(envelope))
+    with pytest.raises(RecoveryRejected):
+        seed.authorize(request, target.path)
+    with pytest.raises(RecoveryRecordMissing):
+        f.store.get_invocation(f.plan.plan_sha256)
+
+
+def test_seed_authorize_keeps_custom_sealing_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = preparation_fixture(tmp_path, monkeypatch)
+    seed, target, request = seed_fixture(f)
+    seed.seed(target)
+
+    def stronger_require(_plan_sha256: str) -> RecoveryTaskRecord:
+        raise RecoveryRejected("custom role admission gate rejected")
+
+    monkeypatch.setattr(f.sealing, "require_current", stronger_require)
+    with pytest.raises(RecoveryRejected, match="custom role admission gate rejected"):
+        seed.authorize(request, target.path)
+    with pytest.raises(RecoveryRecordMissing):
+        f.store.get_invocation(f.plan.plan_sha256)
 
 
 def test_failed_provider_admission_does_not_publish_invocation_or_retain_scope(

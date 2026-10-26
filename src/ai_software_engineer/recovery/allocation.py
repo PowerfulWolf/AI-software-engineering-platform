@@ -13,7 +13,10 @@ from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchA
 from ai_software_engineer.manager.production_backend import _maximum_risk
 from ai_software_engineer.planning import PlanningPreviewService
 from ai_software_engineer.recovery.models import RecoveryRejected
-from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
+from ai_software_engineer.recovery.sealing import (
+    RecoveryTaskSealingService,
+    _uses_standard_sealing,
+)
 from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
 from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
@@ -34,8 +37,14 @@ class RecoveryAllocator:
 
     @source_inspection_scope()
     def allocate(self, plan_sha256: str) -> RecoveryDispatchRecord:
-        sealed = self._sealing.require_current(plan_sha256)
-        draft = self._builder.build(plan_sha256)
+        def standard_seam() -> bool:
+            return self._sealing._builder is self._builder and _uses_standard_sealing(self._sealing)
+
+        if standard_seam():
+            sealed, draft = self._sealing.require_current_draft(plan_sha256)
+        else:
+            sealed = self._sealing.require_current(plan_sha256)
+            draft = self._builder.build(plan_sha256)
         task, plan = sealed.task, draft.facts.original.plan
         snapshot = DispatchWorkforceSnapshot.create(
             repository_id=plan.repository_id,
@@ -58,14 +67,14 @@ class RecoveryAllocator:
         self._authority.seed_snapshot(snapshot)
 
         def validate(record: RecoveryDispatchRecord | None) -> None:
-            current = self._sealing.require_current(plan_sha256)
-            if current != sealed or (
-                record is not None
-                and (
-                    record.task != sealed.task
-                    or record.recovery_task_record_sha256 != sealed.record_sha256
-                    or record.recovery_plan_sha256 != plan_sha256
-                )
+            if standard_seam():
+                self._sealing.validate_current_against(sealed, draft)
+            elif self._sealing.require_current(plan_sha256) != sealed:
+                raise RecoveryRejected("recovery dispatch no longer matches sealed Task")
+            if record is not None and (
+                record.task != sealed.task
+                or record.recovery_task_record_sha256 != sealed.record_sha256
+                or record.recovery_plan_sha256 != plan_sha256
             ):
                 raise RecoveryRejected("recovery dispatch no longer matches sealed Task")
 

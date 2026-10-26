@@ -116,6 +116,132 @@ def test_stopped_unknown_reader_missing_environment_never_initializes_stores(
     assert not Path(config.platform_root).exists()
 
 
+def test_stopped_unknown_authorization_uses_two_fresh_observations_around_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real authorization seam must not repeat an already doubled source scan."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import ai_software_engineer.recovery.current as current_module
+    from ai_software_engineer.domain import AgentPermissions
+    from ai_software_engineer.git import WorktreeChangeCapture
+    from ai_software_engineer.recovery.models import (
+        RecoveryApprovalCommand,
+        RecoveryRejected,
+        VerifiedRecoveryDecision,
+    )
+    from ai_software_engineer.recovery.service import RecoveryAuthorizationService
+    from ai_software_engineer.recovery.store import FileRecoveryStore
+    from tests.recovery.test_authorization import Captures, Human, approval
+
+    plan = stopped_plan(tmp_path)
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "missing"),
+        model_routes=(
+            ProviderRouteConfig(
+                provider="offline", model="offline", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+    verifier = NativeRecoveryFactsVerifier(config, {})
+    observed: list[str] = []
+    current_fact = ["same current facts"]
+    manager = SimpleNamespace(
+        capture_legacy_changes=Mock(return_value=plan.capture.to_capture()),
+        verify_legacy_capture=Mock(),
+    )
+
+    def read_source(_plan: RecoveryPlan) -> object:
+        observed.append("source")
+        return SimpleNamespace(denied_paths=())
+
+    monkeypatch.setattr(verifier, "_read_source", read_source)
+    monkeypatch.setattr(
+        verifier, "_target_preflight", lambda _plan, _original: SimpleNamespace(manager=manager)
+    )
+    monkeypatch.setattr(verifier, "_target_facts", lambda _plan, _target: current_fact[0])
+    monkeypatch.setattr(current_module, "require_stopped_unknown_capture", Mock())
+
+    class RecordingCaptures(Captures):
+        def verify_capture(
+            self,
+            capture: WorktreeChangeCapture,
+            permissions: AgentPermissions,
+            *,
+            denied_paths: tuple[str, ...] = (),
+        ) -> None:
+            observed.append("capture")
+            super().verify_capture(capture, permissions, denied_paths=denied_paths)
+
+    class RecordingHuman(Human):
+        def verify(self, command: RecoveryApprovalCommand) -> VerifiedRecoveryDecision:
+            observed.append("human")
+            return super().verify(command)
+
+    store = FileRecoveryStore.initialize(tmp_path / "recovery", scope=plan.source.scope)
+    store.put_plan(plan)
+    captures = RecordingCaptures()
+    service = RecoveryAuthorizationService(
+        store, facts=verifier, captures=captures, human=RecordingHuman()
+    )
+    assert service.authorize(approval(plan)).decision.approved
+    assert observed == ["source", "capture", "source", "human", "source", "capture", "source"]
+    observed.clear()
+    assert service.inspect_current_authorization(plan.plan_sha256).plan == plan
+    assert observed == ["source", "capture", "source"]
+    original_verify = captures.verify_capture
+
+    def change_during_capture(
+        capture: WorktreeChangeCapture,
+        permissions: AgentPermissions,
+        *,
+        denied_paths: tuple[str, ...] = (),
+    ) -> None:
+        original_verify(capture, permissions, denied_paths=denied_paths)
+        current_fact[0] = "changed while verifying capture"
+
+    monkeypatch.setattr(captures, "verify_capture", change_during_capture)
+    with pytest.raises(RecoveryRejected, match="facts do not match"):
+        service.require_current_authorization(plan.plan_sha256)
+    current_fact[0] = "same current facts"
+    monkeypatch.setattr(captures, "verify_capture", original_verify)
+    captures.stale = True
+    with pytest.raises(RecoveryRejected, match="capture changed"):
+        service.require_current_authorization(plan.plan_sha256)
+
+
+def test_stopped_unknown_custom_inspection_keeps_original_authorization_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_software_engineer.recovery.models import RecoveryRejected
+    from ai_software_engineer.recovery.service import RecoveryAuthorizationService
+    from ai_software_engineer.recovery.store import FileRecoveryStore
+    from tests.recovery.test_authorization import Captures, Human
+
+    plan = stopped_plan(tmp_path)
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "missing"),
+        model_routes=(
+            ProviderRouteConfig(
+                provider="offline", model="offline", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+    verifier = NativeRecoveryFactsVerifier(config, {})
+
+    def stronger_inspect(_plan: RecoveryPlan) -> None:
+        raise RecoveryRejected("stronger native inspection rejected")
+
+    monkeypatch.setattr(verifier, "inspect", stronger_inspect)
+    store = FileRecoveryStore.initialize(tmp_path / "recovery", scope=plan.source.scope)
+    service = RecoveryAuthorizationService(
+        store, facts=verifier, captures=Captures(), human=Human()
+    )
+    with pytest.raises(RecoveryRejected, match="stronger native inspection rejected"):
+        service._require_current(plan)
+
+
 def test_stopped_unknown_complete_recovery_capture_cannot_drop_or_change_draft(
     tmp_path: Path,
 ) -> None:

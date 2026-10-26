@@ -18,7 +18,7 @@ from ai_software_engineer.recovery.admission import (
 from ai_software_engineer.recovery.context import validate_reapply_context
 from ai_software_engineer.recovery.models import CapturedChanges, RecoveryRejected
 from ai_software_engineer.recovery.records import RecoveryInvocationRecord, RecoverySeedRecord
-from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
+from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService, _uses_standard_sealing
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
@@ -47,6 +47,12 @@ class RecoverySeedService(ClaimedRecoveryInvocationHistory):
             artifacts=artifacts,
             guard=guard,
         )
+
+    def _require_current_dispatch(self) -> None:
+        if self.sealing._store is self.store and _uses_standard_sealing(self.sealing):
+            self.sealing.require_current_dispatch(self.dispatch)
+        else:
+            self.sealing.require_current(self.dispatch.recovery_plan_sha256)
 
     @reject_invalid_admission
     def for_request(self, request: AgentRequest) -> InitialWorkspaceAdmission | None:
@@ -153,7 +159,7 @@ class RecoverySeedService(ClaimedRecoveryInvocationHistory):
             pass
         else:
             raise RecoveryRejected("Coder invocation already admitted; inspect durable runtime")
-        self.sealing.require_current(plan.plan_sha256)
+        self._require_current_dispatch()
         invocation = RecoveryInvocationRecord(
             recovery_plan_sha256=plan.plan_sha256,
             seed_record_sha256=receipt.record_sha256,

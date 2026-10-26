@@ -1,6 +1,7 @@
 """Authorized in-process Task draft; no database/dispatch or historical record writes."""
 
 from dataclasses import dataclass
+from types import MethodType
 
 from ai_software_engineer.domain import ProjectRequest, Task
 from ai_software_engineer.domain.engineering_authority import EngineeringScope
@@ -122,3 +123,35 @@ class AuthorizedRecoveryTaskBuilder:
         if final_facts is not None and final_facts != facts:
             raise RecoveryRejected("recovery facts changed while building Task")
         return RecoveryTaskDraft(plan.plan_sha256, facts, rebound, task)
+
+    def validate_current_against(self, draft: RecoveryTaskDraft) -> None:
+        """Reobserve exact facts under a dispatch fence without rederiving frozen Task data."""
+        build = self.build
+        inspector = self._authorization._task_facts_inspector(self._facts)
+        if not _uses_standard_builder(self) or inspector is None:
+            if build(draft.recovery_plan_sha256) != draft:
+                raise RecoveryRejected("recovery draft changed inside dispatch fence")
+            return
+        current = inspector.inspect_current_authorization(draft.recovery_plan_sha256)
+        if current.plan.plan_sha256 != draft.recovery_plan_sha256 or current.facts != draft.facts:
+            raise RecoveryRejected("recovery facts changed inside dispatch fence")
+
+
+_STANDARD_BUILD = AuthorizedRecoveryTaskBuilder.build
+_STANDARD_VALIDATE_CURRENT_AGAINST = AuthorizedRecoveryTaskBuilder.validate_current_against
+
+
+def _uses_standard_builder(builder: AuthorizedRecoveryTaskBuilder) -> bool:
+    if type(builder) is not AuthorizedRecoveryTaskBuilder:
+        return False
+    for method, expected in (
+        (builder.build, _STANDARD_BUILD),
+        (builder.validate_current_against, _STANDARD_VALIDATE_CURRENT_AGAINST),
+    ):
+        if (
+            not isinstance(method, MethodType)
+            or method.__self__ is not builder
+            or method.__func__ is not expected
+        ):
+            return False
+    return True

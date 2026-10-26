@@ -363,6 +363,6 @@ def test_offline_authority_keeps_both_fences_and_all_builder_gates(
     else:
         record, _ = allocate(f, authority)
         assert authority.record == record
-        assert f.reads["facts"] == 32 and f.reads["capture"] == 8
-        assert f.getters == {"plan": 33, "authorization": 14}
+        assert f.reads["facts"] == 16 and f.reads["capture"] == 4
+        assert f.getters == {"plan": 23, "authorization": 10}
     assert f.reads["fence_before"] == f.reads["fence_after"] == 1

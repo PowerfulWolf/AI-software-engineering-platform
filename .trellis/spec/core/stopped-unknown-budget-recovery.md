@@ -130,6 +130,84 @@ only after its complete patch and target revision are reviewed. Rollback to the
 previous verifier will again refuse this legitimate mixed-history source but
 cannot reinterpret UNKNOWN as a successful model result.
 
+### Bounded current-facts observation during authorization
+
+For the standard native stopped-UNKNOWN verifier, one synchronous authorization
+gate observes the complete source and target, validates the full plan capture,
+then independently observes the complete source and target again. This gives a
+fresh before/after observation around capture validation. `authorize()` invokes
+that gate both before and after the exact human decision; execution admission
+invokes it again. `inspect_current_authorization()` uses the same window and
+returns only its second complete observation to the Task builder. The source
+reader's own sealed stop, SQL, original execution
+and full mutation-inventory checks remain in **each** observation. Capture
+verification errors retain their original classification; source or target
+drift fails closed. A custom or replaced verifier/inspection method keeps the
+original two `facts.validate` calls around capture verification.
+
+Do not nest another two-observation `facts.inspect` on *both* sides of the
+capture check for this source. That made one authorization gate traverse and
+hash the entire retained workspace four times at the outer layer, and at
+least 64 times across the complete K1 approval chain once the source reader's
+own repeated inventories were included. The bounded window removes only
+those redundant outer passes; it does not cache file hashes across approval,
+replace byte observations with metadata, or skip the human-decision fence.
+`test_stopped_unknown_authorization_uses_two_fresh_observations_around_capture`
+asserts the exact observation/capture/human ordering and rejects drift during
+capture; `test_stopped_unknown_custom_inspection_keeps_original_authorization_gate`
+guards extension behavior. No old Requirement, Task, Operation or approval
+needs migration. Deploy at an idle service boundary; rollback restores the
+slower repeated observations without rewriting any saved fact.
+
+### Sealed Task to MySQL dispatch admission
+
+`RecoveryAllocator.allocate()` obtains one `require_current_draft()` result:
+the stored Task record, approved authorization and freshly derived draft are
+checked together before the workforce snapshot is seeded. Inside the MySQL
+global reservation transaction, `validate_current` runs both before allocation
+preview and immediately before commit. Each call rereads the durable Task
+record and its exact plan/authorization binding **before and after** one fresh
+complete native source/capture observation, comparing those facts with the
+initial draft. The SQL transaction still rechecks current workforce, Task and
+reservation facts; no prior Python snapshot substitutes for that fence.
+
+For the same standard builder object held by both allocator and sealing, with
+standard `build` and `validate_current_against` methods, this avoids rederiving
+the same frozen Task on each fence while retaining source freshness. The seam
+guard is reevaluated at each MySQL validation callback. A separately injected
+builder, subclass or replaced builder/sealing method uses the original full
+rebuilding path so an extension's stronger checks are never bypassed. A changed stored
+record, approval SHA, source body or current facts rejects dispatch without a
+commit. The offline allocation regression asserts 16 complete fact observations
+and four capture checks rather than the previous 32/eight, with separate
+second-fence drift, stored-record tamper, separate-builder and no-op-validator
+negatives.
+Existing immutable records and SQL rows need no migration. Publish only at an
+idle service boundary; rollback restores repeated derivation and cannot undo
+an already committed dispatch.
+
+### Claimed first Coder invocation admission
+
+`RecoverySeedService.seed()` keeps its full sealed-Task rebuild before touching
+the target worktree. After a seed receipt exists, `authorize()` still checks
+the exact Coder request, Context, clean/seeded target capture, absence of an
+earlier invocation and the current Worker claim under `write_scope`. For the
+same standard store and sealing/builder methods, its final pre-publication
+gate reads the sealed Task record and verifies exact plan/approval binding,
+matches the committed dispatch Task/request/record SHA, performs one complete
+fresh native source/capture observation, then rereads the sealed record. The
+native inspection itself preserves its two observations around capture; the
+seed receipt does not grant source freshness. A custom sealing method or a
+different injected store retains the original full `require_current` rebuild.
+
+This avoids a second deterministic Task derivation at the claimed invocation
+boundary: the offline role-admission regression changes from eight fact
+observations and two capture checks to four facts and one complete capture
+check, while retaining the same lease and at-most-once publication
+checks. Stored-record tamper, changed source and custom-gate tests must leave
+the invocation absent. No new stored field or SQL migration is needed; publish
+at an idle boundary, with rollback restoring the slower full rebuild.
+
 ## Public wait settlement and recovery operation boundary
 
 `TeamHost.handle_delivery_wait` returns the durable `BUDGET_EXHAUSTED` handling

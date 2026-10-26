@@ -1,6 +1,6 @@
 """Concrete read-only recovery gate against native source and current target facts."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -110,6 +110,41 @@ class NativeRecoveryFactsVerifier:
             if first != self._inspect(plan):
                 raise ValueError("recovery facts changed during inspection")
             return first
+        except Exception as error:
+            raise RecoveryRejected(
+                "current recovery source or target facts do not match"
+            ) from error
+
+    @source_inspection_scope()
+    @recovery_record_read_scope()
+    def inspect_around_capture(
+        self, plan: RecoveryPlan, verify_capture: Callable[[], None]
+    ) -> NativeRecoveryFacts:
+        """Observe a settled UNKNOWN source on both sides of exact capture validation.
+
+        Each `_inspect` independently checks the complete stopped source, target,
+        current mutation inventory and retained draft. The caller invokes this
+        only for the standard native verifier, within one synchronous gate.
+        """
+        try:
+            plan.validate_integrity()
+            plan.require_execution_supported()
+            if (
+                plan.source.stopped_unknown_settlement_sha256 is None
+                or not _uses_standard_native_inspection(self)
+            ):
+                raise ValueError("capture window requires standard stopped UNKNOWN inspection")
+            first = self._inspect(plan)
+        except Exception as error:
+            raise RecoveryRejected(
+                "current recovery source or target facts do not match"
+            ) from error
+        verify_capture()
+        try:
+            second = self._inspect(plan)
+            if first != second:
+                raise ValueError("recovery facts changed during capture verification")
+            return second
         except Exception as error:
             raise RecoveryRejected(
                 "current recovery source or target facts do not match"
@@ -382,13 +417,27 @@ class NativeRecoveryFactsVerifier:
 
 # Capture the original delegate before trusted composition can extend validation.
 _STANDARD_NATIVE_INSPECT = NativeRecoveryFactsVerifier._inspect
+_STANDARD_NATIVE_PUBLIC_INSPECT = NativeRecoveryFactsVerifier.inspect
+_STANDARD_NATIVE_CAPTURE_WINDOW = NativeRecoveryFactsVerifier.inspect_around_capture
 _STANDARD_NATIVE_VALIDATE = NativeRecoveryFactsVerifier.validate
 
 
 def _uses_standard_native_inspection(verifier: NativeRecoveryFactsVerifier) -> bool:
     inspect = verifier._inspect
+    public_inspect = verifier.inspect
     return bool(
         type(verifier) is NativeRecoveryFactsVerifier
         and getattr(inspect, "__self__", None) is verifier
         and getattr(inspect, "__func__", None) is _STANDARD_NATIVE_INSPECT
+        and getattr(public_inspect, "__self__", None) is verifier
+        and getattr(public_inspect, "__func__", None) is _STANDARD_NATIVE_PUBLIC_INSPECT
+    )
+
+
+def _uses_standard_native_capture_window(verifier: NativeRecoveryFactsVerifier) -> bool:
+    window = verifier.inspect_around_capture
+    return bool(
+        _uses_standard_native_inspection(verifier)
+        and getattr(window, "__self__", None) is verifier
+        and getattr(window, "__func__", None) is _STANDARD_NATIVE_CAPTURE_WINDOW
     )
