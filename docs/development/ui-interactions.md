@@ -109,6 +109,10 @@ NODE_PATH=/tmp/ase-ui-test-deps/node_modules node --test tests/team_view/browser
 有 Playwright 自带浏览器的 CI 可使用 `ASE_UI_BROWSER_CHANNEL=chromium`。浏览器启动受限时应申请
 测试进程权限，不能把跳过测试当作验证通过。仅检查 DOM hidden 属性不足以证明遮罩真正关闭。
 
+本机日常浏览器可正常使用，并不能证明受限无头测试进程有启动权限。需要离线
+Chromium 合成验证时，可按 [`tools/browser-verifier-image/README.md`](../../tools/browser-verifier-image/README.md)
+构建固定镜像并运行隔离探针；镜像与探针只验证环境边界，不构成实际需求的 QA/Review 验收。
+
 
 ## 工程规范与历史证据
 

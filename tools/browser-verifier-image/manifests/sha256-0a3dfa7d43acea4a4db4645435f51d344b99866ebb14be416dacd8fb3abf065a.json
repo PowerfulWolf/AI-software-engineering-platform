@@ -1,0 +1,13 @@
+{
+  "architecture": "arm64",
+  "base_image_id": "sha256:68456172e8d99f42cf391e835f5d566b3ab0a2c6a745decd9590c4d73c54d2fb",
+  "base_ref": "mcr.microsoft.com/playwright@sha256:68456172e8d99f42cf391e835f5d566b3ab0a2c6a745decd9590c4d73c54d2fb",
+  "dockerfile_sha256": "fd4d7d230b21df3e327d991199edcf2e30da2f3552a98f8e52a0017b0afa3907",
+  "image_id": "sha256:0a3dfa7d43acea4a4db4645435f51d344b99866ebb14be416dacd8fb3abf065a",
+  "manifest_sha256": "002aaa110ca491ac64edf729c88e950affd95fc609fdd7aa5e5b40e4922cce17",
+  "playwright_core_sha256": "90c8b6b19da0a1b1e9a004cd6ff3e49e82668a0856e01efcc0e2d9c2b4466bb6",
+  "playwright_sha256": "55cf2db31a1d9037b050ac272bec7a824c3c9ed3ef75a6e26d6e9e89d104f155",
+  "schema_version": "offline-browser-image-v1",
+  "seccomp_sha256": "65256f6a59c1f7bf76bd6eb0da3f26572e1101bbbae69ec4751668a810816949",
+  "tag": "ase-browser-verifier:offline-1.64.0"
+}
