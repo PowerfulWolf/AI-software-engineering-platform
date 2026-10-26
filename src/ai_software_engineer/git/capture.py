@@ -11,6 +11,10 @@ from pathlib import Path
 from ai_software_engineer.git.ports import WorktreeRef
 
 MAX_CAPTURE_BYTES = 1_000_000
+# Recovery re-verifies both historical and normal captures, including after
+# seeding. Their aggregate current-file observation must use the same bound.
+# Every individual file and reusable patch retains the 1 MB bound above.
+MAX_CAPTURE_CONTENT_BYTES = 2_000_000
 MAX_CAPTURE_FILES = 256
 
 

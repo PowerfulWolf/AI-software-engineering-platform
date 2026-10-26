@@ -22,6 +22,7 @@ from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.git.capture import (
     MAX_CAPTURE_BYTES,
+    MAX_CAPTURE_CONTENT_BYTES,
     MAX_CAPTURE_FILES,
     WorktreeChangeCapture,
     read_capture_file,
@@ -819,7 +820,7 @@ class GitWorktreeManager:
                 # small edit to a large tracked text file fail even when both the
                 # resulting snapshot and generated patch were within their limits.
                 total_bytes += len(content)
-                if total_bytes > MAX_CAPTURE_BYTES:
+                if total_bytes > MAX_CAPTURE_CONTENT_BYTES:
                     raise WorktreeCaptureRejected("capture content exceeds byte limit")
             except (OSError, UnicodeError, ValueError) as error:
                 raise WorktreeCaptureRejected("capture cannot read a regular UTF-8 file") from error
@@ -835,7 +836,7 @@ class GitWorktreeManager:
                     root, path, executable=bool(candidate.lstat().st_mode & 0o100)
                 )
                 total_bytes += len(content)
-                if total_bytes > MAX_CAPTURE_BYTES:
+                if total_bytes > MAX_CAPTURE_CONTENT_BYTES:
                     raise WorktreeCaptureRejected("capture content exceeds byte limit")
             except (OSError, UnicodeError, ValueError) as error:
                 raise WorktreeCaptureRejected("capture cannot read a regular UTF-8 file") from error

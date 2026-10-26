@@ -80,6 +80,42 @@ Run MySQL test groups serially against an identity-checked dedicated test databa
 The current normal legacy recovery capture supports regular modifications/additions; deletion
 and mode-change drafts remain sealed but are refused by this successor path. No new unsupported
 capture behavior is inferred from a complete stopped mutation inventory.
+Both historical and ordinary recovery capture may span at most 2,000,000 bytes
+of changed current file bodies, because seed verification and target observation
+reuse the ordinary path. The 1,000,000-byte per-file and patch bounds remain;
+see `delivery-recovery.md`. A previously settled UNKNOWN Task
+whose larger draft was rejected during proposal generation remains settled.
+After an idle release, use a new public recovery proposal/approval against the
+same Requirement; neither replaying the old handling nor extending its budget
+is required.
+
+## Public wait settlement and recovery operation boundary
+
+`TeamHost.handle_delivery_wait` returns the durable `BUDGET_EXHAUSTED` handling
+after the stopped UNKNOWN Task and queue have been settled. It must not call
+`_resume_delivery_once` to propose a successor in that same Console Operation:
+proposal failure would otherwise mark the successful settlement as a failed
+HANDLE operation. `TeamHost.resume_delivery` may automatically handle one
+engineering wait, but only a `RESOLVED` handling permits a second continuation
+in that call. A budget settlement leaves the original continuation result for
+the caller to refresh from durable Requirement/Task facts; the next public
+Continue prepares the separately approvable recovery plan. Exact replay of an
+already sealed settlement remains idempotent and does not retry the proposal.
+
+| Durable handling | `TeamHost.handle_delivery_wait` | `TeamHost.resume_delivery` |
+| --- | --- | --- |
+| `RESOLVED` | Return handling after one continuation | Continue a second time after the handled wait |
+| `BUDGET_EXHAUSTED` (including exact replay) | Return sealed handling without proposing recovery | Return the first continuation result; require a new public Continue for the plan |
+| Still waiting | Return current handling | Return the first continuation result |
+
+`tests/manager/test_team_host.py` asserts both budget paths never invoke the
+second continuation and keeps the `RESOLVED` one-time path. The existing
+`operation_6b17db82053bcc55cca1680c14fb1927` failure remains historical;
+this code does not rewrite its status, Task or approval. A new public Continue
+uses the current Requirement checkpoint and exposes a separately reviewable
+plan. Rollback at an idle boundary restores the old coupling and may again
+misreport a settled handling if proposal generation fails; it cannot undo the
+sealed settlement.
 
 ## Read-side reference publication and legacy exact replay
 

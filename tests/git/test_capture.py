@@ -19,6 +19,7 @@ from ai_software_engineer.git import (
 )
 from ai_software_engineer.git.capture import (
     MAX_CAPTURE_BYTES,
+    MAX_CAPTURE_CONTENT_BYTES,
     WorktreeChangeCapture,
     read_capture_file,
 )
@@ -208,6 +209,87 @@ def test_capture_does_not_double_count_the_committed_base_blob(tmp_path: Path) -
 
     assert capture.changed_paths == ("src/large.txt",)
     assert len(capture.patch) < MAX_CAPTURE_BYTES
+
+
+@pytest.mark.parametrize(
+    ("sizes", "allowed"),
+    [
+        ((600_000, 600_000, 400_000), True),
+        ((800_000, 800_000, 400_001), False),
+    ],
+)
+def test_capture_and_seed_share_bounded_aggregate_content_limit(
+    tmp_path: Path, sizes: tuple[int, int, int], allowed: bool
+) -> None:
+    assert sum(sizes) == (1_600_000 if allowed else MAX_CAPTURE_CONTENT_BYTES + 1)
+    repo = tmp_path / "large-legacy-repo"
+    repo.mkdir()
+    git(repo, "init", "--initial-branch=main")
+    git(repo, "config", "user.name", "Fixture")
+    git(repo, "config", "user.email", "fixture@example.invalid")
+    (repo / "src").mkdir()
+    for index, size in enumerate(sizes):
+        (repo / "src" / f"large-{index}.txt").write_bytes(b"x\n" * (size // 2) + b"x" * (size % 2))
+    git(repo, "add", "src")
+    git(repo, "commit", "-m", "base")
+    manager = GitWorktreeManager(repo, tmp_path / "large-legacy-roles")
+    ref = manager.create(
+        WorktreeSpec(
+            task_id="task_capture_large_legacy",
+            role=AgentRole.CODER,
+            attempt=1,
+            source_revision=git(repo, "rev-parse", "HEAD"),
+        )
+    )
+    permissions = AgentPermissions(
+        read_paths=("src/**",),
+        write_paths=("src/**",),
+        commands=(),
+        network=NetworkAccess.NONE,
+    )
+    for index in range(len(sizes)):
+        source = ref.path / "src" / f"large-{index}.txt"
+        with source.open("r+b") as stream:
+            stream.write(b"y\n")
+
+    if not allowed:
+        with pytest.raises(WorktreeCaptureRejected, match="capture content exceeds byte limit"):
+            manager.capture_changes(ref, permissions)
+        with pytest.raises(WorktreeCaptureRejected, match="capture content exceeds byte limit"):
+            manager.capture_legacy_changes(ref, permissions)
+        return
+
+    ordinary = manager.capture_changes(ref, permissions)
+    manager.verify_capture(ordinary, permissions)
+    historical = manager.capture_legacy_changes(ref, permissions)
+    assert ordinary == historical
+    assert len(historical.file_sha256s) == 3
+    assert len(historical.patch) < MAX_CAPTURE_BYTES
+    manager.verify_legacy_capture(historical, permissions)
+    target = manager.create(
+        WorktreeSpec(
+            task_id="task_capture_large_successor",
+            role=AgentRole.CODER,
+            attempt=1,
+            source_revision=ref.head_revision,
+        )
+    )
+    seeded = manager.seed_changes(historical, target, permissions, permissions)
+    assert seeded.changed_paths == historical.changed_paths
+    manager.verify_capture(seeded, permissions)
+    for index in range(len(sizes)):
+        assert (target.path / "src" / f"large-{index}.txt").read_bytes() == (
+            ref.path / "src" / f"large-{index}.txt"
+        ).read_bytes()
+
+
+def test_legacy_capture_keeps_the_single_file_limit(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
+) -> None:
+    manager, ref, permissions = workspace
+    (ref.path / "src/app.py").write_bytes(b"x" * (MAX_CAPTURE_BYTES + 1))
+    with pytest.raises(WorktreeCaptureRejected, match="capture cannot read a regular UTF-8 file"):
+        manager.capture_legacy_changes(ref, permissions)
 
 
 @pytest.mark.parametrize("change", ["binary", "encoding", "symlink", "large", "secret"])

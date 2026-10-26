@@ -387,6 +387,39 @@ def test_resume_delivery_does_not_recurse_when_handling_stays_waiting(
     assert captured == [command]
 
 
+def test_resume_delivery_does_not_reenter_after_budget_settlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host, checkpoint, command, captured = _wait_host_fixture(monkeypatch)
+    resume_calls: list[ResumeProjectDelivery] = []
+    first_result = SimpleNamespace(checkpoint=checkpoint)
+
+    def resume_once(
+        current: ResumeProjectDelivery, *, project_id: str | None = None
+    ) -> SimpleNamespace:
+        del project_id
+        resume_calls.append(current)
+        if len(resume_calls) > 1:
+            raise RuntimeError("recovery proposal is a separate public operation")
+        return first_result
+
+    class SettledService:
+        def handle(self, current: HandleDeliveryWait) -> SimpleNamespace:
+            captured.append(current)
+            return SimpleNamespace(status="BUDGET_EXHAUSTED", budget_settlement_sha256="a" * 64)
+
+    host._resume_delivery_once = resume_once
+    host._delivery_wait_service = lambda current, **kwargs: SettledService()
+
+    result = host.resume_delivery(
+        ResumeProjectDelivery(delivery_id=checkpoint.delivery_id), project_id="project_alpha"
+    )
+
+    assert result is first_result
+    assert len(resume_calls) == 1
+    assert captured == [command]
+
+
 def test_resume_delivery_does_not_handle_non_delivering_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -481,6 +514,33 @@ def test_explicit_handle_delivery_wait_resumes_exactly_once_after_resolution(
     assert resume_calls[0].delivery_id == checkpoint.delivery_id
     assert service_bindings[0]["project_id"] == "project_alpha"
     assert service_bindings[0]["delivery_id"] == checkpoint.delivery_id
+
+
+def test_explicit_budget_settlement_returns_success_without_starting_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host, checkpoint, command, captured = _wait_host_fixture(monkeypatch)
+    settled = SimpleNamespace(status="BUDGET_EXHAUSTED", budget_settlement_sha256="a" * 64)
+
+    class SettledService:
+        def handle(self, current: HandleDeliveryWait) -> SimpleNamespace:
+            captured.append(current)
+            return settled
+
+    host._delivery_wait_service = lambda current, **kwargs: SettledService()
+
+    def unexpected_resume(current: ResumeProjectDelivery, *, project_id: str | None = None) -> None:
+        raise RuntimeError("recovery proposal is a separate public operation")
+
+    host._resume_delivery_once = unexpected_resume
+
+    assert (
+        host.handle_delivery_wait(
+            command, project_id="project_alpha", delivery_id=checkpoint.delivery_id
+        )
+        is settled
+    )
+    assert captured == [command]
 
 
 def test_joint_wait_service_binds_continuation_to_native_child_and_exact_dispatch(

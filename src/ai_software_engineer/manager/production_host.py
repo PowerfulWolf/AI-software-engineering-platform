@@ -315,7 +315,7 @@ class TeamHost:
                     delivery_id=delivery_id,
                     repository=repository,
                 ).handle(command)
-                return result.status == "RESOLVED" or result.budget_settlement_sha256 is not None
+                return result.status == "RESOLVED"
         return False
 
     def _resume_delivery_once(
@@ -531,7 +531,7 @@ class TeamHost:
                 delivery_id=delivery_id,
                 repository=repository,
             ).handle(command)
-        if handling.status == "RESOLVED" or handling.budget_settlement_sha256 is not None:
+        if handling.status == "RESOLVED":
             self._resume_delivery_once(
                 ResumeProjectDelivery(delivery_id=delivery_id), project_id=project_id
             )

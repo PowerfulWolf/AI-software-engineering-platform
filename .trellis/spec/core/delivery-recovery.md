@@ -1,5 +1,34 @@
 # Explicit delivery recovery — T044
 
+## Bounded Coder capture across several tracked files (2026-10-26)
+
+`GitWorktreeManager.capture_changes()` and `capture_legacy_changes()` both allow
+the **sum of changed current file contents** to reach 2,000,000 bytes. Recovery
+reuses a historical capture in `seed_changes()`, which calls ordinary
+`verify_capture()` three times and observes the seeded target with ordinary
+`capture_changes()`; differing aggregate bounds would reject a draft only after
+its exact plan was approved. Both paths retain double observation, exact
+worktree ownership, path policy, UTF-8, secret scan, index, base revision and
+drift checks. Each file read by `read_capture_file()` and each generated
+patch/staged diff remain limited to 1,000,000 bytes; file count remains at most
+256. The larger aggregate is a bounded read-only fact bound by
+`capture_sha256`, not a candidate, permission grant or reason to reuse old
+approvals.
+
+| Observed source | Normal capture | Historical capture |
+| --- | --- | --- |
+| Three changed regular tracked files totaling 1.6 MB; bounded patch | Capture, verify and seed on a clean successor | Capture twice and reverify exact bytes |
+| Changed current contents total 2,000,001 bytes | Reject | Reject before returning a capture |
+| Any one file or patch exceeds 1 MB; binary, secret or path violation | Reject | Reject |
+
+`tests/git/test_capture.py` runs these cases with real Git worktrees. Existing
+Requirement/Task/operation/approval facts need no migration. For an affected
+stopped-UNKNOWN Requirement, deploy only at a safe idle boundary, inspect the
+current public state, then request a fresh public recovery proposal and approve
+its exact new scope/plan; never rewrite the failed operation or old Task.
+Rollback restores the former 1 MB aggregate limit in both paths, which may
+again refuse a large preserved draft but cannot silently accept it.
+
 ## Complete chained reapply inputs (2026-10-19)
 
 See [inherited-reapply-inputs.md](inherited-reapply-inputs.md). A new current draft capture
