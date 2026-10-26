@@ -9,6 +9,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import TypeAdapter
 from pymysql.cursors import DictCursor
@@ -105,6 +106,9 @@ from ai_software_engineer.store.mysql_repository import (
 )
 from ai_software_engineer.team_workspace import TeamWorkspace, _read_regular, _reject_symlinks
 
+if TYPE_CHECKING:
+    from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
+
 
 @dataclass(frozen=True)
 class NativeRecoverySource:
@@ -122,6 +126,9 @@ class NativeRecoverySource:
     accepted_progress: CoderProgressArtifact | None = None
     capacity_receipt: ContextCapacityReceipt | None = None
     capacity_input: ContextCapacityRecoveryInput | None = None
+    # Supplied only by the dedicated stopped-unknown settlement reader.  It is
+    # an immutable capture of the real old worktree, never an Agent result.
+    stopped_unknown_capture: CapturedMutations | None = None
 
 
 def _is_recoverable_terminal_coder_route(

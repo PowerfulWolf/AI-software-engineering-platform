@@ -780,6 +780,9 @@ class TeamHost:
         from ai_software_engineer.manager.stopped_budget_settlement import (
             StoppedBudgetSettlementService,
         )
+        from ai_software_engineer.manager.stopped_unknown_budget import (
+            StoppedUnknownBudgetSettlementService,
+        )
         from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCollector
 
         runtime = self._runtime(project_id)
@@ -886,6 +889,16 @@ class TeamHost:
                 records=KnowledgeRecordStore(workspace.directory("state") / "delivery-waits"),
                 collector=collector,
                 git=git,
+                clock=lambda: datetime.now(UTC),
+                idle_scope=lambda: self._work_queue.idle_task_scope(task.id),
+            ),
+            unknown_budget_settlement=StoppedUnknownBudgetSettlementService(
+                repository=repository,
+                queue=self._work_queue,
+                records=KnowledgeRecordStore(workspace.directory("state") / "delivery-preflight"),
+                collector=collector,
+                git=git,
+                artifacts=FileArtifactStore(workspace.directory("artifacts"), read_only=True),
                 clock=lambda: datetime.now(UTC),
                 idle_scope=lambda: self._work_queue.idle_task_scope(task.id),
             ),

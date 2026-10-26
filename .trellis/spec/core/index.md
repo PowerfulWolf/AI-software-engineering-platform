@@ -38,6 +38,9 @@
 
 ## Files
 
+- [Stopped UNKNOWN budget recovery](stopped-unknown-budget-recovery.md): exact exhausted
+  execution settlement, preserved UNKNOWN history and same-Requirement approved successor.
+
 - [`rejected-candidate-owner-expiry.md`](rejected-candidate-owner-expiry.md): exact stopped
   unsupported-report owner settlement, renewed expiry, held Task lock and physical cleanup.
 

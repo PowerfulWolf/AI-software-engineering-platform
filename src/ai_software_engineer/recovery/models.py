@@ -10,6 +10,7 @@ from typing import Annotated, Literal, Self
 from pydantic import (
     AfterValidator,
     AwareDatetime,
+    ConfigDict,
     Field,
     StrictBool,
     StrictInt,
@@ -18,7 +19,7 @@ from pydantic import (
 )
 
 from ai_software_engineer.domain import AgentPermissions, AgentRole
-from ai_software_engineer.domain.artifact import ArtifactId
+from ai_software_engineer.domain.artifact import ArtifactId, Sha256
 from ai_software_engineer.domain.branch import BranchName
 from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
 from ai_software_engineer.domain.engineering_authority import (
@@ -222,6 +223,26 @@ class RecoveryScope(DomainModel):
 class RecoverySource(DomainModel):
     """Exact references; a trusted facts port must resolve and verify their origin."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "required": ["stopped_unknown_settlement_sha256"],
+                        "properties": {"stopped_unknown_settlement_sha256": {"type": "string"}},
+                    },
+                    "then": {
+                        "required": ["failed_run_id"],
+                        "properties": {
+                            "failed_run_id": {"type": "string"},
+                            "context_capacity_receipt_sha256": {"type": "null"},
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
     scope: RecoveryScope
     task_id: TaskId
     task_status: Literal["BLOCKED"] = "BLOCKED"
@@ -249,6 +270,13 @@ class RecoverySource(DomainModel):
     context_capacity_receipt_sha256: StageSha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    # A sealed administrative settlement for a real native Coder invocation
+    # whose durable outcome is unknown.  This is deliberately separate from
+    # the capacity receipt: the original Run remains real and is re-read by a
+    # dedicated source reader.
+    stopped_unknown_settlement_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     parent_delivery_id: DeliveryId | None = None
     parent_checkpoint_sha256: StageSha256 | None = None
 
@@ -267,6 +295,11 @@ class RecoverySource(DomainModel):
             and self.execution_baseline_sha256 is None
         ):
             raise ValueError("legacy capacity observation requires the exact retained baseline")
+        if self.stopped_unknown_settlement_sha256 is not None:
+            if self.failed_run_id is None:
+                raise ValueError("stopped unknown settlement requires its real original Run")
+            if self.context_capacity_receipt_sha256 is not None:
+                raise ValueError("stopped unknown settlement cannot be combined with capacity")
         return self
 
     @property
@@ -507,6 +540,36 @@ class InheritedReapplyInput(DomainModel):
 
 
 class RecoveryPlan(DomainModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "required": ["source"],
+                        "properties": {
+                            "source": {
+                                "required": ["stopped_unknown_settlement_sha256"],
+                                "properties": {
+                                    "stopped_unknown_settlement_sha256": {"type": "string"}
+                                },
+                            }
+                        },
+                    },
+                    "then": {
+                        "required": ["input_mode"],
+                        "properties": {
+                            "input_mode": {"const": "coder_reapply"},
+                            "context_capacity_input": {"type": "null"},
+                            "workspace_snapshot": {"type": "null"},
+                            "scope_supplement": {"type": "null"},
+                            "quarantined_paths": {"type": "null"},
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
     kind: Literal["recovery_plan"] = "recovery_plan"
     schema_version: Literal["v0.1"] = "v0.1"
     # None is omitted from wire/digest, preserving historical strict-seed approvals.
@@ -585,6 +648,18 @@ class RecoveryPlan(DomainModel):
             or self.quarantined_paths is not None
         ):
             raise ValueError("capacity recovery requires a clean exact baseline reapplication")
+        return self
+
+    @model_validator(mode="after")
+    def validate_stopped_unknown(self) -> Self:
+        if self.source.stopped_unknown_settlement_sha256 is not None and (
+            self.input_mode != "coder_reapply"
+            or self.context_capacity_input is not None
+            or self.workspace_snapshot is not None
+            or self.scope_supplement is not None
+            or self.quarantined_paths is not None
+        ):
+            raise ValueError("stopped unknown recovery requires its complete exact reapply input")
         return self
 
     @model_validator(mode="after")

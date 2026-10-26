@@ -183,7 +183,10 @@ def _owners(payload: WirePayload) -> set[str]:
             task_id = capture.get("task_id")
             if isinstance(task_id, str):
                 result.add(task_id)
-    if record.get("kind") == "stopped_failure_budget_settlement":
+    if record.get("kind") in {
+        "stopped_failure_budget_settlement",
+        "stopped_unknown_budget_settlement",
+    }:
         task = record.get("task")
         task_id = task.get("id") if isinstance(task, dict) else None
         if isinstance(task_id, str):

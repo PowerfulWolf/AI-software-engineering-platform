@@ -104,6 +104,9 @@ from ai_software_engineer.manager.rejected_workspace_admission import (
     rejected_workspace_admission_evidence,
 )
 from ai_software_engineer.manager.stopped_budget_settlement import StoppedBudgetSettlementService
+from ai_software_engineer.manager.stopped_unknown_budget import (
+    StoppedUnknownBudgetSettlementService,
+)
 from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationCheckpoint,
     VerifierPreparationIntent,
@@ -268,6 +271,7 @@ class DeliveryWaitService:
         knowledge_retry: Callable[[str], KnowledgePreparationRetryEvidence | None] | None = None,
         clock: Callable[[], datetime] | None = None,
         budget_settlement: StoppedBudgetSettlementService | None = None,
+        unknown_budget_settlement: StoppedUnknownBudgetSettlementService | None = None,
     ) -> None:
         self.repository, self.queue, self.sidecar_state = repository, queue, sidecar_state
         self.scope = scope
@@ -282,6 +286,7 @@ class DeliveryWaitService:
         )
         self.clock = clock or (lambda: datetime.now(UTC))
         self.budget_settlement = budget_settlement
+        self.unknown_budget_settlement = unknown_budget_settlement
         self.records = KnowledgeRecordStore(sidecar_state / "delivery-waits")
 
     def inspect(self, command: InspectDeliveryWait) -> DeliveryWaitInvestigation:
@@ -307,15 +312,17 @@ class DeliveryWaitService:
     def handle(self, command: HandleDeliveryWait) -> DeliveryWaitHandling:
         """Collect once and use frozen policy; requesting handling adds no authority."""
         self._reject_baseline_pause(command.work_item_id)
-        if self.budget_settlement is not None:
+        if self.budget_settlement is not None or self.unknown_budget_settlement is not None:
             replay_guard = WorkerExecutionGuard()
             with replay_guard.task_scope(
                 self.sidecar_state / "queue-worker-locks",
                 self.queue.get(command.work_item_id).task_id,
             ):
-                replay = self.budget_settlement.replay(command, replay_guard)
-                if replay is not None:
-                    return replay
+                for service in (self.budget_settlement, self.unknown_budget_settlement):
+                    if service is not None:
+                        replay = service.replay(command, replay_guard)
+                        if replay is not None:
+                            return replay
         binding_key = digest(
             command.model_dump(mode="json", include=set(InspectDeliveryWait.model_fields))
         )
@@ -398,6 +405,20 @@ class DeliveryWaitService:
                 workspace_refusal = self._workspace_admission_evidence(
                     item, step, task, start, outcome, self._receipt(task, start)
                 )
+                # Exhausted UNKNOWN work has no interruption receipt. Its separate
+                # exact stop/absence/capture verifier must run before ordinary
+                # reconciliation, which correctly rejects unknown causes/output.
+                if (
+                    self.unknown_budget_settlement is not None
+                    and outcome is None
+                    and start is not None
+                ):
+                    unknown_proof = self._collect(item, step, task, guard=guard)
+                    unknown_settled = self.unknown_budget_settlement.try_settle(
+                        command, task, item, step, unknown_proof, guard
+                    )
+                    if unknown_settled is not None:
+                        return unknown_settled
                 if self.fact_collector is not None and workspace_refusal is None:
                     try:
                         self.fact_collector(task, step, guard)

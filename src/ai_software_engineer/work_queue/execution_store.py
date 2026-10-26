@@ -67,6 +67,7 @@ from ai_software_engineer.work_queue.ports import (
 
 if TYPE_CHECKING:
     from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
+    from ai_software_engineer.domain.stopped_unknown_budget import StoppedUnknownBudgetSettlement
     from ai_software_engineer.manager.baseline_models import BaselineContinueAuthorization
     from ai_software_engineer.manager.rejected_candidate_output import RejectedCandidateOutputProof
     from ai_software_engineer.manager.rejected_candidate_owner import (
@@ -446,10 +447,16 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
         )
 
     def settle_stopped_budget(
-        self, cursor: DictCursor, settlement: StoppedFailureBudgetSettlement
+        self,
+        cursor: DictCursor,
+        settlement: StoppedFailureBudgetSettlement | StoppedUnknownBudgetSettlement,
+        *,
+        validate_current: Callable[[], None] | None = None,
     ) -> None:
         """Append Task/event/queue together inside the caller's idle authority fence."""
         settlement.validate_integrity()
+        if settlement.kind == "stopped_unknown_budget_settlement" and validate_current is None:
+            raise QueueConflict("未知结果额度收尾缺少最终原执行核验")
         task, proof, event = settlement.task, settlement.investigation, settlement.event
         self._lock_authority(cursor)
         cursor.execute(
@@ -503,6 +510,8 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             for publication in accepted
         ):
             raise QueueConflict("原失败调用之后已有接纳产物, 暂不能额度收尾")
+        if validate_current is not None:
+            validate_current()
         if previous_event is not None:
             cursor.execute(
                 "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "

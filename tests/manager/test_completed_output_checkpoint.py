@@ -180,6 +180,7 @@ def completed(
             "exhausted",
             "stopped_provider_exhausted",
             "stopped_unknown_exhausted",
+            "stopped_unknown_completed_exhausted",
             "stopped_failure_exhausted",
         }
         else 5,
@@ -255,7 +256,14 @@ def completed(
         if not (stopped_provider or stopped_failure):
             (native.worktree.path / "src/app.py").write_text("VALUE = 2\n")
         session_proof = None
-        if stopped_unknown:
+        if variant == "stopped_unknown_completed_exhausted":
+            process = subprocess.Popen(
+                (sys.executable, "-c", "import time; time.sleep(0.1)"), start_new_session=True
+            )
+            controller = OwnedSessionController(process)
+            returncode = process.wait(timeout=5)
+            session_proof = controller.require_empty()
+        elif stopped_unknown:
             process = subprocess.Popen(
                 (sys.executable, "-c", "import time; time.sleep(60)"), start_new_session=True
             )
@@ -297,7 +305,9 @@ def completed(
             group_id=process.pid,
             returncode=returncode,
             kind="failed"
-            if stopped_provider or stopped_failure or stopped_unknown
+            if stopped_provider
+            or stopped_failure
+            or (stopped_unknown and variant != "stopped_unknown_completed_exhausted")
             else "completed",
             stopped_at=datetime.now(UTC)
             if stopped_unknown or stopped_failure
@@ -310,7 +320,7 @@ def completed(
             process_stop=stop,
             output_present=not stopped_provider
             and not stopped_failure
-            and not stopped_unknown
+            and (not stopped_unknown or variant == "stopped_unknown_completed_exhausted")
             and variant != "output_absent",
             cause=None,
             original_error_code=AgentErrorCode.AUTHENTICATION_ERROR
@@ -318,7 +328,7 @@ def completed(
             else AgentErrorCode.PROVIDER_UNAVAILABLE
             if stopped_failure
             else AgentErrorCode.PROVIDER_ERROR
-            if stopped_unknown
+            if stopped_unknown and variant != "stopped_unknown_completed_exhausted"
             else None,
         )
         capture_start = native.store.capture_start(native.request.run_id)

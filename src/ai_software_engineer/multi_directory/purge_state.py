@@ -30,6 +30,7 @@ def verified_state_record(
     )
     from ai_software_engineer.domain.engineering_authority import EngineeringAdmission
     from ai_software_engineer.domain.stopped_budget_settlement import StoppedFailureBudgetSettlement
+    from ai_software_engineer.domain.stopped_unknown_budget import StoppedUnknownBudgetSettlement
     from ai_software_engineer.manager.context_capacity import ContextCapacityReceipt
     from ai_software_engineer.manager.delivery_preflight import (
         DeliveryPreflightCheckpoint,
@@ -45,6 +46,9 @@ def verified_state_record(
         "stopped-budget-handlings": DeliveryWaitHandling,
         "stopped-budget-captures": CapturedMutations,
         "stopped-budget-settlements": StoppedFailureBudgetSettlement,
+        "stopped-unknown-budget-handlings": DeliveryWaitHandling,
+        "stopped-unknown-budget-captures": CapturedMutations,
+        "stopped-unknown-budget-settlements": StoppedUnknownBudgetSettlement,
         "wait-investigations": DeliveryWaitInvestigation,
         "wait-handling-proofs": DeliveryWaitInvestigation,
         "wait-resolutions": DeliveryResolution,
@@ -150,7 +154,7 @@ def verified_state_record(
         keys.add(record.checkpoint_sha256)
     elif isinstance(record, CapturedMutations):
         keys.add(record.capture_sha256)
-    elif isinstance(record, StoppedFailureBudgetSettlement):
+    elif isinstance(record, StoppedFailureBudgetSettlement | StoppedUnknownBudgetSettlement):
         keys.add(record.settlement_sha256)
     elif isinstance(record, EngineeringAdmission):
         keys.add(record.plan_sha256)

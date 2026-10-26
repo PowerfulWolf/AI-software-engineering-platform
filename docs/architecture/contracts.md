@@ -1258,3 +1258,22 @@ There is no prerequisite-repair assertion, transient refund or old result rewrit
 claim/route/raw-output/receipt and complete lawful pre-existing draft are rechecked at consumption.
 Exact signatures, negative matrix, schema/browser/native-MySQL tests and storage/rollback handling:
 [stopped-failure-retry](../../.trellis/spec/core/stopped-failure-retry.md).
+
+
+### Exhausted stopped invocation with UNKNOWN outcome (2026-10-26)
+
+`StoppedUnknownBudgetSettlement` is an independent v1 immutable contract, separate from a
+failed outcome settlement and a capacity/no-start receipt. It binds the original IMPLEMENTING
+Task snapshot, exact wait investigation/WorkItem/step, real v1/v2 StoppedCoderExecutionProof,
+full retained capture/inventory SHA and one budget-exhaustion BLOCKED event. The Task lock and
+MySQL authority fence atomically append the event and close the unique waiting item, retaining
+UNKNOWN outcome, original counters/policy and all draft bytes. No model outcome, candidate,
+verdict or transient refund is inferred from a completed native process or existing output file.
+
+The new optional `RecoverySource.stopped_unknown_settlement_sha256` selects a dedicated source
+reader. It rechecks the pre-terminal stop proof against its original Task snapshot and verifies
+the current Task is exactly the reducer result of the sealed terminal event. Ordinary failed-route
+recovery still requires a real terminal Coder route. Exact same-Requirement RecoveryPlan approval
+grants a new successor budget, clean approved target base and complete Coder reapply input; old
+Task facts and ProductSpec are unchanged. See `.trellis/spec/core/stopped-unknown-budget-recovery.md`
+and `.trellis/tasks/10-26-stopped-unknown-budget-recovery/` for refusals, tests, storage and rollback.

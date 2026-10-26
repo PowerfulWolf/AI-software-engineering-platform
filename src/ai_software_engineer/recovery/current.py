@@ -38,6 +38,10 @@ from ai_software_engineer.recovery.scope import (
     expanded_recovery_permissions,
     inspect_recovery_scope_supplement,
 )
+from ai_software_engineer.recovery.stopped_unknown import (
+    StoppedUnknownRecoverySourceReader,
+    require_stopped_unknown_capture,
+)
 from ai_software_engineer.recovery.workspace_snapshot import (
     _terminal_workspace_window,
     read_terminal_workspace_snapshot,
@@ -113,6 +117,9 @@ class NativeRecoveryFactsVerifier:
     def _inspect(self, plan: RecoveryPlan) -> NativeRecoveryFacts:
         original = self._read_source(plan)
         target = self._target_preflight(plan, original)
+        if plan.source.stopped_unknown_settlement_sha256 is not None:
+            require_stopped_unknown_capture(original, plan.capture)
+            return self._target_facts(plan, target)
         if plan.context_capacity_input is not None:
             if original.capacity_input != plan.context_capacity_input:
                 raise ValueError("capacity recovery lost its complete retained patch")
@@ -168,7 +175,11 @@ class NativeRecoveryFactsVerifier:
     def _read_source(self, plan: RecoveryPlan) -> NativeRecoverySource:
         plan.require_execution_supported()
         source = plan.source
-        if source.context_capacity_receipt_sha256 is not None:
+        if source.stopped_unknown_settlement_sha256 is not None:
+            original = StoppedUnknownRecoverySourceReader(self._config, self._environment).inspect(
+                source.scope, source.stopped_unknown_settlement_sha256
+            )
+        elif source.context_capacity_receipt_sha256 is not None:
             original = LegacyContextCapacitySourceReader(self._config, self._environment).inspect(
                 source.scope, source.context_capacity_receipt_sha256
             )
