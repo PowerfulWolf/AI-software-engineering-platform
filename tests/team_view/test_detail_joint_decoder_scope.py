@@ -60,8 +60,7 @@ def test_detail_reuses_only_exact_byte_decode_and_keeps_both_complete_reads(
     }
     assert decode.call_count == len(paths), "unchanged final observation must reuse exact decoding"
     assert successor.call_count == len(paths)
-    assert copies.call_count == 2 * len(paths), "public history returns keep full defensive copies"
-    assert all(call.kwargs == {"deep": True} for call in copies.call_args_list)
+    assert copies.call_count == 0, "one Team detail only borrows privately verified models"
     assert len(observations) == 2, "complete histories must be observed independently"
     assert len(journals) == 1, "only the immutable decoder crosses observations"
     assert all(not journal._verified for journal in journals.values())

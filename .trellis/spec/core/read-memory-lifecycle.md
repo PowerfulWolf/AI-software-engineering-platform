@@ -249,6 +249,11 @@ GET /api/v1/team?project_id=project_<id>
 - Continue verifying every historical byte/hash/path, predecessor, ownership and current-scope
   distinction. Never truncate history, remove retired audit records, weaken validation or mutate
   durable delivery facts to reduce memory.
+- A single synchronous Team observation may borrow the journal's already validated private
+  checkpoint models for internal projection, avoiding a second deep copy of every historical
+  checkpoint. The public journal methods still deep-copy. No borrowed model may enter the
+  response, outlive the observation, or be retained through a completed exception traceback;
+  every later HTTP observation starts a new journal and verifies the complete bytes and chain.
 
 ## 4. Validation matrix
 

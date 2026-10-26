@@ -81,6 +81,46 @@ Public `history/current` keep defensive deep copies. Full/summary and later inde
 detail calls do not share this owner; no reader-instance/global/ContextVar cache is added.
 The existing 512-entry decoder bound is a record count, not a serialized-byte or RSS bound.
 
+### Snapshot-local verified history borrowing (2026-10-27)
+
+`JointJournal._borrow_verified_history(delivery_id: str) -> tuple[JointCheckpoint, ...]`
+exhausts the same complete `_validated_history` chain as public `history`, but returns the
+journal's private frozen models for inspection inside one synchronous Team observation.
+`_JointHistorySnapshot` is the only Team consumer. It stores each complete prefix once for
+retirement, ownership and display derivation; the returned `TeamSnapshot`, `TeamSummary` and
+`TeamDetail` contain newly projected views, never a borrowed `JointCheckpoint`. Neither a
+cross-request owner nor a cached verdict/permission is introduced. Public `history/current`
+continue making independent deep copies for ordinary callers.
+
+Every observation still enumerates every historical path, rejects symlinks, reads complete
+bytes, recomputes byte SHA, validates Schema/integrity and predecessor edges, and checks
+Team/Project/native ownership. The detail's second observation remains independent; its
+existing exact-byte decoder may only reuse unchanged bytes with the same predecessor byte
+identity. On any public read failure, clear completed traceback frame locals before wrapping
+or reraising the error, so a caller retaining the exception cannot retain the borrowed
+history. The detail owner additionally clears its decoder in `finally`.
+
+| Case | Required result |
+| --- | --- |
+| Multi-checkpoint full/summary/detail | Complete path/byte checks, identical projected wire, no per-record `JointCheckpoint.model_copy(deep=True)` |
+| Public `JointJournal.history/current` | Independent deep copies, including nested scope |
+| Ancestor mutation, missing/renamed/symlink record or changed predecessor | Same fail-closed rejection; no partial Team response |
+| Late native/SQL read error with retained `TeamReadError` | Private checkpoint weak references release after the exception leaves the worker |
+| Later HTTP/Project observation | New journal and complete fresh validation; no borrowed model survives |
+
+This changes only process-local read assembly. Existing journal, SQL, Task, Operation and
+approval bytes need no migration. Rollback restores public `history()` in the snapshot
+helper during an idle service restart; historical facts and decisions stay unchanged.
+
+Production measurement on 2026-10-27 found 140 joint checkpoints totaling 291 MB for two
+Requirements. A read-only profile attributed about 2.46 of 3.43 seconds in one summary read
+to complete joint-history verification. Same-data isolated runs of this change measured
+2.726→2.538, 2.710→2.476, and 2.503→2.508 seconds, with a 44–80 MB lower peak RSS.
+This bounded improvement does not resolve slow first-load refreshes: the full historical
+byte, Schema, digest and predecessor checks still run for every observation. A broader
+solution must preserve fresh audit validation and decision fences, and needs separate
+performance evidence before changing cross-request lifetime rules.
+
 Good: a record's decode/integrity/successor checks run once across unchanged observations,
 while original complete-byte reads run twice and typed output is identical. Base: empty
 history or evicted decoder entries still yield all records. Bad: a resealed ancestor with

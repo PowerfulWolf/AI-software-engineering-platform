@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from traceback import clear_frames
 from typing import Literal, TypedDict, cast
 
 from pydantic import Field
@@ -228,7 +229,8 @@ class _JointHistorySnapshot:
     Retirement validation, ownership and display counts consume the same prefix.
     The cache is private to one observation. A detail's next observation may reuse
     only the journal's exact-byte decoder; every byte, path and predecessor is
-    checked again. Callers only inspect these captured, publicly copied models.
+    checked again. Callers only inspect these private models during this read;
+    no JointCheckpoint is returned by the Team projection.
     """
 
     _journal: JointJournal
@@ -236,7 +238,7 @@ class _JointHistorySnapshot:
 
     def history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]:
         if delivery_id not in self._histories:
-            self._histories[delivery_id] = self._journal.history(delivery_id)
+            self._histories[delivery_id] = self._journal._borrow_verified_history(delivery_id)
         return self._histories[delivery_id]
 
     def current(self, delivery_id: str) -> JointCheckpoint | None:
@@ -403,6 +405,7 @@ class ProductionTeamReader:
                 return self._snapshot(project_id)
         except Exception as error:
             # Read failure must not become a successful empty team or expose a DSN/path secret.
+            clear_frames(error.__traceback__)
             raise TeamReadError(
                 "Team data unavailable; check configuration, MySQL and workspace integrity."
             ) from error
@@ -418,9 +421,11 @@ class ProductionTeamReader:
                 result = self._read_snapshot(project_id, summary_only=True)
                 assert isinstance(result, TeamSummary)
                 return result
-        except TeamDetailNotFound:
+        except TeamDetailNotFound as error:
+            clear_frames(error.__traceback__)
             raise
         except Exception as error:
+            clear_frames(error.__traceback__)
             raise TeamReadError("当前团队摘要暂时无法完整核验。") from error
 
     def detail(self, query: TeamDetailQuery) -> TeamDetail:
@@ -440,9 +445,11 @@ class ProductionTeamReader:
                 if current != query.source():
                     raise TeamDetailStale("所选详情的版本或归属已更新, 请刷新后重新打开。")
                 return result
-        except (TeamDetailNotFound, TeamDetailStale):
+        except (TeamDetailNotFound, TeamDetailStale) as error:
+            clear_frames(error.__traceback__)
             raise
         except Exception as error:
+            clear_frames(error.__traceback__)
             raise TeamReadError("所选详情暂时无法完整核验。") from error
         finally:
             joint_reads.clear()

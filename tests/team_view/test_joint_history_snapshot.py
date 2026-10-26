@@ -1,8 +1,11 @@
 """A Team read captures each complete Requirement prefix once, then releases it."""
 
+import gc
+import weakref
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -12,6 +15,7 @@ from ai_software_engineer.multi_directory.retirement import RequirementRetiremen
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.project_workspace import ProjectWorkspace
+from ai_software_engineer.team_view import reader as read_module
 from ai_software_engineer.team_view.models import TeamReadError
 from ai_software_engineer.team_view.reader import ProductionTeamReader, _Native, _read_native
 from ai_software_engineer.team_workspace import TeamWorkspace
@@ -97,13 +101,13 @@ def test_snapshot_reads_retired_and_replacement_history_once(
 ) -> None:
     reader, project, journal, current = _fixture(tmp_path)
     calls: Counter[str] = Counter()
-    original = JointJournal.history
+    original = JointJournal._borrow_verified_history
 
     def history(store: JointJournal, delivery_id: str) -> tuple[JointCheckpoint, ...]:
         calls[delivery_id] += 1
         return original(store, delivery_id)
 
-    monkeypatch.setattr(JointJournal, "history", history)
+    monkeypatch.setattr(JointJournal, "_borrow_verified_history", history)
     snapshot = reader.snapshot(project.manifest.project_id)
 
     assert calls == {
@@ -112,7 +116,71 @@ def test_snapshot_reads_retired_and_replacement_history_once(
     }
     assert [request.id for request in snapshot.requests] == [current.delivery_id]
     assert snapshot.projects[0].requirement_count == 1
-    assert len(original(journal, "delivery_multi_retired_snapshot")) == 2
+    assert len(journal.history("delivery_multi_retired_snapshot")) == 2
+
+
+def test_summary_validates_complete_joint_history_without_copying_each_model(
+    tmp_path: Path,
+) -> None:
+    reader, project, writer, current = _fixture(tmp_path)
+    paths = tuple(writer.root.glob("delivery_multi_*/*.json"))
+    with (
+        patch.object(Path, "read_bytes", autospec=True, side_effect=Path.read_bytes) as reads,
+        patch.object(
+            JointCheckpoint, "model_copy", autospec=True, side_effect=JointCheckpoint.model_copy
+        ) as copies,
+    ):
+        summary = reader.summary(project.manifest.project_id)
+    assert [request.id for request in summary.requests] == [current.delivery_id]
+    assert Counter(call.args[0] for call in reads.call_args_list if call.args[0] in paths) == {
+        path: 1 for path in paths
+    }
+    assert not copies.call_args_list, "one Team observation must borrow its verified history"
+
+
+@pytest.mark.parametrize("mode", ["summary", "full"])
+@pytest.mark.parametrize("late_error", [False, True])
+def test_team_read_releases_private_history_after_success_or_retained_late_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, late_error: bool
+) -> None:
+    reader, project, _, _ = _fixture(tmp_path)
+    observed: list[weakref.ReferenceType[JointCheckpoint]] = []
+    original = read_module._JointHistorySnapshot.history
+
+    def history(
+        snapshot: read_module._JointHistorySnapshot, delivery_id: str
+    ) -> tuple[JointCheckpoint, ...]:
+        result = original(snapshot, delivery_id)
+        observed.extend(weakref.ref(value[2]) for value in snapshot._journal._verified.values())
+        return result
+
+    monkeypatch.setattr(read_module._JointHistorySnapshot, "history", history)
+    read = reader.summary if mode == "summary" else reader.snapshot
+    if late_error:
+
+        def reject_native(_project: ProjectWorkspace) -> tuple[_Native, ...]:
+            raise OSError("late read failure")
+
+        monkeypatch.setattr(read_module, "_read_native", reject_native)
+        with pytest.raises(TeamReadError) as retained:
+            read(project.manifest.project_id)
+        assert isinstance(retained.value.__cause__, OSError)
+    else:
+        read(project.manifest.project_id)
+    assert observed
+    gc.collect()
+    assert all(model() is None for model in observed)
+
+
+def test_public_joint_history_and_current_keep_independent_deep_copies(tmp_path: Path) -> None:
+    _, _, journal, current = _fixture(tmp_path)
+    first = journal.history(current.delivery_id)[0]
+    second = journal.history(current.delivery_id)[0]
+    latest = journal.current(current.delivery_id)
+    assert latest is not None
+    assert first == second == latest == current
+    assert first is not second and second is not latest
+    assert first.scope is not second.scope and second.scope is not latest.scope
 
 
 def test_next_snapshot_observes_appended_history(
@@ -131,13 +199,13 @@ def test_next_snapshot_observes_appended_history(
     )
     journal.append(next_checkpoint, expected=current.checkpoint_sha256)
     calls: Counter[str] = Counter()
-    original = JointJournal.history
+    original = JointJournal._borrow_verified_history
 
     def history(store: JointJournal, delivery_id: str) -> tuple[JointCheckpoint, ...]:
         calls[delivery_id] += 1
         return original(store, delivery_id)
 
-    monkeypatch.setattr(JointJournal, "history", history)
+    monkeypatch.setattr(JointJournal, "_borrow_verified_history", history)
     snapshot = reader.snapshot(project.manifest.project_id)
     assert snapshot.requests[0].next_action == next_checkpoint.next_action
     assert calls == {
@@ -213,13 +281,13 @@ def test_other_project_counts_reuse_shared_replacement_history(
             retired_at=datetime.now(UTC),
         )
     calls: Counter[str] = Counter()
-    original = JointJournal.history
+    original = JointJournal._borrow_verified_history
 
     def history(store: JointJournal, delivery_id: str) -> tuple[JointCheckpoint, ...]:
         calls[delivery_id] += 1
         return original(store, delivery_id)
 
-    monkeypatch.setattr(JointJournal, "history", history)
+    monkeypatch.setattr(JointJournal, "_borrow_verified_history", history)
     snapshot = reader.snapshot(project.manifest.project_id)
     assert calls == {
         "delivery_multi_retired_snapshot": 1,

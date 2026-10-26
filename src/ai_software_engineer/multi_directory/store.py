@@ -90,6 +90,19 @@ class JointJournal:
             clear_frames(error.__traceback__)
             raise
 
+    def _borrow_verified_history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]:
+        """Borrow private validated models for one synchronous read observation.
+
+        The caller must only inspect them, must not return them as public models,
+        and must release its observation after building the read projection.
+        ``history`` remains the defensive-copy boundary for ordinary callers.
+        """
+        try:
+            return tuple(self._validated_history(delivery_id))
+        except BaseException as error:
+            clear_frames(error.__traceback__)
+            raise
+
     def _validated_history(self, delivery_id: str) -> Iterator[JointCheckpoint]:
         """Yield private facts; public readers exhaust the chain and copy their returns."""
         previous: JointCheckpoint | None = None
