@@ -26,7 +26,22 @@ route and does not select this contract. The current Worker, original no-start p
 consumed decision, candidate Git tree and claim are rechecked before model admission
 and output acceptance; if they drift, output is rejected without publishing a verdict.
 A genuine QA FAIL follows ordinary Coder remediation. A repaired candidate still
-requires independent QA and Review.
+requires independent QA and Review. The proof-bound static QA input is deliberately
+limited to the authenticated absence proof and frozen Context; it does not append
+the ordinary candidate source snapshot or claim that code review or planned tests
+ran. The ordinary QA/Reviewer source view resumes on the repaired candidate. A
+safe Plan directory suffix `/**` expands only against the base and candidate Git
+trees to exact tracked paths, with the normal read/deny and bounded-input checks;
+other glob syntax and missing exact dependencies remain rejected.
+
+If the first post-decision QA claim has a sealed `READY/NOT_STARTED` preparation
+but its lease expires before a durable model invocation start, a later adjacent
+claim may continue the same consumed decision only after checking the expired
+claim, the unchanged active static decision and Task/candidate, the original
+marker, a fresh `NOT_STARTED` native observation, and the absence of any
+WorkItem invocation start/outcome. The old decision is not resubmitted and the
+failed claim remains in history. Any missing or uncertain fact returns to an
+engineering wait; a later generation cannot inherit this one-step recovery.
 
 The existing engineering wait investigation now preserves the original QA verifier
 preparation as `NOT_STARTED` even when a newly collected mixed prerequisite receipt
@@ -37,14 +52,16 @@ native execution remains `NATIVE_EXECUTION_UNCERTAIN`. The prerequisite blocker
 and empty permitted-resolution list stay intact. This is read-only diagnostic
 evidence, not a static QA admission or authorization to resume.
 
-The code and Schema are integrated but are not deployed merely by this source change.
-To activate for K1, release the verified platform build while the service is idle,
-use the public engineering wait inspection for the exact current K1 WorkItem and
-candidate, seal a separately authorized `STATIC_QA_MISSING_ENTRY` resolution, then
-let the normal Supervisor claim the new QA generation. Inspect the durable QA report,
-queue and retry budget before any Coder continuation. Do not edit the frozen Plan or
-retroactively rewrite the old wait. If the release must be rolled back, stop new
-admissions and restore the previous platform build; preserve all appended decisions,
-claims and QA facts for audit. Any in-flight claim must finish or be fenced before
-restarting on the old build. K1 requires a fresh public inspection after rollback;
-the old wait is never silently recreated.
+The initial static QA route was published on platform main `4ebb0bd9678f4cb2889fe3f9a960dfb43afc2fb5`.
+K1's exact public wait investigation and `STATIC_QA_MISSING_ENTRY` decision were
+already sealed and consumed; do not submit them again. Its first resumed QA claim
+reached `READY/NOT_STARTED` and then expired without a durable invocation start.
+After the follow-up input and no-start recovery fix is reviewed and released at
+an idle boundary, use the public `CONTINUE_DELIVERY` operation with the current
+parent checkpoint. The normal queue reaper fences the expired claim, and the
+new preparation gate verifies the consumed decision and no-start facts before a
+fresh independent QA claim. Inspect its actual QA report, queue status and frozen
+Coder allowance before any Coder continuation. Do not edit the frozen Plan or
+retroactively rewrite the old wait. On rollback, stop admissions, retain every
+decision, claim and QA fact, and use readers compatible with any appended facts;
+an expired lease is never proof that the original execution completed.

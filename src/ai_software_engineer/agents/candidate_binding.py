@@ -71,7 +71,15 @@ def candidate_read_scope(
                 else task.base_ref
             ),
             candidate_revision=candidate_revision,
-            related_paths=tuple(path for step in plan.content.steps for path in step.files),
+            related_paths=tuple(
+                path
+                for step in plan.content.steps
+                for path in step.files
+                if not path.endswith("/**")
+            ),
+            related_patterns=tuple(
+                path for step in plan.content.steps for path in step.files if path.endswith("/**")
+            ),
             denied_paths=task.constraints.denied_paths if task.constraints else (),
         )
     except ValueError as error:

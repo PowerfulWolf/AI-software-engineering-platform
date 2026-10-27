@@ -3506,6 +3506,51 @@ the new QA dispatch only through the recorded `WAIT_RESOLVED` event between
 the original and current claims. Check the unchanged Task, WorkItem, attempt,
 checkpoint, original intent, source, no-start proof and static evidence under
 the generation fence; a lease expiry or newer sequence alone is insufficient.
+After that first resumed QA claim, an adjacent lease expiry may create one
+more fresh claim without replaying the decision only if the current active
+claim still authenticates the same consumed static decision and unchanged
+Task/candidate, the immediately previous claim is exactly EXPIRED, its one
+sealed preparation checkpoint is `READY/NOT_STARTED`, a fresh observation
+of that previous Run remains `NOT_STARTED`, and the WorkItem has no durable
+invocation start or outcome in the actual invocation store. The generation
+step must be exactly one; missing/tampered facts or any native uncertainty
+fail closed without model start, through the existing typed wait or invariant
+failure boundary. This is not an approval replay or a lease expiry inference.
+The original decision and failed claim remain in history.
+
+The recovery seam is
+`static_qa_preparation_reclaimed(queue, dsn, records, invocation_records,
+observe_verifier, intent, claim) -> bool`, composed as the
+`PreflightInvocationControl.reclaimed_static_preparation` callback only for the
+production static QA route. `records` comes from `state/delivery-preflight`;
+`invocation_records` is the separate `state/invocations` store used by
+`DurableInvocationControl`. The callback checks the original claim through
+`MySqlRoleQueue.original_claim`, the current active claim through
+`static_qa_resolution_for_claim`, the original SQL claim state, exactly one
+integrity-checked `VerifierPreparationCheckpoint`, no WorkItem-keyed
+`DeliveryInvocationStart` or `DeliveryInvocationOutcome`, and a fresh
+`observe_verifier_preparation` result for the old Run/lease. It grants only
+preparation for a new Run; `DurableInvocationControl.prepare` still records the
+model-start identity before the adapter may invoke the provider.
+
+| Reclaimed static QA facts | Required result |
+| --- | --- |
+| Exact adjacent expired claim, sealed READY/NOT_STARTED, fresh NOT_STARTED, no invocation records | Fresh QA intent under current claim, then ordinary model-start fence |
+| Missing marker, active old lease, skipped generation, repeated reclaim, changed decision or claim | Refuse new preparation; preserve old decision and Task |
+| Native FINISHED/UNCERTAIN or any model start/outcome | Refuse replay; preserve execution history for engineering investigation |
+| Ordinary `RESUME_UNINVOKED` after another lease expiry | Existing no-reuse rule remains |
+
+Good: one K1-like lost Worker after READY produces a new exact claim and proof-bound
+QA FAIL without a second decision. Base: the original `WAIT_RESOLVED` claim remains
+eligible under the unchanged first-generation rule. Bad: infer no start from lease
+expiry alone or look for invocation records in `state/delivery-preflight` instead
+of `state/invocations`. Tests: `test_wait_resolution_mysql.py` checks real
+MySQL generation, decision tamper and negative execution facts;
+`test_verifier_preparation.py` checks fresh intent and durable start order;
+`test_public_static_qa_missing_entry.py` covers the original public decision
+and independent FAIL routing. The live same-Requirement public continuation is
+required after controlled release to verify composition against stored K1.
+
 This is a distinct branch from `RESUME_UNINVOKED`: it grants no budget refund,
 does not mark the original verifier command as started, and cannot authorize
 ordinary QA or a Responses fallback. A valid proof-bound QA FAIL follows the

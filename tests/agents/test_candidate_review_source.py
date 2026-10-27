@@ -88,6 +88,131 @@ def test_complete_diff_and_dependencies_ignore_unrelated_baseline(tmp_path: Path
     assert "unrelated.txt" not in files
 
 
+def test_directory_glob_expands_only_git_tree_entries_and_obeys_deny(
+    tmp_path: Path,
+) -> None:
+    root, scope = repository(tmp_path)
+    nested = root / "tests" / "learning_collection"
+    nested.mkdir(parents=True)
+    (nested / "test_case.py").write_text("def test_case(): pass\n")
+    _git(root, "add", "tests/learning_collection/test_case.py")
+    _git(root, "commit", "-qm", "planned test")
+    scope = scope.model_copy(
+        update={
+            "candidate_revision": _git(root, "rev-parse", "HEAD"),
+            "related_patterns": ("tests/learning_collection/**",),
+        }
+    )
+    scope = CandidateReadScope.model_validate(scope.to_wire())
+    payload = source_payload(
+        candidate_review_snapshot(root, scope, _definitions()[AgentRole.QA].permissions)
+    )
+    assert "tests/learning_collection/test_case.py" in _source_files(payload)
+    with pytest.raises(WorkspacePolicyError):
+        candidate_review_snapshot(
+            root,
+            scope.model_copy(update={"denied_paths": ("tests/learning_collection/**",)}),
+            _definitions()[AgentRole.QA].permissions,
+        )
+    with pytest.raises(WorkspacePolicyError, match="glob"):
+        candidate_review_snapshot(
+            root,
+            scope.model_copy(update={"related_patterns": ("tests/missing/**",)}),
+            _definitions()[AgentRole.QA].permissions,
+        )
+    with pytest.raises(ValueError, match="directory globs"):
+        CandidateReadScope.model_validate(
+            scope.model_copy(update={"related_patterns": ("tests/*",)}).to_wire()
+        )
+
+
+def test_directory_glob_path_budget_precedes_per_blob_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, scope = repository(tmp_path)
+    nested = root / "tests" / "many"
+    nested.mkdir(parents=True)
+    for index in range(129):
+        (nested / f"test_{index:03}.py").write_text("pass\n")
+    _git(root, "add", "tests/many")
+    _git(root, "commit", "-qm", "many tiny planned files")
+    scope = scope.model_copy(
+        update={
+            "candidate_revision": _git(root, "rev-parse", "HEAD"),
+            "related_patterns": ("tests/many/**",),
+        }
+    )
+    from ai_software_engineer.agents import candidate_source
+
+    def forbidden_blob_read(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("path budget must reject before any blob read")
+
+    monkeypatch.setattr(candidate_source, "_text_blob", forbidden_blob_read)
+    with pytest.raises(WorkspacePolicyError, match="path budget"):
+        candidate_review_snapshot(root, scope, _definitions()[AgentRole.QA].permissions)
+
+
+def test_exact_only_plan_retains_existing_many_small_files_behavior(tmp_path: Path) -> None:
+    root, scope = repository(tmp_path)
+    nested = root / "tests" / "many"
+    nested.mkdir(parents=True)
+    paths = tuple(f"tests/many/test_{index:03}.py" for index in range(129))
+    for path in paths:
+        (root / path).write_text("pass\n")
+    _git(root, "add", "tests/many")
+    _git(root, "commit", "-qm", "many exact planned files")
+    scope = scope.model_copy(
+        update={
+            "candidate_revision": _git(root, "rev-parse", "HEAD"),
+            "related_paths": paths,
+        }
+    )
+    payload = source_payload(
+        candidate_review_snapshot(root, scope, _definitions()[AgentRole.QA].permissions)
+    )
+    assert all(path in _source_files(payload) for path in paths)
+
+
+def test_large_planned_dependency_keeps_per_blob_budget_even_with_tiny_diff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, scope = repository(tmp_path)
+    large = root / "large.py"
+    unchanged = "A" * 100 + "\n"
+    large.write_text(unchanged * 20_000)
+    _git(root, "add", "large.py")
+    _git(root, "commit", "-qm", "large baseline source")
+    baseline = _git(root, "rev-parse", "HEAD")
+    blob_id = _git(root, "rev-parse", "HEAD:large.py")
+    (root / "README.md").write_text("small candidate edit\n")
+    _git(root, "add", "README.md")
+    _git(root, "commit", "-qm", "small unrelated edit")
+    scope = scope.model_copy(
+        update={
+            "base_revision": baseline,
+            "candidate_revision": _git(root, "rev-parse", "HEAD"),
+            "related_paths": ("large.py",),
+        }
+    )
+    from ai_software_engineer.agents import candidate_source
+
+    source_git = candidate_source._git
+    blob_reads = 0
+
+    def record_git(directory: Path, *args: str, limit: int = 2_000_000) -> bytes:
+        nonlocal blob_reads
+        if args == ("cat-file", "blob", blob_id):
+            blob_reads += 1
+            raise AssertionError("oversize source blob must not be read")
+        return source_git(directory, *args, limit=limit)
+
+    monkeypatch.setattr(candidate_source, "_git", record_git)
+    with pytest.raises(WorkspacePolicyError, match="bounded budget"):
+        candidate_review_snapshot(root, scope, _definitions()[AgentRole.QA].permissions)
+    assert blob_reads == 0
+
+
 @pytest.mark.parametrize("denied", ["README.md", "dependency.txt"])
 def test_required_diff_and_dependency_cannot_bypass_task_deny(tmp_path: Path, denied: str) -> None:
     root, scope = repository(tmp_path)

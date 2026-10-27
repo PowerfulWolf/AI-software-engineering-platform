@@ -1921,7 +1921,13 @@ class ProductionProjectDeliveryBackend:
             KnowledgeRecordStore(facts.workspace.directory("state") / "invocations"),
             worker_guard,
         )
+        preflight_records = KnowledgeRecordStore(
+            facts.workspace.directory("state") / "delivery-preflight"
+        )
         from ai_software_engineer.manager.preflight_gate import PreflightInvocationControl
+        from ai_software_engineer.work_queue.preparation_resume import (
+            static_qa_preparation_reclaimed,
+        )
         from ai_software_engineer.work_queue.verification_reservation import (
             QueuedVerificationReservation,
         )
@@ -1992,13 +1998,20 @@ class ProductionProjectDeliveryBackend:
                 guard=worker_guard,
                 task_reader=current_task,
                 inspect=inspect_preflight,
-                records=KnowledgeRecordStore(
-                    facts.workspace.directory("state") / "delivery-preflight"
-                ),
+                records=preflight_records,
                 failure_control=failure_control,
                 prepare_verifier=adapter.prepare_verifier,
                 observe_verifier=adapter.observe_verifier_preparation,
                 resumed_preparation=queue.preparation_resume_consumed,
+                reclaimed_static_preparation=lambda intent, claim: static_qa_preparation_reclaimed(
+                    queue,
+                    self._config.require_mysql_dsn(self._environment),
+                    preflight_records,
+                    invocation_control.records,
+                    adapter.observe_verifier_preparation,
+                    intent,
+                    claim,
+                ),
                 prepare_input=adapter.prepare_input,
                 discard_prepared_input=adapter.discard_prepared_input,
                 context_reader=contexts.get,

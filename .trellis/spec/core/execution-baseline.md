@@ -376,7 +376,10 @@ duplicate plan reads without changing an execution or approval.
   exact parent-plus-consultation lineage check; do not weaken it to accept arbitrary additions.
 - QA/Review keep the actual candidate SHA as their request/context source. `BoundCandidateSource`
   verifies the trusted baseline Context against the typed request before selecting the execution
-  base for the complete candidate diff. Plan.source remains the original approved base. Native
+  base for the complete candidate diff in ordinary QA/Review. A claim-bound static QA
+  missing-entry FAIL uses its sealed absence proof instead of the generic source
+  snapshot; it still keeps the original Task/context/candidate binding, and ordinary
+  QA resumes after repair. Plan.source remains the original approved base. Native
   verification rechecks that the request binding equals the current trusted store binding.
 - Coder cannot change verdicts. QA PASS and Review APPROVE are independent and use the same final
   candidate SHA. Upstream baseline changes must not be mistaken for Coder changes or new findings.

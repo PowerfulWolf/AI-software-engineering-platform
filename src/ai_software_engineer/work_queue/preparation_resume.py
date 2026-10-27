@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import closing
 from typing import TYPE_CHECKING
 
@@ -13,11 +14,21 @@ from ai_software_engineer.domain.delivery_resolution import (
 )
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.knowledge.models import digest
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.manager.verifier_preparation import (
+    VerifierPreparationCheckpoint,
+    VerifierPreparationObservation,
+)
 from ai_software_engineer.store.mysql_repository import open_mysql_connection
+from ai_software_engineer.work_queue.invocation import (
+    DeliveryInvocationOutcome,
+    DeliveryInvocationStart,
+)
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
 from ai_software_engineer.work_queue.ports import QueueConflict, QueueCorruption
 
 if TYPE_CHECKING:
+    from ai_software_engineer.agents.models import AgentRequest
     from ai_software_engineer.manager.verifier_preparation import VerifierPreparationIntent
     from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
 
@@ -164,3 +175,106 @@ def preparation_resume_consumed(
             )
         )
     )
+
+
+def static_qa_preparation_reclaimed(
+    queue: MySqlRoleQueue,
+    dsn: str,
+    records: KnowledgeRecordStore,
+    invocation_records: KnowledgeRecordStore,
+    observe_verifier: Callable[[AgentRequest, str], VerifierPreparationObservation],
+    intent: VerifierPreparationIntent,
+    claim: QueueClaim,
+) -> bool:
+    """Admit a fresh static QA preparation only after a sealed no-start lease expiry.
+
+    The consumed decision is checked again against the current active claim. An
+    expired lease by itself never proves that verification or the model did not run.
+    """
+    intent.validate_integrity()
+    original = queue.original_claim(intent.lease_id)
+    if (
+        claim.work_item.id != intent.work_item_id
+        or claim.work_item.dispatch_sequence != intent.dispatch_sequence + 1
+        or (
+            original.work_item.id,
+            original.work_item.task_id,
+            original.work_item.role,
+            original.work_item.attempt,
+            original.work_item.checkpoint_sequence,
+            original.work_item.dispatch_sequence,
+        )
+        != (
+            intent.work_item_id,
+            intent.task_id,
+            intent.request.role,
+            intent.request.attempt,
+            intent.checkpoint_sequence,
+            intent.dispatch_sequence,
+        )
+    ):
+        return False
+    decision = queue.static_qa_resolution_for_claim(claim)
+    if decision is None or decision.static_qa_missing_entry is None:
+        return False
+    static = decision.static_qa_missing_entry
+    if (
+        intent.dispatch_sequence != static.wait_dispatch_sequence + 1
+        or intent.task_id != decision.task_id
+        or intent.task_snapshot_sha256 != decision.task_snapshot_sha256
+        or intent.checkpoint_sequence != decision.expected_checkpoint_sequence
+        or intent.request.source_revision != decision.expected_source_revision
+        or intent.request.role != claim.work_item.role
+        or intent.request.attempt != claim.work_item.attempt
+    ):
+        return False
+    with (
+        closing(open_mysql_connection(dsn)) as connection,
+        connection.cursor(DictCursor) as cursor,
+    ):
+        cursor.execute(
+            "SELECT state,work_item_id,task_id FROM work_queue_claims WHERE lease_id=%s",
+            (intent.lease_id,),
+        )
+        row = cursor.fetchone()
+    if (
+        row is None
+        or row["state"] != "EXPIRED"
+        or row["work_item_id"] != intent.work_item_id
+        or row["task_id"] != intent.task_id
+    ):
+        return False
+    markers = tuple(
+        marker
+        for marker in records.list("verifier-preparations", VerifierPreparationCheckpoint)
+        if marker.intent_sha256 == intent.intent_sha256
+    )
+    if len(markers) != 1:
+        return False
+    marker = markers[0]
+    marker.validate_integrity()
+    if (
+        marker.result != "READY"
+        or marker.observation.native_execution_state != "NOT_STARTED"
+        or marker.work_item_id != intent.work_item_id
+        or marker.lease_id != intent.lease_id
+        or marker.wait_lease_id != intent.lease_id
+        or marker.task_id != intent.task_id
+        or marker.task_snapshot_sha256 != intent.task_snapshot_sha256
+        or marker.checkpoint_sequence != intent.checkpoint_sequence
+        or marker.dispatch_sequence != intent.dispatch_sequence
+        or marker.wait_dispatch_sequence != intent.dispatch_sequence
+        or marker.request != intent.request
+        or marker.request_sha256 != intent.request_sha256
+        or invocation_records.find(
+            "invocation-starts", intent.work_item_id, DeliveryInvocationStart
+        )
+        is not None
+        or invocation_records.find(
+            "invocation-outcomes", intent.work_item_id, DeliveryInvocationOutcome
+        )
+        is not None
+    ):
+        return False
+    fresh = observe_verifier(intent.request, intent.lease_id)
+    return fresh.native_execution_state == "NOT_STARTED" and fresh == marker.observation

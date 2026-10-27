@@ -50,6 +50,8 @@ class PreflightInvocationControl:
         observe_verifier: Callable[[AgentRequest, str], VerifierPreparationObservation]
         | None = None,
         resumed_preparation: Callable[[VerifierPreparationIntent, QueueClaim], bool] | None = None,
+        reclaimed_static_preparation: Callable[[VerifierPreparationIntent, QueueClaim], bool]
+        | None = None,
         prepare_input: Callable[[AgentRequest], None] | None = None,
         discard_prepared_input: Callable[[AgentRequest], None] | None = None,
         context_reader: Callable[[str], ContextBundle] | None = None,
@@ -60,6 +62,7 @@ class PreflightInvocationControl:
             raise ValueError("verifier preparation requires its trusted execution observation")
         self.prepare_verifier, self.observe_verifier = prepare_verifier, observe_verifier
         self.resumed_preparation = resumed_preparation
+        self.reclaimed_static_preparation = reclaimed_static_preparation
         self.prepare_input, self.discard_prepared_input = prepare_input, discard_prepared_input
         self.context_reader = context_reader
 
@@ -246,7 +249,13 @@ class PreflightInvocationControl:
         if intent is None or (
             claim.work_item.dispatch_sequence > intent.dispatch_sequence
             and self.resumed_preparation is not None
-            and self.resumed_preparation(intent, claim)
+            and (
+                self.resumed_preparation(intent, claim)
+                or (
+                    self.reclaimed_static_preparation is not None
+                    and self.reclaimed_static_preparation(intent, claim)
+                )
+            )
         ):
             intent = VerifierPreparationIntent.create(
                 work_item_id=claim.work_item.id,

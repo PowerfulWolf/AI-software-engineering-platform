@@ -468,6 +468,66 @@ def test_crash_before_model_start_keeps_original_intent_across_new_claim_and_run
         assert "原验证准备已结束" in failure.events[0].reason
 
 
+def test_reclaimed_static_qa_claim_writes_fresh_intent_only_after_trusted_callback(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    first, delegate, _, records = _gate(fixture, tmp_path, prepare=lambda _: None)
+    assert first.prepare(fixture.request) == fixture.request
+    assert delegate.calls == 1
+    original = _marker(records)
+    assert original.result == "READY"
+    assert original.observation.native_execution_state == "NOT_STARTED"
+    next_claim = fixture.claim.model_validate(
+        {
+            **fixture.claim.to_wire(),
+            "work_item": {**fixture.claim.work_item.to_wire(), "dispatch_sequence": 1},
+            "assignment": {
+                **fixture.claim.assignment.to_wire(),
+                "id": "assignment_reclaimed_static",
+                "lease_id": "lease_reclaimed_static",
+            },
+            "lease": {
+                **fixture.claim.lease.to_wire(),
+                "id": "lease_reclaimed_static",
+                "assignment_id": "assignment_reclaimed_static",
+            },
+        }
+    )
+    request = fixture.request.model_copy(
+        update={"run_id": "run_reclaimed_static", "context_manifest_id": "ctx_" + "a" * 64}
+    )
+    continued = replace(fixture, request=request, claim=next_claim, guard=_Guard(next_claim))
+    second, next_delegate, failure, records = _gate(continued, tmp_path, prepare=lambda _: None)
+    second.resumed_preparation = lambda *_: False
+    callbacks: list[tuple[VerifierPreparationIntent, object]] = []
+
+    def consumed(intent: VerifierPreparationIntent, claim: object) -> bool:
+        callbacks.append((intent, claim))
+        return True
+
+    second.reclaimed_static_preparation = consumed
+    assert second.prepare(request) == request
+    assert next_delegate.calls == 1 and not failure.events
+    intents = records.list("verifier-preparation-intents", VerifierPreparationIntent)
+    assert len(intents) == 2
+    assert {item.lease_id for item in intents} == {
+        fixture.claim.lease.id,
+        next_claim.lease.id,
+    }
+    assert callbacks == [
+        (next(item for item in intents if item.lease_id == fixture.claim.lease.id), next_claim)
+    ]
+    markers = records.list("verifier-preparations", VerifierPreparationCheckpoint)
+    assert len(markers) == 2
+    assert any(
+        item.lease_id == next_claim.lease.id
+        and item.result == "READY"
+        and item.observation.native_execution_state == "NOT_STARTED"
+        for item in markers
+    )
+
+
 def test_service_pause_during_verifier_preparation_seals_exact_wait_before_model(
     tmp_path: Path,
 ) -> None:

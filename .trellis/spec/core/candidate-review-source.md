@@ -19,7 +19,8 @@ estimate_input_tokens(content: str) -> int
 ```
 
 `CandidateReadScope` contains `task_id`, full `base_revision` and `candidate_revision`, exact
-`related_paths` from PlanStep.files, and `denied_paths` from the original Task. It is internal
+`related_paths`, bounded `related_patterns` for safe directory suffix `/**` from PlanStep.files,
+and `denied_paths` from the original Task. It is internal
 composition data, not a new approval or AgentRequest wire field.
 
 ## 3. Contracts
@@ -34,8 +35,11 @@ composition data, not a new approval or AgentRequest wire field.
   parent and may only carry Coder progress parents. No parsing of prompt prose or Coder path inventory.
 - Both Git identities must be commit objects. Compare complete original base and candidate trees;
   do not use candidate parent, which loses earlier commits. Every changed path and declared plan
-  dependency is required and passes read/Task deny policy before reading. Exact Plan paths only;
-  directories, globs or missing dependencies require a clearer plan, not guessed closure.
+  dependency is required and passes read/Task deny policy before reading. Exact Plan paths and
+  safe directory suffix `/**` are accepted; the latter expands only from the union of the two
+  Git trees to existing exact tracked paths and must match at least one entry. Other globs,
+  directories and missing exact dependencies still fail closed. No host working-tree bytes or
+  guessed closure enter the expansion.
 - Read fixed regular UTF-8 blobs only. Required binary, symlink, submodule, non-UTF-8 and absent
   objects fail closed. Dirty/untracked bytes are not read. Checkout HEAD may differ for Manager.
   Required paths detected as secret-like are refused without echoing or renaming; exact inventory
@@ -53,11 +57,21 @@ composition data, not a new approval or AgentRequest wire field.
 - Git output is streamed with stdout limit and 64 KiB stderr limit; exceed either or timeout and
   kill/reap the process group, returning no partial package. Disable hooks/fsmonitor, global/system
   config, replace objects, lazy fetch and all Git network protocols. Each required old/new blob
-  also has a conservative 2 MB safety cap even if its diff is small. Package/wrapper totals must
-  fit the separate byte bound; this is not a tokenizer or permission expansion.
-- Production factory always supplies BoundCandidateSource to CLI adapters. Verifiers append it
-  after receipts and image descriptions, then check the entire final serialized prompt against
-  the original Context `max_input_tokens` with the shared ceil(chars/4) estimator. No truncation or
+  also has a conservative 2 MB safety cap even if its diff is small. Before any blob read,
+  if the Plan uses a safe directory glob, refuse more than 128 required
+  changed/dependency paths; during that expansion, cap aggregate old/new UTF-8
+  source bytes at the smaller of twice the package limit and 4 MB. Exact-only
+  Plans keep their existing per-blob and final package limits. Package/wrapper totals
+  must fit the separate byte bound; this is not a tokenizer or permission expansion.
+- Production factory always supplies BoundCandidateSource to CLI adapters. Ordinary QA/Reviewer
+  append it after receipts and image descriptions. A current claim-bound
+  `TrustedStaticQaMissingEntryOutputContract` instead supplies only the sealed absence proof:
+  the commandless QA run skips both generic candidate snapshot branches, provides no
+  authenticated code-review or test-execution evidence, and can publish only the independently
+  gated FAIL. After Coder repairs the candidate, ordinary QA again receives the complete bounded source snapshot and native tests.
+  The configured production route checks the entire final serialized prompt against
+  the original Context `max_input_tokens` with the shared ceil(chars/4) estimator.
+  A low-level adapter without an input-budget binding cannot claim this check. No truncation or
   automatic expansion. Low-level adapters without typed context retain the conservative legacy
   whole-repository helper. Manager uses the same scope and snapshot constructors directly.
 - CLI user JSON objects are serialized as objects with `content_format=json`, preserving every
@@ -70,7 +84,8 @@ composition data, not a new approval or AgentRequest wire field.
 | --- | --- |
 | Large unrelated baseline, small complete candidate difference | Complete source view; no unrelated content |
 | Task/revision/parent/digest or delivered Context mismatch, including unverified remediation feedback | WorkspacePolicyError; zero model invocation |
-| Denied required path, unsupported blob, missing dependency/object | Refuse complete view, no partial review |
+| Denied required path, unsupported blob, missing exact dependency/object, empty or unsafe directory glob, glob-expanded view over 128 required paths | Refuse complete view, no partial review |
+| Exact consumed static QA proof with missing frozen test path | Proof-only independent QA FAIL input; no generic source-review claim |
 | Tree/blob/tag identity instead of commit | Refuse before tree reading |
 | Source/process/final prompt exceeds bound | Stable refusal; no truncation, retry or fabricated verdict |
 | Missing unchanged function or independent test evidence | Verifier must report unmet prerequisite |
@@ -83,12 +98,16 @@ contract. This does not turn a source/environment precondition into a QA code ve
 Good: 20 K1 changes and the two declared unchanged dependencies fit while unrelated history is
 outside the explicitly declared view. Base: offline real Git fixture with >2 MB unrelated file.
 Bad: increase the cap, slice hunks, trust changed_files, use candidate^, or claim full-file review
-from a difference-only view.
+from a difference-only view. A proof-bound static QA FAIL is a separate Good case: it shows
+only the sealed missing-entry evidence and no generic source-review claim. An unsafe glob,
+empty Git-tree directory match or missing exact dependency is a Bad input and fails before
+model start; no path pattern can bypass Task deny rules.
 
 ## 6. Tests Required
 
 - `test_candidate_review_source.py`: multi-commit changes, full additions/deletions/renames/modes,
-  deny rules, missing/binary/symlink/non-UTF-8/commit-object checks, output bounds and byte/hash
+  safe Git-tree `/**` expansion, empty/unsafe/over-count refusals, deny rules,
+  missing/binary/symlink/non-UTF-8/commit-object checks, output bounds and byte/hash
   roundtrip with quotes, backslashes, Unicode and pseudo frame boundaries.
 - `test_candidate_source_binding.py`: real production factory/CLI seam, unchanged native read-only
   and no-command argv, mismatched artifact facts, final receipt+prompt budget, zero calls on failure,
@@ -105,9 +124,11 @@ Correct: original Task + sealed lineage -> complete base/candidate difference + 
 
 ## Existing data and rollback
 
-No database migration or rewrite is needed. Keep the original terminal Task, candidate, failed
-pre-model QA run, exhausted coordination budget and approvals. Load the verified platform change
-only when no role is active; propose a new exact candidate-verification plan with its required
-execution capability, approve it, and independently verify the same candidate. Do not rerun Coder
-or reset a terminal Task. A previous approval cannot authorize new prerequisites. Roll back the
-platform commit and restart when idle; retain all sidecar facts and any new execution receipts.
+No database or Artifact migration is needed. K1 remains the same Requirement and QA Task
+with its frozen Plan, existing candidate and consumed static decision. The previous expired
+claim and all preparation facts stay immutable. After a reviewed idle release, use the
+public `CONTINUE_DELIVERY` operation with the current parent checkpoint to re-enter
+normal queue reclaim and independent QA; do not resubmit the decision, reset the Task
+or edit the frozen Plan. A missing test still requires a proof-bound QA FAIL and Coder
+repair. Roll back only while idle; retain appended records and use a compatible reader
+for any new claim. A rollback cannot turn an expired lease into proof of a result.

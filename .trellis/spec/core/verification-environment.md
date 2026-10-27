@@ -255,9 +255,12 @@ context compilation fails. This is a platform context failure, not business QA f
 `CandidateVerificationEntry.execute(path)` composes `FileRunContextBuilder` with the shared
 `PRODUCTION_DELIVERY_CONTEXT_BUDGET` (256,000 input / 4,000 reserved output).
 
-候选验证必须把完整 base-to-candidate 差异和声明的依赖放进最终提示；生产候选上下文因此使用
-256,000 input token 的版本化上限。该上限不是截断许可：`BoundCandidateSource` 仍按最终序列化
-提示执行完整预算检查，超限、来源不完整或摘要不匹配在模型调用前拒绝，并保留可诊断的
+普通候选 QA/Review 验证必须把完整 base-to-candidate 差异和声明的依赖放进最终提示。
+仅持有当前 claim 绑定的 `TrustedStaticQaMissingEntryOutputContract` 的静态 QA 缺失入口
+检查例外：它以封存的候选树缺失证明生成无命令 FAIL，不提供源码审阅或测试执行证据。
+生产候选上下文使用 256,000 input token 的版本化上限。该上限不是截断许可：普通
+`BoundCandidateSource` 仍检查完整候选快照；静态 QA 的 `BoundModelInputBudget` 检查最终
+序列化输入。超限、来源不完整或摘要不匹配在模型调用前拒绝；普通候选超限保留可诊断的
 `candidate review prompt exceeds its configured Context budget` 原因。旧 Context manifest 和
 已批准计划继续按其冻结预算读取；容量调整后必须以新 baseline、新 Context 和新的精确验证计划
 重新批准，不能重放旧计划。

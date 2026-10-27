@@ -36,7 +36,10 @@ The full `ExecutionBaselineBinding` retains Task intent, Team/Project/Repository
 approved/execution source, branch/path, prior chain, source artifacts, native-rule epoch,
 plan/facts/authority/inventory and original stop-proof references. All existing native-rule,
 candidate SHA/lineage, latest-binding, WorkItem/Lease and write-policy gates remain unchanged.
-QA/Review still receive the complete current-base-to-candidate diff through `BoundCandidateSource`.
+Ordinary QA/Review still receive the complete current-base-to-candidate diff through
+`BoundCandidateSource`. The separately proof-bound static QA missing-entry FAIL omits
+that generic snapshot and cannot supply code-review evidence; a repaired candidate
+returns to ordinary QA/Review.
 
 ## Validation matrix and tests
 

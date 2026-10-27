@@ -18,12 +18,16 @@ from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
 from ai_software_engineer.owned_processes import finish_owned_process, observe_owned_process
 from ai_software_engineer.redaction import redact_text
 
+_MAX_REQUIRED_SOURCE_PATHS = 128
+_MAX_TOTAL_SOURCE_BYTES = 4_000_000
+
 
 class CandidateReadScope(DomainModel):
     task_id: TaskId
     base_revision: str
     candidate_revision: str
     related_paths: tuple[str, ...] = ()
+    related_patterns: tuple[str, ...] = ()
     denied_paths: tuple[str, ...] = ()
 
     @field_validator("base_revision", "candidate_revision")
@@ -46,6 +50,23 @@ class CandidateReadScope(DomainModel):
                 or any(c in value for c in "*?[]\0")
             ):
                 raise ValueError("candidate source requires exact repository-relative paths")
+        return tuple(sorted(set(values)))
+
+    @field_validator("related_patterns")
+    @classmethod
+    def directory_globs(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        for value in values:
+            prefix = value.removesuffix("/**")
+            path = PurePosixPath(prefix)
+            if (
+                not value.endswith("/**")
+                or not prefix
+                or path.is_absolute()
+                or str(path) != prefix
+                or ".." in path.parts
+                or any(character in prefix for character in "*?[]\\\0")
+            ):
+                raise ValueError("candidate source requires safe directory globs")
         return tuple(sorted(set(values)))
 
 
@@ -159,7 +180,19 @@ def candidate_review_snapshot(
             raise WorkspacePolicyError("candidate source requires complete commit objects")
     before, after = _tree(root, scope.base_revision), _tree(root, scope.candidate_revision)
     changed = {path for path in before.keys() | after.keys() if before.get(path) != after.get(path)}
-    required = changed | set(scope.related_paths)
+    expanded: set[str] = set()
+    for pattern in scope.related_patterns:
+        prefix = pattern[:-2]
+        matches = {path for path in before.keys() | after.keys() if path.startswith(prefix)}
+        if not matches:
+            raise WorkspacePolicyError("required candidate directory glob has no Git tree entries")
+        expanded.update(matches)
+    required = changed | set(scope.related_paths) | expanded
+    if scope.related_patterns and len(required) > _MAX_REQUIRED_SOURCE_PATHS:
+        raise WorkspacePolicyError("required candidate source exceeds its bounded path budget")
+    remaining_source_bytes = (
+        min(max_bytes * 2, _MAX_TOTAL_SOURCE_BYTES) if scope.related_patterns else None
+    )
     files: list[dict[str, str | bool | None]] = []
     for path in sorted(required):
         if redact_text(path).occurrences:
@@ -169,8 +202,32 @@ def candidate_review_snapshot(
         if old is None and new is None:
             raise WorkspacePolicyError("required candidate dependency is missing")
         # Reject unsupported required entries before producing a partial review package.
-        old_text = _text_blob(root, old, max_bytes) if old is not None else None
-        new_text = _text_blob(root, new, max_bytes) if new is not None else None
+        old_text = (
+            _text_blob(
+                root,
+                old,
+                max_bytes
+                if remaining_source_bytes is None
+                else min(max_bytes, remaining_source_bytes),
+            )
+            if old is not None
+            else None
+        )
+        if old_text is not None and remaining_source_bytes is not None:
+            remaining_source_bytes -= len(old_text.encode())
+        new_text = (
+            _text_blob(
+                root,
+                new,
+                max_bytes
+                if remaining_source_bytes is None
+                else min(max_bytes, remaining_source_bytes),
+            )
+            if new is not None
+            else None
+        )
+        if new_text is not None and remaining_source_bytes is not None:
+            remaining_source_bytes -= len(new_text.encode())
         item: dict[str, str | bool | None] = {
             "path": path,
             "base_blob": old.object_id if old else None,

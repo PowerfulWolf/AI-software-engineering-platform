@@ -14,6 +14,7 @@ from ai_software_engineer.agents import (
     CodexCliAgentAdapter,
     ResponsesAgentAdapter,
 )
+from ai_software_engineer.agents.candidate_binding import BoundCandidateSource
 from ai_software_engineer.agents.codex_cli import CodexInvocationResult
 from ai_software_engineer.agents.models import AgentRequest
 from ai_software_engineer.agents.openai_compatible import PromptPayload
@@ -174,12 +175,15 @@ def test_codex_accepts_only_fresh_proof_bound_commandless_qa_fail(
         prompt_builder=builder,
         execution_guard=fixture.guard,
         runner=runner,
+        candidate_source=BoundCandidateSource(MagicMock()),
     )
     result = adapter.run(request)
     if defect == "none":
         assert result.status is AgentRunStatus.SUCCEEDED
         assert result.artifact is not None
         assert "Do not run tests or any planned verification command" in runner.prompt
+        assert contract.proof_uri in runner.prompt
+        assert "SOURCE_PACKAGE=" not in runner.prompt
         assert "If the acceptance mapping does not identify focused selectors" not in runner.prompt
         assert "ASE_PROJECT_PYTEST" not in runner.environment
     else:

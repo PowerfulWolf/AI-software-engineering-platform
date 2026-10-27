@@ -1281,7 +1281,7 @@ class CodexCliAgentAdapter:
             )
             if continuation_prompt is not None:
                 compiled_prompt += continuation_prompt
-            if verifier and self._candidate_source is None:
+            if verifier and self._candidate_source is None and not static_qa:
                 compiled_prompt += candidate_read_snapshot(
                     self._workspace_root, source_revision, request.permissions
                 )
@@ -1301,7 +1301,10 @@ class CodexCliAgentAdapter:
                     f"\nAttached image {index}: {attachment.label}; "
                     f"PNG SHA-256 {attachment.image.sha256}\n"
                 )
-            if verifier and self._candidate_source is not None:
+            # The exact static QA proof already binds the absent candidate test
+            # entry. Generic Plan dependency reading would reject that absence
+            # before the independent QA model could report the required FAIL.
+            if verifier and self._candidate_source is not None and not static_qa:
                 compiled_prompt = self._candidate_source.append(
                     request,
                     self._workspace_root,

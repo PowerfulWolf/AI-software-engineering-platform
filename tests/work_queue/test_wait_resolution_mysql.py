@@ -8,6 +8,7 @@ from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal, cast
 
 import pytest
@@ -50,7 +51,13 @@ from ai_software_engineer.domain.engineering_authority import (
 from ai_software_engineer.domain.enums import WorkItemStatus
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure, DeliveryRetryPolicy
 from ai_software_engineer.knowledge.models import digest
-from ai_software_engineer.manager.verifier_preparation import VerifierPreparationIntent
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.manager.preflight_gate import PreflightInvocationControl
+from ai_software_engineer.manager.verifier_preparation import (
+    VerifierPreparationCheckpoint,
+    VerifierPreparationIntent,
+    VerifierPreparationObservation,
+)
 from ai_software_engineer.orchestration.state_machine import build_event
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.store import MySqlTaskRepository
@@ -61,8 +68,17 @@ from ai_software_engineer.work_queue.execution_store import (
     RoleQueueAdmission,
     record_digest,
 )
+from ai_software_engineer.work_queue.invocation import (
+    DeliveryInvocationStart,
+    DurableInvocationControl,
+)
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
 from ai_software_engineer.work_queue.ports import QueueConflict, QueueCorruption, QueueLeaseLost
+from ai_software_engineer.work_queue.preparation_resume import static_qa_preparation_reclaimed
+from ai_software_engineer.work_queue.worker import (
+    WorkerDeliveryFailureControl,
+    WorkerExecutionGuard,
+)
 from tests.agents.test_openai_compatible import _coder_request
 from tests.domain.factories import (
     make_coder_progress_artifact,
@@ -71,6 +87,7 @@ from tests.domain.factories import (
     make_qa_artifact,
     make_task,
 )
+from tests.manager.test_native_verification import _Guard
 from tests.work_queue.test_worker_mysql import (
     ALLOCATION_SHA,
     REPOSITORY_ID,
@@ -874,6 +891,274 @@ def test_preparation_resume_requires_real_consumed_generation_and_original_reque
     reclaimed = dispatcher(reopened).tick(now=retry_time, work_item_id=reclaimed_item.id).claim
     assert reclaimed is not None
     assert not reopened.preparation_resume_consumed(intent, reclaimed)
+
+
+@pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
+@pytest.mark.parametrize(
+    "case",
+    [
+        "ready",
+        "missing_marker",
+        "native_started",
+        "native_finished",
+        "invocation_started",
+        "wrong_decision",
+        "old_lease_active",
+        "skipped_generation",
+        "second_reclaim",
+        "wrong_claim",
+    ],
+)
+def test_static_qa_reclaimed_ready_no_start_preparation_uses_consumed_decision(
+    waiting: WaitingFixture, tmp_path: Path, case: str
+) -> None:
+    resolution = _static_qa_resolution(waiting)
+    ready = waiting.queue.resolve_wait(resolution)
+    first = (
+        dispatcher(waiting.queue)
+        .tick(now=waiting.now + timedelta(seconds=8), work_item_id=ready.id)
+        .claim
+    )
+    assert first is not None
+    task = waiting.repository.get(first.work_item.task_id)
+    request = AgentRequest.model_validate(
+        {
+            **_coder_request().to_wire(),
+            "task_id": task.id,
+            "role": AgentRole.QA.value,
+            "source_revision": SOURCE,
+            "output_schema": "schemas/qa-report.schema.json",
+            "run_id": "run_static_qa_reclaimed_ready",
+            "context_manifest_id": "ctx_" + "e" * 64,
+        }
+    )
+    intent = VerifierPreparationIntent.create(
+        work_item_id=first.work_item.id,
+        lease_id=first.lease.id,
+        task_id=task.id,
+        task_snapshot_sha256=digest(task.to_wire()),
+        checkpoint_sequence=first.work_item.checkpoint_sequence,
+        dispatch_sequence=first.work_item.dispatch_sequence,
+        request=request,
+        request_sha256=digest(request.to_wire()),
+        started_at=first.claimed_at,
+    )
+    observation = VerifierPreparationObservation(native_execution_state="NOT_STARTED")
+    marker = VerifierPreparationCheckpoint.create(
+        work_item_id=first.work_item.id,
+        lease_id=first.lease.id,
+        task_id=task.id,
+        task_snapshot_sha256=digest(task.to_wire()),
+        checkpoint_sequence=first.work_item.checkpoint_sequence,
+        dispatch_sequence=first.work_item.dispatch_sequence,
+        wait_dispatch_sequence=first.work_item.dispatch_sequence,
+        wait_lease_id=first.lease.id,
+        intent_sha256=intent.intent_sha256,
+        source_revision=request.source_revision,
+        run_id=request.run_id,
+        role=request.role,
+        attempt=request.attempt,
+        context_manifest_id=request.context_manifest_id,
+        request_sha256=digest(request.to_wire()),
+        request=request,
+        result="READY",
+        observation=observation,
+        checked_at=first.claimed_at,
+    )
+    records = KnowledgeRecordStore(tmp_path / "preflight")
+    records.put("verifier-preparation-intents", "first", intent)
+    if case != "missing_marker":
+        records.put("verifier-preparations", marker.checkpoint_sha256, marker)
+    invocations = KnowledgeRecordStore(tmp_path / "invocations")
+    if case == "invocation_started":
+        start = DeliveryInvocationStart(
+            work_item_id=first.work_item.id,
+            checkpoint_sequence=first.work_item.checkpoint_sequence,
+            request=request,
+            lease_id=first.lease.id,
+            started_at=first.claimed_at,
+            start_sha256="0" * 64,
+        )
+        start = start.model_copy(
+            update={"start_sha256": digest(start.model_dump(mode="json", exclude={"start_sha256"}))}
+        )
+        invocations.put("invocation-starts", first.work_item.id, start)
+    waiting.queue.start(
+        ready.id,
+        lease_id=first.lease.id,
+        owner_token=TOKEN,
+        now=waiting.now + timedelta(seconds=9),
+    )
+    retry_at = first.lease.expires_at + timedelta(seconds=1)
+    waiting.queue.reclaim_expired(now=first.lease.expires_at, retry_at=retry_at)
+    second = (
+        dispatcher(waiting.queue)
+        .tick(now=retry_at + timedelta(seconds=1), work_item_id=ready.id)
+        .claim
+    )
+    assert second is not None
+    assert waiting.queue.static_qa_resolution_for_claim(second) == resolution
+    assert not waiting.queue.preparation_resume_consumed(intent, second)
+    if case == "old_lease_active":
+        with closing(open_mysql_connection(waiting.dsn)) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE work_queue_claims SET state='ACTIVE' WHERE lease_id=%s",
+                    (first.lease.id,),
+                )
+            connection.commit()
+    if case in {"skipped_generation", "second_reclaim"}:
+        if case == "second_reclaim":
+            later_request = request.model_copy(
+                update={
+                    "run_id": "run_static_qa_second_reclaim",
+                    "context_manifest_id": "ctx_" + "c" * 64,
+                }
+            )
+            later_intent = VerifierPreparationIntent.create(
+                work_item_id=second.work_item.id,
+                lease_id=second.lease.id,
+                task_id=task.id,
+                task_snapshot_sha256=digest(task.to_wire()),
+                checkpoint_sequence=second.work_item.checkpoint_sequence,
+                dispatch_sequence=second.work_item.dispatch_sequence,
+                request=later_request,
+                request_sha256=digest(later_request.to_wire()),
+                started_at=second.claimed_at,
+            )
+            later_marker = VerifierPreparationCheckpoint.create(
+                work_item_id=second.work_item.id,
+                lease_id=second.lease.id,
+                task_id=task.id,
+                task_snapshot_sha256=digest(task.to_wire()),
+                checkpoint_sequence=second.work_item.checkpoint_sequence,
+                dispatch_sequence=second.work_item.dispatch_sequence,
+                wait_dispatch_sequence=second.work_item.dispatch_sequence,
+                wait_lease_id=second.lease.id,
+                intent_sha256=later_intent.intent_sha256,
+                source_revision=later_request.source_revision,
+                run_id=later_request.run_id,
+                role=later_request.role,
+                attempt=later_request.attempt,
+                context_manifest_id=later_request.context_manifest_id,
+                request_sha256=digest(later_request.to_wire()),
+                request=later_request,
+                result="READY",
+                observation=observation,
+                checked_at=second.claimed_at,
+            )
+            records.put("verifier-preparation-intents", "second", later_intent)
+            records.put("verifier-preparations", later_marker.checkpoint_sha256, later_marker)
+            intent = later_intent
+        next_retry = second.lease.expires_at + timedelta(seconds=1)
+        waiting.queue.reclaim_expired(now=second.lease.expires_at, retry_at=next_retry)
+        third = (
+            dispatcher(waiting.queue)
+            .tick(now=next_retry + timedelta(seconds=1), work_item_id=ready.id)
+            .claim
+        )
+        assert third is not None
+        second = third
+    if case == "wrong_claim":
+        second = second.model_copy(update={"worker_id": "worker_wrong_static_reclaim"})
+    if case == "wrong_decision":
+        with closing(open_mysql_connection(waiting.dsn)) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE work_queue_events SET payload_json=JSON_SET(payload_json, "
+                    "'$.detail.resolution.resolution_kind', 'RESUME_UNINVOKED') "
+                    "WHERE work_item_id=%s AND event_type='WAIT_RESOLVED'",
+                    (ready.id,),
+                )
+            connection.commit()
+        with pytest.raises(QueueCorruption):
+            static_qa_preparation_reclaimed(
+                waiting.queue,
+                waiting.dsn,
+                records,
+                invocations,
+                lambda *_: observation,
+                intent,
+                second,
+            )
+        return
+    observed = observation
+    if case == "native_started":
+        observed = VerifierPreparationObservation(
+            native_execution_state="UNCERTAIN", native_started_sha256="f" * 64
+        )
+    elif case == "native_finished":
+        observed = VerifierPreparationObservation(
+            native_execution_state="FINISHED",
+            native_binding_plan_sha256="f" * 64,
+            native_started_sha256="e" * 64,
+            native_finished_sha256="d" * 64,
+        )
+    if case == "wrong_claim":
+        with pytest.raises(QueueConflict):
+            static_qa_preparation_reclaimed(
+                waiting.queue,
+                waiting.dsn,
+                records,
+                invocations,
+                lambda *_: observed,
+                intent,
+                second,
+            )
+        return
+    recovered = static_qa_preparation_reclaimed(
+        waiting.queue,
+        waiting.dsn,
+        records,
+        invocations,
+        lambda observed_request, lease_id: observed,
+        intent,
+        second,
+    )
+    assert recovered is (case == "ready")
+    if case == "ready":
+        next_request = request.model_copy(
+            update={
+                "run_id": "run_static_qa_reclaimed_next",
+                "context_manifest_id": "ctx_" + "d" * 64,
+            }
+        )
+        guard = _Guard(second)
+        guard.lease = SimpleNamespace(claim=second)
+        gate = PreflightInvocationControl(
+            delegate=DurableInvocationControl(invocations, cast(WorkerExecutionGuard, guard)),
+            guard=cast(WorkerExecutionGuard, guard),
+            task_reader=lambda: task,
+            inspect=lambda *_: None,
+            records=records,
+            failure_control=cast(
+                WorkerDeliveryFailureControl,
+                SimpleNamespace(wait=lambda *_args, **_kwargs: None),
+            ),
+            prepare_verifier=lambda *_: None,
+            observe_verifier=lambda *_: observation,
+            resumed_preparation=waiting.queue.preparation_resume_consumed,
+            reclaimed_static_preparation=lambda prior, current: static_qa_preparation_reclaimed(
+                waiting.queue,
+                waiting.dsn,
+                records,
+                invocations,
+                lambda *_: observation,
+                prior,
+                current,
+            ),
+            prepare_input=lambda *_: None,
+        )
+        assert gate.prepare(next_request) == next_request
+        starts = invocations.list("invocation-starts", DeliveryInvocationStart)
+        assert len(starts) == 1 and starts[0].request == next_request
+        assert len(records.list("verifier-preparation-intents", VerifierPreparationIntent)) == 2
+        assert any(
+            marker.lease_id == second.lease.id and marker.result == "READY"
+            for marker in records.list("verifier-preparations", VerifierPreparationCheckpoint)
+        )
+    assert waiting.resolution_events() == 1
+    assert waiting.repository.get(task.id) == task
 
 
 def test_restart_replays_exact_resolution_once_and_rejects_a_different_proof(
