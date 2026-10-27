@@ -122,7 +122,7 @@ def test_public_static_qa_decision_yields_proof_bound_fail_and_coder_retry(
     def prepare_input(self: CodexCliAgentAdapter, request: AgentRequest) -> None:
         if request.role is AgentRole.QA:
             prepared.append(request)
-            CodexCliAgentAdapter.prepare_input(self, request)
+            fixture_prepare(self, request)
         else:
             fixture_prepare(self, request)
 
@@ -130,7 +130,7 @@ def test_public_static_qa_decision_yields_proof_bound_fail_and_coder_retry(
         if request.role is AgentRole.QA:
             current_qa[:] = [request]
             invoked.append(request)
-            return CodexCliAgentAdapter.run(self, request)
+            return fixture_run(self, request)
         return fixture_run(self, request)
 
     monkeypatch.setattr(fixture_adapter, "prepare_input", prepare_input)
