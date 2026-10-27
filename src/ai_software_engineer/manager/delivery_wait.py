@@ -253,6 +253,7 @@ def current_static_qa_for_claim(
     current = observe_accepted_candidate_test_entry_absence(
         repository_root=Path(task.repository),
         task=task,
+        repository=repository,
         source_revision=request.source_revision,
         accepted=queue.accepted(task.id),
         artifacts=artifacts,
@@ -1475,6 +1476,7 @@ class DeliveryWaitService:
                 static_observation = observe_accepted_candidate_test_entry_absence(
                     repository_root=Path(task.repository),
                     task=task,
+                    repository=self.repository,
                     source_revision=step.boundary.source_revision,
                     accepted=self.queue.accepted(task.id),
                     artifacts=self.artifacts,

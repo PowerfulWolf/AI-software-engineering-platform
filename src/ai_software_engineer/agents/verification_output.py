@@ -93,6 +93,7 @@ class TrustedStaticQaMissingEntryOutputContract(DomainModel):
     authority_sha256: Sha256
     claim_sha256: Sha256
     observation_sha256: Sha256
+    implementation_artifact_id: NonEmptyStr
     missing: tuple[StaticQaMissingEntry, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -141,6 +142,7 @@ def static_qa_missing_entry_output_contract(
         authority_sha256=authority_sha256,
         claim_sha256=claim_sha256,
         observation_sha256=observation.observation_sha256,
+        implementation_artifact_id=observation.implementation_artifact_id,
         missing=tuple(
             StaticQaMissingEntry(path=path, criterion_ids=tuple(criteria))
             for path, criteria in by_path.items()
@@ -169,7 +171,7 @@ def validate_static_qa_missing_entry_output(
         or artifact.task_id != request.task_id
         or artifact.source_revision != request.source_revision
         or artifact.context_manifest_id != request.context_manifest_id
-        or artifact.parent_artifact_ids != request.input_artifact_ids
+        or artifact.parent_artifact_ids != (contract.implementation_artifact_id,)
         or artifact.producer.role is not AgentRole.QA
         or artifact.producer.run_id != request.run_id
     ):

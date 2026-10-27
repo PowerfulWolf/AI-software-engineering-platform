@@ -123,7 +123,7 @@ def test_codex_accepts_only_fresh_proof_bound_commandless_qa_fail(
             "task_id": request.task_id,
             "source_revision": request.source_revision,
             "context_manifest_id": request.context_manifest_id,
-            "parent_artifact_ids": request.input_artifact_ids,
+            "parent_artifact_ids": (contract.implementation_artifact_id,),
             "producer": template_report.producer.model_copy(update={"run_id": request.run_id}),
         }
     )

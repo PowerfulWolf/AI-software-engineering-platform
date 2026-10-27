@@ -16,8 +16,11 @@ from pydantic import Field, model_validator
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.domain import (
     AgentRole,
+    CoderProgressArtifact,
     ImplementationReportArtifact,
     PlanArtifact,
+    QaReportArtifact,
+    ReviewReportArtifact,
     Task,
     TaskStatus,
 )
@@ -27,6 +30,7 @@ from ai_software_engineer.domain.execution_window import PlannedVerificationRequ
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.native_verification import role_verification_digest
 from ai_software_engineer.manager.verification_process import bounded_verification_command
+from ai_software_engineer.store.ports import TaskRepository
 from ai_software_engineer.work_queue.execution_store import AcceptedRoleArtifact
 
 _ENVIRONMENT = {
@@ -217,6 +221,7 @@ def observe_accepted_candidate_test_entry_absence(
     *,
     repository_root: Path,
     task: Task,
+    repository: TaskRepository,
     source_revision: str,
     accepted: tuple[AcceptedRoleArtifact, ...],
     artifacts: ArtifactStore,
@@ -242,17 +247,46 @@ def observe_accepted_candidate_test_entry_absence(
     if len(candidates) != 1:
         raise ValueError("static QA requires one exact accepted candidate")
     implementation = candidates[0]
-    if len(implementation.parent_artifact_ids) != 1:
+    parents = tuple(artifacts.get(parent_id) for parent_id in implementation.parent_artifact_ids)
+    plans = tuple(parent for parent in parents if isinstance(parent, PlanArtifact))
+    if len(plans) != 1:
         raise ValueError("static QA candidate requires one frozen Plan parent")
-    plan = artifacts.get(implementation.parent_artifact_ids[0])
+    plan = plans[0]
+    for parent in parents:
+        if parent is plan:
+            continue
+        if not isinstance(
+            parent,
+            (
+                CoderProgressArtifact,
+                ImplementationReportArtifact,
+                QaReportArtifact,
+                ReviewReportArtifact,
+            ),
+        ) or not any(
+            record.task_id == task.id
+            and record.receipt.artifact_id == parent.artifact_id
+            and record.receipt.sha256 == artifact_digest(parent)
+            and record.source_revision == parent.source_revision
+            and record.run_id == parent.producer.run_id
+            and record.context_manifest_id == parent.context_manifest_id
+            for record in accepted
+        ):
+            raise ValueError("static QA candidate parent is not an accepted role artifact")
+    # The Orchestrator's frozen Plan predates the Coder/QA/Review Worker queue.
+    # It is accepted through the Task's durable PLANNING -> IMPLEMENTING event,
+    # not through work_queue_accepted_artifacts. Demand that exact event rather
+    # than manufacturing a queue publication that never exists in production.
     if not isinstance(plan, PlanArtifact) or not any(
-        record.task_id == task.id
-        and record.receipt.artifact_id == plan.artifact_id
-        and record.receipt.sha256 == artifact_digest(plan)
-        and record.source_revision == plan.source_revision
-        for record in accepted
+        event.task_id == task.id
+        and event.from_status is TaskStatus.PLANNING
+        and event.to_status is TaskStatus.IMPLEMENTING
+        and event.reason in {"plan_validated", "plan_recovered"}
+        and event.artifact_ids == (plan.artifact_id,)
+        and event.source_revision == plan.source_revision == task.base_ref
+        for event in repository.list_events(task.id)
     ):
-        raise ValueError("static QA requires the accepted Plan")
+        raise ValueError("static QA requires the durable accepted Plan event")
     return observe_candidate_test_entry_absence(
         repository_root=repository_root,
         task=task,

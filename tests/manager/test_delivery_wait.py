@@ -24,7 +24,7 @@ from ai_software_engineer.agents.models import (
     AgentRunStatus,
 )
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
-from ai_software_engineer.domain import AgentDefinition, ArtifactKind, Task
+from ai_software_engineer.domain import AgentDefinition, ArtifactKind, StateEvent, Task
 from ai_software_engineer.domain.artifact import (
     ArtifactIntegrity,
     ImplementationReportArtifact,
@@ -720,6 +720,10 @@ class WaitQueue:
     def accepted(self, task_id: str) -> tuple[AcceptedRoleArtifact, ...]:
         assert task_id == self.item.task_id
         return self.accepted_artifacts
+
+    def static_qa_resolution_for_claim(self, claim: QueueClaim) -> DeliveryResolution | None:
+        del claim
+        return None
 
     def consume(self, resolution: DeliveryResolution) -> None:
         if resolution not in self.consumed:
@@ -2190,6 +2194,19 @@ def test_static_qa_missing_entry_proposes_manual_static_recovery(
         artifacts.put(plan)
         artifacts.put(implementation)
         fixture.entry.artifacts = artifacts
+        plan_event = StateEvent(
+            event_id="evt_static_qa_frozen_plan",
+            task_id=fixture.native.task.id,
+            from_status=TaskStatus.PLANNING,
+            to_status=TaskStatus.IMPLEMENTING,
+            actor=AgentRole.ORCHESTRATOR,
+            attempt=1,
+            reason="plan_validated",
+            artifact_ids=(plan.artifact_id,),
+            source_revision=plan.source_revision,
+            occurred_at=NOW,
+        )
+        monkeypatch.setattr(fixture.repository, "list_events", lambda task_id: (plan_event,))
         scope = fixture.native.registry.scope
         waiting = DeliveryPreflightReceipt(
             scope=DeliveryPreflightScope(
@@ -2238,7 +2255,7 @@ def test_static_qa_missing_entry_proposes_manual_static_recovery(
                     sha256=artifact.integrity.sha256,
                 ),
             )
-            for artifact in (plan, implementation)
+            for artifact in (implementation,)
         )
         command = fixture.queue.command()
         proof = fixture.entry.inspect(command)

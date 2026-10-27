@@ -1356,6 +1356,48 @@ class ProductionProjectDeliveryBackend:
                     ),
                 )
                 selected_adapters = selected_adapters.with_registered_verifier(native_registry)
+
+                from ai_software_engineer.agents.execution import ExecutionGuard
+                from ai_software_engineer.agents.verification_output import (
+                    TrustedStaticQaMissingEntryOutputContract,
+                    static_qa_missing_entry_output_contract,
+                )
+                from ai_software_engineer.manager.delivery_wait import (
+                    DeliveryWaitRejected,
+                    current_static_qa_for_claim,
+                )
+
+                def static_qa_contract(
+                    request: AgentRequest,
+                    workspace_root: Path,
+                    execution_guard: ExecutionGuard | None,
+                ) -> TrustedStaticQaMissingEntryOutputContract | None:
+                    if request.role is not AgentRole.QA:
+                        return None
+                    if execution_guard is not worker_guard or active_runtime is None:
+                        raise DeliveryWaitRejected("静态 QA 缺少当前受控 Worker 与运行时")
+                    proof = current_static_qa_for_claim(
+                        request=request,
+                        guard=worker_guard,
+                        workspace_root=workspace_root,
+                        queue=queue,
+                        repository=active_runtime.task_repository,
+                        artifacts=accepted_artifacts,
+                        sidecar_state=facts.workspace.directory("state"),
+                    )
+                    if proof is None:
+                        return None
+                    return static_qa_missing_entry_output_contract(
+                        request,
+                        observation=proof.observation,
+                        sealed_no_start_proof_sha256=proof.resolution.proof_sha256,
+                        authority_sha256=proof.resolution.resolution_sha256,
+                        claim_sha256=proof.claim_sha256,
+                    )
+
+                selected_adapters = selected_adapters.with_static_qa_contract_resolver(
+                    static_qa_contract
+                )
             if dispatch.task.interruption_continuation_policy is not None:
                 from ai_software_engineer.git import GitWorktreeManager
                 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation

@@ -5,12 +5,14 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from typing import cast
+from unittest.mock import MagicMock
 
 import pytest
 
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.domain import (
     AgentRole,
+    CoderProgressArtifact,
     ImplementationReportArtifact,
     PlanArtifact,
     Task,
@@ -22,11 +24,14 @@ from ai_software_engineer.manager.candidate_test_entry_absence import (
     observe_accepted_candidate_test_entry_absence,
     observe_candidate_test_entry_absence,
 )
+from ai_software_engineer.store.ports import TaskRepository
 from ai_software_engineer.work_queue.execution_store import AcceptedRoleArtifact
 from ai_software_engineer.work_queue.models import QueueArtifactReceipt
 from tests.domain.factories import (
+    make_coder_progress_artifact,
     make_implementation_artifact,
     make_plan_artifact,
+    make_state_event,
     make_task,
 )
 
@@ -105,7 +110,7 @@ def test_missing_planned_test_entry_is_bound_to_exact_candidate_and_row(
         changed.validate_integrity()
 
 
-def test_accepted_candidate_absence_requires_both_exact_artifact_receipts(
+def test_accepted_candidate_absence_requires_candidate_receipt_and_durable_plan_event(
     repository: Path, tmp_path: Path
 ) -> None:
     candidate = _git(repository, "rev-parse", "HEAD")
@@ -114,6 +119,7 @@ def test_accepted_candidate_absence_requires_both_exact_artifact_receipts(
     plan = plan.model_copy(update={"context_manifest_id": "ctx_" + "a" * 64})
     implementation = implementation.model_copy(update={"context_manifest_id": "ctx_" + "b" * 64})
     plan = cast(PlanArtifact, seal_artifact(plan, validated_at=task.updated_at))
+    task = task.model_copy(update={"base_ref": plan.source_revision})
     implementation = cast(
         ImplementationReportArtifact, seal_artifact(implementation, validated_at=task.updated_at)
     )
@@ -135,25 +141,42 @@ def test_accepted_candidate_absence_requires_both_exact_artifact_receipts(
             ),
         )
 
-    receipts = (accepted(plan), accepted(implementation))
+    receipt = accepted(implementation)
+    event = make_state_event(
+        task_id=task.id,
+        from_status=TaskStatus.PLANNING,
+        to_status=TaskStatus.IMPLEMENTING,
+    ).model_copy(
+        update={
+            "reason": "plan_validated",
+            "artifact_ids": (plan.artifact_id,),
+            "source_revision": plan.source_revision,
+        }
+    )
+    durable = MagicMock(spec=TaskRepository)
+    durable.list_events.return_value = (event,)
     observed = observe_accepted_candidate_test_entry_absence(
         repository_root=repository,
         task=task,
+        repository=durable,
         source_revision=candidate,
-        accepted=receipts,
+        accepted=(receipt,),
         artifacts=store,
     )
     assert observed.candidate_revision == candidate
     assert observed.missing[0].path == "tests/browser/fixture.test.cjs"
-    with pytest.raises(ValueError, match="accepted Plan"):
+    durable.list_events.return_value = ()
+    with pytest.raises(ValueError, match="durable accepted Plan event"):
         observe_accepted_candidate_test_entry_absence(
             repository_root=repository,
             task=task,
+            repository=durable,
             source_revision=candidate,
-            accepted=(receipts[1],),
+            accepted=(receipt,),
             artifacts=store,
         )
-    changed = receipts[1].model_copy(
+    durable.list_events.return_value = (event,)
+    changed = receipt.model_copy(
         update={
             "receipt": QueueArtifactReceipt(artifact_id=implementation.artifact_id, sha256="f" * 64)
         }
@@ -162,8 +185,84 @@ def test_accepted_candidate_absence_requires_both_exact_artifact_receipts(
         observe_accepted_candidate_test_entry_absence(
             repository_root=repository,
             task=task,
+            repository=durable,
             source_revision=candidate,
-            accepted=(receipts[0], changed),
+            accepted=(changed,),
+            artifacts=store,
+        )
+
+
+def test_accepted_candidate_with_k1_style_plan_and_progress_parents(
+    repository: Path, tmp_path: Path
+) -> None:
+    candidate = _git(repository, "rev-parse", "HEAD")
+    task, plan, implementation = _sources(repository, candidate)
+    store = FileArtifactStore(tmp_path / "artifacts")
+    plan = cast(PlanArtifact, seal_artifact(plan, validated_at=task.updated_at))
+    task = task.model_copy(update={"base_ref": plan.source_revision})
+    progress = make_coder_progress_artifact().model_copy(
+        update={"source_revision": task.base_ref, "context_manifest_id": "ctx_" + "a" * 64}
+    )
+    progress = cast(CoderProgressArtifact, seal_artifact(progress, validated_at=task.updated_at))
+    implementation = implementation.model_copy(
+        update={
+            "parent_artifact_ids": (plan.artifact_id, progress.artifact_id),
+            "context_manifest_id": "ctx_" + "b" * 64,
+        }
+    )
+    implementation = cast(
+        ImplementationReportArtifact, seal_artifact(implementation, validated_at=task.updated_at)
+    )
+    for artifact in (plan, progress, implementation):
+        store.put(artifact)
+
+    def receipt(
+        artifact: CoderProgressArtifact | ImplementationReportArtifact,
+    ) -> AcceptedRoleArtifact:
+        return AcceptedRoleArtifact(
+            task_id=task.id,
+            work_item_id="work_" + artifact.artifact_id,
+            lease_id="lease_" + artifact.artifact_id,
+            dispatch_sequence=0,
+            checkpoint_sequence=0,
+            run_id=artifact.producer.run_id,
+            context_manifest_id=artifact.context_manifest_id,
+            source_revision=artifact.source_revision,
+            receipt=QueueArtifactReceipt(
+                artifact_id=artifact.artifact_id, sha256=artifact.integrity.sha256
+            ),
+        )
+
+    durable = MagicMock(spec=TaskRepository)
+    durable.list_events.return_value = (
+        make_state_event(
+            task_id=task.id,
+            from_status=TaskStatus.PLANNING,
+            to_status=TaskStatus.IMPLEMENTING,
+        ).model_copy(
+            update={
+                "reason": "plan_validated",
+                "artifact_ids": (plan.artifact_id,),
+                "source_revision": plan.source_revision,
+            }
+        ),
+    )
+    observed = observe_accepted_candidate_test_entry_absence(
+        repository_root=repository,
+        task=task,
+        repository=durable,
+        source_revision=candidate,
+        accepted=(receipt(progress), receipt(implementation)),
+        artifacts=store,
+    )
+    assert observed.missing[0].path == "tests/browser/fixture.test.cjs"
+    with pytest.raises(ValueError, match="candidate parent is not an accepted"):
+        observe_accepted_candidate_test_entry_absence(
+            repository_root=repository,
+            task=task,
+            repository=durable,
+            source_revision=candidate,
+            accepted=(receipt(implementation),),
             artifacts=store,
         )
 

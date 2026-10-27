@@ -87,7 +87,15 @@ def preparation_resume_consumed(
     decision = event.detail.resolution
     decision.validate_integrity()
     proof = decision.verifier_preparation
-    if decision.resolution_kind is not DeliveryResolutionKind.RESUME_UNINVOKED or proof is None:
+    static = decision.resolution_kind is DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY
+    if (
+        decision.resolution_kind
+        not in {
+            DeliveryResolutionKind.RESUME_UNINVOKED,
+            DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,
+        }
+        or proof is None
+    ):
         return False
     capacity = proof.context_capacity_receipt_sha256 is not None
     return (
@@ -141,4 +149,18 @@ def preparation_resume_consumed(
         and proof.previous_run_id == intent.request.run_id
         and proof.previous_context_manifest_id == intent.request.context_manifest_id
         and proof.candidate_revision == intent.request.source_revision
+        and (
+            not static
+            or (
+                decision.static_qa_missing_entry is not None
+                and decision.static_qa_missing_entry.preparation_checkpoint_sha256
+                == proof.preparation_checkpoint_sha256
+                and decision.static_qa_missing_entry.original_lease_id == intent.lease_id
+                and decision.static_qa_missing_entry.previous_run_id == intent.request.run_id
+                and decision.static_qa_missing_entry.previous_context_manifest_id
+                == intent.request.context_manifest_id
+                and not capacity
+                and proof.native_execution_state == "NOT_STARTED"
+            )
+        )
     )

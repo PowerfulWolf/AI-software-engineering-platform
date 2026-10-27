@@ -81,7 +81,7 @@ def _subject() -> tuple[AgentRequest, TrustedStaticQaMissingEntryOutputContract,
             "task_id": request.task_id,
             "source_revision": request.source_revision,
             "context_manifest_id": request.context_manifest_id,
-            "parent_artifact_ids": request.input_artifact_ids,
+            "parent_artifact_ids": (contract.implementation_artifact_id,),
             "producer": template.producer.model_copy(update={"run_id": request.run_id}),
             "evidence": (evidence,),
             "content": template.content.model_copy(
@@ -172,6 +172,8 @@ def test_multiple_frozen_rows_for_one_file_preserve_all_affected_criteria() -> N
         "proof",
         "extra_evidence",
         "wrong_run",
+        "plan_parent",
+        "missing_parent",
     ],
 )
 def test_static_qa_rejects_any_unbound_or_nonfailing_output(defect: str) -> None:
@@ -210,6 +212,10 @@ def test_static_qa_rejects_any_unbound_or_nonfailing_output(defect: str) -> None
                 )
             }
         )
+    elif defect == "plan_parent":
+        report = report.model_copy(update={"parent_artifact_ids": request.input_artifact_ids})
+    elif defect == "missing_parent":
+        report = report.model_copy(update={"parent_artifact_ids": ()})
     else:
         report = report.model_copy(
             update={"producer": report.producer.model_copy(update={"run_id": "run_other"})}

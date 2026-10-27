@@ -103,6 +103,34 @@ def test_static_qa_responses_fallback_refuses_before_ordinary_verifier(
     registry.prepare_verifier.assert_not_called()
 
 
+def test_static_qa_mixed_routes_fail_closed_before_any_ordinary_verifier(
+    tmp_path: Path,
+) -> None:
+    request, contract, _ = _subject()
+    registry = MagicMock()
+    factory = (
+        ConfiguredDeliveryRouteAdapterFactory()
+        .with_registered_verifier(registry)
+        .with_static_qa_contract_resolver(lambda *_: contract)
+    )
+    binding = MagicMock()
+    binding.worktree.path = tmp_path
+    factory.prepare_verifier(
+        request=request,
+        route=_route(ModelProviderKind.CODEX_CLI),
+        binding=binding,
+        config=_config(tmp_path),
+    )
+    with pytest.raises(ProductionConfigError, match="guarded Codex CLI"):
+        factory.prepare_verifier(
+            request=request,
+            route=_route(ModelProviderKind.RESPONSES),
+            binding=binding,
+            config=_config(tmp_path),
+        )
+    registry.prepare_verifier.assert_not_called()
+
+
 def test_static_qa_callback_is_never_consulted_for_reviewer(tmp_path: Path) -> None:
     request, contract, _ = _subject()
     registry = MagicMock()
