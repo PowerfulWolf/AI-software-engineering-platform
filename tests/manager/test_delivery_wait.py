@@ -2157,6 +2157,69 @@ def test_public_mixed_prerequisite_investigation_preserves_rows_and_requires_cap
         _assert_public_mixed_prerequisites(fixture, tmp_path, browser, live, unknown_process)
 
 
+def test_unregistered_qa_preparation_drift_cannot_supply_no_start_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser = PlannedVerificationRequirement(
+        id="browser_entry",
+        role=AgentRole.QA,
+        criterion_ids=("ac_models_01",),
+        argv=("node", "--test", "tests/browser.test.cjs"),
+        planned_new_files=("tests/browser.test.cjs",),
+        verification_levels=("e2e",),
+    )
+    with _native_preparation_wait(
+        tmp_path, monkeypatch, state="NOT_STARTED", requirements=(browser,)
+    ) as fixture:
+        scope = fixture.native.registry.scope
+        waiting = DeliveryPreflightReceipt(
+            scope=DeliveryPreflightScope(
+                team_id=scope.team_id,
+                project_id=scope.project_id,
+                repository_id=scope.repository_id,
+                requirement_id=scope.requirement_id,
+            ),
+            task_id=fixture.native.task.id,
+            source_revision=fixture.native.request.source_revision,
+            plan_sha256="d" * 64,
+            frozen_policy_sha256="e" * 64,
+            requirements_sha256="f" * 64,
+            observations=(
+                DeliveryPreflightObservation(
+                    requirement_id=browser.id,
+                    status="WAIT_ENGINEERING",
+                    reason_code="FIXTURE_UNREGISTERED",
+                ),
+            ),
+            status="WAIT_ENGINEERING",
+            checked_at=NOW,
+            receipt_sha256="0" * 64,
+        )
+        waiting = waiting.model_copy(
+            update={
+                "receipt_sha256": digest(
+                    waiting.model_dump(mode="json", exclude={"receipt_sha256"})
+                )
+            }
+        )
+        waiting.validate_integrity()
+        fixture.entry.prerequisite_collector = lambda task, step: waiting
+        fixture.queue.original = fixture.queue.original.model_copy(
+            update={
+                "work_item": fixture.queue.original.work_item.model_copy(
+                    update={"attempt": fixture.queue.original.work_item.attempt + 1}
+                )
+            }
+        )
+        proof = fixture.entry.inspect(fixture.queue.command())
+        assert DeliveryProofMissing.PREREQUISITES_UNVERIFIED in proof.missing
+        assert DeliveryProofMissing.VERIFIER_PREPARATION_UNAVAILABLE in proof.missing
+        assert proof.verifier_preparation is None
+        assert proof.permitted_resolutions == ()
+        assert not fixture.queue.consumed
+
+
 def _assert_public_mixed_prerequisites(
     fixture: _PreparationWaitFixture,
     tmp_path: Path,
@@ -2278,6 +2341,22 @@ def _assert_public_mixed_prerequisites(
             for item in receipt.observations[:65]
         )
     assert DeliveryProofMissing.PREREQUISITES_UNVERIFIED in proof.missing
+    assert proof.verifier_preparation is not None
+    assert proof.verifier_preparation.native_execution_state == "NOT_STARTED"
+    assert proof.verifier_preparation.preparation_checkpoint_sha256 == (
+        fixture.marker.checkpoint_sha256
+    )
+    with pytest.raises(DeliveryWaitRejected):
+        entry.resolve(
+            ResolveDeliveryWait.model_validate(
+                {
+                    **queue.command().to_wire(),
+                    "proof_sha256": proof.proof_sha256,
+                    "resolution_kind": DeliveryResolutionKind.RESUME_UNINVOKED,
+                    "submitted_at": NOW + timedelta(seconds=2),
+                }
+            )
+        )
     handling = entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire()))
     assert handling.resolution is None
     assert entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire())) == handling

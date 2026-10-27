@@ -25,6 +25,15 @@ re-enters the ordinary verifier and waits again. The immutable old wait must rem
 in history. A genuine QA FAIL would then follow the ordinary Coder remediation path,
 and the repaired candidate would still need independent QA and Review.
 
+The existing engineering wait investigation now preserves the original QA verifier
+preparation as `NOT_STARTED` even when a newly collected mixed prerequisite receipt
+is `WAIT_ENGINEERING`. It verifies the original preparation intent, historical
+claims and current native execution records before recording that fact. A missing
+or drifted original claim remains `VERIFIER_PREPARATION_UNAVAILABLE`; an uncertain
+native execution remains `NATIVE_EXECUTION_UNCERTAIN`. The prerequisite blocker
+and empty permitted-resolution list stay intact. This is read-only diagnostic
+evidence, not a static QA admission or authorization to resume.
+
 No existing Requirement, Task, Operation, queue or verdict data is changed by this
 inactive code. Removing this code is the rollback; current K1 stays at its original
 wait until the complete public recovery route is separately implemented and checked.

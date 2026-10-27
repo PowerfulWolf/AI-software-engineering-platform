@@ -1284,6 +1284,31 @@ class DeliveryWaitService:
             ):
                 raise DeliveryWaitRejected("前提调查不属于当前 Task 和 Repository")
             self.records.put("wait-prerequisites", prerequisites.receipt_sha256, prerequisites)
+        if (
+            item.role is AgentRole.QA
+            and start is None
+            and outcome is None
+            and prerequisites is not None
+            and prerequisites.status == "WAIT_ENGINEERING"
+            and any(
+                value.startswith("verifier-preparation://")
+                for value in item.wait_disposition.facts.evidence_ids
+            )
+        ):
+            # A missing controlled capability does not make the original QA
+            # preparation disappear. Preserve its independently observed
+            # no-start fact in the existing investigation wire, but grant no
+            # resume while the complete prerequisite set is unavailable.
+            try:
+                observed_preparation = self._claimed_verifier_preparation(
+                    item, task, step, prerequisites
+                )
+                if observed_preparation.native_execution_state == "NOT_STARTED":
+                    verifier_preparation = observed_preparation
+            except DeliveryNativeExecutionUncertain:
+                missing.append(DeliveryProofMissing.NATIVE_EXECUTION_UNCERTAIN)
+            except (ValueError, QueueError, OSError, KnowledgeError):
+                missing.append(DeliveryProofMissing.VERIFIER_PREPARATION_UNAVAILABLE)
         if reverify:
             if prerequisites is None or prerequisites.status != "READY":
                 missing.append(DeliveryProofMissing.PREREQUISITES_UNVERIFIED)
