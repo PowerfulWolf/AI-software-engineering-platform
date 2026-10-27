@@ -109,8 +109,22 @@ class ConditionalStaticQaEvidenceProvider:
         self,
         delegate: VerificationEvidenceProvider | None,
         resolver: StaticQaContractResolver,
+        selected_contract: StaticQaContractResolver,
     ) -> None:
         self._delegate, self._resolver = delegate, resolver
+        self._selected_contract = selected_contract
+
+    def _current_contract(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None,
+    ) -> TrustedStaticQaMissingEntryOutputContract | None:
+        selected = self._selected_contract(request, workspace_root, execution_guard)
+        current = self._resolver(request, workspace_root, execution_guard)
+        if current != selected:
+            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+        return selected
 
     def evidence_for(
         self,
@@ -118,7 +132,7 @@ class ConditionalStaticQaEvidenceProvider:
         workspace_root: Path,
         execution_guard: ExecutionGuard | None = None,
     ) -> VerificationEvidence:
-        contract = self._resolver(request, workspace_root, execution_guard)
+        contract = self._current_contract(request, workspace_root, execution_guard)
         if contract is None:
             if self._delegate is None:
                 raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
@@ -146,7 +160,7 @@ class ConditionalStaticQaEvidenceProvider:
         execution_guard: ExecutionGuard | None,
         contract: TrustedStaticQaMissingEntryOutputContract,
     ) -> None:
-        current = self._resolver(request, workspace_root, execution_guard)
+        current = self._current_contract(request, workspace_root, execution_guard)
         if current != contract:
             raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
 
@@ -157,6 +171,8 @@ class ConditionalStaticQaEvidenceProvider:
         execution_guard: ExecutionGuard | None,
         contract: TrustedVerificationOutputContract,
     ) -> None:
+        if self._current_contract(request, workspace_root, execution_guard) is not None:
+            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
         if self._delegate is None:
             raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
         validator = cast(VerificationOutputCurrentValidator, self._delegate)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -49,6 +50,16 @@ class _StaticEvidenceProvider:
         )
 
 
+def test_unselected_ordinary_qa_keeps_registered_verifier_provider(tmp_path: Path) -> None:
+    request, _, _ = _subject()
+    delegate = MagicMock()
+    expected = VerificationEvidence(text="ordinary verifier receipt")
+    delegate.evidence_for.return_value = expected
+    provider = ConditionalStaticQaEvidenceProvider(delegate, lambda *_: None, lambda *_: None)
+    assert provider.evidence_for(request, tmp_path, None) == expected
+    delegate.evidence_for.assert_called_once_with(request, tmp_path, None)
+
+
 def test_static_qa_contract_survives_internal_prompt_transport_without_wire_leak(
     tmp_path: Path,
 ) -> None:
@@ -77,7 +88,7 @@ def test_static_qa_evidence_resolves_fresh_at_prompt_and_output(tmp_path: Path) 
 
     builder = VerificationEvidencePromptBuilder(
         StaticPromptBuilder(),
-        ConditionalStaticQaEvidenceProvider(None, resolve),
+        ConditionalStaticQaEvidenceProvider(None, resolve, lambda *_: contract),
         tmp_path,
         None,
     )
@@ -128,7 +139,7 @@ def test_codex_accepts_only_fresh_proof_bound_commandless_qa_fail(
         assert observed == request and root == fixture.root and guard is fixture.guard
         return active[0]
 
-    provider = ConditionalStaticQaEvidenceProvider(None, resolve)
+    provider = ConditionalStaticQaEvidenceProvider(None, resolve, lambda *_: contract)
     builder = VerificationEvidencePromptBuilder(
         StaticPromptBuilder(), provider, fixture.root, fixture.guard
     )
@@ -200,7 +211,7 @@ def test_static_qa_changed_after_preparation_never_starts_codex(tmp_path: Path) 
 
     builder = VerificationEvidencePromptBuilder(
         StaticPromptBuilder(),
-        ConditionalStaticQaEvidenceProvider(None, resolve),
+        ConditionalStaticQaEvidenceProvider(None, resolve, lambda *_: contract),
         fixture.root,
         fixture.guard,
     )

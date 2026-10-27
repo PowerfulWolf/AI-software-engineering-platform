@@ -28,6 +28,11 @@ from ai_software_engineer.agents.continuation import CoderInterruptionControl
 from ai_software_engineer.agents.execution import ExecutionGuard
 from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.agents.model_input import BoundModelInputBudget, ModelInputPreparation
+from ai_software_engineer.agents.verification_output import (
+    TrustedStaticQaMissingEntryOutputContract,
+    VerificationOutputRejected,
+    VerificationOutputRule,
+)
 from ai_software_engineer.agents.workspace_admission import InitialWorkspaceAdmission
 from ai_software_engineer.config import (
     ModelProviderKind,
@@ -106,6 +111,33 @@ class ConfiguredDeliveryRouteAdapterFactory:
         self._baseline_verifier = baseline_verifier
         self._candidate_commit_factory = candidate_commit_factory
         self._static_qa_contract_resolver = static_qa_contract_resolver
+        self._selected_static_qa: dict[
+            str,
+            tuple[
+                AgentRequest,
+                Path,
+                ExecutionGuard | None,
+                TrustedStaticQaMissingEntryOutputContract,
+            ],
+        ] = {}
+
+    def _selected_static_qa_contract(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        guard: ExecutionGuard | None,
+    ) -> TrustedStaticQaMissingEntryOutputContract | None:
+        selected = self._selected_static_qa.get(role_verification_digest(request.to_wire()))
+        if selected is None:
+            return None
+        selected_request, selected_root, selected_guard, contract = selected
+        if (
+            selected_request != request
+            or selected_root != workspace_root
+            or selected_guard is not guard
+        ):
+            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+        return contract
 
     def with_execution_guard(self, guard: ExecutionGuard) -> ConfiguredDeliveryRouteAdapterFactory:
         """Bind Worker ownership while preserving explicitly approved recovery admission."""
@@ -241,16 +273,29 @@ class ConfiguredDeliveryRouteAdapterFactory:
         config: ProductionConfig,
     ) -> None:
         """Trusted pre-model seam; no role model, verdict, or new recovery Task."""
+        workspace_root = Path(binding.worktree.path)
+        selected = self._selected_static_qa_contract(request, workspace_root, self._execution_guard)
         if request.role is AgentRole.QA and self._static_qa_contract_resolver is not None:
             static_contract = self._static_qa_contract_resolver(
-                request, Path(binding.worktree.path), self._execution_guard
+                request, workspace_root, self._execution_guard
             )
+            if selected is not None and static_contract != selected:
+                raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
             if static_contract is not None:
                 if route.kind is not ModelProviderKind.CODEX_CLI:
                     raise ProductionConfigError(
                         "static QA missing-entry proof requires the guarded Codex CLI route"
                     )
+                if selected is None:
+                    self._selected_static_qa[role_verification_digest(request.to_wire())] = (
+                        request,
+                        workspace_root,
+                        self._execution_guard,
+                        static_contract,
+                    )
                 return
+        elif selected is not None:
+            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
         if self._registered_verifier is None or self._verification_evidence is not None:
             return
         self._registered_verifier.prepare_verifier(
@@ -312,7 +357,9 @@ class ConfiguredDeliveryRouteAdapterFactory:
             )
 
             verification_evidence = ConditionalStaticQaEvidenceProvider(
-                verification_evidence, self._static_qa_contract_resolver
+                verification_evidence,
+                self._static_qa_contract_resolver,
+                self._selected_static_qa_contract,
             )
         if verification_evidence is not None:
             from ai_software_engineer.recovery.verification_execution import (
