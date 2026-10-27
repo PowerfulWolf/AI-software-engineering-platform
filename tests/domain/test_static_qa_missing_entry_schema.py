@@ -1,8 +1,12 @@
 """Published wait schemas retain the exact static QA decision guards."""
 
 import json
+import os
+import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
+from shutil import copy2, copytree
 from typing import Any
 
 import pytest
@@ -90,3 +94,39 @@ def test_static_decision_schema_roundtrip_and_tamper(filename: str, mutation: st
         DeliveryResolution.model_validate(changed)
     with pytest.raises(SchemaValidationError):
         validator.validate(changed)
+
+
+def test_deletion_schema_regeneration_preserves_static_qa_guards(tmp_path: Path) -> None:
+    root = tmp_path / "regeneration"
+    copytree(SCHEMAS, root / "schemas")
+    (root / "scripts").mkdir()
+    copy2(
+        SCHEMAS.parent / "scripts/sync-requirement-purge-schemas.py",
+        root / "scripts/sync-requirement-purge-schemas.py",
+    )
+    copy2(
+        SCHEMAS.parent / "scripts/sync-legacy-rescue-schemas.py",
+        root / "scripts/sync-legacy-rescue-schemas.py",
+    )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(SCHEMAS.parent / "src")
+    subprocess.run(
+        (sys.executable, str(root / "scripts/sync-requirement-purge-schemas.py")),
+        check=True,
+        env=environment,
+    )
+    regenerated_bytes = (root / "schemas/console-deletion-cleanup.schema.json").read_bytes()
+    published_bytes = (SCHEMAS / "console-deletion-cleanup.schema.json").read_bytes()
+    generated = json.loads(regenerated_bytes)
+    published = json.loads(published_bytes)
+    assert (
+        generated["$defs"]["StaticQaMissingEntryEvidence"]
+        == published["$defs"]["StaticQaMissingEntryEvidence"]
+    )
+    for name in ("DeliveryResolution", "DeliveryWaitInvestigation"):
+        assert generated["$defs"][name]["allOf"] == published["$defs"][name]["allOf"]
+    rejected = generated["$defs"]["RejectedKnowledgePreparationEvidence"]["properties"]
+    assert rejected["role"] == {"const": "coder"}
+    assert rejected["carry_history_sha256s"]["uniqueItems"] is True
+    assert generated == published
+    assert regenerated_bytes == published_bytes

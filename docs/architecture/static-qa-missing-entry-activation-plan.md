@@ -20,6 +20,17 @@ TechnicalDesign, frozen Plan or candidate baseline. This is a conversation
 authorization reference, not a platform `HumanActionEvent` or an engineering
 resolution; the latter must be sealed separately before consuming a live wait.
 
+Supplemental human authorization `call_c490e86c1251409ca13da375898d720c`
+allows only `scripts/sync-requirement-purge-schemas.py` against that same main
+revision, using reviewed patch SHA-256
+`129dbc09339e656241d8fb491ccd28a2b59dc11523ca3672e9b74b29cf52a9db`.
+It preserves canonical wait guards and the Coder-only rejected-knowledge role
+when regenerating the already approved deletion-cleanup schema. This reference
+also is not a platform `HumanActionEvent` or a live K1 wait resolution.
+The one-line import correction was separately approved in human reply
+`call_002835614b90489894fd2cbe0fd95a42`; the final exact patch SHA-256 is
+`5888d5a8e418274321ce71e8e8b2b9895cba3fe28333c6df15bcbf9018d41cba`.
+
 ## Exact first-stage maintenance scope
 
 The following paths need a named, auditable maintenance authority before a

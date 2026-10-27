@@ -68,12 +68,7 @@ def test_delete_cleanup_interruption_is_readable_and_restartable(
 
     from jsonschema import Draft202012Validator
 
-    from ai_software_engineer.web_console.deletion_cleanup import ConsoleDeletionCleanup
-
     schema = json.loads(Path("schemas/console-deletion-cleanup.schema.json").read_text())
-    assert {
-        key: value for key, value in schema.items() if key not in {"$schema", "$id"}
-    } == ConsoleDeletionCleanup.model_json_schema()
     for payload in before.values():
         Draft202012Validator(schema).validate(json.loads(payload))
     RequirementPurger(service.project).prepare(checkpoint, {}, native_ids={}, persist=False)

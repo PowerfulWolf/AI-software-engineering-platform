@@ -1,7 +1,10 @@
 """Regenerate physical deletion's bounded, body-free wire contracts."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
+from runpy import run_path
+from typing import cast
 
 from ai_software_engineer.multi_directory.purge import (
     RequirementPurgeCompletion,
@@ -16,6 +19,24 @@ for filename, model in (
     ("requirement-purge-completion.schema.json", RequirementPurgeCompletion),
 ):
     schema = model.model_json_schema()
+    if filename == "console-deletion-cleanup.schema.json":
+        guards = cast(
+            Callable[[dict[str, object]], None],
+            run_path(str(root.parent / "scripts/sync-legacy-rescue-schemas.py"))["guards"],
+        )
+        for node in (schema, *schema.get("$defs", {}).values()):
+            guards(node)
+        engineering = json.loads(
+            (root / "engineering-wait-resolution.schema.json").read_text(encoding="utf-8")
+        )
+        for name in ("DeliveryResolution", "DeliveryWaitInvestigation", "DeliveryWaitHandling"):
+            schema["$defs"][name]["allOf"] = engineering["$defs"][name]["allOf"]
+        schema["$defs"]["RejectedKnowledgePreparationEvidence"] = engineering["$defs"][
+            "RejectedKnowledgePreparationEvidence"
+        ]
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     schema["$id"] = "https://ai-software-engineer.local/schemas/" + filename
-    (root / filename).write_text(json.dumps(schema, ensure_ascii=False, indent=2) + "\n")
+    target = root / filename
+    if target.exists() and json.loads(target.read_text(encoding="utf-8")) == schema:
+        continue
+    target.write_text(json.dumps(schema, ensure_ascii=False, indent=2) + "\n")
