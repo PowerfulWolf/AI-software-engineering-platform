@@ -403,6 +403,18 @@ dirty workspace 不允许清理。历史无命名字段的 Task 保持原分支�
 
 `qa-report.status` 为 `PASS` 或 `FAIL`。只有所有 required criteria 为 `PASS` 且 required checks 有 evidence 时才允许 `PASS`。
 
+静态 QA 缺失入口是独立的工程等待恢复合同：仅当原计划测试命令有封存的
+`WAIT/NOT_STARTED` 事实、当前候选 Git tree 确实缺少冻结 Plan 指定的测试文件，
+并由工程主体对精确证明作出一次性决定后，新领取的独立 QA 才可提交
+`status=FAIL`、空 `tests_run` 的报告。每个缺失路径必须有
+`MISSING_PLANNED_TEST_ENTRY` finding、受影响验收项的 `FAIL` 和绑定该证明的
+唯一文件 evidence；不得声称计划命令已运行，也不得以此产生 `PASS`。
+QA request 同时引用 Plan 与 implementation，报告的直接 parent 仅为
+implementation；Plan 由 Task 的已验证状态事件和 artifact lineage 认证。
+后续仍由 Coder 补齐测试，并对新候选执行独立 QA 和 Review。详见
+[`static-qa-missing-entry.md`](static-qa-missing-entry.md) 和
+`.trellis/spec/core/native-verification-output.md`。
+
 ## 5. Reviewer 契约
 
 ### 输入
