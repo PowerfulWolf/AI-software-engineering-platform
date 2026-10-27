@@ -13,7 +13,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, model_validator
 
-from ai_software_engineer.artifacts import artifact_digest
+from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.domain import (
     AgentRole,
     ImplementationReportArtifact,
@@ -27,6 +27,7 @@ from ai_software_engineer.domain.execution_window import PlannedVerificationRequ
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.native_verification import role_verification_digest
 from ai_software_engineer.manager.verification_process import bounded_verification_command
+from ai_software_engineer.work_queue.execution_store import AcceptedRoleArtifact
 
 _ENVIRONMENT = {
     "PATH": "/usr/bin:/bin",
@@ -210,3 +211,51 @@ def observe_candidate_test_entry_absence(
     )
     observation.validate_integrity()
     return observation
+
+
+def observe_accepted_candidate_test_entry_absence(
+    *,
+    repository_root: Path,
+    task: Task,
+    source_revision: str,
+    accepted: tuple[AcceptedRoleArtifact, ...],
+    artifacts: ArtifactStore,
+) -> CandidateTestEntryAbsenceObservation:
+    """Bind the Git-tree absence to the accepted Plan and candidate lineage.
+
+    The caller still has to prove the current wait and original QA no-start.
+    This read-only seam grants no claim, execution permission or QA verdict.
+    """
+    candidates: list[ImplementationReportArtifact] = []
+    for record in accepted:
+        if record.task_id != task.id or record.source_revision != source_revision:
+            continue
+        artifact = artifacts.get(record.receipt.artifact_id)
+        if (
+            artifact.integrity.sha256 != record.receipt.sha256
+            or artifact_digest(artifact) != record.receipt.sha256
+            or artifact.task_id != task.id
+        ):
+            raise ValueError("accepted candidate receipt changed")
+        if isinstance(artifact, ImplementationReportArtifact):
+            candidates.append(artifact)
+    if len(candidates) != 1:
+        raise ValueError("static QA requires one exact accepted candidate")
+    implementation = candidates[0]
+    if len(implementation.parent_artifact_ids) != 1:
+        raise ValueError("static QA candidate requires one frozen Plan parent")
+    plan = artifacts.get(implementation.parent_artifact_ids[0])
+    if not isinstance(plan, PlanArtifact) or not any(
+        record.task_id == task.id
+        and record.receipt.artifact_id == plan.artifact_id
+        and record.receipt.sha256 == artifact_digest(plan)
+        and record.source_revision == plan.source_revision
+        for record in accepted
+    ):
+        raise ValueError("static QA requires the accepted Plan")
+    return observe_candidate_test_entry_absence(
+        repository_root=repository_root,
+        task=task,
+        plan=plan,
+        implementation=implementation,
+    )

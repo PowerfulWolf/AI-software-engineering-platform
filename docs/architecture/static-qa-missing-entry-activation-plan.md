@@ -68,6 +68,10 @@ outcome, accepted Plan/implementation and full candidate Git tree. It must
 prove every named missing test entry is absent at the candidate SHA, not merely
 the checkout, and reject a symlink or changed Plan row. A changed active claim,
 candidate, queue generation, Task or checkpoint must refuse before a decision.
+The read-only `observe_accepted_candidate_test_entry_absence` seam checks the
+exact immutable Plan and implementation receipts before the Git-tree probe;
+it grants no queue admission or QA verdict. Production must additionally bind
+the current wait and original no-start proof before consuming any decision.
 
 The separate engineering decision must bind that proof and be consumed exactly
 once under the queue lock. It may create only a fresh independent QA claim,

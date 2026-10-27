@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.domain import (
     AgentRole,
     ImplementationReportArtifact,
@@ -17,8 +19,11 @@ from ai_software_engineer.domain import (
 from ai_software_engineer.domain.execution_window import PlannedVerificationRequirement
 from ai_software_engineer.manager.candidate_test_entry_absence import (
     CandidateTestEntryAbsenceObservation,
+    observe_accepted_candidate_test_entry_absence,
     observe_candidate_test_entry_absence,
 )
+from ai_software_engineer.work_queue.execution_store import AcceptedRoleArtifact
+from ai_software_engineer.work_queue.models import QueueArtifactReceipt
 from tests.domain.factories import (
     make_implementation_artifact,
     make_plan_artifact,
@@ -98,6 +103,69 @@ def test_missing_planned_test_entry_is_bound_to_exact_candidate_and_row(
     changed = proof.model_copy(update={"candidate_revision": "f" * 40})
     with pytest.raises(ValueError, match="changed"):
         changed.validate_integrity()
+
+
+def test_accepted_candidate_absence_requires_both_exact_artifact_receipts(
+    repository: Path, tmp_path: Path
+) -> None:
+    candidate = _git(repository, "rev-parse", "HEAD")
+    task, plan, implementation = _sources(repository, candidate)
+    store = FileArtifactStore(tmp_path / "artifacts")
+    plan = plan.model_copy(update={"context_manifest_id": "ctx_" + "a" * 64})
+    implementation = implementation.model_copy(update={"context_manifest_id": "ctx_" + "b" * 64})
+    plan = cast(PlanArtifact, seal_artifact(plan, validated_at=task.updated_at))
+    implementation = cast(
+        ImplementationReportArtifact, seal_artifact(implementation, validated_at=task.updated_at)
+    )
+    store.put(plan)
+    store.put(implementation)
+
+    def accepted(artifact: PlanArtifact | ImplementationReportArtifact) -> AcceptedRoleArtifact:
+        return AcceptedRoleArtifact(
+            task_id=task.id,
+            work_item_id="work_" + artifact.artifact_id,
+            lease_id="lease_" + artifact.artifact_id,
+            dispatch_sequence=0,
+            checkpoint_sequence=0,
+            run_id=artifact.producer.run_id,
+            context_manifest_id=artifact.context_manifest_id,
+            source_revision=artifact.source_revision,
+            receipt=QueueArtifactReceipt(
+                artifact_id=artifact.artifact_id, sha256=artifact.integrity.sha256
+            ),
+        )
+
+    receipts = (accepted(plan), accepted(implementation))
+    observed = observe_accepted_candidate_test_entry_absence(
+        repository_root=repository,
+        task=task,
+        source_revision=candidate,
+        accepted=receipts,
+        artifacts=store,
+    )
+    assert observed.candidate_revision == candidate
+    assert observed.missing[0].path == "tests/browser/fixture.test.cjs"
+    with pytest.raises(ValueError, match="accepted Plan"):
+        observe_accepted_candidate_test_entry_absence(
+            repository_root=repository,
+            task=task,
+            source_revision=candidate,
+            accepted=(receipts[1],),
+            artifacts=store,
+        )
+    changed = receipts[1].model_copy(
+        update={
+            "receipt": QueueArtifactReceipt(artifact_id=implementation.artifact_id, sha256="f" * 64)
+        }
+    )
+    with pytest.raises(ValueError, match="accepted candidate"):
+        observe_accepted_candidate_test_entry_absence(
+            repository_root=repository,
+            task=task,
+            source_revision=candidate,
+            accepted=(receipts[0], changed),
+            artifacts=store,
+        )
 
 
 def test_frozen_python_module_pytest_nodeid_binds_missing_source_file(
