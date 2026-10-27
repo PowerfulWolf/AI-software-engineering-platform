@@ -62,7 +62,7 @@ from ai_software_engineer.work_queue.execution_store import (
     record_digest,
 )
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
-from ai_software_engineer.work_queue.ports import QueueConflict, QueueCorruption
+from ai_software_engineer.work_queue.ports import QueueConflict, QueueCorruption, QueueLeaseLost
 from tests.agents.test_openai_compatible import _coder_request
 from tests.domain.factories import (
     make_coder_progress_artifact,
@@ -558,10 +558,48 @@ def test_static_qa_decision_creates_fresh_claim_without_spending_frozen_work(
         owner_token=TOKEN,
         now=waiting.now + timedelta(seconds=9),
     )
+    waiting.queue.renew(
+        claimed.work_item.id,
+        lease_id=claimed.lease.id,
+        owner_token=TOKEN,
+        now=waiting.now + timedelta(seconds=10),
+        expires_at=claimed.lease.expires_at + timedelta(minutes=1),
+    )
     assert waiting.queue.static_qa_resolution_for_claim(claimed) == resolution
     stale_claim = claimed.model_copy(update={"worker_id": "worker_changed"})
     with pytest.raises(QueueConflict, match="current claim"):
         waiting.queue.static_qa_resolution_for_claim(stale_claim)
+
+
+@pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
+@pytest.mark.parametrize("make_ready", [False, True])
+def test_static_qa_decision_carries_across_fenced_lease_reclaim(
+    waiting: WaitingFixture, make_ready: bool
+) -> None:
+    resolution = _static_qa_resolution(waiting)
+    item = waiting.queue.resolve_wait(resolution)
+    first = (
+        dispatcher(waiting.queue)
+        .tick(now=waiting.now + timedelta(seconds=8), work_item_id=item.id)
+        .claim
+    )
+    assert first is not None
+    retry_at = first.lease.expires_at + timedelta(seconds=1)
+    waiting.queue.reclaim_expired(now=first.lease.expires_at, retry_at=retry_at)
+    claim_at = retry_at + timedelta(seconds=1)
+    if make_ready:
+        waiting.queue.make_ready(item.id, now=claim_at)
+        claim_at += timedelta(seconds=1)
+    second = dispatcher(waiting.queue).tick(now=claim_at, work_item_id=item.id).claim
+    assert second is not None and second.lease.id != first.lease.id
+    assert second.work_item.dispatch_sequence == first.work_item.dispatch_sequence + 1 + int(
+        make_ready
+    )
+    with pytest.raises(QueueLeaseLost):
+        waiting.queue.static_qa_resolution_for_claim(first)
+    assert waiting.queue.static_qa_resolution_for_claim(second) == resolution
+    assert waiting.resolution_events() == 1
+    assert waiting.repository.get(item.task_id).attempts == item.attempt
 
 
 @pytest.mark.parametrize(
@@ -582,8 +620,10 @@ def test_static_qa_claim_drift_rejects_without_consuming_wait(waiting: WaitingFi
 
 
 @pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
+@pytest.mark.parametrize("tamper", ["delete", "wrong_kind"])
+@pytest.mark.parametrize("reclaimed", [False, True])
 def test_static_qa_missing_consumed_event_cannot_fall_back_to_ordinary_qa(
-    waiting: WaitingFixture,
+    waiting: WaitingFixture, tamper: str, reclaimed: bool
 ) -> None:
     resolution = _static_qa_resolution(waiting)
     item = waiting.queue.resolve_wait(resolution)
@@ -593,16 +633,34 @@ def test_static_qa_missing_consumed_event_cannot_fall_back_to_ordinary_qa(
         .claim
     )
     assert claim is not None
+    if reclaimed:
+        retry_at = claim.lease.expires_at + timedelta(seconds=1)
+        waiting.queue.reclaim_expired(now=claim.lease.expires_at, retry_at=retry_at)
+        reclaimed_claim = (
+            dispatcher(waiting.queue)
+            .tick(now=retry_at + timedelta(seconds=1), work_item_id=item.id)
+            .claim
+        )
+        assert reclaimed_claim is not None
+        claim = reclaimed_claim
     with closing(open_mysql_connection(waiting.dsn)) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM work_queue_events WHERE work_item_id=%s "
-                "AND event_type='WAIT_RESOLVED'",
-                (item.id,),
-            )
+            if tamper == "delete":
+                cursor.execute(
+                    "DELETE FROM work_queue_events WHERE work_item_id=%s "
+                    "AND event_type='WAIT_RESOLVED'",
+                    (item.id,),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE work_queue_events SET payload_json=JSON_SET(payload_json, "
+                    "'$.detail.resolution.resolution_kind', 'RESUME_UNINVOKED') "
+                    "WHERE work_item_id=%s AND event_type='WAIT_RESOLVED'",
+                    (item.id,),
+                )
             assert cursor.rowcount == 1
         connection.commit()
-    with pytest.raises(QueueCorruption, match="no durable transition"):
+    with pytest.raises(QueueCorruption):
         waiting.queue.static_qa_resolution_for_claim(claim)
 
 

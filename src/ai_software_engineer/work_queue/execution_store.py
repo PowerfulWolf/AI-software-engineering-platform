@@ -255,7 +255,12 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             row = cursor.fetchone()
             if row is None or row["state"] != "ACTIVE":
                 raise QueueLeaseLost("static QA claim is no longer active")
-            if self._parse_time(str(row["expires_at"])) <= self._clock():
+            try:
+                live_lease = TaskLease.model_validate_json(str(row["lease_json"]))
+                live_expiry = self._parse_time(str(row["expires_at"]))
+            except (ValidationError, ValueError) as error:
+                raise QueueCorruption("static QA live Lease failed typed validation") from error
+            if live_expiry <= self._clock():
                 raise QueueLeaseLost("static QA claim has expired")
             if (
                 current.status not in {WorkItemStatus.LEASED, WorkItemStatus.RUNNING}
@@ -267,60 +272,70 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 ).to_wire()
                 != claim.work_item.to_wire()
                 or json.loads(str(row["assignment_json"])) != claim.assignment.to_wire()
-                or json.loads(str(row["lease_json"])) != claim.lease.to_wire()
+                or live_lease.model_copy(update={"expires_at": claim.lease.expires_at}).to_wire()
+                != claim.lease.to_wire()
+                or live_lease.expires_at < claim.lease.expires_at
+                or live_lease.expires_at != live_expiry
                 or json.loads(str(row["model_selection_json"])) != claim.model_selection.to_wire()
                 or row["worker_id"] != claim.worker_id
                 or self._parse_time(str(row["acquired_at"])) != claim.claimed_at
             ):
                 raise QueueConflict("static QA current claim or queue generation changed")
             cursor.execute(
-                "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
-                "AND event_type='WAIT_RESOLVED' "
-                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,"
-                "'$.detail.resolution.resolution_kind'))=%s "
-                "ORDER BY sequence DESC LIMIT 2",
-                (current.id, DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY.value),
+                "SELECT event_type,payload_json FROM work_queue_events "
+                "WHERE work_item_id=%s AND event_type IN "
+                "('READY','WAIT_RESOLVED','LEASE_EXPIRED') "
+                "ORDER BY sequence ASC LIMIT 1025",
+                (current.id,),
             )
-            events = cursor.fetchall()
-            if not events:
-                if current.dispatch_sequence > 0:
-                    cursor.execute(
-                        "SELECT event_type,payload_json FROM work_queue_events "
-                        "WHERE work_item_id=%s "
-                        "AND event_type IN ('READY','WAIT_RESOLVED','LEASE_EXPIRED',"
-                        "'RETRY_SCHEDULED') "
-                        "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,"
-                        "'$.work_item.dispatch_sequence'))=%s LIMIT 1",
-                        (current.id, str(current.dispatch_sequence)),
-                    )
-                    transition = cursor.fetchone()
-                    if transition is None:
-                        raise QueueCorruption(
-                            "active QA dispatch generation has no durable transition event"
-                        )
-                    if transition["event_type"] == "WAIT_RESOLVED":
-                        try:
-                            recorded = _RejectedOutputResolutionEvent.model_validate_json(
-                                str(transition["payload_json"])
-                            )
-                            recorded.detail.resolution.validate_integrity()
-                        except (ValidationError, ValueError) as error:
-                            raise QueueCorruption(
-                                "active QA wait resolution event is corrupt"
-                            ) from error
-                return None
-            if len(events) != 1:
-                raise QueueCorruption("static QA claim lacks one consumed decision")
+            rows = cursor.fetchall()
+            if len(rows) > 1024:
+                raise QueueCorruption("active QA dispatch history exceeds bounded inspection")
+            generations: dict[int, str] = {}
+            static_events: list[_RejectedOutputResolutionEvent] = []
             try:
-                event = _RejectedOutputResolutionEvent.model_validate_json(
-                    str(events[0]["payload_json"])
-                )
-                decision = event.detail.resolution
-                decision.validate_integrity()
-            except (ValidationError, ValueError) as error:
+                for transition in rows:
+                    payload = json.loads(str(transition["payload_json"]))
+                    transitioned = QueuedWorkItem.model_validate(payload["work_item"])
+                    if transitioned.id != current.id:
+                        raise QueueCorruption("active QA transition changed WorkItem identity")
+                    event_type = str(transition["event_type"])
+                    if transitioned.status is not (
+                        WorkItemStatus.RETRY_SCHEDULED
+                        if event_type == "LEASE_EXPIRED"
+                        else WorkItemStatus.READY
+                    ):
+                        raise QueueCorruption("active QA transition changed expected status")
+                    sequence = transitioned.dispatch_sequence
+                    if sequence in generations or sequence > current.dispatch_sequence:
+                        raise QueueCorruption("active QA generation has duplicate origin")
+                    generations[sequence] = event_type
+                    if transition["event_type"] == "WAIT_RESOLVED":
+                        event = _RejectedOutputResolutionEvent.model_validate(payload)
+                        event.detail.resolution.validate_integrity()
+                        if (
+                            event.detail.resolution_sha256
+                            != event.detail.resolution.resolution_sha256
+                        ):
+                            raise QueueCorruption("active QA wait decision digest changed")
+                        if event.detail.resolution.resolution_kind is (
+                            DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY
+                        ):
+                            static_events.append(event)
+            except (KeyError, TypeError, ValueError, ValidationError) as error:
+                raise QueueCorruption("active QA transition history is corrupt") from error
+            if any(
+                sequence not in generations for sequence in range(1, current.dispatch_sequence + 1)
+            ):
                 raise QueueCorruption(
-                    "static QA consumed decision failed typed validation"
-                ) from error
+                    "active QA dispatch generation has no durable transition event"
+                )
+            if not static_events:
+                return None
+            if len(static_events) != 1:
+                raise QueueCorruption("static QA claim lacks one consumed decision")
+            event = static_events[0]
+            decision = event.detail.resolution
             step = self.step(current.id)
             static = decision.static_qa_missing_entry
             if (
@@ -333,7 +348,17 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 or decision.resolution_kind is not DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY
                 or static is None
                 or event.work_item.dispatch_sequence != static.wait_dispatch_sequence + 1
-                or current.dispatch_sequence != static.wait_dispatch_sequence + 1
+                or current.dispatch_sequence < static.wait_dispatch_sequence + 1
+                or any(
+                    generations[sequence] not in {"LEASE_EXPIRED", "READY"}
+                    or (
+                        generations[sequence] == "READY"
+                        and generations.get(sequence - 1) != "LEASE_EXPIRED"
+                    )
+                    for sequence in range(
+                        static.wait_dispatch_sequence + 2, current.dispatch_sequence + 1
+                    )
+                )
                 or current.role is not AgentRole.QA
                 or current.task_id != decision.task_id
                 or current.checkpoint_sequence != decision.expected_checkpoint_sequence
