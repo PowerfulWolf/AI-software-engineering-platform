@@ -1608,6 +1608,7 @@ const engineeringResolutionLabels = {
   RESUME_UNINVOKED: "继续未开始的工作",
   REVERIFY_CANDIDATE: "重新测试当前候选",
   RETRY_VERIFIER_PREPARATION: "重试验证准备",
+  STATIC_QA_MISSING_ENTRY: "交由独立 QA 确认测试入口缺失",
   RETRY_KNOWLEDGE_PREPARATION: "扩大知识准备窗口并继续",
   RETRY_REJECTED_KNOWLEDGE_PREPARATION: "重新进行知识准备并继续",
   RETRY_REJECTED_WORKSPACE_ADMISSION: "修复工作区准入后继续原开发",
@@ -1779,6 +1780,49 @@ function matchingRejectedCoderOutputEvidence(request, step, proof) {
       proof.retry_cause != null || proof.interruption_receipt_sha256 != null) return null;
   if (task.scope?.root && evidence.scope.repository_root !== task.scope.root) return null;
   if (task.repository_id && evidence.scope.repository_id !== task.repository_id) return null;
+  return evidence;
+}
+function staticQaMissingEntryLines(evidence) {
+  if (!evidence) return [];
+  return [
+    "当前候选缺少冻结计划指定的测试入口；原 QA 验证命令尚未开始。",
+    "工程决定只允许独立 QA 核验该缺项并报告 FAIL，不代表测试已运行或验收通过。",
+    "QA 确认后由 Coder 补齐测试，再对新候选执行独立 QA 和 Review。",
+  ];
+}
+function matchingStaticQaMissingEntryEvidence(request, step, proof) {
+  const evidence = proof?.static_qa_missing_entry;
+  const preparation = proof?.verifier_preparation;
+  const facts = step.wait_disposition?.facts;
+  const task = currentRequestTasks(request).find(item => item.task_id === proof?.task_id);
+  const sha = value => /^[a-f0-9]{64}$/.test(value || "");
+  if (!task || task.status !== "QA" || task.terminal || step.role !== "qa" || facts?.role !== "qa" ||
+      !["ENVIRONMENT_UNAVAILABLE", "ENGINEERING_AUTHORIZATION"].includes(facts.classification) ||
+      !evidence || !preparation || preparation.native_execution_state !== "NOT_STARTED" ||
+      proof.permitted_resolutions?.length !== 1 || proof.permitted_resolutions[0] !== "STATIC_QA_MISSING_ENTRY" ||
+      evidence.candidate_revision !== proof.source_revision ||
+      preparation.candidate_revision !== proof.source_revision ||
+      evidence.preparation_checkpoint_sha256 !== preparation.preparation_checkpoint_sha256 ||
+      evidence.previous_run_id !== preparation.previous_run_id ||
+      evidence.previous_context_manifest_id !== preparation.previous_context_manifest_id ||
+      evidence.prerequisite_facts_sha256 !== preparation.prerequisite_facts_sha256 ||
+      evidence.prerequisite_facts_sha256 !== proof.prerequisite_facts_sha256 ||
+      !["original_dispatch_sequence", "wait_dispatch_sequence"].every(key =>
+        Number.isSafeInteger(evidence[key]) && evidence[key] >= 0) ||
+      !["plan_artifact_sha256", "implementation_artifact_sha256", "observation_sha256",
+        "preparation_checkpoint_sha256", "original_claim_sha256", "wait_claim_sha256",
+        "prerequisite_facts_sha256"].every(key => sha(evidence[key])) ||
+      !["plan_artifact_id", "implementation_artifact_id", "original_lease_id", "wait_lease_id",
+        "previous_run_id", "previous_context_manifest_id"].every(key =>
+        typeof evidence[key] === "string" && evidence[key].length > 0) ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(evidence.candidate_revision || "") || !sha(preparation.request_sha256) ||
+      facts.evidence_ids?.length !== 1 ||
+      facts.evidence_ids[0] !== "verifier-preparation://" + evidence.preparation_checkpoint_sha256 ||
+      proof.original_run_id !== evidence.previous_run_id ||
+      proof.invocation_start_sha256 != null || proof.invocation_outcome_sha256 != null ||
+      proof.retry_cause != null || proof.process_stop_sha256 != null ||
+      preparation.native_started_sha256 != null || preparation.native_finished_sha256 != null ||
+      preparation.native_failure_code != null || preparation.context_capacity_receipt_sha256 != null) return null;
   return evidence;
 }
 function engineeringWaitHandlingLabel(step) {
@@ -2005,16 +2049,25 @@ function engineeringWaitDecision(request, step, proof) {
     matchingRejectedWorkspaceAdmissionEvidence(request, step, proof) &&
     sameEngineeringWaitProofFacts({rejected_workspace_admission: decision.rejected_workspace_admission},
       {rejected_workspace_admission: proof.rejected_workspace_admission});
+  const matchesStaticQa = decision => decision?.resolution_kind !== "STATIC_QA_MISSING_ENTRY" ||
+    decision.authorization_source === "engineering_operator_decision" &&
+    matchingStaticQaMissingEntryEvidence(request, step, proof) &&
+    sameEngineeringWaitProofFacts({static_qa_missing_entry: decision.static_qa_missing_entry,
+      verifier_preparation: decision.verifier_preparation},
+    {static_qa_missing_entry: proof.static_qa_missing_entry,
+      verifier_preparation: proof.verifier_preparation});
   if (handling?.status === "RESOLVED" && handling.resolution?.proof_sha256 === handling.investigation.proof_sha256 &&
       engineeringResolutionLabels[handling.resolution.resolution_kind] && matchesKnowledge(handling.resolution) &&
-      matchesRejected(handling.resolution) && matchesRejectedKnowledge(handling.resolution) && matchesWorkspace(handling.resolution)) return handling.resolution;
+      matchesRejected(handling.resolution) && matchesRejectedKnowledge(handling.resolution) && matchesWorkspace(handling.resolution) &&
+      matchesStaticQa(handling.resolution)) return handling.resolution;
   const operation = operations.find(item => item.status === "SUCCEEDED" &&
     operationAction(item) === "RESOLVE_DELIVERY_WAIT" && sameEngineeringWaitIntent(item.intent, bound) &&
     operationResult(item)?.engineering_wait_resolution?.proof_sha256 === proof.proof_sha256 &&
     matchesKnowledge(operationResult(item).engineering_wait_resolution) &&
     matchesRejected(operationResult(item).engineering_wait_resolution) &&
     matchesRejectedKnowledge(operationResult(item).engineering_wait_resolution) &&
-    matchesWorkspace(operationResult(item).engineering_wait_resolution));
+    matchesWorkspace(operationResult(item).engineering_wait_resolution) &&
+    matchesStaticQa(operationResult(item).engineering_wait_resolution));
   return operationResult(operation)?.engineering_wait_resolution || null;
 }
 function engineeringWaitCanResolve(request, step, proof) {
@@ -2031,7 +2084,8 @@ function engineeringWaitCanResolve(request, step, proof) {
       (kind !== "RETRY_KNOWLEDGE_PREPARATION" || matchingKnowledgePreparationEvidence(request, step, proof)) &&
       (kind !== "RETRY_REJECTED_KNOWLEDGE_PREPARATION" || matchingRejectedKnowledgePreparationEvidence(request, step, proof)) &&
       (kind !== "RETRY_REJECTED_WORKSPACE_ADMISSION" || matchingRejectedWorkspaceAdmissionEvidence(request, step, proof)) &&
-      (kind !== "RETRY_REJECTED_CODER_OUTPUT" || matchingRejectedCoderOutputEvidence(request, step, proof)));
+      (kind !== "RETRY_REJECTED_CODER_OUTPUT" || matchingRejectedCoderOutputEvidence(request, step, proof)) &&
+      (kind !== "STATIC_QA_MISSING_ENTRY" || matchingStaticQaMissingEntryEvidence(request, step, proof)));
 }
 async function submitEngineeringWaitOperation(intent) {
   const request = requestById(intent.delivery_id);
@@ -2081,13 +2135,15 @@ function engineeringActiveOperationBox(request, operation) {
       : progress?.title || "平台正在处理当前操作，完成后会更新检查结果与可用操作。", "muted"));
   return panel;
 }
-function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, handling = null, legacyRescue = false, rescueFailure = null, controlUnavailable = null, rejectedOutputValid = false, rejectedKnowledgeValid = false, workspaceAdmissionValid = false} = {}) {
+function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, handling = null, legacyRescue = false, rescueFailure = null, controlUnavailable = null, rejectedOutputValid = false, rejectedKnowledgeValid = false, workspaceAdmissionValid = false, staticQaValid = false} = {}) {
   const knowledgeWindow = !(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_KNOWLEDGE_PREPARATION")
     ? knowledgePreparationWindowLines(proof.knowledge_preparation) : [];
   const rejectedKnowledge = !(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_REJECTED_KNOWLEDGE_PREPARATION")
     ? rejectedKnowledgePreparationLines(proof.rejected_knowledge) : [];
   const workspaceLines = !(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_REJECTED_WORKSPACE_ADMISSION")
     ? rejectedWorkspaceAdmissionLines(proof.rejected_workspace_admission) : [];
+  const staticQaLines = !(proof.missing || []).length && proof.permitted_resolutions?.includes("STATIC_QA_MISSING_ENTRY") && staticQaValid
+    ? staticQaMissingEntryLines(proof.static_qa_missing_entry) : [];
   if (historical) {
     for (const line of workspaceLines) target.append(el("p", "当次工作区准入方案 · " + line));
     target.append(el("p", "当次调查 · " + humanizeBlockingText(proof.next_action || "调查结果未提供处理建议。")),
@@ -2098,6 +2154,7 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
     for (const line of rejectedKnowledge) target.append(el("p", "当次知识准备方案 · " + line));
     if (!(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_REJECTED_CODER_OUTPUT"))
       for (const line of rejectedCoderOutputLines(proof.rejected_output)) target.append(el("p", "当次保留进度方案 · " + line));
+    for (const line of staticQaLines) target.append(el("p", "当次 QA 缺项方案 · " + line));
     return;
   }
   const missing = proof.missing || [];
@@ -2132,7 +2189,8 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
     const known = permitted.length === proof.permitted_resolutions?.length &&
       (!proof.permitted_resolutions?.includes("RETRY_REJECTED_CODER_OUTPUT") || rejectedOutputValid) &&
       (!proof.permitted_resolutions?.includes("RETRY_REJECTED_KNOWLEDGE_PREPARATION") || rejectedKnowledgeValid) &&
-      (!proof.permitted_resolutions?.includes("RETRY_REJECTED_WORKSPACE_ADMISSION") || workspaceAdmissionValid);
+      (!proof.permitted_resolutions?.includes("RETRY_REJECTED_WORKSPACE_ADMISSION") || workspaceAdmissionValid) &&
+      (!proof.permitted_resolutions?.includes("STATIC_QA_MISSING_ENTRY") || staticQaValid);
     target.append(el("p", permitted.length && known ? "检查已通过，可按以下方案继续 · " + permitted.join("、")
       : "当前没有可安全执行的继续方案，需平台维护者处理。"));
     for (const line of knowledgeWindow) target.append(el("p", line));
@@ -2140,6 +2198,7 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
     if (known) for (const line of rejectedKnowledge) target.append(el("p", line));
     if (known && proof.permitted_resolutions?.includes("RETRY_REJECTED_CODER_OUTPUT"))
       for (const line of rejectedCoderOutputLines(proof.rejected_output)) target.append(el("p", line));
+    if (known) for (const line of staticQaLines) target.append(el("p", line));
   }
 }
 function engineeringWaitCurrentFacts(request, step, proof, handling, decision, active) {
@@ -2169,6 +2228,7 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
   const knowledge = matchingKnowledgePreparationEvidence(request, step, proof);
   const rejectedKnowledge = matchingRejectedKnowledgePreparationEvidence(request, step, proof);
   const rejected = matchingRejectedCoderOutputEvidence(request, step, proof);
+  const staticQa = matchingStaticQaMissingEntryEvidence(request, step, proof);
   if (rejected) {
     facts.happened = "本轮开发报告的进度序号不符合执行约定，报告未被接纳。";
     facts.preservation = "原执行已结束，完整开发文件已封存；原任务、分支和工作区保留。";
@@ -2187,6 +2247,12 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
     facts.preservation = "原需求、分支、开发进度、原知识结果和历史保留。";
     facts.platform = "可使用 1 次原任务剩余的冻结工作额度，重新进行知识准备；执行时限保持。";
     facts.user = "查看知识准备方案；需要工程授权时，确认后继续，后续仍需独立 QA 和 Review。";
+  }
+  if (staticQa) {
+    facts.happened = "当前候选缺少冻结计划指定的 QA 测试入口，原验证命令尚未开始。";
+    facts.preservation = "候选、原 QA 等待和停止记录保留；不会伪造测试结果。";
+    facts.platform = "可交由新领取的独立 QA 核验缺项并报告 FAIL，随后由 Coder 补齐测试；新候选仍需独立 QA 和 Review。";
+    facts.user = "查看下方缺项证明；工程授权者确认后，平台才能重新领取 QA。";
   }
   if (!completedPlan && /^[a-f0-9]{64}$/.test(proof?.process_stop_sha256 || "") &&
       !missing.includes("STOP_UNRECORDED") && missing.includes("CHECKPOINT_UNAVAILABLE")) {
@@ -2470,9 +2536,10 @@ function engineeringWaitBox(request, task, step) {
     const rejectedOutputValid = Boolean(matchingRejectedCoderOutputEvidence(request, step, proof));
     const rejectedKnowledgeValid = Boolean(matchingRejectedKnowledgePreparationEvidence(request, step, proof));
     const workspaceAdmissionValid = Boolean(matchingRejectedWorkspaceAdmissionEvidence(request, step, proof));
+    const staticQaValid = Boolean(matchingStaticQaMissingEntryEvidence(request, step, proof));
     const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof",
-      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, rejectedKnowledgeValid, workspaceAdmissionValid, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || stoppedPlan?.plan_sha256 || failurePlan?.plan_sha256 || null]);
-    appendEngineeringInvestigation(result, proof, {historical: Boolean(completedPlan || providerPlan || stoppedPlan || failurePlan), collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, rejectedKnowledgeValid, workspaceAdmissionValid});
+      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, rejectedKnowledgeValid, workspaceAdmissionValid, staticQaValid, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || stoppedPlan?.plan_sha256 || failurePlan?.plan_sha256 || null]);
+    appendEngineeringInvestigation(result, proof, {historical: Boolean(completedPlan || providerPlan || stoppedPlan || failurePlan), collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, rejectedKnowledgeValid, workspaceAdmissionValid, staticQaValid});
     management.append(result);
   }
   if (controlUnavailable) management.append(deliveryControlUnavailableNotice(controlUnavailable));

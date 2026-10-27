@@ -117,6 +117,37 @@ function handling(h, status = "PLATFORM_ATTENTION", missing = ["STOP_UNRECORDED"
   return result;
 }
 
+function staticQaMissingEntry(h) {
+  const proof = investigation(h);
+  h.step.role = h.step.wait_disposition.facts.role = "qa";
+  h.step.status = "WAITING_DEPENDENCY";
+  h.step.wait_disposition.facts.classification = "ENVIRONMENT_UNAVAILABLE";
+  h.step.wait_disposition.facts.evidence_ids = ["verifier-preparation://" + digest("1")];
+  h.task.status = "QA";
+  proof.permitted_resolutions = ["STATIC_QA_MISSING_ENTRY"];
+  proof.original_run_id = "run_original_qa";
+  proof.prerequisite_facts_sha256 = digest("2");
+  proof.verifier_preparation = {
+    candidate_revision: proof.source_revision, preparation_checkpoint_sha256: digest("1"),
+    previous_run_id: proof.original_run_id, previous_context_manifest_id: "ctx_" + digest("3"),
+    request_sha256: digest("4"), native_execution_state: "NOT_STARTED",
+    prerequisite_facts_sha256: proof.prerequisite_facts_sha256,
+  };
+  proof.static_qa_missing_entry = {
+    candidate_revision: proof.source_revision, observation_sha256: digest("5"),
+    plan_artifact_id: "art_plan_qa", plan_artifact_sha256: digest("6"),
+    implementation_artifact_id: "art_implementation_qa", implementation_artifact_sha256: digest("7"),
+    preparation_checkpoint_sha256: proof.verifier_preparation.preparation_checkpoint_sha256,
+    original_lease_id: "lease_original_qa", wait_lease_id: "lease_wait_qa",
+    original_dispatch_sequence: 0, wait_dispatch_sequence: 1,
+    original_claim_sha256: digest("8"), wait_claim_sha256: digest("9"),
+    previous_run_id: proof.original_run_id,
+    previous_context_manifest_id: proof.verifier_preparation.previous_context_manifest_id,
+    prerequisite_facts_sha256: proof.prerequisite_facts_sha256,
+  };
+  return proof;
+}
+
 function knowledgePreparation(h, role = "coder", manual = true) {
   const result = handling(h, "NEEDS_AUTHORIZATION", [], manual);
   h.step.role = h.step.wait_disposition.facts.role = role;
@@ -858,6 +889,67 @@ test("engineering wait controls submit exact facts and only the sealed permitted
   assert.equal(Object.hasOwn(intent, "process_stopped"), false);
   assert.equal(Object.hasOwn(intent, "operator_id"), false);
   assert.equal(Object.hasOwn(intent, "retry_cause"), false);
+});
+
+test("static QA missing entry exposes a proof-bound independent FAIL decision", async () => {
+  const h = harness();
+  const proof = staticQaMissingEntry(h);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const decide = control(box, "交由独立 QA 确认测试入口缺失");
+  assert.ok(decide);
+  assert.match(text(box), /原验证命令尚未开始/);
+  assert.match(text(box), /报告 FAIL/);
+  assert.match(text(box), /Coder 补齐测试/);
+  assert.equal(control(box, "继续未开始的工作"), undefined);
+  await decide.events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.equal(intent.action, "RESOLVE_DELIVERY_WAIT");
+  assert.equal(intent.resolution_kind, "STATIC_QA_MISSING_ENTRY");
+  assert.equal(intent.proof_sha256, proof.proof_sha256);
+  assert.equal(intent.expected_disposition_sha256, h.step.wait_disposition_sha256);
+  assert.equal(Object.hasOwn(intent, "static_qa_missing_entry"), false);
+  assert.equal(Object.hasOwn(intent, "operator_id"), false);
+});
+
+test("static QA missing entry hides stale or unbound proof and retained button refuses posting", async () => {
+  for (const mutation of [
+    'proof.static_qa_missing_entry.observation_sha256 = "bad"',
+    'proof.static_qa_missing_entry.candidate_revision = "0".repeat(40)',
+    'proof.static_qa_missing_entry.wait_claim_sha256 = "bad"',
+    'proof.static_qa_missing_entry.previous_run_id = "run_other"',
+    'proof.static_qa_missing_entry.preparation_checkpoint_sha256 = "f".repeat(64)',
+    'proof.verifier_preparation.native_execution_state = "FINISHED"',
+    'proof.verifier_preparation.native_started_sha256 = "a".repeat(64)',
+    'data.step.wait_disposition.facts.evidence_ids = []',
+    'data.step.wait_disposition.facts.classification = "PLATFORM_BUG"',
+    'data.task.status = "REVIEW"',
+  ]) {
+    const h = harness();
+    staticQaMissingEntry(h);
+    const prior = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    const decide = control(prior, "交由独立 QA 确认测试入口缺失");
+    assert.ok(decide, mutation);
+    h.run(mutation);
+    const current = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.equal(control(current, "交由独立 QA 确认测试入口缺失"), undefined, mutation);
+    await decide.events.click();
+    assert.equal(h.run("submitted.length"), 0, mutation);
+  }
+});
+
+test("static QA saved decision only matches the same no-start and candidate proof", () => {
+  const h = harness();
+  const proof = staticQaMissingEntry(h);
+  h.context.resolution = {kind: "delivery_wait_resolution", resolution_kind: "STATIC_QA_MISSING_ENTRY",
+    proof_sha256: proof.proof_sha256, authorization_source: "engineering_operator_decision",
+    verifier_preparation: structuredClone(proof.verifier_preparation),
+    static_qa_missing_entry: structuredClone(proof.static_qa_missing_entry)};
+  h.run(`operations.push({status: "SUCCEEDED", intent: {...engineeringWaitIntent(data.request, data.step),
+    action: "RESOLVE_DELIVERY_WAIT"}, result: {project_id: data.request.project_id, delivery_id: data.request.id,
+      checkpoint_sha256: data.request.checkpoint_sha256, engineering_wait_resolution: resolution}})`);
+  assert.ok(h.run("engineeringWaitDecision(data.request, data.step, proof)"));
+  h.run('resolution.static_qa_missing_entry.observation_sha256 = "f".repeat(64)');
+  assert.equal(h.run("engineeringWaitDecision(data.request, data.step, proof)"), null);
 });
 
 test("unknown stop proof remains an engineering wait with explicit missing facts and no resolution", () => {
