@@ -3489,3 +3489,25 @@ QA FAIL routing then checks the Task's remaining frozen work allowance before
 returning to Coder. An exhausted allowance preserves the finding and blocks
 until a separate exact resource decision. No QA/Review verdict is synthesized
 by the orchestrator.
+
+The frozen Plan is an Orchestrator artifact. Production does not insert it into
+`work_queue_accepted_artifacts`: authenticate its exact ID, source revision and
+Task through the durable `PLANNING → IMPLEMENTING` `plan_validated` or
+`plan_recovered` StateEvent. The implementation report must have exactly one
+Plan parent, but may also have accepted Coder progress or other accepted role
+parents from the same Task. Validate every additional parent's immutable
+artifact digest, source, run and context against its accepted queue receipt;
+do not require a synthetic accepted Plan row or discard legitimate progress.
+The current candidate must still have one exact accepted implementation
+receipt, and its Git-tree observation is read-only.
+
+After an exact static decision is consumed, verifier preparation may recognize
+the new QA dispatch only through the recorded `WAIT_RESOLVED` event between
+the original and current claims. Check the unchanged Task, WorkItem, attempt,
+checkpoint, original intent, source, no-start proof and static evidence under
+the generation fence; a lease expiry or newer sequence alone is insufficient.
+This is a distinct branch from `RESUME_UNINVOKED`: it grants no budget refund,
+does not mark the original verifier command as started, and cannot authorize
+ordinary QA or a Responses fallback. A valid proof-bound QA FAIL follows the
+ordinary remaining Coder work allowance; it never certifies the missing test
+as having run.

@@ -157,6 +157,12 @@ affected criteria and one `MISSING_PLANNED_TEST_ENTRY` finding per missing path
 is valid. PASS, command claims, changed proof/claim/candidate, or unrelated
 criterion PASS fail closed. Responses routes cannot consume this authority
 until they implement the same current-output validation as Codex CLI.
+The QA request carries both frozen Plan and accepted implementation as inputs,
+but the QA report's direct `parent_artifact_ids` is exactly the implementation
+artifact, as required by `RetryingOrchestrator`; the Plan remains authenticated
+through the Task's durable `plan_validated`/`plan_recovered` StateEvent and
+the request/observation lineage. Requiring both input IDs as direct report
+parents rejects a valid QA output and must not be used as the static gate.
 `tests_run=()` and the original controlled verifier's `NOT_STARTED` observation
 do not prove that the QA model made zero read-only source-inspection tool calls;
 the role's existing read-only tool policy continues to govern those calls.
