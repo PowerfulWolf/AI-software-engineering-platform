@@ -1,10 +1,24 @@
 # Static QA missing-entry recovery: maintenance authorization proposal
 
-This is a proposal, not an active recovery route or an approval. It targets
+This is an activation plan, not an active recovery route or a live K1 wait
+resolution. It targets
 platform `main` revision `5536cbbc946dd0a8235d2636d7c9aead50d10ae2`. The
 existing K1 ProductSpec, frozen Plan, candidate and product approval remain
 unchanged. The inactive proof/output slice is `36f8dbf1100cff37139e552b2f68b409b8cfbff6`;
 the additional no-start investigation is `439460de23186b7ae68d9cb58a1b76603a4ece90`.
+
+## One-time maintenance authorization record
+
+The human user confirmed this plan's exact protected-path exception in the
+trusted asynchronous reply `call_af8ceccef4f6491097071e3a54bd18d3` with
+the exact answer `确认上述一次性维护授权` (UTF-8 SHA-256
+`3701bb74227bcc8d1ab4137c9a1aeb2c1ae9cce1f5be08f42b499b85eedc3a22`).
+The authorization applies once to the protected paths listed below against
+platform `main` `5536cbbc946dd0a8235d2636d7c9aead50d10ae2`. It does not
+approve any additional generated path or any change to K1 ProductSpec,
+TechnicalDesign, frozen Plan or candidate baseline. This is a conversation
+authorization reference, not a platform `HumanActionEvent` or an engineering
+resolution; the latter must be sealed separately before consuming a live wait.
 
 ## Exact first-stage maintenance scope
 
