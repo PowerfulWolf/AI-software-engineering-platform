@@ -59,7 +59,10 @@ from ai_software_engineer.role_workspace import (
 if TYPE_CHECKING:
     from ai_software_engineer.manager.native_verification import RegisteredNativePythonVerifier
     from ai_software_engineer.manager.verifier_preparation import VerifierPreparationObservation
-    from ai_software_engineer.recovery.verification_execution import VerificationEvidenceProvider
+    from ai_software_engineer.recovery.verification_execution import (
+        StaticQaContractResolver,
+        VerificationEvidenceProvider,
+    )
 
 
 class DeliveryRouteAdapterFactory(Protocol):
@@ -93,6 +96,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             [RoleWorktreeBinding, AgentDefinition], CandidateCommitSkill
         ]
         | None = None,
+        static_qa_contract_resolver: StaticQaContractResolver | None = None,
     ) -> None:
         self._initial_admission = initial_workspace_admission
         self._execution_guard = execution_guard
@@ -101,6 +105,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
         self._registered_verifier = registered_verifier
         self._baseline_verifier = baseline_verifier
         self._candidate_commit_factory = candidate_commit_factory
+        self._static_qa_contract_resolver = static_qa_contract_resolver
 
     def with_execution_guard(self, guard: ExecutionGuard) -> ConfiguredDeliveryRouteAdapterFactory:
         """Bind Worker ownership while preserving explicitly approved recovery admission."""
@@ -112,6 +117,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             registered_verifier=self._registered_verifier,
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
+            static_qa_contract_resolver=self._static_qa_contract_resolver,
         )
 
     def with_initial_workspace_admission(
@@ -127,6 +133,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             registered_verifier=self._registered_verifier,
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
+            static_qa_contract_resolver=self._static_qa_contract_resolver,
         )
 
     def wrap_initial_workspace_admission(
@@ -147,6 +154,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             registered_verifier=self._registered_verifier,
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
+            static_qa_contract_resolver=self._static_qa_contract_resolver,
         )
 
     def with_interruption_control(
@@ -160,6 +168,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             registered_verifier=self._registered_verifier,
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
+            static_qa_contract_resolver=self._static_qa_contract_resolver,
         )
 
     def with_registered_verifier(
@@ -174,6 +183,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             registered_verifier=registry,
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
+            static_qa_contract_resolver=self._static_qa_contract_resolver,
         )
 
     def with_baseline_verifier(
@@ -188,6 +198,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             registered_verifier=self._registered_verifier,
             baseline_verifier=verifier,
             candidate_commit_factory=self._candidate_commit_factory,
+            static_qa_contract_resolver=self._static_qa_contract_resolver,
         )
 
     def with_candidate_commit_factory(
@@ -203,6 +214,22 @@ class ConfiguredDeliveryRouteAdapterFactory:
             registered_verifier=self._registered_verifier,
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=factory,
+            static_qa_contract_resolver=self._static_qa_contract_resolver,
+        )
+
+    def with_static_qa_contract_resolver(
+        self, resolver: StaticQaContractResolver
+    ) -> ConfiguredDeliveryRouteAdapterFactory:
+        """Enable only a proof-bound, currently consumed static QA claim."""
+        return ConfiguredDeliveryRouteAdapterFactory(
+            initial_workspace_admission=self._initial_admission,
+            execution_guard=self._execution_guard,
+            verification_evidence=self._verification_evidence,
+            interruption_control=self._interruption_control,
+            registered_verifier=self._registered_verifier,
+            baseline_verifier=self._baseline_verifier,
+            candidate_commit_factory=self._candidate_commit_factory,
+            static_qa_contract_resolver=resolver,
         )
 
     def prepare_verifier(
@@ -214,6 +241,16 @@ class ConfiguredDeliveryRouteAdapterFactory:
         config: ProductionConfig,
     ) -> None:
         """Trusted pre-model seam; no role model, verdict, or new recovery Task."""
+        if request.role is AgentRole.QA and self._static_qa_contract_resolver is not None:
+            static_contract = self._static_qa_contract_resolver(
+                request, Path(binding.worktree.path), self._execution_guard
+            )
+            if static_contract is not None:
+                if route.kind is not ModelProviderKind.CODEX_CLI:
+                    raise ProductionConfigError(
+                        "static QA missing-entry proof requires the guarded Codex CLI route"
+                    )
+                return
         if self._registered_verifier is None or self._verification_evidence is not None:
             return
         self._registered_verifier.prepare_verifier(
@@ -268,6 +305,14 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 allow_ordinary_commands=route.kind is ModelProviderKind.RESPONSES,
                 require_prepared=True,
                 route_sha256=_verifier_route_sha256(route, config),
+            )
+        if definition.role is AgentRole.QA and self._static_qa_contract_resolver is not None:
+            from ai_software_engineer.recovery.verification_execution import (
+                ConditionalStaticQaEvidenceProvider,
+            )
+
+            verification_evidence = ConditionalStaticQaEvidenceProvider(
+                verification_evidence, self._static_qa_contract_resolver
             )
         if verification_evidence is not None:
             from ai_software_engineer.recovery.verification_execution import (

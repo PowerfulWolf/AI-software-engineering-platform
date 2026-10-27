@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import pytest
 
+from ai_software_engineer.agents.models import AgentRequest
 from ai_software_engineer.agents.verification_output import (
+    TrustedStaticQaMissingEntryOutputContract,
     VerificationOutputRejected,
     static_qa_missing_entry_output_contract,
     validate_static_qa_missing_entry_output,
 )
 from ai_software_engineer.domain import AgentRole
-from ai_software_engineer.domain.artifact import Finding
+from ai_software_engineer.domain.artifact import Finding, QaReportArtifact
 from ai_software_engineer.domain.enums import (
     EvidenceType,
     FindingSeverity,
@@ -29,7 +31,7 @@ from tests.domain.factories import make_qa_artifact
 PATH = "tests/browser/fixture.test.cjs"
 
 
-def _subject():
+def _subject() -> tuple[AgentRequest, TrustedStaticQaMissingEntryOutputContract, QaReportArtifact]:
     request = _request(AgentRole.QA).model_copy(
         update={"input_artifact_ids": ("art_plan_001", "art_impl_001")}
     )

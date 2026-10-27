@@ -55,6 +55,9 @@ from ai_software_engineer.agents.ports import (
     AgentError,
     AgentRequestConflict,
 )
+from ai_software_engineer.agents.verification_output import (
+    TrustedStaticQaMissingEntryOutputContract,
+)
 from ai_software_engineer.agents.workspace_admission import (
     InitialWorkspaceAdmission,
     WorkspaceAdmissionRejected,
@@ -413,6 +416,12 @@ class ResponsesAgentAdapter:
         self, request: AgentRequest, continuation_prompt: str | None
     ) -> list[WirePayload]:
         prompt = self._prompt_builder.build(request)
+        if isinstance(
+            prompt.verification_output_contract, TrustedStaticQaMissingEntryOutputContract
+        ):
+            raise AgentConfigurationError(
+                "static QA missing-entry output requires a guarded native route"
+            )
         input_items: list[WirePayload] = [
             {
                 "role": message.role,

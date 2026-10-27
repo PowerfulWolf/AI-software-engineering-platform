@@ -15,7 +15,7 @@ from contextlib import ExitStack, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -67,10 +67,12 @@ from ai_software_engineer.agents.ports import (
     AgentRequestConflict,
 )
 from ai_software_engineer.agents.verification_output import (
+    TrustedStaticQaMissingEntryOutputContract,
     TrustedVerificationOutputContract,
     VerificationOutputCurrentValidator,
     VerificationOutputRejected,
     VerificationOutputRule,
+    validate_static_qa_missing_entry_output,
     validate_verification_output,
 )
 from ai_software_engineer.agents.workspace_admission import (
@@ -246,12 +248,25 @@ class _PreparedNativeInput:
     schema_content: str
     output_path: Path
     environment: Mapping[str, str]
-    verification_output_contract: TrustedVerificationOutputContract | None
+    verification_output_contract: (
+        TrustedVerificationOutputContract | TrustedStaticQaMissingEntryOutputContract | None
+    )
 
     @property
     def budget_content(self) -> str:
         """All platform-owned text inputs; CLI implicit system material is unobserved."""
         return self.compiled_prompt + "\n" + self.schema_content
+
+
+@runtime_checkable
+class _StaticQaOutputCurrentValidator(Protocol):
+    def validate_output_current(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None,
+        contract: TrustedStaticQaMissingEntryOutputContract,
+    ) -> None: ...
 
 
 class CodexCommandRunner(Protocol):
@@ -850,6 +865,13 @@ class CodexCliAgentAdapter:
         )
         verifier = request.role in {AgentRole.QA, AgentRole.REVIEWER}
         with prepared.resources:
+            static_contract = prepared.verification_output_contract
+            if isinstance(static_contract, TrustedStaticQaMissingEntryOutputContract):
+                if not isinstance(self._prompt_builder, _StaticQaOutputCurrentValidator):
+                    raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+                self._prompt_builder.validate_output_current(
+                    request, self._workspace_root, self._execution_guard, static_contract
+                )
             compiled_prompt = prepared.compiled_prompt
             sandbox_arguments = prepared.sandbox_arguments
             image_arguments = prepared.image_arguments
@@ -1132,12 +1154,20 @@ class CodexCliAgentAdapter:
             with execution_scope(self._execution_guard):
                 contract = prepared.verification_output_contract
                 if contract is not None:
-                    if not isinstance(self._prompt_builder, VerificationOutputCurrentValidator):
-                        raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
-                    self._prompt_builder.validate_output_current(
-                        request, self._workspace_root, self._execution_guard, contract
-                    )
-                    validate_verification_output(request, artifact, contract)
+                    if isinstance(contract, TrustedStaticQaMissingEntryOutputContract):
+                        if not isinstance(self._prompt_builder, _StaticQaOutputCurrentValidator):
+                            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+                        self._prompt_builder.validate_output_current(
+                            request, self._workspace_root, self._execution_guard, contract
+                        )
+                        validate_static_qa_missing_entry_output(request, artifact, contract)
+                    else:
+                        if not isinstance(self._prompt_builder, VerificationOutputCurrentValidator):
+                            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+                        self._prompt_builder.validate_output_current(
+                            request, self._workspace_root, self._execution_guard, contract
+                        )
+                        validate_verification_output(request, artifact, contract)
                 artifact = self._finalize_coder_candidate(request, initial_head, artifact)
                 self._validate_git_result(request, initial_head, artifact)
         except WorkspacePolicyError:
@@ -1190,7 +1220,12 @@ class CodexCliAgentAdapter:
     ) -> _PreparedNativeInput:
         source_revision = _require_full_revision(request.source_revision)
         prompt = self._prompt_builder.build(request)
-        qa_runner = _manager_provisioned_qa_runner(request, self._workspace_root)
+        static_qa = isinstance(
+            prompt.verification_output_contract, TrustedStaticQaMissingEntryOutputContract
+        )
+        qa_runner = (
+            None if static_qa else _manager_provisioned_qa_runner(request, self._workspace_root)
+        )
         coder_tooling = _manager_provisioned_coder_tooling(request, self._workspace_root)
         verifier = request.role in {AgentRole.QA, AgentRole.REVIEWER}
         invocation_environment = dict(self._environment)
@@ -1242,6 +1277,7 @@ class CodexCliAgentAdapter:
                 prompt.to_messages(include_images=False),
                 manager_qa_runner=qa_runner,
                 manager_coder_tooling=coder_tooling,
+                static_qa=static_qa,
             )
             if continuation_prompt is not None:
                 compiled_prompt += continuation_prompt
@@ -1463,6 +1499,7 @@ def _compile_prompt(
     *,
     manager_qa_runner: Path | None = None,
     manager_coder_tooling: _NativePythonTooling | None = None,
+    static_qa: bool = False,
 ) -> str:
     completion_reserve = (
         request.work_slice.window.finalization_reserve_seconds
@@ -1582,6 +1619,15 @@ def _compile_prompt(
             "top-level evidence array."
         ),
     }[request.role]
+    if static_qa:
+        if request.role is not AgentRole.QA:
+            raise CodexCliConfigurationError("static QA contract is QA-only")
+        role_instruction = (
+            "Independently inspect the exact candidate and trusted missing-entry proof. "
+            "Do not run tests or any planned verification command. Return only a "
+            "qa-report with FAIL, no tests_run, and proof-bound findings for each "
+            "missing planned test entry. Do not claim a command or PASS. "
+        )
     # PromptBuilder JSON content is a structured object, not a second escaped
     # JSON string. Preserve every value while avoiding redundant serialization.
     serialized: list[object] = []

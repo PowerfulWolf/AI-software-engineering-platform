@@ -10,9 +10,10 @@ import json
 import shlex
 import subprocess
 import tempfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from pydantic import Field
 
@@ -24,6 +25,7 @@ from ai_software_engineer.agents.openai_compatible import (
     PromptPayload,
 )
 from ai_software_engineer.agents.verification_output import (
+    TrustedStaticQaMissingEntryOutputContract,
     TrustedVerificationOutputContract,
     VerificationOutputCurrentValidator,
     VerificationOutputRejected,
@@ -69,7 +71,9 @@ from ai_software_engineer.service_pause import ServicePauseRequested
 class VerificationEvidence(DomainModel):
     text: NonEmptyStr
     images: tuple[PromptImage, ...] = Field(default=(), max_length=12)
-    output_contract: TrustedVerificationOutputContract | None = Field(default=None, exclude=True)
+    output_contract: (
+        TrustedVerificationOutputContract | TrustedStaticQaMissingEntryOutputContract | None
+    ) = Field(default=None, exclude=True)
 
 
 class VerificationEvidenceProvider(Protocol):
@@ -79,6 +83,86 @@ class VerificationEvidenceProvider(Protocol):
         workspace_root: Path,
         execution_guard: ExecutionGuard | None = None,
     ) -> VerificationEvidence: ...
+
+
+StaticQaContractResolver = Callable[
+    [AgentRequest, Path, ExecutionGuard | None],
+    TrustedStaticQaMissingEntryOutputContract | None,
+]
+
+
+@runtime_checkable
+class StaticQaOutputCurrentValidator(Protocol):
+    def validate_static_output_current(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None,
+        contract: TrustedStaticQaMissingEntryOutputContract,
+    ) -> None: ...
+
+
+class ConditionalStaticQaEvidenceProvider:
+    """Use a fresh consumed static QA proof or retain the ordinary verifier path."""
+
+    def __init__(
+        self,
+        delegate: VerificationEvidenceProvider | None,
+        resolver: StaticQaContractResolver,
+    ) -> None:
+        self._delegate, self._resolver = delegate, resolver
+
+    def evidence_for(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None = None,
+    ) -> VerificationEvidence:
+        contract = self._resolver(request, workspace_root, execution_guard)
+        if contract is None:
+            if self._delegate is None:
+                raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+            return self._delegate.evidence_for(request, workspace_root, execution_guard)
+        if request.role is not AgentRole.QA:
+            raise VerificationOutputRejected(VerificationOutputRule.IDENTITY)
+        paths = ", ".join(entry.path for entry in contract.missing)
+        return VerificationEvidence(
+            text=(
+                "Trusted static QA evidence: the candidate Git tree lacks these frozen planned "
+                f"test entries: {paths}. Cite the exact proof URI {contract.proof_uri} and its "
+                f"SHA-256 {contract.proof_sha256}. The original controlled planned "
+                "verification did not start; do not run that missing test. Return only a "
+                "qa-report FAIL with tests_run empty, each affected criterion FAIL citing this "
+                "proof, and one MISSING_PLANNED_TEST_ENTRY major or blocker finding per path. "
+                "Do not claim a PASS, a command result, or coverage of other criteria."
+            ),
+            output_contract=contract,
+        )
+
+    def validate_static_output_current(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None,
+        contract: TrustedStaticQaMissingEntryOutputContract,
+    ) -> None:
+        current = self._resolver(request, workspace_root, execution_guard)
+        if current != contract:
+            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+
+    def validate_output_current(
+        self,
+        request: AgentRequest,
+        workspace_root: Path,
+        execution_guard: ExecutionGuard | None,
+        contract: TrustedVerificationOutputContract,
+    ) -> None:
+        if self._delegate is None:
+            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+        validator = cast(VerificationOutputCurrentValidator, self._delegate)
+        if not isinstance(validator, VerificationOutputCurrentValidator):
+            raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+        validator.validate_output_current(request, workspace_root, execution_guard, contract)
 
 
 class VerificationEvidencePromptBuilder:
@@ -108,15 +192,22 @@ class VerificationEvidencePromptBuilder:
         request: AgentRequest,
         workspace_root: Path,
         execution_guard: ExecutionGuard | None,
-        contract: TrustedVerificationOutputContract,
+        contract: TrustedVerificationOutputContract | TrustedStaticQaMissingEntryOutputContract,
     ) -> None:
-        if (
-            workspace_root != self._root
-            or execution_guard is not self._guard
-            or not isinstance(self._provider, VerificationOutputCurrentValidator)
-        ):
+        if workspace_root != self._root or execution_guard is not self._guard:
             raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
-        self._provider.validate_output_current(request, workspace_root, execution_guard, contract)
+        if isinstance(contract, TrustedStaticQaMissingEntryOutputContract):
+            if not isinstance(self._provider, StaticQaOutputCurrentValidator):
+                raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+            self._provider.validate_static_output_current(
+                request, workspace_root, execution_guard, contract
+            )
+        else:
+            if not isinstance(self._provider, VerificationOutputCurrentValidator):
+                raise VerificationOutputRejected(VerificationOutputRule.CURRENT)
+            self._provider.validate_output_current(
+                request, workspace_root, execution_guard, contract
+            )
 
 
 class BoundSwiftVerificationEvidence:
