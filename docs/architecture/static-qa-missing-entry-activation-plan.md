@@ -20,6 +20,14 @@ an amended exact authorization before publication.
   under the Task/queue lock with a fresh QA identity and one-use fence.
 - `schemas/engineering-wait-resolution.schema.json`: generated wire contract
   and cross-field guards for the new resolution and proof.
+- `schemas/console-deletion-cleanup.schema.json`: nested generated wait models
+  in the deletion cleanup response.
+- `schemas/console-operation.schema.json`: nested generated wait models in the
+  Console operation response.
+- `schemas/stopped-failure-budget-settlement.schema.json`: nested generated
+  wait models in the stopped-failure settlement response.
+- `schemas/stopped-unknown-budget-settlement.schema.json`: nested generated
+  wait models in the stopped-unknown settlement response.
 - `scripts/sync-engineering-authority-schemas.py`: regenerate the canonical
   resolution schema without dropping existing hand-written guards.
 - `.trellis/spec/core/delivery-recovery.md`: nonterminal wait and replay rules.
@@ -31,10 +39,11 @@ an amended exact authorization before publication.
 
 Ordinary implementation would also use the already scoped
 `manager/delivery_wait.py`, `agents/verification_output.py`, production
-composition, tests and `docs/`. Console and nested generated Schema paths are
-not included in this first-stage authorization: the exact generated diff must
-be audited and separately added before activation. No `schemas/**` or
-`.trellis/spec/**` wildcard is requested.
+composition, tests and `docs/`. The four nested generated Schema paths above
+are the only additional generated outputs in the first-stage scope. Audit the
+exact generated diff and stop before publication if any other path changes;
+amend the exact authorization first. No `schemas/**` or `.trellis/spec/**`
+wildcard is requested.
 
 ## Required admission and validation
 

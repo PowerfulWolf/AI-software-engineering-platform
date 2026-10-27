@@ -2360,6 +2360,10 @@ def _assert_public_mixed_prerequisites(
     handling = entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire()))
     assert handling.resolution is None
     assert entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire())) == handling
+    schema = json.loads(Path("schemas/engineering-wait-resolution.schema.json").read_text())
+    validator = Draft202012Validator(schema)
+    validator.validate(proof.to_wire())
+    validator.validate(handling.to_wire())
     assert proof.next_action.count("真实 A→B") == 1
     assert "Scripted 或 composition 结果不能替代" in proof.next_action
     if unknown_process:
