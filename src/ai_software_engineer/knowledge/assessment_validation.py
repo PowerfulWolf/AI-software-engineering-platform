@@ -1,11 +1,13 @@
 """Pure assessment semantics shared by online consultation and exact recovery reads."""
 
 from copy import deepcopy
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal, Self, cast
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.agents.verification_output import StaticQaMissingEntry
+from ai_software_engineer.domain.enums import TeamRole
+from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.knowledge.gaps import KnowledgeClaim
 from ai_software_engineer.knowledge.models import (
     BoundedText,
@@ -32,6 +34,48 @@ class KnowledgeAssessment(DomainModel):
     gap_question: BoundedText | None = None
     gap_reason: Literal["MISSING", "CONFLICT", "STALE", "UNVERIFIABLE"] = "MISSING"
     gap_owner: Literal["HUMAN", "REPOSITORY"] = "HUMAN"
+
+
+class StaticQaKnowledgeScope(DomainModel):
+    """Versioned, trusted proof-only input to one QA knowledge consultation."""
+
+    kind: Literal["static_qa_missing_entry_v1"] = "static_qa_missing_entry_v1"
+    task_id: NonEmptyStr
+    source_revision: NonEmptyStr
+    attempt: int = Field(ge=1)
+    claim_sha256: Digest
+    claim_identity_sha256: Digest
+    authority_sha256: Digest
+    observation_sha256: Digest
+    proof_sha256: Digest
+    plan_artifact_id: NonEmptyStr
+    implementation_artifact_id: NonEmptyStr
+    missing: tuple[StaticQaMissingEntry, ...] = Field(min_length=1)
+    original_acceptance_status: Literal["NOT_RUN"] = "NOT_RUN"
+
+
+STATIC_QA_KNOWLEDGE_INSTRUCTIONS = (
+    "This is an independently admitted static QA run limited to a sealed proof that frozen "
+    "planned test entries are absent from the exact candidate tree. Assess knowledge only for "
+    "whether the QA role can report that source defect as FAIL, citing the supplied proof. "
+    "The original browser, MySQL and live A-to-B acceptance checks remain NOT_RUN and their "
+    "environment readiness is outside this run's consultation scope. Do not claim those checks "
+    "passed or are ready. The original Task, Plan and full context remain in the final QA role "
+    "request; this scope grants no verification command or verdict authority."
+)
+
+
+class StaticQaKnowledgeProjection(DomainModel):
+    kind: Literal["static_qa_knowledge_projection_v1"] = "static_qa_knowledge_projection_v1"
+    scope: StaticQaKnowledgeScope
+    parent_context_manifest_id: NonEmptyStr
+
+    def consultation_payload(self) -> dict[str, object]:
+        return {
+            "run_scope": self.scope.to_wire(),
+            "parent_context_manifest_id": self.parent_context_manifest_id,
+            "assessment_boundary": STATIC_QA_KNOWLEDGE_INSTRUCTIONS,
+        }
 
 
 def assessment_output_schema(citations: tuple[KnowledgeCitation, ...]) -> dict[str, object]:
@@ -66,6 +110,19 @@ def assessment_output_schema(citations: tuple[KnowledgeCitation, ...]) -> dict[s
 class KnowledgeConsultationInput(DomainModel):
     binding: KnowledgeRunBinding
     input_sha256: Digest
+    static_qa_projection: StaticQaKnowledgeProjection | None = None
+
+    @model_validator(mode="after")
+    def validate_projection(self) -> Self:
+        projection = self.static_qa_projection
+        if projection is not None and (
+            self.binding.role is not TeamRole.QA
+            or projection.scope.task_id != self.binding.task_id
+            or projection.scope.source_revision != self.binding.source_revision
+            or projection.parent_context_manifest_id != self.binding.context_manifest_id
+        ):
+            raise ValueError("static QA knowledge projection changed its binding")
+        return self
 
 
 def assessment_rejection_reason(

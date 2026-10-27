@@ -29,6 +29,7 @@ from ai_software_engineer.agents.structured_observation import (
     StructuredNativeStopReceipt,
     structured_request_digest,
 )
+from ai_software_engineer.agents.verification_output import StaticQaMissingEntry
 from ai_software_engineer.context import (
     ContextBundle,
     ContextSource,
@@ -42,6 +43,8 @@ from ai_software_engineer.knowledge.assessment_rejection import (
     KnowledgeAssessmentRejected,
     RejectedAssessmentUnavailable,
     RejectedKnowledgeAssessment,
+    _manifest,
+    _require_requests,
     derive_rejected_assessment,
     read_historical_rejected_assessment,
     read_rejected_assessment,
@@ -49,6 +52,10 @@ from ai_software_engineer.knowledge.assessment_rejection import (
 from ai_software_engineer.knowledge.assessment_validation import (
     KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
     KnowledgeAssessment,
+    KnowledgeConsultationInput,
+    KnowledgeIntent,
+    StaticQaKnowledgeProjection,
+    StaticQaKnowledgeScope,
     assessment_output_schema,
     assessment_rejection_reason,
 )
@@ -76,6 +83,7 @@ from tests.domain.factories import make_task
 from tests.knowledge.test_consultation import Model
 from tests.knowledge.test_invocation_native import _actual_claim, _client
 from tests.knowledge.test_retrieval_contract import binding, document, snapshot
+from tests.orchestration.test_runner import _definitions
 
 
 class UnreadCitationModel(Model):
@@ -219,6 +227,7 @@ class NativeRejection:
     observation: RejectedKnowledgeAssessment
     context: ContextBundle
     task: Task
+    projection: StaticQaKnowledgeProjection | None = None
 
     @property
     def lane(self) -> KnowledgeRecordStore:
@@ -232,22 +241,32 @@ def native_rejection(tmp_path: Path) -> NativeRejection:
     return _rejection(tmp_path)
 
 
-def _rejection(tmp_path: Path, *, model: StructuredModelClient | None = None) -> NativeRejection:
+def _rejection(
+    tmp_path: Path, *, model: StructuredModelClient | None = None, static_qa: bool = False
+) -> NativeRejection:
     frozen = snapshot(document())
-    bound = binding(frozen)
+    role = TeamRole.QA if static_qa else TeamRole.CODER
+    bound = binding(frozen, role)
     claim = _actual_claim(bound)
+    if static_qa:
+        claim = claim.model_copy(
+            update={
+                "work_item": claim.work_item.model_copy(update={"role": AgentRole.QA}),
+                "assignment": claim.assignment.model_copy(update={"role": AgentRole.QA}),
+            }
+        )
     task = make_task().model_copy(
         update={
             "id": bound.task_id,
             "repository": str(tmp_path),
             "base_ref": bound.source_revision,
-            "status": TaskStatus.IMPLEMENTING,
+            "status": TaskStatus.QA if static_qa else TaskStatus.IMPLEMENTING,
             "attempts": 1,
         }
     )
     context = FileContextBuilder(
         tmp_path,
-        _coder_request().permissions,
+        _definitions()[AgentRole.QA].permissions if static_qa else _coder_request().permissions,
         sources=(
             ContextSource(
                 source_id="execution.claim",
@@ -259,7 +278,7 @@ def _rejection(tmp_path: Path, *, model: StructuredModelClient | None = None) ->
                         "lease_id": claim.lease.id,
                         "assignment_id": claim.assignment.id,
                         "dispatch_sequence": claim.work_item.dispatch_sequence,
-                        "role": AgentRole.CODER.value,
+                        "role": AgentRole.QA.value if static_qa else AgentRole.CODER.value,
                         "attempt": claim.work_item.attempt,
                         "checkpoint_sequence": claim.work_item.checkpoint_sequence,
                     }
@@ -267,12 +286,40 @@ def _rejection(tmp_path: Path, *, model: StructuredModelClient | None = None) ->
                 required=True,
             ),
         ),
-    ).build(task, AgentRole.CODER, attempt=1)
+    ).build(task, AgentRole.QA if static_qa else AgentRole.CODER, attempt=1)
     FileContextStore(tmp_path / "contexts").put(context)
+    projection = None
+    if static_qa:
+        scope = StaticQaKnowledgeScope(
+            task_id=task.id,
+            source_revision=context.source_revision,
+            attempt=context.attempt,
+            claim_sha256=digest(claim.to_wire()),
+            claim_identity_sha256=claim_identity_sha256(claim),
+            authority_sha256="2" * 64,
+            observation_sha256="3" * 64,
+            proof_sha256="4" * 64,
+            plan_artifact_id="plan_1",
+            implementation_artifact_id="impl_1",
+            missing=(
+                StaticQaMissingEntry(
+                    path="tests/browser.test.cjs",
+                    criterion_ids=(task.acceptance_criteria[0].id,),
+                ),
+            ),
+        )
+        projection = StaticQaKnowledgeProjection(
+            scope=scope, parent_context_manifest_id=context.context_id
+        )
     bound = bound.model_copy(
         update={
             "context_manifest_id": context.context_id,
-            "run_id": "run_knowledge_" + digest((context.context_id, frozen.snapshot_sha256))[:32],
+            "run_id": "run_knowledge_"
+            + digest(
+                (context.context_id, frozen.snapshot_sha256)
+                if projection is None
+                else (context.context_id, frozen.snapshot_sha256, projection.scope.to_wire())
+            )[:32],
         }
     )
     records = KnowledgeRecordStore(tmp_path / "knowledge" / "runs")
@@ -285,13 +332,21 @@ def _rejection(tmp_path: Path, *, model: StructuredModelClient | None = None) ->
     )
     with pytest.raises(KnowledgeAssessmentRejected) as raised:
         service.consult(
-            bound, frozen, {"task": task.to_wire(), "context": context.to_wire()}, timeout_seconds=5
+            bound,
+            frozen,
+            (
+                {"task": task.to_wire(), "context": context.to_wire()}
+                if projection is None
+                else projection.consultation_payload()
+            ),
+            timeout_seconds=5,
+            static_qa_projection=projection,
         )
     observation = raised.value.observation
     assert observation is not None
-    assert raised.value.with_context("Coder").observation == observation
+    assert raised.value.with_context(role.value).observation == observation
     assert observation.reason == "CLAIM_WITHOUT_READ"
-    return NativeRejection(tmp_path, records, bound, observation, context, task)
+    return NativeRejection(tmp_path, records, bound, observation, context, task, projection)
 
 
 def _bytes(root: Path) -> dict[str, bytes]:
@@ -634,7 +689,9 @@ class _KnowledgeHttpTransport:
         return HttpResponse(200, json.dumps({"output_text": json.dumps(result)}).encode())
 
 
-def _http_rejection(tmp_path: Path, *, assessment_fallback: bool) -> NativeRejection:
+def _http_rejection(
+    tmp_path: Path, *, assessment_fallback: bool, static_qa: bool = False
+) -> NativeRejection:
     transport = _KnowledgeHttpTransport(assessment_fallback=assessment_fallback)
     routes: tuple[StructuredModelRoute, ...] = (
         StructuredModelRoute(
@@ -662,7 +719,11 @@ def _http_rejection(tmp_path: Path, *, assessment_fallback: bool) -> NativeRejec
             ),
         )
     case = _rejection(
-        tmp_path, model=FallbackStructuredModelClient(routes, role=binding(snapshot()).role)
+        tmp_path,
+        model=FallbackStructuredModelClient(
+            routes, role=TeamRole.QA if static_qa else binding(snapshot()).role
+        ),
+        static_qa=static_qa,
     )
     assert transport.calls == ["KnowledgeIntent", "KnowledgeAssessment"]
     return case
@@ -697,6 +758,78 @@ def test_http_returned_rejection_reopens_exact_completion_without_native_substit
         StructuredNativeStopReceipt if assessment_fallback else StructuredHttpRoundTripReceipt,
     )
     assert bool(list(tmp_path.glob("calls"))) is assessment_fallback
+
+
+def test_static_qa_rejected_assessment_replays_both_scoped_phases(tmp_path: Path) -> None:
+    case = _http_rejection(tmp_path, assessment_fallback=False, static_qa=True)
+    assert case.projection is not None
+    before = _bytes(tmp_path)
+    assert derive_rejected_assessment(case.records.root, case.bound) == case.observation
+    assert read_rejected_assessment(case.records.root, case.observation.observation_sha256) == (
+        case.observation
+    )
+    assert _bytes(tmp_path) == before
+
+
+@pytest.mark.parametrize("phase", ["intent", "assessment"])
+def test_static_qa_replay_recomputes_each_phase_request_digest(tmp_path: Path, phase: str) -> None:
+    case = _http_rejection(tmp_path, assessment_fallback=False, static_qa=True)
+    original_input = case.records.get(
+        "consultation-inputs", case.bound.run_id, KnowledgeConsultationInput
+    )
+    intent_outcome = case.lane.get(
+        "knowledge-invocation-outcomes", case.bound.run_id + ":intent", KnowledgeInvocationOutcome
+    )
+    assessment_outcome = case.lane.get(
+        "knowledge-invocation-outcomes",
+        case.bound.run_id + ":assessment",
+        KnowledgeInvocationOutcome,
+    )
+    saved_intent = case.records.get("knowledge-intents", case.bound.run_id, KnowledgeIntent)
+    manifest, evidence = _manifest(case.records, case.bound, saved_intent)
+    changed = (intent_outcome if phase == "intent" else assessment_outcome).model_copy(
+        update={
+            "intent": (
+                intent_outcome if phase == "intent" else assessment_outcome
+            ).intent.model_copy(update={"request_sha256": "f" * 64})
+        }
+    )
+    with pytest.raises(KnowledgeError, match="REQUEST_CHANGED"):
+        _require_requests(
+            case.records,
+            case.bound,
+            original_input,
+            case.observation.original_claim,
+            changed if phase == "intent" else intent_outcome,
+            changed if phase == "assessment" else assessment_outcome,
+            evidence,
+            manifest,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["claim", "candidate", "proof"])
+def test_static_qa_replay_refuses_changed_projection(tmp_path: Path, mutation: str) -> None:
+    case = _http_rejection(tmp_path, assessment_fallback=False, static_qa=True)
+    receipt = case.records.get("consultation-inputs", case.bound.run_id, KnowledgeConsultationInput)
+    assert receipt.static_qa_projection is not None
+    scope = receipt.static_qa_projection.scope
+    values = {
+        "claim": {"claim_identity_sha256": "f" * 64},
+        "candidate": {"source_revision": "f" * 40},
+        "proof": {"proof_sha256": "f" * 64},
+    }
+    changed = receipt.model_copy(
+        update={
+            "static_qa_projection": receipt.static_qa_projection.model_copy(
+                update={"scope": scope.model_copy(update=values[mutation])}
+            )
+        }
+    )
+    _replace_record(case.records, "consultation-inputs", case.bound.run_id, changed.to_wire())
+    before = _bytes(tmp_path)
+    with pytest.raises((KnowledgeError, ValueError)):
+        derive_rejected_assessment(case.records.root, case.bound)
+    assert _bytes(tmp_path) == before
 
 
 @pytest.mark.parametrize("phase", ["intent", "assessment"])

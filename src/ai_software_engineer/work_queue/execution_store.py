@@ -34,6 +34,7 @@ from ai_software_engineer.domain.engineering_authority import EngineeringCapabil
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
 from ai_software_engineer.domain.stopped_budget_settlement import StoppedFailureBudgetSettlement
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.domain.workforce import (
@@ -42,7 +43,13 @@ from ai_software_engineer.domain.workforce import (
     TaskLease,
     validate_assignment_independence,
 )
+from ai_software_engineer.knowledge.gaps import (
+    KnowledgeGap,
+    KnowledgeGapRouting,
+    KnowledgeResolution,
+)
 from ai_software_engineer.knowledge.models import digest
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.orchestration.state_machine import apply_event
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.store.mysql_repository import _decode_task, _encode, open_mysql_connection
@@ -67,6 +74,7 @@ from ai_software_engineer.work_queue.ports import (
 )
 
 if TYPE_CHECKING:
+    from ai_software_engineer.agents.models import AgentRequest
     from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
     from ai_software_engineer.domain.stopped_unknown_budget import StoppedUnknownBudgetSettlement
     from ai_software_engineer.manager.baseline_models import BaselineContinueAuthorization
@@ -75,7 +83,10 @@ if TYPE_CHECKING:
         RejectedCandidateExpiredOwnerSettlement,
         TaskProcessLockGuard,
     )
-    from ai_software_engineer.manager.verifier_preparation import VerifierPreparationIntent
+    from ai_software_engineer.manager.verifier_preparation import (
+        VerifierPreparationIntent,
+        VerifierPreparationObservation,
+    )
 
 
 def record_digest(value: DomainModel) -> str:
@@ -240,7 +251,174 @@ def read_queue_workforce(cursor: DictCursor, now: datetime) -> WorkforceFacts:
 
 
 class MySqlRoleQueue(MySqlPersistentWorkQueue):
-    def static_qa_resolution_for_claim(self, claim: QueueClaim) -> DeliveryResolution | None:
+    def static_qa_resolution_for_wait(
+        self, item: QueuedWorkItem, *, knowledge_records: KnowledgeRecordStore | None = None
+    ) -> DeliveryResolution | None:
+        """Read a prior consumed static decision while the same QA item is waiting."""
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            connection.cursor(DictCursor) as cursor,
+        ):
+            current = self._get_locked(cursor, item.id, lock=False)
+            if current != item or current.status not in {
+                WorkItemStatus.WAITING_HUMAN,
+                WorkItemStatus.WAITING_DEPENDENCY,
+            }:
+                raise QueueConflict("static QA wait changed during inspection")
+            cursor.execute(
+                "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
+                "AND event_type='WAIT_RESOLVED' ORDER BY sequence LIMIT 3",
+                (item.id,),
+            )
+            rows = cursor.fetchall()
+            if len(rows) > 2:
+                raise QueueCorruption("static QA wait has excessive consumed decisions")
+            decisions = []
+            for row in rows:
+                event = _RejectedOutputResolutionEvent.model_validate_json(str(row["payload_json"]))
+                event.detail.resolution.validate_integrity()
+                if event.detail.resolution_sha256 != event.detail.resolution.resolution_sha256:
+                    raise QueueCorruption("static QA wait decision digest changed")
+                decisions.append(event)
+            static = tuple(
+                event
+                for event in decisions
+                if event.detail.resolution.resolution_kind
+                is DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY
+            )
+            if not static:
+                return None
+            if len(static) != 1 or decisions[0] != static[0]:
+                raise QueueCorruption("static QA wait lacks one original decision")
+            decision = static[0].detail.resolution
+            evidence = decision.static_qa_missing_entry
+            step = self.step(item.id)
+            if (
+                evidence is None
+                or static[0].work_item.dispatch_sequence != evidence.wait_dispatch_sequence + 1
+                or decision.task_id != item.task_id
+                or decision.work_item_id != item.id
+                or decision.expected_checkpoint_sequence != item.checkpoint_sequence
+                or decision.expected_source_revision != step.boundary.source_revision
+                or decision.authorization_source != "engineering_operator_decision"
+                or item.role is not AgentRole.QA
+                or any(
+                    event.detail.resolution.resolution_kind
+                    is not DeliveryResolutionKind.RESUME_UNINVOKED
+                    for event in decisions[1:]
+                )
+            ):
+                raise QueueCorruption("static QA wait lineage changed")
+            cursor.execute("SELECT payload_json,revision FROM tasks WHERE id=%s", (item.task_id,))
+            task_row = cursor.fetchone()
+            if task_row is None:
+                raise QueueCorruption("static QA waiting Task is missing")
+            task = _decode_task(item.task_id, str(task_row["payload_json"]))
+            if (
+                task.status is not TaskStatus.QA
+                or task.repository != item.repository_scopes[0]
+                or task_intent_sha256(task) != decision.expected_task_intent_sha256
+                or digest(task.to_wire()) != decision.task_snapshot_sha256
+                or task_row["revision"] != decision.task_revision
+                or task.attempts != item.attempt
+            ):
+                raise QueueConflict("static QA waiting Task or candidate changed")
+            if current.dispatch_sequence > evidence.wait_dispatch_sequence + 1:
+                if (
+                    current.dispatch_sequence != evidence.wait_dispatch_sequence + 3
+                    or knowledge_records is None
+                    or len(decisions) != 1
+                ):
+                    raise QueueCorruption(
+                        "static QA later wait needs one approved knowledge generation"
+                    )
+                prior_sequence = current.dispatch_sequence - 1
+                cursor.execute(
+                    "SELECT event_type,payload_json,lease_id,from_status FROM work_queue_events "
+                    "WHERE work_item_id=%s AND event_type IN ('WAITING','READY','LEASE_EXPIRED') "
+                    "ORDER BY sequence LIMIT 1025",
+                    (item.id,),
+                )
+                transitions = cursor.fetchall()
+                if len(transitions) > 1024:
+                    raise QueueCorruption("static QA wait transition history exceeds bound")
+                matching_waits = []
+                matching_ready = []
+                matching_expiry = []
+                for transition in transitions:
+                    payload = json.loads(str(transition["payload_json"]))
+                    changed = QueuedWorkItem.model_validate(payload["work_item"])
+                    if changed.id != current.id:
+                        raise QueueCorruption("static QA wait changed WorkItem identity")
+                    if (
+                        transition["event_type"] == "WAITING"
+                        and changed.dispatch_sequence == prior_sequence
+                        and (changed.wait_reason or "").startswith("KNOWLEDGE_GAP:")
+                    ):
+                        matching_waits.append((changed, transition))
+                    if (
+                        transition["event_type"] == "READY"
+                        and changed.dispatch_sequence == current.dispatch_sequence
+                    ):
+                        matching_ready.append((changed, transition))
+                    if (
+                        transition["event_type"] == "LEASE_EXPIRED"
+                        and changed.dispatch_sequence == prior_sequence
+                    ):
+                        matching_expiry.append((changed, transition))
+                if (
+                    len(matching_waits) != 1
+                    or len(matching_ready) != 1
+                    or len(matching_expiry) != 1
+                ):
+                    raise QueueCorruption("static QA knowledge wait has no unique continuation")
+                waiting, wait_event = matching_waits[0]
+                _, ready_event = matching_ready[0]
+                reason = (waiting.wait_reason or "").split(":")
+                if len(reason) != 3:
+                    raise QueueCorruption("static QA knowledge wait identity is invalid")
+                gap = knowledge_records.get("gaps", reason[1], KnowledgeGap)
+                route = knowledge_records.get("gap-routes", reason[1], KnowledgeGapRouting)
+                approved = knowledge_records.get("gap-resolutions", reason[1], KnowledgeResolution)
+                gap.validate_integrity()
+                approved.validate_integrity()
+                prior_claim = self.original_claim(str(wait_event["lease_id"]))
+                if (
+                    route.routing_sha256 != reason[2]
+                    or route.routing_sha256
+                    != digest(route.model_dump(mode="json", exclude={"routing_sha256"}))
+                    or approved.gap_id != gap.gap_id
+                    or approved.previous_run_id != gap.binding.run_id
+                    or gap.binding.task_id != current.task_id
+                    or gap.binding.role.value != current.role.value
+                    or gap.binding.repository_ids != (current.repository_id,)
+                    or gap.binding.source_revision != decision.expected_source_revision
+                    or prior_claim.work_item.dispatch_sequence != prior_sequence
+                    or prior_claim.work_item.id != item.id
+                    or ready_event["from_status"] != waiting.status.value
+                    or matching_expiry[0][1]["from_status"]
+                    not in {WorkItemStatus.LEASED.value, WorkItemStatus.RUNNING.value}
+                ):
+                    raise QueueCorruption("static QA knowledge wait approval changed")
+            cursor.execute(
+                "SELECT id FROM work_queue_accepted_artifacts WHERE task_id=%s "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.work_item_id'))=%s LIMIT 1",
+                (item.task_id, item.id),
+            )
+            if cursor.fetchone() is not None:
+                raise QueueCorruption("static QA wait already has accepted output")
+            return decision
+
+    def static_qa_resolution_for_claim(
+        self,
+        claim: QueueClaim,
+        *,
+        knowledge_records: KnowledgeRecordStore | None = None,
+        preflight_records: KnowledgeRecordStore | None = None,
+        invocation_records: KnowledgeRecordStore | None = None,
+        observe_verifier: Callable[[AgentRequest, str], VerifierPreparationObservation]
+        | None = None,
+    ) -> DeliveryResolution | None:
         """Read only the consumed decision behind this exact active QA claim."""
         with (
             closing(open_mysql_connection(self._dsn)) as connection,
@@ -285,9 +463,9 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             ):
                 raise QueueConflict("static QA current claim or queue generation changed")
             cursor.execute(
-                "SELECT event_type,payload_json FROM work_queue_events "
+                "SELECT event_type,payload_json,from_status,lease_id FROM work_queue_events "
                 "WHERE work_item_id=%s AND event_type IN "
-                "('READY','WAIT_RESOLVED','LEASE_EXPIRED','RETRY_SCHEDULED') "
+                "('READY','WAIT_RESOLVED','LEASE_EXPIRED','RETRY_SCHEDULED','WAITING') "
                 "ORDER BY sequence ASC LIMIT 1025",
                 (current.id,),
             )
@@ -296,6 +474,9 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 raise QueueCorruption("active QA dispatch history exceeds bounded inspection")
             generations: dict[int, str] = {}
             static_events: list[_RejectedOutputResolutionEvent] = []
+            resumed_events: list[_RejectedOutputResolutionEvent] = []
+            knowledge_waits: dict[int, tuple[str, str, str]] = {}
+            engineering_waits: dict[int, tuple[QueuedWorkItem, str]] = {}
             try:
                 for transition in rows:
                     payload = json.loads(str(transition["payload_json"]))
@@ -303,6 +484,24 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     if transitioned.id != current.id:
                         raise QueueCorruption("active QA transition changed WorkItem identity")
                     event_type = str(transition["event_type"])
+                    if event_type == "WAITING":
+                        reason = transitioned.wait_reason or ""
+                        if reason.startswith("KNOWLEDGE_GAP:"):
+                            if transitioned.dispatch_sequence in knowledge_waits:
+                                raise QueueCorruption("static QA knowledge wait is duplicated")
+                            knowledge_waits[transitioned.dispatch_sequence] = (
+                                reason,
+                                str(transition["lease_id"]),
+                                transitioned.status.value,
+                            )
+                        elif transitioned.wait_disposition is not None:
+                            if transitioned.dispatch_sequence in engineering_waits:
+                                raise QueueCorruption("static QA engineering wait is duplicated")
+                            engineering_waits[transitioned.dispatch_sequence] = (
+                                transitioned,
+                                str(transition["lease_id"]),
+                            )
+                        continue
                     if transitioned.status is not (
                         WorkItemStatus.RETRY_SCHEDULED
                         if event_type in {"LEASE_EXPIRED", "RETRY_SCHEDULED"}
@@ -325,6 +524,10 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                             DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY
                         ):
                             static_events.append(event)
+                        elif event.detail.resolution.resolution_kind is (
+                            DeliveryResolutionKind.RESUME_UNINVOKED
+                        ):
+                            resumed_events.append(event)
             except (KeyError, TypeError, ValueError, ValidationError) as error:
                 raise QueueCorruption("active QA transition history is corrupt") from error
             if any(
@@ -352,16 +555,6 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 or static is None
                 or event.work_item.dispatch_sequence != static.wait_dispatch_sequence + 1
                 or current.dispatch_sequence < static.wait_dispatch_sequence + 1
-                or any(
-                    generations[sequence] not in {"LEASE_EXPIRED", "READY"}
-                    or (
-                        generations[sequence] == "READY"
-                        and generations.get(sequence - 1) != "LEASE_EXPIRED"
-                    )
-                    for sequence in range(
-                        static.wait_dispatch_sequence + 2, current.dispatch_sequence + 1
-                    )
-                )
                 or current.role is not AgentRole.QA
                 or current.task_id != decision.task_id
                 or current.checkpoint_sequence != decision.expected_checkpoint_sequence
@@ -369,6 +562,271 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 or decision.authorization_source != "engineering_operator_decision"
             ):
                 raise QueueCorruption("static QA decision changed its exact claim lineage")
+            original_wait = engineering_waits.get(static.wait_dispatch_sequence)
+            if (
+                original_wait is None
+                or original_wait[1] != static.wait_lease_id
+                or original_wait[0].wait_disposition is None
+                or original_wait[0].wait_disposition.disposition_sha256
+                != decision.expected_disposition_sha256
+                or original_wait[0].wait_disposition.facts.evidence_ids
+                != ("verifier-preparation://" + static.preparation_checkpoint_sha256,)
+            ):
+                raise QueueCorruption("static QA original wait evidence changed")
+            stale_marker = None
+            if current.dispatch_sequence > static.wait_dispatch_sequence + 2:
+                from ai_software_engineer.manager.verifier_preparation import (
+                    VerifierPreparationCheckpoint,
+                    VerifierPreparationIntent,
+                )
+                from ai_software_engineer.work_queue.invocation import (
+                    DeliveryInvocationOutcome,
+                    DeliveryInvocationStart,
+                )
+
+                if (
+                    preflight_records is None
+                    or invocation_records is None
+                    or observe_verifier is None
+                ):
+                    raise QueueCorruption("static QA descendant lacks independent no-start stores")
+                intents = tuple(
+                    intent
+                    for intent in preflight_records.list(
+                        "verifier-preparation-intents", VerifierPreparationIntent
+                    )
+                    if intent.work_item_id == current.id
+                    and intent.checkpoint_sequence == current.checkpoint_sequence
+                )
+                original_intents = tuple(
+                    intent
+                    for intent in intents
+                    if intent.dispatch_sequence == static.wait_dispatch_sequence + 1
+                )
+                current_intents = tuple(
+                    intent
+                    for intent in intents
+                    if intent.dispatch_sequence == current.dispatch_sequence
+                )
+                historical_intents = tuple(
+                    intent
+                    for intent in intents
+                    if intent.dispatch_sequence < static.wait_dispatch_sequence + 1
+                )
+                if (
+                    len(original_intents) != 1
+                    or len(current_intents) > 1
+                    or len(historical_intents) > 1
+                    or len(intents)
+                    != len(original_intents) + len(current_intents) + len(historical_intents)
+                ):
+                    raise QueueCorruption("static QA descendant has changed preparation intents")
+                prior_intent = original_intents[0]
+                prior_intent.validate_integrity()
+                current_intent = current_intents[0] if current_intents else None
+                if current_intent is not None:
+                    current_intent.validate_integrity()
+                    if (
+                        current_intent.work_item_id != current.id
+                        or current_intent.lease_id != claim.lease.id
+                        or current_intent.task_id != current.task_id
+                        or current_intent.task_snapshot_sha256 != decision.task_snapshot_sha256
+                        or current_intent.checkpoint_sequence != current.checkpoint_sequence
+                        or current_intent.request_sha256 != digest(current_intent.request.to_wire())
+                        or current_intent.request.model_dump(
+                            mode="json", exclude={"run_id", "context_manifest_id"}
+                        )
+                        != prior_intent.request.model_dump(
+                            mode="json", exclude={"run_id", "context_manifest_id"}
+                        )
+                    ):
+                        raise QueueCorruption("static QA current preparation changed its claim")
+                for historical_intent in historical_intents:
+                    historical_intent.validate_integrity()
+                    if (
+                        historical_intent.dispatch_sequence != static.original_dispatch_sequence
+                        or historical_intent.lease_id != static.original_lease_id
+                        or historical_intent.task_id != current.task_id
+                        or historical_intent.task_snapshot_sha256 != decision.task_snapshot_sha256
+                    ):
+                        raise QueueCorruption("static QA historical preparation changed its Task")
+                markers = tuple(
+                    marker
+                    for marker in preflight_records.list(
+                        "verifier-preparations", VerifierPreparationCheckpoint
+                    )
+                    if marker.work_item_id == current.id
+                    and marker.checkpoint_sequence == current.checkpoint_sequence
+                )
+                historical_markers = tuple(
+                    marker
+                    for marker in markers
+                    if marker.intent_sha256 in {value.intent_sha256 for value in historical_intents}
+                )
+                if any(
+                    marker.observation.native_execution_state != "NOT_STARTED"
+                    for marker in historical_markers
+                ):
+                    raise QueueCorruption("static QA historical preparation execution is uncertain")
+                ready = tuple(
+                    marker
+                    for marker in markers
+                    if marker.result == "READY"
+                    and marker.intent_sha256 == prior_intent.intent_sha256
+                )
+                current_markers = tuple(
+                    marker
+                    for marker in markers
+                    if current_intent is not None
+                    and marker.intent_sha256 == current_intent.intent_sha256
+                )
+                later = tuple(marker for marker in markers if marker not in ready + current_markers)
+                later = tuple(marker for marker in later if marker not in historical_markers)
+                start = invocation_records.find(
+                    "invocation-starts", current.id, DeliveryInvocationStart
+                )
+                outcome = invocation_records.find(
+                    "invocation-outcomes", current.id, DeliveryInvocationOutcome
+                )
+                if (
+                    len(ready) != 1
+                    or len(later) > 1
+                    or len(current_markers) > 1
+                    or prior_intent.dispatch_sequence != static.wait_dispatch_sequence + 1
+                    or prior_intent.task_id != current.task_id
+                    or prior_intent.task_snapshot_sha256 != decision.task_snapshot_sha256
+                    or prior_intent.request.source_revision != decision.expected_source_revision
+                    or ready[0].lease_id != prior_intent.lease_id
+                    or ready[0].request != prior_intent.request
+                    or ready[0].observation.native_execution_state != "NOT_STARTED"
+                    or observe_verifier(prior_intent.request, prior_intent.lease_id)
+                    != ready[0].observation
+                ):
+                    raise QueueCorruption("static QA descendant has no complete no-start proof")
+                ready[0].validate_integrity()
+                if current_markers:
+                    current_marker = current_markers[0]
+                    current_marker.validate_integrity()
+                    if (
+                        current_intent is None
+                        or current_marker.result != "READY"
+                        or current_marker.lease_id != claim.lease.id
+                        or current_marker.wait_lease_id != claim.lease.id
+                        or current_marker.dispatch_sequence != current.dispatch_sequence
+                        or current_marker.wait_dispatch_sequence != current.dispatch_sequence
+                        or current_marker.request != current_intent.request
+                        or current_marker.observation.native_execution_state != "NOT_STARTED"
+                    ):
+                        raise QueueCorruption("static QA current preparation marker changed")
+                if start is not None:
+                    start.validate_integrity()
+                    if (
+                        current_intent is None
+                        or not current_markers
+                        or start.work_item_id != current.id
+                        or start.checkpoint_sequence != current.checkpoint_sequence
+                        or start.lease_id != claim.lease.id
+                        or start.request != current_intent.request
+                    ):
+                        raise QueueCorruption("static QA earlier invocation may have started")
+                if outcome is not None:
+                    outcome.validate_integrity()
+                    if start is None or outcome.start != start:
+                        raise QueueCorruption("static QA earlier invocation has an outcome")
+                if later:
+                    later[0].validate_integrity()
+                    if (
+                        later[0].result != "WAIT"
+                        or later[0].failure_reason is None
+                        or later[0].failure_reason is not NativeVerificationWaitReason.FACTS_CHANGED
+                        or later[0].observation.native_execution_state != "NOT_STARTED"
+                        or later[0].intent_sha256 != prior_intent.intent_sha256
+                        or later[0].wait_dispatch_sequence != current.dispatch_sequence - 1
+                        or later[0].request != prior_intent.request
+                    ):
+                        raise QueueCorruption("static QA descendant changed stale-preflight marker")
+                    stale_marker = later[0]
+            for sequence in range(static.wait_dispatch_sequence + 2, current.dispatch_sequence + 1):
+                origin = generations[sequence]
+                if origin == "LEASE_EXPIRED":
+                    continue
+                if origin == "READY" and sequence - 1 in knowledge_waits:
+                    if knowledge_records is None:
+                        raise QueueCorruption("static QA knowledge continuation lacks records")
+                    wait_reason, wait_lease_id, wait_status = knowledge_waits[sequence - 1]
+                    parts = wait_reason.split(":")
+                    if len(parts) != 3:
+                        raise QueueCorruption("static QA knowledge wait has invalid identity")
+                    gap = knowledge_records.get("gaps", parts[1], KnowledgeGap)
+                    route = knowledge_records.get("gap-routes", parts[1], KnowledgeGapRouting)
+                    approved = knowledge_records.get(
+                        "gap-resolutions", parts[1], KnowledgeResolution
+                    )
+                    gap.validate_integrity()
+                    approved.validate_integrity()
+                    wait_claim = self.original_claim(wait_lease_id)
+                    if (
+                        route.routing_sha256 != parts[2]
+                        or route.routing_sha256
+                        != digest(route.model_dump(mode="json", exclude={"routing_sha256"}))
+                        or approved.gap_id != gap.gap_id
+                        or approved.previous_run_id != gap.binding.run_id
+                        or gap.binding.task_id != current.task_id
+                        or gap.binding.role.value != current.role.value
+                        or gap.binding.repository_ids != (current.repository_id,)
+                        or gap.binding.source_revision != decision.expected_source_revision
+                        or wait_claim.work_item.id != current.id
+                        or wait_claim.work_item.dispatch_sequence != sequence - 1
+                        or wait_status != route.waiting_status
+                    ):
+                        raise QueueCorruption("static QA knowledge approval changed")
+                    continue
+                if origin == "READY" and generations.get(sequence - 1) == "LEASE_EXPIRED":
+                    continue
+                if origin == "WAIT_RESOLVED" and len(resumed_events) == 1:
+                    resumed = resumed_events[0].detail.resolution
+                    proof = resumed.verifier_preparation
+                    engineering_wait = engineering_waits.get(sequence - 1)
+                    if (
+                        resumed.resolution_kind is DeliveryResolutionKind.RESUME_UNINVOKED
+                        and resumed_events[0].work_item.dispatch_sequence == sequence
+                        and resumed.work_item_id == current.id
+                        and resumed.task_id == decision.task_id
+                        and resumed.task_snapshot_sha256 == decision.task_snapshot_sha256
+                        and resumed.task_revision == decision.task_revision
+                        and resumed.expected_checkpoint_sequence
+                        == decision.expected_checkpoint_sequence
+                        and resumed.expected_source_revision == decision.expected_source_revision
+                        and resumed.step_sha256 == decision.step_sha256
+                        and proof is not None
+                        and stale_marker is not None
+                        and engineering_wait is not None
+                        and engineering_wait[0].wait_disposition is not None
+                        and engineering_wait[1] == stale_marker.wait_lease_id
+                        and engineering_wait[0].dispatch_sequence
+                        == stale_marker.wait_dispatch_sequence
+                        and engineering_wait[0].wait_disposition.facts.evidence_ids
+                        == ("verifier-preparation://" + stale_marker.checkpoint_sha256,)
+                        and engineering_wait[0].wait_disposition.disposition_sha256
+                        == resumed.expected_disposition_sha256
+                        and proof.preparation_checkpoint_sha256 == stale_marker.checkpoint_sha256
+                        and proof.request_sha256 == stale_marker.request_sha256
+                        and proof.previous_run_id == stale_marker.run_id
+                        and proof.previous_context_manifest_id == stale_marker.context_manifest_id
+                        and proof.native_execution_state == "NOT_STARTED"
+                        and proof.context_capacity_receipt_sha256 is None
+                        and resumed.static_qa_missing_entry is None
+                        and not resumed_events[0].detail.budget_refund
+                    ):
+                        continue
+                raise QueueCorruption("static QA descendant generation has no exact authority")
+            cursor.execute(
+                "SELECT id FROM work_queue_accepted_artifacts WHERE task_id=%s "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.work_item_id'))=%s LIMIT 1",
+                (current.task_id, current.id),
+            )
+            if cursor.fetchone() is not None:
+                raise QueueCorruption("static QA work item already has accepted output")
             cursor.execute(
                 "SELECT payload_json,revision FROM tasks WHERE id=%s", (current.task_id,)
             )

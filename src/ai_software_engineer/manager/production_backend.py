@@ -31,7 +31,12 @@ from ai_software_engineer.config import (
     ProviderRouteConfig,
 )
 from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
-from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
+from ai_software_engineer.context import (
+    ContextBudget,
+    ContextBundle,
+    ContextSource,
+    FileContextStore,
+)
 from ai_software_engineer.context.native import (
     execution_native_rule_sources,
     native_rule_prompt_sources,
@@ -210,7 +215,10 @@ from ai_software_engineer.spec_compiler import SpecRule
 from ai_software_engineer.store import MySqlTaskRepository, TaskRepository
 from ai_software_engineer.swift_verification import SWIFT_VERIFICATION_COMMANDS
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
-from ai_software_engineer.work_queue.invocation import DurableInvocationControl
+from ai_software_engineer.work_queue.invocation import (
+    DeliveryInvocationStart,
+    DurableInvocationControl,
+)
 from ai_software_engineer.work_queue.ports import DeliveryQueuePending
 
 Clock = Callable[[], datetime]
@@ -1802,7 +1810,10 @@ class ProductionProjectDeliveryBackend:
         from ai_software_engineer.context import ContextBudget
         from ai_software_engineer.knowledge.audit import KnowledgeHumanActionRecorder
         from ai_software_engineer.knowledge.delivery import KnowledgeDeliveryGate
-        from ai_software_engineer.knowledge.runtime import KnowledgeRunContextBuilder
+        from ai_software_engineer.knowledge.runtime import (
+            KnowledgeRunContextBuilder,
+            StaticQaKnowledgeScope,
+        )
         from ai_software_engineer.knowledge.store import KnowledgeRecordStore
         from ai_software_engineer.orchestration.context import FileRunContextBuilder
 
@@ -1898,6 +1909,88 @@ class ProductionProjectDeliveryBackend:
             resolver=baseline_inputs,
             native_sources=runtime_config.context_sources,
         )
+
+        def static_qa_knowledge_scope(
+            task: Task,
+            agent: AgentDefinition,
+            attempt: int,
+            candidate_revision: str | None,
+            input_artifacts: tuple[Artifact, ...],
+            base: ContextBundle,
+        ) -> StaticQaKnowledgeScope | None:
+            if agent.role is not AgentRole.QA or task.engineering_policy is None:
+                return None
+            if active_runtime is None:
+                raise ValueError("static QA knowledge scope requires the current runtime")
+            from ai_software_engineer.agents.verification_output import StaticQaMissingEntry
+            from ai_software_engineer.artifacts import artifact_digest
+            from ai_software_engineer.knowledge.claim_identity import claim_identity_sha256
+            from ai_software_engineer.manager.delivery_wait import (
+                StaticQaPreContextIdentity,
+                current_static_qa_for_claim,
+            )
+
+            proof = current_static_qa_for_claim(
+                request=StaticQaPreContextIdentity(
+                    task_id=task.id,
+                    role=agent.role,
+                    attempt=attempt,
+                    source_revision=base.source_revision,
+                ),
+                guard=worker_guard,
+                workspace_root=Path(task.repository),
+                queue=queue,
+                repository=active_runtime.task_repository,
+                artifacts=accepted_artifacts,
+                sidecar_state=facts.workspace.directory("state"),
+            )
+            if proof is None:
+                return None
+            claim = knowledge_claim()
+            if (
+                invocation_control.records.find(
+                    "invocation-starts", claim.work_item.id, DeliveryInvocationStart
+                )
+                is not None
+            ):
+                raise ValueError("static QA knowledge scope cannot follow a started invocation")
+            observation = proof.observation
+            parents = {item.artifact_id: item for item in input_artifacts}
+            plan_artifact = parents.get(observation.plan_artifact_id)
+            implementation_artifact = parents.get(observation.implementation_artifact_id)
+            if (
+                candidate_revision != observation.candidate_revision
+                or len(parents) != len(input_artifacts)
+                or not isinstance(plan_artifact, PlanArtifact)
+                or not isinstance(implementation_artifact, ImplementationReportArtifact)
+                or artifact_digest(plan_artifact) != observation.plan_artifact_sha256
+                or artifact_digest(implementation_artifact)
+                != observation.implementation_artifact_sha256
+            ):
+                raise ValueError("static QA knowledge scope changed its candidate or parents")
+            by_path: dict[str, list[str]] = {}
+            for entry in observation.missing:
+                criteria = by_path.setdefault(entry.path, [])
+                for criterion_id in entry.requirement.criterion_ids:
+                    if criterion_id not in criteria:
+                        criteria.append(criterion_id)
+            return StaticQaKnowledgeScope(
+                task_id=task.id,
+                source_revision=base.source_revision,
+                attempt=attempt,
+                claim_sha256=proof.claim_sha256,
+                claim_identity_sha256=claim_identity_sha256(claim),
+                authority_sha256=proof.resolution.resolution_sha256,
+                observation_sha256=observation.observation_sha256,
+                proof_sha256=proof.resolution.proof_sha256,
+                plan_artifact_id=observation.plan_artifact_id,
+                implementation_artifact_id=observation.implementation_artifact_id,
+                missing=tuple(
+                    StaticQaMissingEntry(path=path, criterion_ids=tuple(criteria))
+                    for path, criteria in by_path.items()
+                ),
+            )
+
         knowledge_contexts = (
             KnowledgeRunContextBuilder(
                 baseline_contexts,
@@ -1912,6 +2005,7 @@ class ProductionProjectDeliveryBackend:
                 wait_port=WorkerKnowledgeWait(worker_guard, knowledge_records),
                 invocation_claim=knowledge_claim,
                 invocation_timeout=queue.knowledge_timeout,
+                static_qa_scope=static_qa_knowledge_scope,
             )
             if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory)
             else baseline_contexts
@@ -2011,6 +2105,7 @@ class ProductionProjectDeliveryBackend:
                     adapter.observe_verifier_preparation,
                     intent,
                     claim,
+                    knowledge_records=knowledge_records,
                 ),
                 prepare_input=adapter.prepare_input,
                 discard_prepared_input=adapter.discard_prepared_input,

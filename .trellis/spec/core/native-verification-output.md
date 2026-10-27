@@ -166,3 +166,12 @@ parents rejects a valid QA output and must not be used as the static gate.
 `tests_run=()` and the original controlled verifier's `NOT_STARTED` observation
 do not prove that the QA model made zero read-only source-inspection tool calls;
 the role's existing read-only tool policy continues to govern those calls.
+
+Before this static QA role request is built, knowledge consultation may receive
+the exact proof-only scope described in `active-knowledge.md`. That scope does
+not authorize a verdict or a command: the current claim and candidate proof
+are independently checked again at the adapter and output gate. Original
+MySQL/browser/live A→B acceptance remains `NOT_RUN` until an ordinary QA run
+executes it against a repaired candidate. Rejected knowledge assessments must
+remain replayable from the versioned scope, without weakening the ordinary
+QA/Reviewer output contracts or hiding unresolved knowledge gaps.

@@ -814,3 +814,13 @@ fresh QA claim and the restricted output contract in
 `native-verification-output.md`. Once Coder supplies a new candidate, the
 registered real browser and live A→B executors remain mandatory for complete
 QA and Review.
+
+Knowledge consultation for an authenticated static QA claim evaluates only
+that proof-bound missing-entry FAIL, as specified in `active-knowledge.md`.
+It must not demand future MySQL/browser/live A→B readiness as a prerequisite
+for identifying an absent candidate test, nor mark those unrun checks ready or
+passed. If a knowledge gap and later failed preparation consumed additional
+claim generations, `delivery-recovery.md` requires exact public engineering
+recovery and complete no-start evidence before another static claim. Ordinary
+QA after a repaired candidate still needs real controlled executors and
+independent verification.

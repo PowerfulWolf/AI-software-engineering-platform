@@ -27,6 +27,8 @@ from ai_software_engineer.knowledge.assessment_rejection import (
 from ai_software_engineer.knowledge.assessment_validation import (
     KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
     KNOWLEDGE_INTENT_INSTRUCTIONS,
+    STATIC_QA_KNOWLEDGE_INSTRUCTIONS,
+    StaticQaKnowledgeProjection,
     assessment_output_schema,
     assessment_rejection_reason,
 )
@@ -236,12 +238,39 @@ class KnowledgeConsultationService:
         payload: Mapping[str, object],
         *,
         timeout_seconds: int,
+        static_qa_projection: StaticQaKnowledgeProjection | None = None,
     ) -> KnowledgeConsultation:
+        if static_qa_projection is not None:
+            scope = static_qa_projection.scope
+            if (
+                payload != static_qa_projection.consultation_payload()
+                or binding.role is not TeamRole.QA
+                or binding.task_id != scope.task_id
+                or binding.source_revision != scope.source_revision
+                or binding.context_manifest_id != static_qa_projection.parent_context_manifest_id
+                or binding.run_id
+                != "run_knowledge_"
+                + digest(
+                    (
+                        binding.context_manifest_id,
+                        binding.snapshot_sha256,
+                        scope.to_wire(),
+                    )
+                )[:32]
+            ):
+                raise KnowledgeError("STATIC_QA_PROJECTION_INPUT_CHANGED")
+        scope_instructions = (
+            STATIC_QA_KNOWLEDGE_INSTRUCTIONS if static_qa_projection is not None else ""
+        )
         input_sha = digest(payload)
         self.records.put(
             "consultation-inputs",
             binding.run_id,
-            KnowledgeConsultationInput(binding=binding, input_sha256=input_sha),
+            KnowledgeConsultationInput(
+                binding=binding,
+                input_sha256=input_sha,
+                static_qa_projection=static_qa_projection,
+            ),
         )
         prior = self.records.find("consultations", binding.run_id, KnowledgeConsultation)
         gaps = KnowledgeGapService(self.records)
@@ -306,7 +335,8 @@ class KnowledgeConsultationService:
             self._call(
                 binding,
                 "intent",
-                instructions=KNOWLEDGE_INTENT_INSTRUCTIONS,
+                instructions=KNOWLEDGE_INTENT_INSTRUCTIONS
+                + (" " + scope_instructions if scope_instructions else ""),
                 input_payload={
                     "binding": binding.to_wire(),
                     "task": consultation_payload,
@@ -346,7 +376,8 @@ class KnowledgeConsultationService:
                 self._call(
                     binding,
                     "assessment",
-                    instructions=KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
+                    instructions=KNOWLEDGE_ASSESSMENT_INSTRUCTIONS
+                    + (" " + scope_instructions if scope_instructions else ""),
                     input_payload={
                         "binding": binding.to_wire(),
                         "task": consultation_payload,

@@ -49,8 +49,15 @@ from ai_software_engineer.domain.engineering_authority import (
     LocalOperatorPrincipal,
 )
 from ai_software_engineer.domain.enums import WorkItemStatus
+from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure, DeliveryRetryPolicy
-from ai_software_engineer.knowledge.models import digest
+from ai_software_engineer.knowledge.gaps import (
+    KnowledgeGapService,
+    KnowledgeResolution,
+    KnowledgeResolutionSource,
+)
+from ai_software_engineer.knowledge.models import digest, text_digest
+from ai_software_engineer.knowledge.queue import QueueKnowledgeWaitPort
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.preflight_gate import PreflightInvocationControl
 from ai_software_engineer.manager.verifier_preparation import (
@@ -87,6 +94,7 @@ from tests.domain.factories import (
     make_qa_artifact,
     make_task,
 )
+from tests.knowledge.test_queue import bound, route
 from tests.manager.test_native_verification import _Guard
 from tests.work_queue.test_worker_mysql import (
     ALLOCATION_SHA,
@@ -614,7 +622,13 @@ def test_static_qa_decision_carries_across_fenced_lease_reclaim(
     )
     with pytest.raises(QueueLeaseLost):
         waiting.queue.static_qa_resolution_for_claim(first)
-    assert waiting.queue.static_qa_resolution_for_claim(second) == resolution
+    if make_ready:
+        # A manual READY transition after a reclaimed generation has no
+        # consumed engineering decision or independent no-start proof.
+        with pytest.raises(QueueCorruption):
+            waiting.queue.static_qa_resolution_for_claim(second)
+    else:
+        assert waiting.queue.static_qa_resolution_for_claim(second) == resolution
     assert waiting.resolution_events() == 1
     assert waiting.repository.get(item.task_id).attempts == item.attempt
 
@@ -906,6 +920,12 @@ def test_preparation_resume_requires_real_consumed_generation_and_original_reque
         "old_lease_active",
         "skipped_generation",
         "second_reclaim",
+        "knowledge_gap_intermediate",
+        "knowledge_gap_unresolved",
+        "knowledge_gap_native_started",
+        "knowledge_gap_role_started",
+        "knowledge_gap_stale_preflight_wait",
+        "knowledge_gap_then_engineering_wait",
         "wrong_claim",
     ],
 )
@@ -1059,6 +1079,160 @@ def test_static_qa_reclaimed_ready_no_start_preparation_uses_consumed_decision(
         )
         assert third is not None
         second = third
+    if case in {
+        "knowledge_gap_intermediate",
+        "knowledge_gap_unresolved",
+        "knowledge_gap_native_started",
+        "knowledge_gap_role_started",
+        "knowledge_gap_stale_preflight_wait",
+        "knowledge_gap_then_engineering_wait",
+    }:
+        # A later claim may stop at the knowledge gate before verifier preparation.
+        # Its exact gap and approved resolution create another generation without
+        # a verifier intent, while preserving the frozen Task and static decision.
+        knowledge = KnowledgeRecordStore(tmp_path / "knowledge")
+        knowledge_binding = bound(second)
+        knowledge_route = route(knowledge, knowledge_binding)
+        QueueKnowledgeWaitPort(
+            waiting.queue,
+            claim=second,
+            owner_token=TOKEN,
+            binding=knowledge_binding,
+            records=knowledge,
+            clock=lambda: second.claimed_at + timedelta(seconds=1),
+        ).wait(knowledge_binding, knowledge_route)
+        source = KnowledgeResolutionSource(
+            uri="test://verified-static-qa-scope",
+            content="Only proof-bound missing-entry FAIL is in scope; full checks remain NOT_RUN.",
+            sha256=text_digest(
+                "Only proof-bound missing-entry FAIL is in scope; full checks remain NOT_RUN."
+            ),
+        )
+        knowledge_resolution = KnowledgeResolution(
+            gap_id=knowledge_route.gap_id,
+            previous_run_id=knowledge_binding.run_id,
+            answer="Do proof-bound static QA only; real MySQL and browser checks remain NOT_RUN.",
+            sources=(source,),
+            approval_reference="test://human-approved-exact-gap",
+            approved_by="human:local-console",
+            resolution_id="0" * 64,
+        )
+        knowledge_resolution = knowledge_resolution.model_copy(
+            update={
+                "resolution_id": digest(
+                    knowledge_resolution.model_dump(mode="json", exclude={"resolution_id"})
+                )
+            }
+        )
+
+        class _HumanApproval:
+            def require_approval(self, candidate: KnowledgeResolution) -> None:
+                assert candidate == knowledge_resolution
+
+        if case != "knowledge_gap_unresolved":
+            KnowledgeGapService(knowledge).resolve(knowledge_resolution, _HumanApproval())
+        assert waiting.queue.get(ready.id).wait_reason == (
+            f"KNOWLEDGE_GAP:{knowledge_route.gap_id}:{knowledge_route.routing_sha256}"
+        )
+        resumed = waiting.queue.make_ready(ready.id, now=second.claimed_at + timedelta(seconds=2))
+        third = (
+            dispatcher(waiting.queue)
+            .tick(now=second.claimed_at + timedelta(seconds=3), work_item_id=resumed.id)
+            .claim
+        )
+        assert third is not None
+        # The existing K1 also persisted a failed preflight marker against the
+        # old intent. It cannot replace the original READY/NOT_STARTED receipt.
+        later_wait = VerifierPreparationCheckpoint.create(
+            work_item_id=third.work_item.id,
+            lease_id=first.lease.id,
+            task_id=task.id,
+            task_snapshot_sha256=digest(task.to_wire()),
+            checkpoint_sequence=third.work_item.checkpoint_sequence,
+            dispatch_sequence=first.work_item.dispatch_sequence,
+            wait_dispatch_sequence=third.work_item.dispatch_sequence,
+            wait_lease_id=third.lease.id,
+            intent_sha256=intent.intent_sha256,
+            source_revision=request.source_revision,
+            run_id=request.run_id,
+            role=request.role,
+            attempt=request.attempt,
+            context_manifest_id=request.context_manifest_id,
+            request_sha256=digest(request.to_wire()),
+            request=request,
+            result="WAIT",
+            observation=observation,
+            failure_reason=NativeVerificationWaitReason.FACTS_CHANGED,
+            checked_at=third.claimed_at,
+        )
+        if case in {"knowledge_gap_stale_preflight_wait", "knowledge_gap_then_engineering_wait"}:
+            records.put("verifier-preparations", later_wait.checkpoint_sha256, later_wait)
+            assert len(records.list("verifier-preparations", VerifierPreparationCheckpoint)) == 2
+        if case == "knowledge_gap_role_started":
+            start = DeliveryInvocationStart(
+                work_item_id=ready.id,
+                checkpoint_sequence=first.work_item.checkpoint_sequence,
+                request=request,
+                lease_id=third.lease.id,
+                started_at=third.claimed_at,
+                start_sha256="0" * 64,
+            )
+            invocations.put(
+                "invocation-starts",
+                ready.id,
+                start.model_copy(
+                    update={
+                        "start_sha256": digest(
+                            start.model_dump(mode="json", exclude={"start_sha256"})
+                        )
+                    }
+                ),
+            )
+        second = third
+        if case == "knowledge_gap_then_engineering_wait":
+            # The production K1 wait itself became durable after the stale intent
+            # was observed. Model the queue state after a trusted, disposition-bound
+            # resume signal; the public engineering decision is tested separately.
+            # A fresh claim must retain this failed preparation receipt.
+            disposition = decide_delivery_disposition(
+                waiting.disposition.facts.model_copy(
+                    update={
+                        "classification": "ENGINEERING_AUTHORIZATION",
+                        "evidence_ids": ("verifier-preparation://" + later_wait.checkpoint_sha256,),
+                    }
+                )
+            )
+            waiting.queue.wait(
+                ready.id,
+                lease_id=third.lease.id,
+                owner_token=TOKEN,
+                status=WorkItemStatus.WAITING_DEPENDENCY,
+                reason=disposition.reason,
+                disposition=disposition,
+                now=third.claimed_at + timedelta(seconds=1),
+            )
+            resumed_again = waiting.queue.make_ready(
+                ready.id,
+                now=third.claimed_at + timedelta(seconds=2),
+                expected_disposition_sha256=disposition.disposition_sha256,
+            )
+            fourth = (
+                dispatcher(waiting.queue)
+                .tick(now=third.claimed_at + timedelta(seconds=3), work_item_id=resumed_again.id)
+                .claim
+            )
+            assert fourth is not None
+            # This queue-only resume is intentionally not an engineering
+            # resolution; a stale FACTS_CHANGED marker must still fail closed.
+            with pytest.raises(QueueCorruption):
+                waiting.queue.static_qa_resolution_for_claim(
+                    fourth,
+                    knowledge_records=knowledge,
+                    preflight_records=records,
+                    invocation_records=invocations,
+                    observe_verifier=lambda *_: observation,
+                )
+            return
     if case == "wrong_claim":
         second = second.model_copy(update={"worker_id": "worker_wrong_static_reclaim"})
     if case == "wrong_decision":
@@ -1083,7 +1257,7 @@ def test_static_qa_reclaimed_ready_no_start_preparation_uses_consumed_decision(
             )
         return
     observed = observation
-    if case == "native_started":
+    if case in {"native_started", "knowledge_gap_native_started"}:
         observed = VerifierPreparationObservation(
             native_execution_state="UNCERTAIN", native_started_sha256="f" * 64
         )
@@ -1106,6 +1280,67 @@ def test_static_qa_reclaimed_ready_no_start_preparation_uses_consumed_decision(
                 second,
             )
         return
+    knowledge_records = (
+        knowledge
+        if case
+        in {
+            "knowledge_gap_intermediate",
+            "knowledge_gap_unresolved",
+            "knowledge_gap_native_started",
+            "knowledge_gap_role_started",
+            "knowledge_gap_stale_preflight_wait",
+            "knowledge_gap_then_engineering_wait",
+        }
+        else None
+    )
+    should_recover = case in {
+        "ready",
+        "knowledge_gap_intermediate",
+    }
+    if case == "knowledge_gap_intermediate":
+        assert (
+            waiting.queue.static_qa_resolution_for_claim(
+                second,
+                knowledge_records=knowledge,
+                preflight_records=records,
+                invocation_records=invocations,
+                observe_verifier=lambda *_: observation,
+            )
+            == resolution
+        )
+    if case == "second_reclaim":
+        # A second prepared generation is outside the one consumed static
+        # decision. The exact lineage reader must fail closed.
+        with pytest.raises(QueueCorruption):
+            static_qa_preparation_reclaimed(
+                waiting.queue,
+                waiting.dsn,
+                records,
+                invocations,
+                lambda *_: observation,
+                intent,
+                second,
+            )
+        assert waiting.resolution_events() == 1
+        return
+    if case in {
+        "knowledge_gap_native_started",
+        "knowledge_gap_role_started",
+        "knowledge_gap_stale_preflight_wait",
+    }:
+        with pytest.raises(QueueCorruption):
+            static_qa_preparation_reclaimed(
+                waiting.queue,
+                waiting.dsn,
+                records,
+                invocations,
+                lambda *_: observed,
+                intent,
+                second,
+                knowledge_records=knowledge_records,
+            )
+        assert waiting.resolution_events() == 1
+        return
     recovered = static_qa_preparation_reclaimed(
         waiting.queue,
         waiting.dsn,
@@ -1114,9 +1349,10 @@ def test_static_qa_reclaimed_ready_no_start_preparation_uses_consumed_decision(
         lambda observed_request, lease_id: observed,
         intent,
         second,
+        knowledge_records=knowledge_records,
     )
-    assert recovered is (case == "ready")
-    if case == "ready":
+    assert recovered is should_recover
+    if should_recover:
         next_request = request.model_copy(
             update={
                 "run_id": "run_static_qa_reclaimed_next",
@@ -1146,6 +1382,7 @@ def test_static_qa_reclaimed_ready_no_start_preparation_uses_consumed_decision(
                 lambda *_: observation,
                 prior,
                 current,
+                knowledge_records=knowledge_records,
             ),
             prepare_input=lambda *_: None,
         )

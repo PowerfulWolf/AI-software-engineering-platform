@@ -3556,3 +3556,54 @@ does not mark the original verifier command as started, and cannot authorize
 ordinary QA or a Responses fallback. A valid proof-bound QA FAIL follows the
 ordinary remaining Coder work allowance; it never certifies the missing test
 as having run.
+
+### Static QA after a knowledge wait and a failed preparation retry
+
+An already consumed static decision can outlive a QA claim that expired after
+`READY/NOT_STARTED` preparation. If the next dispatch stops at a real knowledge
+gap before verifier preparation, an exact approved resolution creates one more
+dispatch generation. A fresh claim may recover the original preparation only
+after `static_qa_resolution_for_claim` proves that generation's `KNOWLEDGE_GAP`
+wait, its stored route and approval, unchanged Task/candidate/Plan/accepted
+implementation, and the absence of any accepted output or role/native start.
+Sequence growth or a free-text assertion of no start is never enough.
+
+If a later claim has already written `WAIT/FACTS_CHANGED` against the old
+preparation intent, preserve that marker. A public `InspectDeliveryWait` may
+offer only `RESUME_UNINVOKED`, based on the unique original static decision,
+the original `READY/NOT_STARTED` marker, the precise later
+`WAIT/FACTS_CHANGED/NOT_STARTED` marker, complete intermediate claim and
+knowledge-approval lineage, unchanged source and budget, and no invocation or
+accepted artifact. `ResolveDeliveryWait` consumes the new exact engineering
+decision and creates a new claim; it does not issue a second static decision.
+`preparation_resume_consumed` and `static_qa_preparation_reclaimed` then check
+the same event/marker chain before writing a fresh verifier intent. The native
+observer must still return `NOT_STARTED`; any `FINISHED` or `UNCERTAIN` state
+refuses this route. The final adapter again binds the current claim and proof
+and can accept only the independent missing-entry QA `FAIL`.
+
+The historical first-generation, original adjacent-expiry and ordinary
+`RESUME_UNINVOKED` paths retain their previous guards. This extension permits
+only the bounded shape of one approved knowledge wait and one subsequent
+`FACTS_CHANGED` engineering wait. Unknown generations, duplicate static
+decisions, missing/altered markers or approvals, wrong wait dispositions,
+changed Task/candidate/role/attempt/permission, any model or native start and
+any accepted artifact fail closed.
+
+| Stored generation chain | Required result |
+| --- | --- |
+| Original READY/no-start → approved knowledge wait → fresh active claim, no later preparation WAIT | One revalidated fresh preparation intent may be admitted |
+| Same chain → exact later FACTS_CHANGED/no-start wait → public RESUME_UNINVOKED → fresh claim | Reuse the unique original static decision; create a new intent only after full revalidation |
+| Unapproved knowledge gap, repeated static decision, altered marker or skipped generation | Reject without role model start |
+| Any role/native execution or accepted output in the intermediate generations | Reject and preserve all audit facts |
+
+Good: K1's existing Requirement, frozen Plan and candidate stay bound while a
+new public engineering decision resumes the QA role; all earlier waits remain
+auditable. Base: the earlier adjacent-expiry case still works. Bad: deleting
+the later marker, calling `make_ready` directly, or approving another static
+decision to escape the wait. `tests/work_queue/test_wait_resolution_mysql.py`
+must verify the real queue chain and negatives; the public static QA test must
+exercise Inspect → Resolve → new claim → proof-bound independent FAIL. Rollback
+stops new admission and leaves all historical records intact; no direct SQL or
+sidecar rewrite is authorized. This K1 wait is repaired through the public
+interface after a controlled release, using the existing Task and candidate.

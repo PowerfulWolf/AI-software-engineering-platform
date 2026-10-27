@@ -23,6 +23,7 @@ from ai_software_engineer.domain.task import Task
 from ai_software_engineer.knowledge.assessment_validation import (
     KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
     KNOWLEDGE_INTENT_INSTRUCTIONS,
+    STATIC_QA_KNOWLEDGE_INSTRUCTIONS,
     AssessmentRejectionReason,
     KnowledgeAssessment,
     KnowledgeConsultationInput,
@@ -362,8 +363,11 @@ def _manifest(
 
 
 def _request_payload(
-    records: KnowledgeRecordStore, binding: KnowledgeRunBinding, input_sha256: str
+    records: KnowledgeRecordStore,
+    original_input: KnowledgeConsultationInput,
+    original_claim: QueueClaim,
 ) -> dict[str, object]:
+    binding = original_input.binding
     context = FileContextStore(records.root.parent.parent / "contexts", read_only=True).get(
         binding.context_manifest_id
     )
@@ -379,8 +383,24 @@ def _request_payload(
     ):
         raise KnowledgeError("ASSESSMENT_REJECTION_CONTEXT_CHANGED")
     task = Task.model_validate_json(tasks[0].content)
-    payload: dict[str, object] = {"task": task.to_wire(), "context": context.to_wire()}
-    if digest(payload) != input_sha256:
+    projection = original_input.static_qa_projection
+    if projection is None:
+        payload: dict[str, object] = {"task": task.to_wire(), "context": context.to_wire()}
+    else:
+        scope = projection.scope
+        if (
+            binding.role.value != "qa"
+            or scope.task_id != task.id
+            or scope.source_revision != context.source_revision
+            or scope.attempt != context.attempt
+            or scope.claim_identity_sha256 != claim_identity_sha256(original_claim)
+            or binding.run_id
+            != "run_knowledge_"
+            + digest((context.context_id, binding.snapshot_sha256, scope.to_wire()))[:32]
+        ):
+            raise KnowledgeError("ASSESSMENT_REJECTION_STATIC_SCOPE_CHANGED")
+        payload = projection.consultation_payload()
+    if digest(payload) != original_input.input_sha256:
         raise KnowledgeError("ASSESSMENT_REJECTION_INPUT_CHANGED")
     resolved = []
     for gap in records.list("gaps", KnowledgeGap):
@@ -419,16 +439,22 @@ def _request_payload(
 def _require_requests(
     records: KnowledgeRecordStore,
     binding: KnowledgeRunBinding,
-    input_sha256: str,
+    original_input: KnowledgeConsultationInput,
+    original_claim: QueueClaim,
     intent_outcome: KnowledgeInvocationOutcome,
     assessment_outcome: KnowledgeInvocationOutcome,
     evidence: tuple[KnowledgeEvidence, ...],
     manifest: KnowledgeRunManifest,
 ) -> None:
-    payload = _request_payload(records, binding, input_sha256)
+    payload = _request_payload(records, original_input, original_claim)
+    scope_instructions = (
+        " " + STATIC_QA_KNOWLEDGE_INSTRUCTIONS
+        if original_input.static_qa_projection is not None
+        else ""
+    )
     snapshot = records.get("snapshots", binding.snapshot_sha256, KnowledgeSnapshot)
     intent_request_sha = structured_request_digest(
-        instructions=KNOWLEDGE_INTENT_INSTRUCTIONS,
+        instructions=KNOWLEDGE_INTENT_INSTRUCTIONS + scope_instructions,
         input_payload={
             "binding": binding.to_wire(),
             "task": payload,
@@ -443,7 +469,7 @@ def _require_requests(
     )
     assessment_request_shas = {
         structured_request_digest(
-            instructions=KNOWLEDGE_ASSESSMENT_INSTRUCTIONS,
+            instructions=KNOWLEDGE_ASSESSMENT_INSTRUCTIONS + scope_instructions,
             input_payload={
                 "binding": binding.to_wire(),
                 "task": payload,
@@ -506,7 +532,8 @@ def _derive_rejected_assessment(
     _require_requests(
         records,
         binding,
-        original_input.input_sha256,
+        original_input,
+        claim,
         intent_outcome,
         assessment_outcome,
         evidence,

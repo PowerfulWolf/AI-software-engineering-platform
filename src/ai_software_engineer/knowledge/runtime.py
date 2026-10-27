@@ -19,6 +19,12 @@ from ai_software_engineer.knowledge.agents import (
     RepositoryInspection,
     knowledge_phase_timeout,
 )
+from ai_software_engineer.knowledge.assessment_validation import (
+    StaticQaKnowledgeProjection,
+)
+from ai_software_engineer.knowledge.assessment_validation import (
+    StaticQaKnowledgeScope as StaticQaKnowledgeScope,
+)
 from ai_software_engineer.knowledge.context import snapshot_from_sources
 from ai_software_engineer.knowledge.context_reads import (
     requires_frozen_reads,
@@ -100,6 +106,12 @@ class KnowledgeRoleClients(Protocol):
     def for_project(self, repository_root: Path, role: TeamRole) -> StructuredModelClient: ...
 
 
+StaticQaScopeProvider = Callable[
+    [Task, AgentDefinition, int, str | None, tuple[Artifact, ...], ContextBundle],
+    StaticQaKnowledgeScope | None,
+]
+
+
 def append_knowledge_context(
     context: ContextBundle, store: ContextStore, *, name: str, uri: str, content: str
 ) -> ContextBundle:
@@ -149,6 +161,7 @@ class KnowledgeRunContextBuilder:
         wait_port: KnowledgeWaitPort | None = None,
         invocation_claim: Callable[[], QueueClaim] | None = None,
         invocation_timeout: Callable[[Task, QueueClaim], int | None] | None = None,
+        static_qa_scope: StaticQaScopeProvider | None = None,
     ) -> None:
         self.delegate, self.contexts, self.clients = delegate, contexts, clients
         self.repository_root, self.records = repository_root, records
@@ -157,6 +170,7 @@ class KnowledgeRunContextBuilder:
         self.wait_port = wait_port
         self.invocation_claim = invocation_claim
         self.invocation_timeout = invocation_timeout
+        self.static_qa_scope = static_qa_scope
 
     def build(
         self,
@@ -176,6 +190,18 @@ class KnowledgeRunContextBuilder:
         )
         if agent.role is AgentRole.ORCHESTRATOR:
             return base
+        static_scope = (
+            self.static_qa_scope(task, agent, attempt, candidate_revision, input_artifacts, base)
+            if self.static_qa_scope is not None and agent.role is AgentRole.QA
+            else None
+        )
+        if static_scope is not None and (
+            static_scope.task_id != task.id
+            or static_scope.attempt != attempt
+            or static_scope.source_revision != base.source_revision
+            or (candidate_revision is not None and candidate_revision != base.source_revision)
+        ):
+            raise ValueError("static QA knowledge scope does not match the current run")
         requirement_id = task.id
         for source in self.sources:
             if source.uri.startswith("joint://"):
@@ -257,7 +283,12 @@ class KnowledgeRunContextBuilder:
                 content=content,
             )
         binding = KnowledgeRunBinding(
-            run_id="run_knowledge_" + digest((base.context_id, snapshot.snapshot_sha256))[:32],
+            run_id="run_knowledge_"
+            + digest(
+                (base.context_id, snapshot.snapshot_sha256)
+                if static_scope is None
+                else (base.context_id, snapshot.snapshot_sha256, static_scope.to_wire())
+            )[:32],
             task_id=task.id,
             role=TeamRole(agent.role.value),
             team_id=self.team_id,
@@ -269,6 +300,13 @@ class KnowledgeRunContextBuilder:
             snapshot_sha256=snapshot.snapshot_sha256,
         )
         client = self.clients.for_project(self.repository_root, binding.role)
+        projection = (
+            StaticQaKnowledgeProjection(
+                scope=static_scope, parent_context_manifest_id=base.context_id
+            )
+            if static_scope is not None
+            else None
+        )
         timeout = knowledge_phase_timeout(binding.role, agent.timeout_seconds)
         if self.invocation_timeout is not None:
             if self.invocation_claim is None:
@@ -288,8 +326,15 @@ class KnowledgeRunContextBuilder:
         ).consult(
             binding,
             snapshot,
-            {"task": task.to_wire(), "context": base.to_wire()},
+            (
+                {"task": task.to_wire(), "context": base.to_wire()}
+                if static_scope is None
+                else StaticQaKnowledgeProjection(
+                    scope=static_scope, parent_context_manifest_id=base.context_id
+                ).consultation_payload()
+            ),
             timeout_seconds=timeout,
+            static_qa_projection=projection,
         )
         if requires_frozen_reads(base):
             reads = retrieved_context_section(consultation, self.records)

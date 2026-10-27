@@ -271,6 +271,56 @@ The delivery gate recomputes the same section and permits exactly parent + reads
 legacy contexts without reference projection retain the parent + receipt contract. Original
 snapshots, gap resolutions, consultations and Artifact Context IDs are never rewritten.
 
+### Proof-only static QA consultation scope
+
+`KnowledgeRunContextBuilder.build(..., static_qa_scope=...)` may use a trusted
+`StaticQaKnowledgeScope` only for a current QA claim whose consumed
+`STATIC_QA_MISSING_ENTRY` decision, frozen Task and candidate, accepted Plan and
+implementation, candidate-tree absence observation, and original native
+`NOT_STARTED` evidence are rechecked by `current_static_qa_for_claim`. The
+provider must reject a changed claim or any role invocation start. The scope
+contains the exact missing paths, affected criterion IDs and content hashes;
+its context is a new content-addressed knowledge Run, not a replacement Task,
+permission, verdict or Product/Plan approval.
+
+Knowledge intent and assessment for this Run receive only the versioned
+proof-only task projection and its parent Context ID. Their instructions state
+that the present QA may report the missing-entry source defect as `FAIL`, while
+MySQL, browser and live A→B checks remain `NOT_RUN`. The full frozen sources
+still determine the knowledge snapshot, and the complete Task, Plan and base
+Context still enter the final QA role prompt. The adapter and output gate
+independently recheck the current static proof before accepting any report.
+Ordinary QA and Reviewer consultations retain the full Task/Context input.
+No unresolved earlier knowledge gap may be silently excluded by this scope.
+
+Both consultation phases and rejected-assessment observation must reconstruct
+the same versioned scope and instruction digest from trusted retained facts.
+An invalid citation or sensitive assessment output produces a replayable
+`INVALID_OUTPUT` rejection, never a generic platform wait. The existing
+`RETRY_REJECTED_KNOWLEDGE_PREPARATION` action remains Coder-only: a static QA
+rejection stays waiting until a separately authorized recovery can carry the
+original static decision across a new QA WorkItem and Task attempt. It must
+never fall through to ordinary QA. Historical full-Task consultations retain
+their original replay format and immutable records.
+
+| Consultation facts | Required result |
+| --- | --- |
+| Exact current static QA claim and complete sealed proof | Consult only the missing-entry FAIL scope; preserve original acceptance as NOT_RUN |
+| Missing, stale or foreign decision/claim, changed candidate or parent artifact | Refuse scoped consultation before model start |
+| Ordinary QA or Reviewer | Consult the complete Task and Context with unchanged prerequisites |
+| Prior unresolved knowledge gap | Keep the existing wait; scope cannot hide it |
+| Invalid static assessment output | Reconstruct the exact scope and both request digests; preserve the rejected result and wait without an automatic QA retry |
+
+Good: a current proof-bound QA claim can identify an absent frozen test without
+asking whether future browser/MySQL tools are already ready. Base: after Coder
+adds the test, ordinary QA again checks the real environment and runs complete
+verification. Bad: dropping full snapshot sources, treating `NOT_RUN` as PASS,
+or filtering unresolved gaps by a newly derived Run ID. Tests:
+`tests/knowledge/test_static_qa_scope.py`,
+`tests/manager/test_public_static_qa_knowledge_scope.py` and rejected-assessment
+replay/tamper tests. Existing K1 knowledge and wait records remain append-only;
+an approved exact gap resolution is consumed through a new public Continue run.
+
 Regression coverage: `tests/manager/test_joint_context_limits.py` exercises full joint stage
 payloads, profile/baseline and serial role artifacts alongside frozen READ text. Native rules
 must remain searchable by body-only terms; resumed approved resolutions keep their snapshot

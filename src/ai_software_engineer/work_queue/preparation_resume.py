@@ -13,7 +13,8 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolutionKind,
 )
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
-from ai_software_engineer.knowledge.models import digest
+from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
+from ai_software_engineer.knowledge.models import KnowledgeError, digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationCheckpoint,
@@ -185,6 +186,8 @@ def static_qa_preparation_reclaimed(
     observe_verifier: Callable[[AgentRequest, str], VerifierPreparationObservation],
     intent: VerifierPreparationIntent,
     claim: QueueClaim,
+    *,
+    knowledge_records: KnowledgeRecordStore | None = None,
 ) -> bool:
     """Admit a fresh static QA preparation only after a sealed no-start lease expiry.
 
@@ -193,9 +196,11 @@ def static_qa_preparation_reclaimed(
     """
     intent.validate_integrity()
     original = queue.original_claim(intent.lease_id)
+    if queue.original_claim(claim.lease.id) != claim:
+        raise QueueConflict("static QA current claim changed")
     if (
         claim.work_item.id != intent.work_item_id
-        or claim.work_item.dispatch_sequence != intent.dispatch_sequence + 1
+        or claim.work_item.dispatch_sequence <= intent.dispatch_sequence
         or (
             original.work_item.id,
             original.work_item.task_id,
@@ -214,7 +219,16 @@ def static_qa_preparation_reclaimed(
         )
     ):
         return False
-    decision = queue.static_qa_resolution_for_claim(claim)
+    try:
+        decision = queue.static_qa_resolution_for_claim(
+            claim,
+            knowledge_records=knowledge_records,
+            preflight_records=records,
+            invocation_records=invocation_records,
+            observe_verifier=observe_verifier,
+        )
+    except KnowledgeError:
+        return False
     if decision is None or decision.static_qa_missing_entry is None:
         return False
     static = decision.static_qa_missing_entry
@@ -226,6 +240,12 @@ def static_qa_preparation_reclaimed(
         or intent.request.source_revision != decision.expected_source_revision
         or intent.request.role != claim.work_item.role
         or intent.request.attempt != claim.work_item.attempt
+    ):
+        return False
+    if claim.work_item.dispatch_sequence > intent.dispatch_sequence + 1 and (
+        knowledge_records is None
+        or claim.work_item.dispatch_sequence
+        not in {intent.dispatch_sequence + 2, intent.dispatch_sequence + 3}
     ):
         return False
     with (
@@ -249,10 +269,70 @@ def static_qa_preparation_reclaimed(
         for marker in records.list("verifier-preparations", VerifierPreparationCheckpoint)
         if marker.intent_sha256 == intent.intent_sha256
     )
-    if len(markers) != 1:
+    original_markers = tuple(
+        marker
+        for marker in markers
+        if marker.result == "READY" and marker.wait_dispatch_sequence == intent.dispatch_sequence
+    )
+    if len(original_markers) != 1:
         return False
-    marker = markers[0]
+    marker = original_markers[0]
     marker.validate_integrity()
+    later = tuple(value for value in markers if value != marker)
+    if len(later) > 1:
+        return False
+    offset = claim.work_item.dispatch_sequence - intent.dispatch_sequence
+    if (offset == 2 and later) or (offset == 3 and len(later) != 1):
+        return False
+    if offset > 1:
+        with (
+            closing(open_mysql_connection(dsn)) as connection,
+            connection.cursor(DictCursor) as cursor,
+        ):
+            cursor.execute(
+                "SELECT event_type,payload_json FROM work_queue_events "
+                "WHERE work_item_id=%s AND event_type IN ('READY','WAIT_RESOLVED') "
+                "ORDER BY sequence",
+                (intent.work_item_id,),
+            )
+            transitions = tuple(
+                event
+                for event in cursor.fetchall()
+                if event["event_type"] == "WAIT_RESOLVED"
+                if _ResolutionEvent.model_validate_json(
+                    str(event["payload_json"])
+                ).work_item.dispatch_sequence
+                == claim.work_item.dispatch_sequence
+            )
+        if offset == 3 and len(transitions) != 1:
+            return False
+    if later:
+        failed = later[0]
+        failed.validate_integrity()
+        if (
+            failed.result != "WAIT"
+            or failed.failure_reason is not NativeVerificationWaitReason.FACTS_CHANGED
+            or failed.observation.native_execution_state != "NOT_STARTED"
+            or failed.dispatch_sequence != intent.dispatch_sequence
+            or failed.wait_dispatch_sequence != claim.work_item.dispatch_sequence - 1
+            or failed.work_item_id != intent.work_item_id
+            or failed.lease_id != intent.lease_id
+            or failed.task_id != intent.task_id
+            or failed.task_snapshot_sha256 != intent.task_snapshot_sha256
+            or failed.checkpoint_sequence != intent.checkpoint_sequence
+            or failed.request != intent.request
+            or failed.request_sha256 != intent.request_sha256
+            or queue.original_claim(failed.wait_lease_id).work_item.dispatch_sequence
+            != failed.wait_dispatch_sequence
+        ):
+            return False
+    if any(
+        value.intent_sha256 != intent.intent_sha256
+        for value in records.list("verifier-preparation-intents", type(intent))
+        if value.work_item_id == intent.work_item_id
+        and value.checkpoint_sequence == intent.checkpoint_sequence
+    ):
+        return False
     if (
         marker.result != "READY"
         or marker.observation.native_execution_state != "NOT_STARTED"

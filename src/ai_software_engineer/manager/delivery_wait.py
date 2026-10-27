@@ -62,7 +62,10 @@ from ai_software_engineer.domain.enums import (
 from ai_software_engineer.domain.knowledge_preparation_pause import (
     KnowledgePreparationPauseEvidence,
 )
-from ai_software_engineer.domain.native_verification import NativeVerificationCapabilityDetail
+from ai_software_engineer.domain.native_verification import (
+    NativeVerificationCapabilityDetail,
+    NativeVerificationWaitReason,
+)
 from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, DeliveryRetryFailure
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import GitWorkspaceError, GitWorktreeManager
@@ -116,6 +119,7 @@ from ai_software_engineer.manager.stopped_unknown_budget import (
 from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationCheckpoint,
     VerifierPreparationIntent,
+    VerifierPreparationObservation,
     observe_verifier_preparation,
 )
 from ai_software_engineer.manager.wait_fact_collection import WaitWorkspaceCaptureRejected
@@ -172,7 +176,19 @@ class DeliveryWaitQueue(Protocol):
     def original_claim(self, lease_id: str) -> QueueClaim: ...
     def claims_for_work_item(self, work_item_id: str) -> tuple[QueueClaim, ...]: ...
     def accepted(self, task_id: str) -> tuple[AcceptedRoleArtifact, ...]: ...
-    def static_qa_resolution_for_claim(self, claim: QueueClaim) -> DeliveryResolution | None: ...
+    def static_qa_resolution_for_claim(
+        self,
+        claim: QueueClaim,
+        *,
+        knowledge_records: KnowledgeRecordStore | None = None,
+        preflight_records: KnowledgeRecordStore | None = None,
+        invocation_records: KnowledgeRecordStore | None = None,
+        observe_verifier: Callable[[AgentRequest, str], VerifierPreparationObservation]
+        | None = None,
+    ) -> DeliveryResolution | None: ...
+    def static_qa_resolution_for_wait(
+        self, item: QueuedWorkItem, *, knowledge_records: KnowledgeRecordStore | None = None
+    ) -> DeliveryResolution | None: ...
     def step_for_invocation(
         self, work_item_id: str, baseline_sha256: str | None
     ) -> QueuedRoleStep: ...
@@ -192,9 +208,33 @@ class StaticQaRuntimeProof:
     task_snapshot_sha256: str
 
 
+class StaticQaRequestIdentity(Protocol):
+    @property
+    def task_id(self) -> str: ...
+
+    @property
+    def role(self) -> AgentRole: ...
+
+    @property
+    def attempt(self) -> int: ...
+
+    @property
+    def source_revision(self) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class StaticQaPreContextIdentity:
+    """Only the fields known before the final AgentRequest/context ID exists."""
+
+    task_id: str
+    role: AgentRole
+    attempt: int
+    source_revision: str
+
+
 def current_static_qa_for_claim(
     *,
-    request: AgentRequest,
+    request: StaticQaRequestIdentity,
     guard: WorkerExecutionGuard,
     workspace_root: Path,
     queue: DeliveryWaitQueue,
@@ -212,7 +252,21 @@ def current_static_qa_for_claim(
     if lease is None:
         raise DeliveryWaitRejected("静态 QA 缺少当前 Worker claim")
     claim = lease.claim
-    resolution = queue.static_qa_resolution_for_claim(claim)
+    resolution = queue.static_qa_resolution_for_claim(
+        claim,
+        knowledge_records=KnowledgeRecordStore(
+            sidecar_state.parent / "knowledge" / "runs", read_only=True
+        ),
+        preflight_records=KnowledgeRecordStore(
+            sidecar_state / "delivery-preflight", read_only=True
+        ),
+        invocation_records=KnowledgeRecordStore(sidecar_state / "invocations", read_only=True),
+        observe_verifier=lambda previous, lease_id: observe_verifier_preparation(
+            repository_workspace_root=sidecar_state.parent,
+            request=previous,
+            lease_id=lease_id,
+        ),
+    )
     if resolution is None:
         return None
     resolution.validate_integrity()
@@ -295,8 +349,6 @@ def current_static_qa_for_claim(
         or marker.checkpoint_sequence != resolution.expected_checkpoint_sequence
     ):
         raise DeliveryWaitRejected("静态 QA 原验证准备不再是可信的未开始事实")
-    from ai_software_engineer.manager.verifier_preparation import observe_verifier_preparation
-
     observed = observe_verifier_preparation(
         repository_workspace_root=sidecar_state.parent,
         request=marker.request,
@@ -1461,6 +1513,42 @@ class DeliveryWaitService:
             except (ValueError, QueueError, OSError, KnowledgeError):
                 missing.append(DeliveryProofMissing.VERIFIER_PREPARATION_UNAVAILABLE)
         static_qa_missing_entry = None
+        consumed_static_qa = (
+            self.queue.static_qa_resolution_for_wait(
+                item,
+                knowledge_records=KnowledgeRecordStore(
+                    self.sidecar_state.parent / "knowledge" / "runs", read_only=True
+                ),
+            )
+            if item.role is AgentRole.QA and hasattr(self.queue, "static_qa_resolution_for_wait")
+            else None
+        )
+        if consumed_static_qa is not None:
+            static = consumed_static_qa.static_qa_missing_entry
+            if static is None or self.artifacts is None:
+                raise DeliveryWaitRejected("原静态 QA 决定缺少可信候选或产物读取")
+            original_observation = self.records.get(
+                "static-qa-observations",
+                static.observation_sha256,
+                CandidateTestEntryAbsenceObservation,
+            )
+            original_observation.validate_integrity()
+            current_observation = observe_accepted_candidate_test_entry_absence(
+                repository_root=Path(task.repository),
+                task=task,
+                repository=self.repository,
+                source_revision=step.boundary.source_revision,
+                accepted=self.queue.accepted(task.id),
+                artifacts=self.artifacts,
+            )
+            if current_observation != original_observation:
+                raise DeliveryWaitRejected("静态 QA 候选缺项或冻结计划已改变")
+            if prerequisites is not None and prerequisites.status == "WAIT_ENGINEERING":
+                missing = [
+                    value
+                    for value in missing
+                    if value is not DeliveryProofMissing.PREREQUISITES_UNVERIFIED
+                ]
         if (
             item.role is AgentRole.QA
             and task.status is TaskStatus.QA
@@ -1471,6 +1559,7 @@ class DeliveryWaitService:
             and verifier_preparation is not None
             and verifier_preparation.native_execution_state == "NOT_STARTED"
             and self.artifacts is not None
+            and consumed_static_qa is None
         ):
             try:
                 static_observation = observe_accepted_candidate_test_entry_absence(
@@ -1745,13 +1834,31 @@ class DeliveryWaitService:
             )
             if preparation_ids:
                 try:
-                    if prerequisites is None or prerequisites.status != "READY":
+                    if prerequisites is None or (
+                        prerequisites.status != "READY" and consumed_static_qa is None
+                    ):
                         missing.append(DeliveryProofMissing.PREREQUISITES_UNVERIFIED)
                     else:
                         verifier_preparation = self._claimed_verifier_preparation(
                             item, task, step, prerequisites
                         )
                         if verifier_preparation.native_execution_state == "NOT_STARTED":
+                            if consumed_static_qa is not None:
+                                marker = KnowledgeRecordStore(
+                                    self.sidecar_state / "delivery-preflight", read_only=True
+                                ).get(
+                                    "verifier-preparations",
+                                    verifier_preparation.preparation_checkpoint_sha256,
+                                    VerifierPreparationCheckpoint,
+                                )
+                                if (
+                                    marker.failure_reason
+                                    is not NativeVerificationWaitReason.FACTS_CHANGED
+                                    or marker.wait_dispatch_sequence != item.dispatch_sequence
+                                ):
+                                    raise DeliveryWaitRejected(
+                                        "静态 QA 后续等待不是精确未启动事实变化"
+                                    )
                             permitted = (DeliveryResolutionKind.RESUME_UNINVOKED,)
                         elif task.work_budget_exhausted or task.attempts >= task.max_attempts:
                             missing.append(DeliveryProofMissing.BUDGET_EXHAUSTED)
