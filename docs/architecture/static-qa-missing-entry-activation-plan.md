@@ -46,7 +46,7 @@ an amended exact authorization before publication.
   resolution schema without dropping existing hand-written guards.
 - `.trellis/spec/core/delivery-recovery.md`: nonterminal wait and replay rules.
 - `.trellis/spec/core/verification-environment.md`: missing candidate entry,
-  no-command QA evidence and controlled execution boundary.
+  original controlled verifier no-start evidence and execution boundary.
 - `.trellis/spec/core/native-verification-output.md`: distinct static FAIL
   output contract and fresh-current validation.
 - `.trellis/spec/core/index.md`: index the accepted contract.
@@ -74,9 +74,12 @@ it grants no queue admission or QA verdict. Production must additionally bind
 the current wait and original no-start proof before consuming any decision.
 
 The separate engineering decision must bind that proof and be consumed exactly
-once under the queue lock. It may create only a fresh independent QA claim,
-not a QA verdict. That QA may submit only a no-command FAIL citing the sealed
-missing-entry proof. Ordinary QA FAIL routing then returns the findings to
+once under the queue lock. It may requeue the same QA WorkItem only with a fresh
+dispatch generation and independent claim, not a QA verdict or a new work
+allowance. The planned controlled verifier remains unstarted. QA may inspect
+source under its existing read-only policy and may submit only a proof-bound
+FAIL with no tests_run or claim that the missing tests executed. Ordinary QA
+FAIL routing then returns the findings to
 Coder for a new candidate. Browser and live A→B capability registration and
 complete independent QA/Review are separate gates.
 
@@ -87,7 +90,7 @@ complete independent QA/Review are separate gates.
 | Candidate has the test or a symlink entry | Reject static route |
 | Original invocation/native command started or is uncertain | Reject static route; preserve original evidence |
 | Changed Plan, claim, Task, disposition or Requirement checkpoint | Reject stale decision; no queue mutation |
-| QA reports PASS, claims a command, or omits proof | Reject output without verdict publication |
+| QA reports PASS, claims a planned test command ran, or omits proof | Reject output without verdict publication |
 | QA gives proof-bound FAIL | Route genuine findings to Coder; then independently verify repaired candidate |
 
 Existing records require no rewrite or deletion. New records append with exact

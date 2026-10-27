@@ -35,6 +35,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
     DeliveryResolutionKind,
     OriginalInvocationAuthority,
+    StaticQaMissingEntryEvidence,
     VerificationRetryEvidence,
     VerifierPreparationEvidence,
     delivery_wait_resolution_plan_sha256,
@@ -61,7 +62,7 @@ from ai_software_engineer.work_queue.execution_store import (
     record_digest,
 )
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
-from ai_software_engineer.work_queue.ports import QueueConflict
+from ai_software_engineer.work_queue.ports import QueueConflict, QueueCorruption
 from tests.agents.test_openai_compatible import _coder_request
 from tests.domain.factories import (
     make_coder_progress_artifact,
@@ -96,6 +97,7 @@ class WaitingFixture:
     claim: QueueClaim
     disposition: DeliveryDisposition
     now: datetime
+    original_claim: QueueClaim | None = None
 
     def resolution(
         self,
@@ -180,8 +182,13 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
     original = make_task()
     variant = getattr(request, "param", AgentRole.CODER)
     role = variant[0] if isinstance(variant, tuple) else variant
-    classification: Literal["PLATFORM_BUG", "EXECUTION_UNCERTAIN", "NONTRANSIENT_INFRA"] = (
-        "NONTRANSIENT_INFRA"
+    static_qa = isinstance(variant, tuple) and variant[1] in {"STATIC_QA", "STATIC_QA_RECLAIMED"}
+    classification: Literal[
+        "PLATFORM_BUG", "EXECUTION_UNCERTAIN", "NONTRANSIENT_INFRA", "ENVIRONMENT_UNAVAILABLE"
+    ] = (
+        "ENVIRONMENT_UNAVAILABLE"
+        if static_qa
+        else "NONTRANSIENT_INFRA"
         if isinstance(variant, tuple) and variant[1] == "NONTRANSIENT_INFRA"
         else "PLATFORM_BUG"
         if isinstance(variant, tuple) and variant[1] == "PLATFORM_BUG"
@@ -232,7 +239,8 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
             )
         task = repository.get(task.id)
         revision = repository.current_revision(task.id)
-        queue = MySqlRoleQueue(dsn, clock=lambda: now + timedelta(seconds=5))
+        current_clock = [now + timedelta(seconds=5)]
+        queue = MySqlRoleQueue(dsn, clock=lambda: current_clock[0])
         item = QueuedWorkItem(
             id="work_wait_resolution_001",
             task_id=task.id,
@@ -264,6 +272,18 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
             step,
         )
         claim = claim_step(queue, step)
+        original_claim = claim
+        if isinstance(variant, tuple) and variant[1] == "STATIC_QA_RECLAIMED":
+            expires = claim.lease.expires_at
+            retry_at = expires + timedelta(seconds=1)
+            (reclaimed,) = queue.reclaim_expired(now=expires, retry_at=retry_at)
+            ready_at = retry_at + timedelta(seconds=1)
+            ready = queue.make_ready(reclaimed.id, now=ready_at)
+            current_clock[0] = ready_at + timedelta(seconds=1)
+            claimed = dispatcher(queue).tick(now=current_clock[0], work_item_id=ready.id).claim
+            assert claimed is not None
+            claim = claimed
+            now = current_clock[0]
         if classification == "PLATFORM_BUG":
             store = FileArtifactStore(tmp_path / "artifacts")
             store.put(
@@ -287,7 +307,7 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
                 }
             )
             queue.accept_artifact(claim, TOKEN, store, seal_artifact(progress, validated_at=now))
-        if role is AgentRole.QA:
+        if role is AgentRole.QA and not static_qa:
             store = FileArtifactStore(tmp_path / "artifacts")
             implementation = make_implementation_artifact()
             implementation = implementation.model_copy(
@@ -336,6 +356,7 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
                 task_intent_sha256=task_intent_sha256(task),
                 checkpoint_sequence=revision,
                 budget_available=True,
+                evidence_ids=("verifier-preparation://" + "f" * 64,) if static_qa else (),
             )
         )
         queue.wait(
@@ -347,7 +368,7 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
             disposition=disposition,
             now=now + timedelta(seconds=2),
         )
-        yield WaitingFixture(dsn, repository, queue, step, claim, disposition, now)
+        yield WaitingFixture(dsn, repository, queue, step, claim, disposition, now, original_claim)
 
 
 def _policy_resolution(waiting: WaitingFixture, *, drift: bool = False) -> DeliveryResolution:
@@ -464,6 +485,125 @@ def test_finished_native_preparation_retry_has_new_identity_without_provider_ref
     assert waiting.queue.accepted(task.id) == before
     assert waiting.queue.resolve_wait(resolution) == next_item
     assert waiting.resolution_events() == 1
+
+
+def _static_qa_resolution(waiting: WaitingFixture) -> DeliveryResolution:
+    original = waiting.original_claim
+    assert original is not None
+    current = waiting.claim
+    base = waiting.resolution(DeliveryResolutionKind.RESUME_UNINVOKED)
+    preparation = VerifierPreparationEvidence(
+        candidate_revision=SOURCE,
+        preparation_checkpoint_sha256="f" * 64,
+        previous_run_id="run_wait_original",
+        previous_context_manifest_id="ctx_" + "c" * 64,
+        request_sha256="b" * 64,
+        native_execution_state="NOT_STARTED",
+        prerequisite_facts_sha256="d" * 64,
+    )
+    static = StaticQaMissingEntryEvidence(
+        candidate_revision=SOURCE,
+        observation_sha256="e" * 64,
+        plan_artifact_id="art_plan_001",
+        plan_artifact_sha256="a" * 64,
+        implementation_artifact_id="art_impl_001",
+        implementation_artifact_sha256="b" * 64,
+        preparation_checkpoint_sha256="f" * 64,
+        original_lease_id=original.lease.id,
+        wait_lease_id=current.lease.id,
+        original_dispatch_sequence=original.work_item.dispatch_sequence,
+        wait_dispatch_sequence=current.work_item.dispatch_sequence,
+        original_claim_sha256=digest(original.to_wire()),
+        wait_claim_sha256=digest(current.to_wire()),
+        previous_run_id=preparation.previous_run_id,
+        previous_context_manifest_id=preparation.previous_context_manifest_id,
+        prerequisite_facts_sha256=preparation.prerequisite_facts_sha256,
+    )
+    return reseal(
+        base,
+        resolution_kind=DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,
+        verifier_preparation=preparation.to_wire(),
+        static_qa_missing_entry=static.to_wire(),
+    )
+
+
+@pytest.mark.parametrize(
+    "waiting",
+    [(AgentRole.QA, "STATIC_QA"), (AgentRole.QA, "STATIC_QA_RECLAIMED")],
+    indirect=True,
+)
+def test_static_qa_decision_creates_fresh_claim_without_spending_frozen_work(
+    waiting: WaitingFixture,
+) -> None:
+    resolution = _static_qa_resolution(waiting)
+    task_before = waiting.repository.get(resolution.task_id)
+    next_item = waiting.queue.resolve_wait(resolution)
+    assert next_item.id == waiting.step.work_item.id
+    assert next_item.dispatch_sequence == waiting.claim.work_item.dispatch_sequence + 1
+    assert next_item.status is WorkItemStatus.READY
+    assert next_item.attempt == task_before.attempts
+    assert waiting.queue.get(waiting.step.work_item.id).status is WorkItemStatus.READY
+    assert waiting.repository.get(task_before.id) == task_before
+    assert waiting.queue.resolve_wait(resolution) == next_item
+    assert waiting.resolution_events() == 1
+    claimed = (
+        dispatcher(waiting.queue)
+        .tick(now=waiting.now + timedelta(seconds=8), work_item_id=next_item.id)
+        .claim
+    )
+    assert claimed is not None
+    waiting.queue.start(
+        claimed.work_item.id,
+        lease_id=claimed.lease.id,
+        owner_token=TOKEN,
+        now=waiting.now + timedelta(seconds=9),
+    )
+    assert waiting.queue.static_qa_resolution_for_claim(claimed) == resolution
+    stale_claim = claimed.model_copy(update={"worker_id": "worker_changed"})
+    with pytest.raises(QueueConflict, match="current claim"):
+        waiting.queue.static_qa_resolution_for_claim(stale_claim)
+
+
+@pytest.mark.parametrize(
+    "waiting",
+    [(AgentRole.QA, "STATIC_QA"), (AgentRole.QA, "STATIC_QA_RECLAIMED")],
+    indirect=True,
+)
+def test_static_qa_claim_drift_rejects_without_consuming_wait(waiting: WaitingFixture) -> None:
+    resolution = _static_qa_resolution(waiting)
+    assert resolution.static_qa_missing_entry is not None
+    changed = resolution.static_qa_missing_entry.model_copy(
+        update={"original_claim_sha256": "0" * 64}
+    )
+    with pytest.raises(QueueConflict, match="historical claims"):
+        waiting.queue.resolve_wait(reseal(resolution, static_qa_missing_entry=changed.to_wire()))
+    assert waiting.queue.get(waiting.step.work_item.id).status is WorkItemStatus.WAITING_HUMAN
+    assert waiting.resolution_events() == 0
+
+
+@pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
+def test_static_qa_missing_consumed_event_cannot_fall_back_to_ordinary_qa(
+    waiting: WaitingFixture,
+) -> None:
+    resolution = _static_qa_resolution(waiting)
+    item = waiting.queue.resolve_wait(resolution)
+    claim = (
+        dispatcher(waiting.queue)
+        .tick(now=waiting.now + timedelta(seconds=8), work_item_id=item.id)
+        .claim
+    )
+    assert claim is not None
+    with closing(open_mysql_connection(waiting.dsn)) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM work_queue_events WHERE work_item_id=%s "
+                "AND event_type='WAIT_RESOLVED'",
+                (item.id,),
+            )
+            assert cursor.rowcount == 1
+        connection.commit()
+    with pytest.raises(QueueCorruption, match="no durable transition"):
+        waiting.queue.static_qa_resolution_for_claim(claim)
 
 
 @pytest.mark.parametrize("provider", [False, True])

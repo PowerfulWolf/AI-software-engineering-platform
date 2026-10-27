@@ -3980,6 +3980,17 @@
             }
           ],
           "default": null
+        },
+        "static_qa_missing_entry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StaticQaMissingEntryEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -4255,9 +4266,37 @@
               }
             },
             "else": {
-              "properties": {
-                "verifier_preparation": {
-                  "type": "null"
+              "if": {
+                "properties": {
+                  "resolution_kind": {
+                    "const": "STATIC_QA_MISSING_ENTRY"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "verifier_preparation",
+                  "static_qa_missing_entry"
+                ],
+                "properties": {
+                  "verifier_preparation": {
+                    "type": "object",
+                    "properties": {
+                      "native_execution_state": {
+                        "const": "NOT_STARTED"
+                      }
+                    }
+                  },
+                  "static_qa_missing_entry": {
+                    "type": "object"
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "verifier_preparation": {
+                    "type": "null"
+                  }
                 }
               }
             }
@@ -4491,6 +4530,49 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "resolution_kind": {
+                "const": "STATIC_QA_MISSING_ENTRY"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "static_qa_missing_entry",
+              "verifier_preparation",
+              "operator_principal"
+            ],
+            "properties": {
+              "static_qa_missing_entry": {
+                "type": "object"
+              },
+              "authorization_source": {
+                "const": "engineering_operator_decision"
+              },
+              "operator_principal": {
+                "type": "object"
+              },
+              "engineering_admission": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
+              "retry_cause": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "static_qa_missing_entry": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -4504,7 +4586,8 @@
         "RETRY_KNOWLEDGE_PREPARATION",
         "RETRY_REJECTED_CODER_OUTPUT",
         "RETRY_REJECTED_KNOWLEDGE_PREPARATION",
-        "RETRY_REJECTED_WORKSPACE_ADMISSION"
+        "RETRY_REJECTED_WORKSPACE_ADMISSION",
+        "STATIC_QA_MISSING_ENTRY"
       ],
       "title": "DeliveryResolutionKind",
       "type": "string"
@@ -5200,6 +5283,17 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Proof Sha256",
           "type": "string"
+        },
+        "static_qa_missing_entry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StaticQaMissingEntryEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -5935,6 +6029,129 @@
                     }
                   }
                 }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "permitted_resolutions"
+            ],
+            "properties": {
+              "permitted_resolutions": {
+                "contains": {
+                  "const": "STATIC_QA_MISSING_ENTRY"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "static_qa_missing_entry",
+              "verifier_preparation"
+            ],
+            "properties": {
+              "static_qa_missing_entry": {
+                "type": "object"
+              },
+              "verifier_preparation": {
+                "type": "object",
+                "properties": {
+                  "native_execution_state": {
+                    "const": "NOT_STARTED"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "static_qa_missing_entry"
+            ],
+            "properties": {
+              "static_qa_missing_entry": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "verifier_preparation",
+              "original_run_id"
+            ],
+            "properties": {
+              "verifier_preparation": {
+                "type": "object",
+                "properties": {
+                  "native_execution_state": {
+                    "const": "NOT_STARTED"
+                  }
+                }
+              },
+              "invocation_start_sha256": {
+                "type": "null"
+              },
+              "invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
+              },
+              "retry_cause": {
+                "type": "null"
+              },
+              "process_stop_sha256": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "minItems": 1,
+                "maxItems": 1,
+                "items": {
+                  "const": "STATIC_QA_MISSING_ENTRY"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "role": {
+                        "const": "qa"
+                      },
+                      "classification": {
+                        "enum": [
+                          "ENVIRONMENT_UNAVAILABLE",
+                          "ENGINEERING_AUTHORIZATION"
+                        ]
+                      },
+                      "evidence_ids": {
+                        "minItems": 1,
+                        "maxItems": 1,
+                        "items": {
+                          "pattern": "^verifier-preparation://[a-f0-9]{64}$"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "static_qa_missing_entry": {
+                "type": "null"
               }
             }
           }
@@ -15377,6 +15594,112 @@
           }
         }
       ]
+    },
+    "StaticQaMissingEntryEvidence": {
+      "additionalProperties": false,
+      "description": "Exact accepted candidate defect, bound to original QA no-start preparation.",
+      "properties": {
+        "candidate_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Candidate Revision",
+          "type": "string"
+        },
+        "observation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Observation Sha256",
+          "type": "string"
+        },
+        "plan_artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Plan Artifact Id",
+          "type": "string"
+        },
+        "plan_artifact_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Artifact Sha256",
+          "type": "string"
+        },
+        "implementation_artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Implementation Artifact Id",
+          "type": "string"
+        },
+        "implementation_artifact_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Implementation Artifact Sha256",
+          "type": "string"
+        },
+        "preparation_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Preparation Checkpoint Sha256",
+          "type": "string"
+        },
+        "original_lease_id": {
+          "minLength": 1,
+          "title": "Original Lease Id",
+          "type": "string"
+        },
+        "wait_lease_id": {
+          "minLength": 1,
+          "title": "Wait Lease Id",
+          "type": "string"
+        },
+        "original_dispatch_sequence": {
+          "minimum": 0,
+          "title": "Original Dispatch Sequence",
+          "type": "integer"
+        },
+        "wait_dispatch_sequence": {
+          "minimum": 0,
+          "title": "Wait Dispatch Sequence",
+          "type": "integer"
+        },
+        "original_claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Original Claim Sha256",
+          "type": "string"
+        },
+        "wait_claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Wait Claim Sha256",
+          "type": "string"
+        },
+        "previous_run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Previous Run Id",
+          "type": "string"
+        },
+        "previous_context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Previous Context Manifest Id",
+          "type": "string"
+        },
+        "prerequisite_facts_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Prerequisite Facts Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_revision",
+        "observation_sha256",
+        "plan_artifact_id",
+        "plan_artifact_sha256",
+        "implementation_artifact_id",
+        "implementation_artifact_sha256",
+        "preparation_checkpoint_sha256",
+        "original_lease_id",
+        "wait_lease_id",
+        "original_dispatch_sequence",
+        "wait_dispatch_sequence",
+        "original_claim_sha256",
+        "wait_claim_sha256",
+        "previous_run_id",
+        "previous_context_manifest_id",
+        "prerequisite_facts_sha256"
+      ],
+      "title": "StaticQaMissingEntryEvidence",
+      "type": "object"
     }
   },
   "additionalProperties": false,

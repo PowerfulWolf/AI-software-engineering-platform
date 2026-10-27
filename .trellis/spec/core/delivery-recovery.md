@@ -3463,3 +3463,29 @@ RESUME the current binding and follow the normal Coder/QA/Review chain. Keep ori
 unsupported output as history and check its bytes before and after. Roll back while idle
 without deleting the appended proof, authority, binding or queue records; readers must
 retain the additive fields, and older writers must fail closed on the new purpose.
+# Static QA missing-entry recovery (one-time maintenance authorization)
+
+`DeliveryWaitService.inspect` may propose `STATIC_QA_MISSING_ENTRY` only for a
+current QA `WAITING_DEPENDENCY`/`WAITING_HUMAN` item whose original verifier
+preparation is a claimed, sealed `WAIT/NOT_STARTED` observation. There must be
+no QA invocation start/outcome, accepted QA report, live claim or uncertain
+native command. It must bind the current Task/queue/checkpoint, both historical
+claims, exact accepted Plan and implementation receipts, and a read-only
+candidate Git-tree absence observation. Missing paths must come from frozen QA
+Plan rows and must be absent at the candidate commit, not merely in the
+checkout; symlinks and changed rows reject the route.
+
+The action is never auto-consumed through frozen policy. An engineering actor
+must separately resolve the exact proof. `MySqlPersistentWorkQueue.resolve_wait`
+checks the decision, Task and queue generation under the owner fence, consumes
+it once, and retains the original wait/history while requeuing that same QA
+WorkItem with a new dispatch generation and fresh independent claim. The static
+route does not refund or increment the original work attempt and cannot silently
+expand the frozen Coder budget. The original controlled planned verifier remains
+`NOT_STARTED`; QA may inspect source under its existing read-only policy and
+author only a proof-bound `FAIL` with empty `tests_run` for the missing test files.
+`PASS`, a claim that a planned test ran, a stale proof, or a changed candidate is rejected. Ordinary
+QA FAIL routing then checks the Task's remaining frozen work allowance before
+returning to Coder. An exhausted allowance preserves the finding and blocks
+until a separate exact resource decision. No QA/Review verdict is synthesized
+by the orchestrator.

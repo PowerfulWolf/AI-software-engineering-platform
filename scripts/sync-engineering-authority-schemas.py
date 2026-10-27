@@ -1,6 +1,7 @@
 """Regenerate the organization engineering policy/admission wire contracts."""
 
 import json
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -21,14 +22,19 @@ from ai_software_engineer.domain.engineering_authority import (
 )
 from ai_software_engineer.manager.rejected_output_checkpoint import RejectedCoderOutputCheckpoint
 
+if sys.argv[1:] not in ([], ["--wait-only"]):
+    raise SystemExit("usage: sync-engineering-authority-schemas.py [--wait-only]")
+wait_only = sys.argv[1:] == ["--wait-only"]
+
 schema = TypeAdapter(
     Annotated[EngineeringPolicy | EngineeringAdmission, Field(discriminator="kind")]
 ).json_schema()
 schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 schema["$id"] = "https://ai-software-engineer.local/schemas/engineering-authority.schema.json"
-(Path(__file__).resolve().parents[1] / "schemas/engineering-authority.schema.json").write_text(
-    json.dumps(schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-)
+if not wait_only:
+    (Path(__file__).resolve().parents[1] / "schemas/engineering-authority.schema.json").write_text(
+        json.dumps(schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 resolution_schema = TypeAdapter(
     Annotated[
@@ -164,7 +170,20 @@ resolution_schema["$defs"]["DeliveryResolution"]["allOf"] = [
                     }
                 }
             },
-            "else": {"properties": {"verifier_preparation": {"type": "null"}}},
+            "else": {
+                "if": {"properties": {"resolution_kind": {"const": "STATIC_QA_MISSING_ENTRY"}}},
+                "then": {
+                    "required": ["verifier_preparation", "static_qa_missing_entry"],
+                    "properties": {
+                        "verifier_preparation": {
+                            "type": "object",
+                            "properties": {"native_execution_state": {"const": "NOT_STARTED"}},
+                        },
+                        "static_qa_missing_entry": {"type": "object"},
+                    },
+                },
+                "else": {"properties": {"verifier_preparation": {"type": "null"}}},
+            },
         },
     },
     {
@@ -338,6 +357,72 @@ resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] = [
         },
     },
 ]
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] += [
+    {
+        "if": {
+            "required": ["permitted_resolutions"],
+            "properties": {
+                "permitted_resolutions": {"contains": {"const": "STATIC_QA_MISSING_ENTRY"}}
+            },
+        },
+        "then": {
+            "required": ["static_qa_missing_entry", "verifier_preparation"],
+            "properties": {
+                "static_qa_missing_entry": {"type": "object"},
+                "verifier_preparation": {
+                    "type": "object",
+                    "properties": {"native_execution_state": {"const": "NOT_STARTED"}},
+                },
+            },
+        },
+    },
+    {
+        "if": {
+            "required": ["static_qa_missing_entry"],
+            "properties": {"static_qa_missing_entry": {"type": "object"}},
+        },
+        "then": {
+            "required": ["verifier_preparation", "original_run_id"],
+            "properties": {
+                "verifier_preparation": {
+                    "type": "object",
+                    "properties": {"native_execution_state": {"const": "NOT_STARTED"}},
+                },
+                "invocation_start_sha256": {"type": "null"},
+                "invocation_outcome_sha256": {"type": "null"},
+                "original_authority": {"type": "null"},
+                "verification_retry": {"type": "null"},
+                "knowledge_preparation": {"type": "null"},
+                "rejected_output": {"type": "null"},
+                "retry_cause": {"type": "null"},
+                "process_stop_sha256": {"type": "null"},
+                "permitted_resolutions": {
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": {"const": "STATIC_QA_MISSING_ENTRY"},
+                },
+                "disposition": {
+                    "properties": {
+                        "facts": {
+                            "properties": {
+                                "role": {"const": "qa"},
+                                "classification": {
+                                    "enum": ["ENVIRONMENT_UNAVAILABLE", "ENGINEERING_AUTHORIZATION"]
+                                },
+                                "evidence_ids": {
+                                    "minItems": 1,
+                                    "maxItems": 1,
+                                    "items": {"pattern": "^verifier-preparation://[a-f0-9]{64}$"},
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+        },
+        "else": {"properties": {"static_qa_missing_entry": {"type": "null"}}},
+    },
+]
 resolution_schema["$defs"]["KnowledgePreparationRetryEvidence"]["allOf"] = [
     {
         "properties": {
@@ -504,6 +589,23 @@ resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"][-1]["then"]["pr
     ],
 }
 # Today's complete draft needs its own operator decision, never an old policy grant.
+resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
+    {
+        "if": {"properties": {"resolution_kind": {"const": "STATIC_QA_MISSING_ENTRY"}}},
+        "then": {
+            "required": ["static_qa_missing_entry", "verifier_preparation", "operator_principal"],
+            "properties": {
+                "static_qa_missing_entry": {"type": "object"},
+                "authorization_source": {"const": "engineering_operator_decision"},
+                "operator_principal": {"type": "object"},
+                "engineering_admission": {"type": "null"},
+                "retry_failure": {"type": "null"},
+                "retry_cause": {"type": "null"},
+            },
+        },
+        "else": {"properties": {"static_qa_missing_entry": {"type": "null"}}},
+    }
+)
 resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
     {
         "if": {
@@ -841,9 +943,86 @@ for proof_name in ("DeliveryResolution", "DeliveryWaitInvestigation"):
         }
     )
 
-(
-    Path(__file__).resolve().parents[1] / "schemas/engineering-wait-resolution.schema.json"
-).write_text(json.dumps(resolution_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+if not wait_only:
+    (
+        Path(__file__).resolve().parents[1] / "schemas/engineering-wait-resolution.schema.json"
+    ).write_text(
+        json.dumps(resolution_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+if wait_only:
+    # Nested Console/settlement schemas have additional hand-written guards.
+    # Copy only the new static-QA definitions and guards from the canonical
+    # schema; full model regeneration would silently erase those guards.
+    canonical = resolution_schema["$defs"]
+    assert isinstance(canonical, dict)
+    static_guard = next(
+        guard
+        for guard in canonical["DeliveryResolution"]["allOf"]
+        if guard.get("if", {}).get("properties", {}).get("resolution_kind", {}).get("const")
+        == "STATIC_QA_MISSING_ENTRY"
+    )
+    verifier_guard = next(
+        guard
+        for guard in canonical["DeliveryResolution"]["allOf"]
+        if guard.get("if", {}).get("properties", {}).get("resolution_kind", {}).get("const")
+        == "RETRY_VERIFIER_PREPARATION"
+    )
+    investigation_guards = tuple(
+        guard
+        for guard in canonical["DeliveryWaitInvestigation"]["allOf"]
+        if "STATIC_QA_MISSING_ENTRY" in json.dumps(guard, sort_keys=True)
+    )
+    if len(investigation_guards) != 2:
+        raise RuntimeError("static QA investigation guards are incomplete")
+    for filename in (
+        "engineering-wait-resolution.schema.json",
+        "console-deletion-cleanup.schema.json",
+        "console-operation.schema.json",
+        "stopped-failure-budget-settlement.schema.json",
+        "stopped-unknown-budget-settlement.schema.json",
+    ):
+        path = Path(__file__).resolve().parents[1] / "schemas" / filename
+        nested = json.loads(path.read_text(encoding="utf-8"))
+        definitions = nested["$defs"]
+        kind = definitions["DeliveryResolutionKind"]
+        expected_previous = [
+            value
+            for value in canonical["DeliveryResolutionKind"]["enum"]
+            if value != "STATIC_QA_MISSING_ENTRY"
+        ]
+        if kind["enum"] not in (expected_previous, canonical["DeliveryResolutionKind"]["enum"]):
+            raise RuntimeError(f"{filename} has an unexpected resolution enum")
+        kind["enum"] = canonical["DeliveryResolutionKind"]["enum"]
+        definitions["StaticQaMissingEntryEvidence"] = canonical["StaticQaMissingEntryEvidence"]
+        for model_name in ("DeliveryResolution", "DeliveryWaitInvestigation"):
+            if model_name not in definitions:
+                continue
+            model = definitions[model_name]
+            model["properties"]["static_qa_missing_entry"] = canonical[model_name]["properties"][
+                "static_qa_missing_entry"
+            ]
+            guards = model.setdefault("allOf", [])
+            if model_name == "DeliveryResolution":
+                for index, guard in enumerate(guards):
+                    if (
+                        guard.get("if", {})
+                        .get("properties", {})
+                        .get("resolution_kind", {})
+                        .get("const")
+                        == "RETRY_VERIFIER_PREPARATION"
+                    ):
+                        guards[index] = verifier_guard
+                        break
+                else:
+                    raise RuntimeError(f"{filename} lost the verifier preparation guard")
+                if static_guard not in guards:
+                    guards.append(static_guard)
+            else:
+                for guard in investigation_guards:
+                    if guard not in guards:
+                        guards.append(guard)
+        path.write_text(json.dumps(nested, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 checkpoint_schema = RejectedCoderOutputCheckpoint.model_json_schema()
 checkpoint_schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
@@ -886,9 +1065,12 @@ checkpoint_schema["allOf"] = [
         }
     }
 ]
-(
-    Path(__file__).resolve().parents[1] / "schemas/rejected-coder-output-checkpoint.schema.json"
-).write_text(json.dumps(checkpoint_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+if not wait_only:
+    (
+        Path(__file__).resolve().parents[1] / "schemas/rejected-coder-output-checkpoint.schema.json"
+    ).write_text(
+        json.dumps(checkpoint_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 # EngineeringPolicy is embedded in Task/dispatch/recovery wire contracts. Keep
 # every copy's capability enum synchronized without erasing their hand-written
@@ -896,7 +1078,10 @@ checkpoint_schema["allOf"] = [
 capability_schema = TypeAdapter(EngineeringCapability).json_schema()
 failure_schema = DeliveryFailureFacts.model_json_schema()
 failure_schema.pop("$defs")
-for path in (Path(__file__).resolve().parents[1] / "schemas").glob("*.schema.json"):
+embedded_paths = (
+    () if wait_only else (Path(__file__).resolve().parents[1] / "schemas").glob("*.schema.json")
+)
+for path in embedded_paths:
     embedded = json.loads(path.read_text(encoding="utf-8"))
     definitions = embedded.get("$defs", {})
     changed = False

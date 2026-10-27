@@ -799,3 +799,15 @@ current role/criterion/command/read/deny/candidate checks still apply before cac
 Any explicit capability, unknown command, unmarked e2e/acceptance obligation or unsupported mixed
 row prevents ordinary fallback. Original-role preflight and final preparation choose the same
 whole-group mode; a single ordinary row cannot conceal a missing member of a registered group.
+# Candidate-tree missing test entries
+
+When a frozen QA Plan names a new browser or live A→B test file absent at the
+candidate Git SHA, unavailable controlled executors remain separate platform
+prerequisites. A read-only `CandidateTestEntryAbsenceObservation` can establish
+the source defect without executing the missing command. It does not establish
+that browser/live verification passed or grant a QA claim. The dedicated static
+QA route requires a separately approved exact wait decision, an independent
+fresh QA claim and the restricted output contract in
+`native-verification-output.md`. Once Coder supplies a new candidate, the
+registered real browser and live A→B executors remain mandatory for complete
+QA and Review.

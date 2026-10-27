@@ -50,6 +50,7 @@ class DeliveryResolutionKind(StrEnum):
     RETRY_REJECTED_CODER_OUTPUT = "RETRY_REJECTED_CODER_OUTPUT"
     RETRY_REJECTED_KNOWLEDGE_PREPARATION = "RETRY_REJECTED_KNOWLEDGE_PREPARATION"
     RETRY_REJECTED_WORKSPACE_ADMISSION = "RETRY_REJECTED_WORKSPACE_ADMISSION"
+    STATIC_QA_MISSING_ENTRY = "STATIC_QA_MISSING_ENTRY"
 
 
 class DeliveryProofMissing(StrEnum):
@@ -162,6 +163,27 @@ class VerifierPreparationEvidence(DomainModel):
         ):
             raise ValueError("unstarted native preparation cannot claim execution or failure")
         return self
+
+
+class StaticQaMissingEntryEvidence(DomainModel):
+    """Exact accepted candidate defect, bound to original QA no-start preparation."""
+
+    candidate_revision: FullGitRevision
+    observation_sha256: DispositionSha256
+    plan_artifact_id: ArtifactId
+    plan_artifact_sha256: DispositionSha256
+    implementation_artifact_id: ArtifactId
+    implementation_artifact_sha256: DispositionSha256
+    preparation_checkpoint_sha256: DispositionSha256
+    original_lease_id: NonEmptyStr
+    wait_lease_id: NonEmptyStr
+    original_dispatch_sequence: Annotated[StrictInt, Field(ge=0)]
+    wait_dispatch_sequence: Annotated[StrictInt, Field(ge=0)]
+    original_claim_sha256: DispositionSha256
+    wait_claim_sha256: DispositionSha256
+    previous_run_id: RunId
+    previous_context_manifest_id: ContextId
+    prerequisite_facts_sha256: DispositionSha256
 
 
 class OriginalInvocationAuthority(DomainModel):
@@ -435,6 +457,9 @@ class DeliveryWaitInvestigation(DomainModel):
     original_authority: OriginalInvocationAuthority | None = None
     verification_retry: VerificationRetryEvidence | None = None
     verifier_preparation: VerifierPreparationEvidence | None = None
+    static_qa_missing_entry: StaticQaMissingEntryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     knowledge_preparation: KnowledgePreparationRetryEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -635,6 +660,39 @@ class DeliveryWaitInvestigation(DomainModel):
             or self.invocation_outcome_sha256 is not None
         ):
             raise ValueError("native preparation proof changed its exact pre-model facts")
+        static = self.static_qa_missing_entry
+        if (DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY in self.permitted_resolutions) != (
+            static is not None
+        ):
+            raise ValueError("static QA proposal requires its exact missing-entry evidence")
+        if static is not None:
+            preparation = self.verifier_preparation
+            if (
+                facts.role is not AgentRole.QA
+                or facts.classification
+                not in {"ENVIRONMENT_UNAVAILABLE", "ENGINEERING_AUTHORIZATION"}
+                or preparation is None
+                or preparation.native_execution_state != "NOT_STARTED"
+                or static.candidate_revision != self.source_revision
+                or static.preparation_checkpoint_sha256 != preparation.preparation_checkpoint_sha256
+                or static.previous_run_id != preparation.previous_run_id
+                or static.previous_context_manifest_id != preparation.previous_context_manifest_id
+                or static.prerequisite_facts_sha256 != self.prerequisite_facts_sha256
+                or facts.evidence_ids
+                != ("verifier-preparation://" + static.preparation_checkpoint_sha256,)
+                or self.invocation_start_sha256 is not None
+                or self.invocation_outcome_sha256 is not None
+                or self.original_authority is not None
+                or self.verification_retry is not None
+                or self.knowledge_preparation is not None
+                or self.rejected_output is not None
+                or self.rejected_knowledge is not None
+                or self.rejected_workspace_admission is not None
+                or self.retry_cause is not None
+                or self.process_stop_sha256 is not None
+                or self.permitted_resolutions != (DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,)
+            ):
+                raise ValueError("static QA proof changed its original no-start facts")
         capacity = self.verifier_preparation
         if (
             capacity is not None
@@ -764,6 +822,9 @@ class DeliveryResolution(DomainModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    static_qa_missing_entry: StaticQaMissingEntryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     knowledge_preparation: KnowledgePreparationRetryEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -870,6 +931,8 @@ class DeliveryResolution(DomainModel):
                 or self.verifier_preparation.context_capacity_receipt_sha256 is not None
                 else DeliveryResolutionKind.RETRY_VERIFIER_PREPARATION
             )
+            if self.static_qa_missing_entry is not None:
+                expected_kind = DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY
             if (
                 self.resolution_kind is not expected_kind
                 or self.verifier_preparation.candidate_revision != self.expected_source_revision
@@ -877,6 +940,27 @@ class DeliveryResolution(DomainModel):
                 raise ValueError(
                     "native preparation decision changed the retained candidate or action"
                 )
+        static = self.static_qa_missing_entry
+        if (self.resolution_kind is DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY) != (
+            static is not None
+        ):
+            raise ValueError("only static QA decision may use missing-entry proof")
+        if static is not None and (
+            self.authorization_source != "engineering_operator_decision"
+            or self.verifier_preparation is None
+            or self.verifier_preparation.native_execution_state != "NOT_STARTED"
+            or self.verifier_preparation.preparation_checkpoint_sha256
+            != static.preparation_checkpoint_sha256
+            or self.verifier_preparation.previous_run_id != static.previous_run_id
+            or self.verifier_preparation.previous_context_manifest_id
+            != static.previous_context_manifest_id
+            or self.verifier_preparation.prerequisite_facts_sha256
+            != static.prerequisite_facts_sha256
+            or static.candidate_revision != self.expected_source_revision
+            or self.retry_failure is not None
+            or self.retry_cause is not None
+        ):
+            raise ValueError("static QA decision changed its exact no-start authority")
         if (self.resolution_kind is DeliveryResolutionKind.RETRY_KNOWLEDGE_PREPARATION) != (
             self.knowledge_preparation is not None
         ):

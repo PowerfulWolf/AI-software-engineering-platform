@@ -144,3 +144,19 @@ Codex mode separation, mixed65-selector discovery and public wait/handle preserv
 browser/live remedies without starting resources/models or consuming recovery authority.
 No existing Task/Plan/receipt/approval is rewritten. Existing waits require a fresh public
 investigation after reviewed deployment; original browser/live acceptance remains required.
+# Static QA missing-entry output
+
+`TrustedStaticQaMissingEntryOutputContract` is distinct from a command receipt.
+It binds the fresh current QA `AgentRequest`, current claim and consumed
+`STATIC_QA_MISSING_ENTRY` decision to the sealed candidate-tree observation.
+The prompt may describe the missing frozen test paths, but the output gate must
+independently re-read the current decision, claim, accepted Plan/implementation
+receipts and candidate Git tree before accepting the report. Only one QA-authored
+`qa-report` with overall `FAIL`, no `tests_run`, proof file evidence, FAIL for
+affected criteria and one `MISSING_PLANNED_TEST_ENTRY` finding per missing path
+is valid. PASS, command claims, changed proof/claim/candidate, or unrelated
+criterion PASS fail closed. Responses routes cannot consume this authority
+until they implement the same current-output validation as Codex CLI.
+`tests_run=()` and the original controlled verifier's `NOT_STARTED` observation
+do not prove that the QA model made zero read-only source-inspection tool calls;
+the role's existing read-only tool policy continues to govern those calls.

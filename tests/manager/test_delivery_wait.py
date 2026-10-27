@@ -12,6 +12,7 @@ from typing import Literal, Never, cast
 
 import pytest
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as SchemaValidationError
 from pydantic import ValidationError
 
 from ai_software_engineer.agents.continuation import InterruptionObservation
@@ -72,6 +73,9 @@ from ai_software_engineer.execution import CommandTimedOut, SubprocessCommandExe
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.manager.candidate_test_entry_absence import (
+    CandidateTestEntryAbsenceObservation,
+)
 from ai_software_engineer.manager.delivery import ProjectDeliveryResult, UnifiedProjectEntryService
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryNextAction,
@@ -2155,6 +2159,123 @@ def test_public_mixed_prerequisite_investigation_preserves_rows_and_requires_cap
         tmp_path, monkeypatch, state="NOT_STARTED", requirements=rows
     ) as fixture:
         _assert_public_mixed_prerequisites(fixture, tmp_path, browser, live, unknown_process)
+
+
+def test_static_qa_missing_entry_proposes_manual_static_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser = PlannedVerificationRequirement(
+        id="browser_entry",
+        role=AgentRole.QA,
+        criterion_ids=("ac_models_01",),
+        argv=("node", "--test", "tests/browser.test.cjs"),
+        planned_new_files=("tests/browser.test.cjs",),
+        verification_levels=("e2e",),
+    )
+    with _native_preparation_wait(
+        tmp_path, monkeypatch, state="NOT_STARTED", requirements=(browser,)
+    ) as fixture:
+        artifacts = FileArtifactStore(tmp_path / "accepted-artifacts")
+        plan = seal_artifact(
+            fixture.native.plan.model_copy(update={"context_manifest_id": "ctx_" + "a" * 64}),
+            validated_at=NOW,
+        )
+        implementation = seal_artifact(
+            fixture.native.implementation.model_copy(
+                update={"context_manifest_id": "ctx_" + "b" * 64}
+            ),
+            validated_at=NOW,
+        )
+        artifacts.put(plan)
+        artifacts.put(implementation)
+        fixture.entry.artifacts = artifacts
+        scope = fixture.native.registry.scope
+        waiting = DeliveryPreflightReceipt(
+            scope=DeliveryPreflightScope(
+                team_id=scope.team_id,
+                project_id=scope.project_id,
+                repository_id=scope.repository_id,
+                requirement_id=scope.requirement_id,
+            ),
+            task_id=fixture.native.task.id,
+            source_revision=fixture.native.request.source_revision,
+            plan_sha256="d" * 64,
+            frozen_policy_sha256="e" * 64,
+            requirements_sha256="f" * 64,
+            observations=(
+                DeliveryPreflightObservation(
+                    requirement_id=browser.id,
+                    status="WAIT_ENGINEERING",
+                    reason_code="BROWSER_EXECUTOR_UNREGISTERED",
+                ),
+            ),
+            status="WAIT_ENGINEERING",
+            checked_at=NOW,
+            receipt_sha256="0" * 64,
+        )
+        waiting = waiting.model_copy(
+            update={
+                "receipt_sha256": digest(
+                    waiting.model_dump(mode="json", exclude={"receipt_sha256"})
+                )
+            }
+        )
+        waiting.validate_integrity()
+        fixture.entry.prerequisite_collector = lambda current, step: waiting
+        fixture.queue.accepted_artifacts = tuple(
+            AcceptedRoleArtifact(
+                task_id=fixture.native.task.id,
+                work_item_id="work_prior_" + artifact.artifact_id,
+                lease_id="lease_prior_" + artifact.artifact_id,
+                dispatch_sequence=0,
+                checkpoint_sequence=fixture.queue.item.checkpoint_sequence,
+                run_id=artifact.producer.run_id,
+                context_manifest_id=artifact.context_manifest_id,
+                source_revision=artifact.source_revision,
+                receipt=QueueArtifactReceipt(
+                    artifact_id=artifact.artifact_id,
+                    sha256=artifact.integrity.sha256,
+                ),
+            )
+            for artifact in (plan, implementation)
+        )
+        command = fixture.queue.command()
+        proof = fixture.entry.inspect(command)
+        assert proof.permitted_resolutions == (DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,)
+        assert proof.static_qa_missing_entry is not None
+        observation = fixture.entry.records.get(
+            "static-qa-observations",
+            proof.static_qa_missing_entry.observation_sha256,
+            CandidateTestEntryAbsenceObservation,
+        )
+        assert observation.candidate_revision == implementation.source_revision
+        assert observation.missing[0].path == "tests/browser.test.cjs"
+        assert proof.verifier_preparation is not None
+        assert proof.verifier_preparation.native_execution_state == "NOT_STARTED"
+        assert not proof.missing
+        for filename in (
+            "engineering-wait-resolution.schema.json",
+            "console-operation.schema.json",
+            "console-deletion-cleanup.schema.json",
+            "stopped-failure-budget-settlement.schema.json",
+            "stopped-unknown-budget-settlement.schema.json",
+        ):
+            schema = json.loads((Path("schemas") / filename).read_text(encoding="utf-8"))
+            validator = Draft202012Validator(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "$defs": schema["$defs"],
+                    "$ref": "#/$defs/DeliveryWaitInvestigation",
+                }
+            )
+            validator.validate(proof.to_wire())
+            tampered = {**proof.to_wire(), "static_qa_missing_entry": None}
+            with pytest.raises(SchemaValidationError):
+                validator.validate(tampered)
+        handling = fixture.entry.handle(HandleDeliveryWait.model_validate(command.to_wire()))
+        assert handling.status == "NEEDS_AUTHORIZATION" and handling.resolution is None
+        assert not fixture.queue.consumed
 
 
 def test_unregistered_qa_preparation_drift_cannot_supply_no_start_proof(

@@ -66,6 +66,8 @@
 
 - [Native verification output](native-verification-output.md): trusted current execution receipt
   binding at native QA/Review output acceptance, with unchanged independent verdicts and history.
+  Includes the separately approved static QA missing-entry no-command FAIL
+  contract for an accepted candidate with frozen test files absent at its Git SHA.
 
 - [Inherited reapply inputs](inherited-reapply-inputs.md): authenticated transitive complete
   patch inputs, exact Plan binding and unchanged current-capture/role/approval boundaries.
