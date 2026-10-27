@@ -31,6 +31,18 @@ The one-line import correction was separately approved in human reply
 `call_002835614b90489894fd2cbe0fd95a42`; the final exact patch SHA-256 is
 `5888d5a8e418274321ce71e8e8b2b9895cba3fe28333c6df15bcbf9018d41cba`.
 
+The public Host test exposed one additional state-machine seam after the
+first-stage scope was approved: the consumed static QA decision must be
+recognized by the next verifier preparation claim. The human user granted a
+single-file supplemental authorization in trusted reply
+`call_880fd1048e8645d6ad370c2bcf4db05e` for only
+`src/ai_software_engineer/work_queue/preparation_resume.py`, still against
+platform main `5536cbbc946dd0a8235d2636d7c9aead50d10ae2`. The exact
+reviewed patch is `/private/tmp/ase-k1-static-qa-preparation-resume.patch`,
+SHA-256 `a661745afef58dbe745a5ea8d4c97e642f4df3633fe459dcc927cf22c5e56e52`.
+This conversation authorization is not a live K1 wait decision. It does not
+alter the frozen ProductSpec, Design, Plan or candidate.
+
 ## Exact first-stage maintenance scope
 
 The following paths need a named, auditable maintenance authority before a
