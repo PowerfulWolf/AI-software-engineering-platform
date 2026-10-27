@@ -248,7 +248,8 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
         ):
             current = self._get_locked(cursor, claim.work_item.id, lock=False)
             cursor.execute(
-                "SELECT state,expires_at,assignment_json,lease_json,model_selection_json,"
+                "SELECT state,work_item_id,task_id,expires_at,assignment_json,lease_json,"
+                "model_selection_json,"
                 "worker_id,acquired_at FROM work_queue_claims WHERE lease_id=%s",
                 (claim.lease.id,),
             )
@@ -264,6 +265,8 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 raise QueueLeaseLost("static QA claim has expired")
             if (
                 current.status not in {WorkItemStatus.LEASED, WorkItemStatus.RUNNING}
+                or row["work_item_id"] != claim.work_item.id
+                or row["task_id"] != claim.work_item.task_id
                 or current.model_copy(
                     update={
                         "status": WorkItemStatus.LEASED,
@@ -284,7 +287,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             cursor.execute(
                 "SELECT event_type,payload_json FROM work_queue_events "
                 "WHERE work_item_id=%s AND event_type IN "
-                "('READY','WAIT_RESOLVED','LEASE_EXPIRED') "
+                "('READY','WAIT_RESOLVED','LEASE_EXPIRED','RETRY_SCHEDULED') "
                 "ORDER BY sequence ASC LIMIT 1025",
                 (current.id,),
             )
@@ -302,7 +305,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     event_type = str(transition["event_type"])
                     if transitioned.status is not (
                         WorkItemStatus.RETRY_SCHEDULED
-                        if event_type == "LEASE_EXPIRED"
+                        if event_type in {"LEASE_EXPIRED", "RETRY_SCHEDULED"}
                         else WorkItemStatus.READY
                     ):
                         raise QueueCorruption("active QA transition changed expected status")

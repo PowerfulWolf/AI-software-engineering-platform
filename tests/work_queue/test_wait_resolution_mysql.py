@@ -664,6 +664,76 @@ def test_static_qa_missing_consumed_event_cannot_fall_back_to_ordinary_qa(
         waiting.queue.static_qa_resolution_for_claim(claim)
 
 
+@pytest.mark.parametrize("waiting", [AgentRole.QA], indirect=True)
+def test_ordinary_qa_retry_scheduled_generation_has_no_static_authority(
+    waiting: WaitingFixture,
+) -> None:
+    resumed = waiting.queue.resolve_wait(
+        waiting.resolution(DeliveryResolutionKind.RESUME_UNINVOKED)
+    )
+    first = (
+        dispatcher(waiting.queue)
+        .tick(now=waiting.now + timedelta(seconds=8), work_item_id=resumed.id)
+        .claim
+    )
+    assert first is not None
+    retry_at = first.claimed_at + timedelta(seconds=2)
+    waiting.queue.retry(
+        resumed.id,
+        lease_id=first.lease.id,
+        owner_token=TOKEN,
+        reason="fixture transient retry",
+        now=first.claimed_at + timedelta(seconds=1),
+        available_at=retry_at,
+    )
+    second = (
+        dispatcher(waiting.queue)
+        .tick(now=retry_at + timedelta(seconds=1), work_item_id=resumed.id)
+        .claim
+    )
+    assert second is not None
+    assert second.work_item.dispatch_sequence == first.work_item.dispatch_sequence + 1
+    assert waiting.queue.static_qa_resolution_for_claim(second) is None
+
+
+@pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
+@pytest.mark.parametrize("changed_column", ["task_id", "work_item_id"])
+def test_static_qa_claim_row_must_bind_exact_task_and_work_item(
+    waiting: WaitingFixture, changed_column: str
+) -> None:
+    item = waiting.queue.resolve_wait(_static_qa_resolution(waiting))
+    claim = (
+        dispatcher(waiting.queue)
+        .tick(now=waiting.now + timedelta(seconds=8), work_item_id=item.id)
+        .claim
+    )
+    assert claim is not None
+    if changed_column == "work_item_id":
+        decoy = QueuedWorkItem.model_validate(
+            {
+                **item.to_wire(),
+                "id": "work_static_qa_decoy",
+                "role": AgentRole.REVIEWER,
+                "parent_work_item_id": None,
+                "dispatch_sequence": 0,
+            }
+        )
+        waiting.queue.enqueue(decoy)
+        replacement = decoy.id
+    else:
+        replacement = "task_unrelated_static_qa"
+    with closing(open_mysql_connection(waiting.dsn)) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE work_queue_claims SET {changed_column}=%s WHERE lease_id=%s",
+                (replacement, claim.lease.id),
+            )
+            assert cursor.rowcount == 1
+        connection.commit()
+    with pytest.raises(QueueConflict, match="current claim"):
+        waiting.queue.static_qa_resolution_for_claim(claim)
+
+
 @pytest.mark.parametrize("provider", [False, True])
 def test_retry_reserves_new_identity_and_separates_work_from_provider_budget(
     waiting: WaitingFixture,
