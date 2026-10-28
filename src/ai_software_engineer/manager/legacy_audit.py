@@ -4,6 +4,8 @@ from pathlib import Path
 
 from ai_software_engineer.domain import Task
 from ai_software_engineer.domain.contained_unknown_budget import ContainedUnknownBudgetSettlement
+from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.delivery_resolution import DeliveryResolutionKind
 from ai_software_engineer.domain.execution_baseline import BaselinePurpose
 from ai_software_engineer.evaluation import (
     EvaluationCaseId,
@@ -15,6 +17,10 @@ from ai_software_engineer.knowledge.audit import KnowledgeHumanActionRecorder
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import BaselineOperatorAuthorization
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+from ai_software_engineer.manager.recovery_input_schedule import (
+    RecoveryInputResolutionReader,
+    get_recovery_input_schedule,
+)
 from ai_software_engineer.manager.workspace_admission_contract import (
     WorkspaceAdmissionAdapterContractStore,
 )
@@ -49,12 +55,22 @@ def contained_unknown_human_event(
 
 
 class EngineeringHumanActionRecorder:
-    def __init__(self, knowledge: KnowledgeHumanActionRecorder, baseline_root: Path) -> None:
+    def __init__(
+        self,
+        knowledge: KnowledgeHumanActionRecorder,
+        baseline_root: Path,
+        *,
+        recovery_input_root: Path | None = None,
+        recovery_input_resolution_reader: RecoveryInputResolutionReader | None = None,
+    ) -> None:
         self.knowledge, self.baseline_root = knowledge, baseline_root
+        self.recovery_input_root = recovery_input_root
+        self.recovery_input_resolution_reader = recovery_input_resolution_reader
 
     def record(self, task: Task, case_id: EvaluationCaseId, events: EvaluationEventStore) -> None:
         self.knowledge.record(task, case_id, events)
         self._record_workspace_admission_declarations(task, case_id, events)
+        self._record_recovery_input_schedule(task, case_id, events)
         root = self.baseline_root / task.id
         if not root.exists():
             return
@@ -194,6 +210,55 @@ class EngineeringHumanActionRecorder:
                 ),
             )
             events.append(event)
+
+    def _record_recovery_input_schedule(
+        self, task: Task, case_id: EvaluationCaseId, events: EvaluationEventStore
+    ) -> None:
+        reader = self.recovery_input_resolution_reader
+        if reader is None:
+            return
+        decision = reader.consumed_recovery_input_resolution(task.id)
+        if decision is None:
+            return
+        decision.validate_integrity()
+        source = decision.pre_context_recovery_input
+        root = self.recovery_input_root
+        if root is None or source is None:
+            raise ValueError("已消费的恢复输入调度缺少精确工程审计来源")
+        records = KnowledgeRecordStore(root, read_only=True)
+        schedule = get_recovery_input_schedule(records, source.plan_sha256)
+        if (
+            schedule is None
+            or decision.resolution_kind is not DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT
+            or schedule.schedule_sha256 != decision.recovery_input_schedule_sha256
+            or schedule.authorization_reference != decision.authorization_reference
+            or schedule.engineering_actor != decision.operator_principal
+            or schedule.task_id != task.id
+            or schedule.task_intent_sha256 != task_intent_sha256(task)
+            or schedule.target_base_revision != task.base_ref
+            or schedule.plan_sha256 != task.metadata.get("recovery_plan_sha256")
+            or schedule.work_item_id != decision.work_item_id
+            or schedule.disposition_sha256 != decision.expected_disposition_sha256
+        ):
+            raise ValueError("已消费的恢复输入调度与 Task 或工程决定不一致")
+        events.append(
+            HumanActionEvent(
+                event_id="evalevt_recovery_input_" + schedule.schedule_sha256[:32],
+                case_id=case_id,
+                task_id=task.id,
+                occurred_at=schedule.decided_at,
+                action=HumanAction.SUPPLY_EVIDENCE,
+                evidence_uri=(
+                    records.root
+                    / records._name("recovery-input-schedules", schedule.plan_sha256)
+                ).absolute().as_uri(),
+                note=(
+                    "ENGINEERING 主体 " + schedule.engineering_actor.operator_id
+                    + " 通过真实 Console Operation " + schedule.authorization_reference
+                    + " 批准完整旧补丁按独立 Coder Run 分轮输入; 原等待与历史保留。"
+                ),
+            )
+        )
 
     def _record_workspace_admission_declarations(
         self, task: Task, case_id: EvaluationCaseId, events: EvaluationEventStore

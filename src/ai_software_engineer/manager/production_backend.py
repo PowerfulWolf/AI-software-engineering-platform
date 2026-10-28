@@ -11,7 +11,7 @@ from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 from ai_software_engineer.agents import (
     AgentRequest,
@@ -220,6 +220,9 @@ from ai_software_engineer.work_queue.invocation import (
     DurableInvocationControl,
 )
 from ai_software_engineer.work_queue.ports import DeliveryQueuePending
+
+if TYPE_CHECKING:
+    from ai_software_engineer.recovery.models import RecoveryPlan
 
 Clock = Callable[[], datetime]
 ResultT = TypeVar("ResultT")
@@ -1142,7 +1145,11 @@ class ProductionProjectDeliveryBackend:
         return result
 
     def _recovery_input_validator(
-        self, dispatch: RecoveryDispatchRecord, sidecar: Path, resolver: StoredContextResolver
+        self,
+        dispatch: RecoveryDispatchRecord,
+        sidecar: Path,
+        resolver: StoredContextResolver,
+        scheduled_input_validator: Callable[[AgentRequest, RecoveryPlan, ContextBundle], bool],
     ) -> Callable[[AgentRequest], None]:
         from ai_software_engineer.recovery.admission import reject_invalid_admission
         from ai_software_engineer.recovery.context import validate_reapply_context
@@ -1178,7 +1185,8 @@ class ProductionProjectDeliveryBackend:
                 request.source_revision,
             ):
                 raise ValueError("recovery input Context changed its request binding")
-            validate_reapply_context(plan, context)
+            if not scheduled_input_validator(request, plan, context):
+                validate_reapply_context(plan, context)
 
         return validate
 
@@ -1216,6 +1224,43 @@ class ProductionProjectDeliveryBackend:
         )
 
         queue = self._role_queue or production_role_queue(self._dsn)
+        from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+        from ai_software_engineer.manager.recovery_input_schedule import (
+            RecoveryInputScheduleDecision,
+            require_consumed_recovery_input_schedule,
+        )
+        schedule_root = facts.workspace.directory("state") / "delivery-waits"
+
+        def scheduled_recovery_input(
+            task: Task,
+        ) -> tuple[RecoveryPlan, RecoveryInputScheduleDecision] | None:
+            if not isinstance(dispatch, RecoveryDispatchRecord):
+                return None
+            if not schedule_root.is_dir():
+                if queue.consumed_recovery_input_resolution(task.id) is not None:
+                    raise ValueError("consumed recovery input has no decision store")
+                return None
+            delivery_id = dispatch.task.metadata.get("recovery_of_delivery_id")
+            if not isinstance(delivery_id, str):
+                raise ValueError("recovery input allocation has no Requirement binding")
+            from ai_software_engineer.recovery.entry import open_recovery_plan
+
+            _, recovery_plan = open_recovery_plan(
+                self._config,
+                facts.workspace.root
+                / "state"
+                / f"recovery-{delivery_id}"
+                / f"plan-{dispatch.recovery_plan_sha256}.json",
+            )
+            schedule = require_consumed_recovery_input_schedule(
+                queue,
+                KnowledgeRecordStore(schedule_root, read_only=True),
+                recovery_plan,
+                dispatch,
+                task,
+            )
+            return (recovery_plan, schedule) if schedule is not None else None
+
         approved = ApprovedRoleDispatch(
             queue,
             dispatch,
@@ -1732,6 +1777,50 @@ class ProductionProjectDeliveryBackend:
             selected_adapters = selected_adapters.wrap_initial_workspace_admission(
                 wrap_rejected_knowledge_admission
             )
+        def validate_scheduled_context(
+            request: AgentRequest, recovery_plan: RecoveryPlan, context: ContextBundle
+        ) -> bool:
+            if request.role is not AgentRole.CODER or initial_schedule is None:
+                return False
+            from ai_software_engineer.recovery.bounded_input import (
+                validate_scheduled_reapply_context,
+            )
+
+            selected = scheduled_source_index(current_task(), request.attempt)
+            if selected is None:
+                raise ValueError("scheduled Coder input is missing")
+            current_plan, decision, index = selected
+            if current_plan.plan_sha256 != recovery_plan.plan_sha256:
+                raise ValueError("scheduled Coder input changed its recovery Plan")
+            validate_scheduled_reapply_context(
+                current_plan, decision.schedule_sha256, index, context
+            )
+            return True
+
+        def validate_candidate_coverage(request: AgentRequest) -> None:
+            if request.role is not AgentRole.CODER or initial_schedule is None:
+                return
+            from ai_software_engineer.git import WorkspacePolicyError
+            from ai_software_engineer.recovery.bounded_input import (
+                complete_reapply_source_refs,
+            )
+
+            try:
+                selected = scheduled_source_index(current_task(), request.attempt)
+                if selected is None:
+                    raise ValueError("scheduled recovery candidate has no current input")
+                recovery_plan, _, index = selected
+                if index != len(complete_reapply_source_refs(recovery_plan)) - 1:
+                    raise ValueError("scheduled recovery candidate has uncovered sources")
+                context = resolver.get_context(request.context_manifest_id)
+                validate_scheduled_context(request, recovery_plan, context)
+            except (ValueError, RuntimeError) as error:
+                raise WorkspacePolicyError("scheduled recovery candidate input changed") from error
+
+        if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory):
+            selected_adapters = selected_adapters.with_candidate_precommit_validator(
+                validate_candidate_coverage
+            )
         adapter = DispatchDeliveryAgentAdapter(
             dispatch=dispatch,
             definitions=definitions,
@@ -1745,13 +1834,22 @@ class ProductionProjectDeliveryBackend:
             route_scope=route_scope,
             route_validator=approved.validate_routes,
             recovery_input_validator=(
-                self._recovery_input_validator(dispatch, facts.workspace.root, resolver)
+                self._recovery_input_validator(
+                    dispatch, facts.workspace.root, resolver, validate_scheduled_context
+                )
                 if isinstance(dispatch, RecoveryDispatchRecord)
                 else None
             ),
         )
         primary = self._config.routes_for(TeamRole.CODER)[0]
         delivery_sources = (*self._delivery_context_sources, *extra_context)
+        initial_schedule = scheduled_recovery_input(dispatch.task)
+        if initial_schedule is not None:
+            _, decision = initial_schedule
+            replaced = {"recovery.origin", *(source.source_id for source in decision.sources)}
+            delivery_sources = tuple(
+                source for source in delivery_sources if source.source_id not in replaced
+            )
         native_epoch = baseline_inputs.native_rule_epoch(
             baseline_inputs.current(dispatch.task, implementation=None, progress=None)
         )
@@ -1814,7 +1912,6 @@ class ProductionProjectDeliveryBackend:
             KnowledgeRunContextBuilder,
             StaticQaKnowledgeScope,
         )
-        from ai_software_engineer.knowledge.store import KnowledgeRecordStore
         from ai_software_engineer.orchestration.context import FileRunContextBuilder
 
         contexts = FileContextStore(paths.contexts)
@@ -1887,6 +1984,60 @@ class ProductionProjectDeliveryBackend:
                 required=True,
             )
 
+        def scheduled_source_index(
+            task: Task, attempt: int
+        ) -> tuple[RecoveryPlan, RecoveryInputScheduleDecision, int] | None:
+            if initial_schedule is None:
+                return None
+            from ai_software_engineer.recovery.bounded_input import (
+                accepted_reapply_source_index,
+            )
+
+            worker_guard.check()
+            claim = knowledge_claim()
+            if (
+                claim.work_item.task_id != task.id
+                or claim.work_item.role is not AgentRole.CODER
+                or claim.work_item.attempt != attempt
+                or active_runtime is None
+            ):
+                raise ValueError("scheduled Coder source has no current claim and Task")
+            fresh = scheduled_recovery_input(task)
+            if fresh is None or fresh[1].schedule_sha256 != initial_schedule[1].schedule_sha256:
+                raise ValueError("scheduled Coder input decision changed")
+            recovery_plan, decision = fresh
+            index = accepted_reapply_source_index(
+                recovery_plan,
+                decision.schedule_sha256,
+                queue.accepted(task.id),
+                active_runtime.task_repository.list_events(task.id),
+                FileArtifactStore(paths.artifacts, read_only=True),
+                contexts,
+                retired_rejected_outputs=queue.retired_rejected_outputs(task.id),
+                lineage=queue,
+            )
+            return recovery_plan, decision, index
+
+        def scheduled_source_selector(
+            task: Task,
+            agent: AgentDefinition,
+            attempt: int,
+            _artifacts: tuple[Artifact, ...],
+        ) -> tuple[ContextSource, ...]:
+            if agent.role is not AgentRole.CODER or initial_schedule is None:
+                return ()
+            from ai_software_engineer.recovery.bounded_input import (
+                scheduled_reapply_context_sources,
+            )
+
+            selected = scheduled_source_index(task, attempt)
+            if selected is None:
+                raise ValueError("scheduled Coder source is missing")
+            recovery_plan, decision, index = selected
+            return scheduled_reapply_context_sources(
+                recovery_plan, decision.schedule_sha256, index
+            )
+
         run_contexts = FileRunContextBuilder(
             facts.workspace.repository_root,
             sources=(
@@ -1896,6 +2047,7 @@ class ProductionProjectDeliveryBackend:
             ),
             context_store=contexts,
             claim_context=claimed_context,
+            source_selector=scheduled_source_selector,
             budget=ContextBudget(
                 max_input_tokens=runtime_config.context_max_input_tokens,
                 reserved_output_tokens=4_000,
@@ -2117,6 +2269,8 @@ class ProductionProjectDeliveryBackend:
             human_action_recorder=EngineeringHumanActionRecorder(
                 KnowledgeHumanActionRecorder(tuple(audit_stores), requirement_id=requirement_id),
                 facts.workspace.directory("state") / "execution-baselines",
+                recovery_input_root=facts.workspace.directory("state") / "delivery-waits",
+                recovery_input_resolution_reader=queue,
             ),
             transition_gate=KnowledgeDeliveryGate(
                 records=KnowledgeRecordStore(facts.workspace.root / "knowledge" / "runs"),

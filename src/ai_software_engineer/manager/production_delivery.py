@@ -102,6 +102,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
         ]
         | None = None,
         static_qa_contract_resolver: StaticQaContractResolver | None = None,
+        candidate_precommit_validator: Callable[[AgentRequest], None] | None = None,
     ) -> None:
         self._initial_admission = initial_workspace_admission
         self._execution_guard = execution_guard
@@ -111,6 +112,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
         self._baseline_verifier = baseline_verifier
         self._candidate_commit_factory = candidate_commit_factory
         self._static_qa_contract_resolver = static_qa_contract_resolver
+        self._candidate_precommit_validator = candidate_precommit_validator
         self._selected_static_qa: dict[
             str,
             tuple[
@@ -150,6 +152,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
             static_qa_contract_resolver=self._static_qa_contract_resolver,
+            candidate_precommit_validator=self._candidate_precommit_validator,
         )
 
     def with_initial_workspace_admission(
@@ -166,6 +169,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
             static_qa_contract_resolver=self._static_qa_contract_resolver,
+            candidate_precommit_validator=self._candidate_precommit_validator,
         )
 
     def wrap_initial_workspace_admission(
@@ -187,6 +191,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
             static_qa_contract_resolver=self._static_qa_contract_resolver,
+            candidate_precommit_validator=self._candidate_precommit_validator,
         )
 
     def with_interruption_control(
@@ -201,6 +206,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
             static_qa_contract_resolver=self._static_qa_contract_resolver,
+            candidate_precommit_validator=self._candidate_precommit_validator,
         )
 
     def with_registered_verifier(
@@ -216,6 +222,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
             static_qa_contract_resolver=self._static_qa_contract_resolver,
+            candidate_precommit_validator=self._candidate_precommit_validator,
         )
 
     def with_baseline_verifier(
@@ -231,6 +238,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             baseline_verifier=verifier,
             candidate_commit_factory=self._candidate_commit_factory,
             static_qa_contract_resolver=self._static_qa_contract_resolver,
+            candidate_precommit_validator=self._candidate_precommit_validator,
         )
 
     def with_candidate_commit_factory(
@@ -247,6 +255,23 @@ class ConfiguredDeliveryRouteAdapterFactory:
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=factory,
             static_qa_contract_resolver=self._static_qa_contract_resolver,
+            candidate_precommit_validator=self._candidate_precommit_validator,
+        )
+
+    def with_candidate_precommit_validator(
+        self, validator: Callable[[AgentRequest], None]
+    ) -> ConfiguredDeliveryRouteAdapterFactory:
+        """Check a scheduled input history before the platform creates a candidate."""
+        return ConfiguredDeliveryRouteAdapterFactory(
+            initial_workspace_admission=self._initial_admission,
+            execution_guard=self._execution_guard,
+            verification_evidence=self._verification_evidence,
+            interruption_control=self._interruption_control,
+            registered_verifier=self._registered_verifier,
+            baseline_verifier=self._baseline_verifier,
+            candidate_commit_factory=self._candidate_commit_factory,
+            static_qa_contract_resolver=self._static_qa_contract_resolver,
+            candidate_precommit_validator=validator,
         )
 
     def with_static_qa_contract_resolver(
@@ -262,6 +287,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             baseline_verifier=self._baseline_verifier,
             candidate_commit_factory=self._candidate_commit_factory,
             static_qa_contract_resolver=resolver,
+            candidate_precommit_validator=self._candidate_precommit_validator,
         )
 
     def prepare_verifier(
@@ -392,6 +418,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 agent_version=definition.version,
                 prompt_builder=prompt_builder,
                 candidate_commit_skill=candidate_commit,
+                candidate_precommit_validator=self._candidate_precommit_validator,
                 candidate_source=BoundCandidateSource(
                     context_resolver, baseline_verifier=self._baseline_verifier
                 ),
@@ -425,6 +452,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             agent=definition,
             prompt_builder=prompt_builder,
             candidate_commit_skill=candidate_commit,
+            candidate_precommit_validator=self._candidate_precommit_validator,
             input_budget=BoundModelInputBudget(context_resolver),
             initial_workspace_admission=(
                 self._initial_admission if definition.role is AgentRole.CODER else None

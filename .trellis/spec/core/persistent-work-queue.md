@@ -1,5 +1,11 @@
 # Persistent WorkQueue / Dispatcher Contract
 
+## 预 Context 容量等待的原 Task 续领（2026-10-28）
+
+`MySqlRoleQueue.resolve_wait(SCHEDULE_RECOVERY_INPUT)` 只在原 WorkItem 仍为精确容量等待、原 claim 唯一且已结束、Task/step/disposition/来源与 immutable 工程决定一致时消费。一次消费追加 `WAIT_RESOLVED`，保留原 Task、attempt、工作额度、旧 claim 与等待事件；同一 WorkItem 使用 `dispatch_sequence + 1` 回到 READY，下一轮由正常 Dispatcher 产生新 claim。`consumed_recovery_input_resolution(task_id)` 从 SQL `WAIT_RESOLVED` 事件重算唯一已消费决定，逐项核对原 claim、Schedule SHA、WorkItem 身份和无退款；不能用 sidecar 文件存在代替 SQL 消费。后续 Coder Run 的完整补丁来源选择先核验此 SQL 决定及精确 Schedule。无已消费决定时原输入行为保持；损坏或重复决定 fail closed。
+
+崩溃矩阵：Schedule 写入前无新权限；写入后 SQL 前可用同事实的新 Console Operation 重放原决定；SQL 后 Runtime 审计和 Coder 准入从持久事实重算。已接纳 progress/candidate、Context、模型调用或路由记录出现后不得使用此路径。测试覆盖原等待无退款、新 dispatch sequence、重复消费幂等和变更拒绝。
+
 ## 1. Scope / Trigger
 
 本规范适用于组织级 Run 调度：`QueuedWorkItem`、MySQL `PersistentWorkQueue`、Planner-owned

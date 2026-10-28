@@ -1,5 +1,28 @@
 # 工程授权与非终态等待处置
 
+## 预 Context 恢复输入的真实人工决定（2026-10-28）
+
+当原恢复 Coder 的唯一已领取 WorkItem 因 Context 容量等待，且尚无 Context、模型调用、路由记录或已接纳 Coder 产物时，工程主体可以通过当前 Web Console Operation 批准三份完整旧补丁按独立 Coder Run 分轮输入。此决定只决定输入来源，不批准代码、候选、QA 或 Review，也不改变冻结 ProductSpec、Design、Plan、Task 范围或目标基线。
+
+```python
+ProjectConsole._execute_operation(running: ConsoleOperation) -> ConsoleOperation
+ManagerConsoleAdapter.execute_operation(running: ConsoleOperation) -> ConsoleCommandResult
+DeliveryWaitService.inspect(command: InspectDeliveryWait) -> DeliveryWaitInvestigation
+DeliveryWaitService.resolve(command: ResolveDeliveryWait) -> DeliveryResolution
+EngineeringHumanActionRecorder.record(task, case_id, events) -> None
+```
+
+`ProjectConsole` 先从 durable `ConsoleOperationStore.claim_next` 取得并验证 `RUNNING` Operation。`ManagerConsoleAdapter` 必须从同一 store 重读精确 Operation，验证 ID、intent SHA 和 Operation SHA；浏览器 payload 不能提交这些值。新 `SCHEDULE_RECOVERY_INPUT` 不接受直接 `execute(intent)`。授权引用格式固定为 `web-console-operation:<operation_id>:<intent_sha256>:<running_operation_sha256>`，不是由 disposition/proof SHA 推导的字符串。可信 Host 注入的 `LocalOperatorPrincipal` 必须含 `ENGINEERING` 职责；`RecoveryInputScheduleDecision` 封存此主体、授权引用、原 Plan/Task/dispatch/seed/claim、目标 revision、完整来源和自身 SHA。`DeliveryResolution` 必须与 Schedule 引用和 SHA 对齐，SQL `WAIT_RESOLVED` 消费后才可激活输入。
+
+| 边界 | 行为 |
+| --- | --- |
+| 仅有调查或孤立 Schedule 文件 | 不授权输入，不生成 `HumanActionEvent`，保留原等待。 |
+| Schedule 已封存、SQL 未消费后崩溃 | 同一精确事实的新 Operation 复用原 Schedule 和原授权引用；不得覆盖原记录或重复批准。 |
+| SQL 已消费、审计尚未写入后崩溃 | 下次 Runtime 从 SQL 和 Schedule 核验后，幂等追加 `HumanActionEvent(SUPPLY_EVIDENCE)`，evidence URI 指向 immutable Schedule。 |
+| Operation/actor、Plan、Task、revision、claim 或来源漂移 | 拒绝消费或 Coder 准入，保留历史与现场；不得从页面摘要补造授权。 |
+
+调查只在显式工程等待操作执行有界负面事实扫描；普通页面刷新不得扫描所有 invocation/Context。存量原 K1 不重写旧结果或额度；发布后从当前等待重新调查，精确 Operation 提交后按同一 Task 新 claim 继续。`tests/manager/test_recovery_input_schedule.py` 覆盖真实 Operation 引用、直接调用拒绝、孤立/已消费审计与重放；队列 MySQL 测试覆盖原等待的精确消费和新 dispatch sequence。
+
 ## Task 隔离的等待授权存储（2026-10-12）
 
 `DeliveryWaitService._resolve(command, automatic=True)` 的本地 `FileRecoveryStore`

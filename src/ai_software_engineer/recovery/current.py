@@ -157,9 +157,15 @@ class NativeRecoveryFactsVerifier:
     def _inspect(self, plan: RecoveryPlan) -> NativeRecoveryFacts:
         original = self._read_source(plan)
         target = self._target_preflight(plan, original)
+        # Older sealed source projections may omit the additive contained-UNKNOWN
+        # settlement field. Treat that absence as the legacy stopped-UNKNOWN path;
+        # the typed RecoveryPlan model still validates the field when it is present.
+        contained_unknown_settlement_sha256 = getattr(
+            plan.source, "contained_unknown_settlement_sha256", None
+        )
         if (
             plan.source.stopped_unknown_settlement_sha256 is not None
-            or plan.source.contained_unknown_settlement_sha256 is not None
+            or contained_unknown_settlement_sha256 is not None
         ):
             current_capture = CapturedChanges.from_capture(
                 target.manager.capture_legacy_changes(
@@ -168,7 +174,7 @@ class NativeRecoveryFactsVerifier:
                     denied_paths=original.denied_paths,
                 )
             )
-            if plan.source.contained_unknown_settlement_sha256 is not None:
+            if contained_unknown_settlement_sha256 is not None:
                 require_contained_unknown_capture(original, plan.capture, current_capture)
             else:
                 require_stopped_unknown_capture(original, plan.capture, current_capture)

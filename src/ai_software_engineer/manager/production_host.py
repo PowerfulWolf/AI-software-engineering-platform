@@ -81,6 +81,7 @@ from ai_software_engineer.manager.production_rules import (
     production_rules,
 )
 from ai_software_engineer.manager.queue_capacity import production_role_queue
+from ai_software_engineer.manager.recovery_input_schedule import RecoveryInputPlanFacts
 from ai_software_engineer.manager.spec_rules import ProductionProjectRuleProvider
 from ai_software_engineer.manager.stage_coordination import ProductionStageCoordinator
 from ai_software_engineer.manager.team_roster import production_team_roster
@@ -874,6 +875,57 @@ class TeamHost:
             with self._work_queue.idle_task_scope(task.id):
                 return self._work_queue.knowledge_preparation_retry(work_item_id)
 
+        def recovery_input_plan_reader(current: Task) -> RecoveryInputPlanFacts:
+            """Read the existing exact Plan/approval/seed/dispatch without DDL."""
+            from typing import cast
+
+            from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
+            from ai_software_engineer.manager.mysql_dispatch_authority import _decode_allocation
+            from ai_software_engineer.recovery.models import RecoveryScope
+            from ai_software_engineer.recovery.store import FileRecoveryStore
+            from ai_software_engineer.store.mysql_repository import open_mysql_connection
+
+            plan_sha256 = current.metadata.get("recovery_plan_sha256")
+            if not isinstance(plan_sha256, str) or len(plan_sha256) != 64:
+                raise ValueError("当前 Task 没有精确的恢复计划身份")
+            recovery_scope = RecoveryScope(
+                team_id=self._config.team_id,
+                repository_id=item.repository_id,
+                delivery_id=native.delivery_id,
+                repository_root=str(workspace.repository_root),
+            )
+            store = FileRecoveryStore(
+                workspace.directory("state") / f"recovery-{native.delivery_id}",
+                scope=recovery_scope,
+            )
+            plan = store.get_plan(plan_sha256)
+            authorization = store.get_authorization(plan_sha256)
+            sealed = store.get_task_record(plan_sha256)
+            seed = store.get_seed(plan_sha256)
+            connection = open_mysql_connection(self._config.require_mysql_dsn(self._environment))
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                    cursor.execute(
+                        "SELECT * FROM dispatch_commits WHERE id=%s",
+                        (f"dispatch_commit_{plan_sha256}",),
+                    )
+                    row = cast(Mapping[str, object] | None, cursor.fetchone())
+                    if row is None:
+                        raise ValueError("当前恢复计划缺少已封存的 dispatch")
+                    dispatch = _decode_allocation(row)
+            finally:
+                connection.rollback()
+                connection.close()
+            if (
+                not isinstance(dispatch, RecoveryDispatchRecord)
+                or plan.source.scope != recovery_scope
+                or plan.new_task_id != current.id
+                or dispatch.task_id != current.id
+            ):
+                raise ValueError("恢复 Plan/dispatch 与当前需求和 Task 不一致")
+            return RecoveryInputPlanFacts(plan, authorization, sealed, dispatch, seed)
+
         return DeliveryWaitService(
             repository=repository,
             queue=self._work_queue,
@@ -930,6 +982,7 @@ class TeamHost:
                     native,
                 )
             ),
+            recovery_input_plan_reader=recovery_input_plan_reader,
         )
 
     def _runtime(self, project_id: ProjectId | str) -> _ProjectRuntime:

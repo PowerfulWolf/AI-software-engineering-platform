@@ -45,12 +45,16 @@ class FileRunContextBuilder:
         context_store: ContextStore | None = None,
         budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
         claim_context: Callable[[], ContextSource] | None = None,
+        source_selector: Callable[
+            [Task, AgentDefinition, int, tuple[Artifact, ...]], tuple[ContextSource, ...]
+        ] | None = None,
     ) -> None:
         self._repository_root = Path(repository_root)
         self._sources = sources
         self._context_store = context_store
         self._budget = budget
         self._claim_context = claim_context
+        self._source_selector = source_selector
 
     def build(
         self,
@@ -63,6 +67,11 @@ class FileRunContextBuilder:
     ) -> ContextBundle:
         """Compile machine policy, Task, role and persisted Artifact wire payloads."""
         artifact_sources = self._artifact_sources(task, agent, input_artifacts)
+        selected_sources = (
+            self._source_selector(task, agent, attempt, input_artifacts)
+            if self._source_selector is not None
+            else ()
+        )
         claim_sources = (
             (self._claim_context(),)
             if self._claim_context is not None and agent.role is not AgentRole.ORCHESTRATOR
@@ -71,7 +80,7 @@ class FileRunContextBuilder:
         builder = FileContextBuilder(
             self._repository_root,
             agent.permissions,
-            sources=self._sources + artifact_sources + claim_sources,
+            sources=self._sources + artifact_sources + claim_sources + selected_sources,
             budget=self._budget,
         )
         bundle = builder.build(

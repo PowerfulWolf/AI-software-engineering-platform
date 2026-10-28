@@ -56,6 +56,7 @@ class DeliveryResolutionKind(StrEnum):
     RETRY_REJECTED_KNOWLEDGE_PREPARATION = "RETRY_REJECTED_KNOWLEDGE_PREPARATION"
     RETRY_REJECTED_WORKSPACE_ADMISSION = "RETRY_REJECTED_WORKSPACE_ADMISSION"
     STATIC_QA_MISSING_ENTRY = "STATIC_QA_MISSING_ENTRY"
+    SCHEDULE_RECOVERY_INPUT = "SCHEDULE_RECOVERY_INPUT"
 
 
 class DeliveryProofMissing(StrEnum):
@@ -119,6 +120,22 @@ class VerificationRetryEvidence(DomainModel):
     invocation_outcome_sha256: DispositionSha256
     prerequisite_facts_sha256: DispositionSha256
     budget_source: Literal["frozen_work_attempt"] = "frozen_work_attempt"
+
+
+class PreContextRecoveryInputEvidence(DomainModel):
+    """Exact original Coder claim and approved input lineage before Context compilation."""
+
+    plan_sha256: DispositionSha256
+    authorization_sha256: DispositionSha256
+    task_record_sha256: DispositionSha256
+    dispatch_sha256: DispositionSha256
+    seed_record_sha256: DispositionSha256
+    source_inventory_sha256: DispositionSha256
+    original_claim_sha256: DispositionSha256
+    original_lease_id: NonEmptyStr
+    worktree_head_revision: FullGitRevision
+    no_context_or_model_start: Literal[True] = True
+    workspace_clean: Literal[True] = True
 
 
 class VerifierPreparationEvidence(DomainModel):
@@ -423,6 +440,17 @@ class ResolveDeliveryWait(InspectDeliveryWait):
     resolution_kind: DeliveryResolutionKind
     proof_sha256: DispositionSha256
     submitted_at: AwareDatetime
+    authorization_reference: NonEmptyStr | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def require_schedule_reference(self) -> Self:
+        if (self.resolution_kind is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT) != (
+            self.authorization_reference is not None
+        ):
+            raise ValueError("预 Context 恢复输入决定需要独立的精确人工工程授权引用")
+        return self
 
 
 class HandleDeliveryWait(InspectDeliveryWait):
@@ -479,6 +507,9 @@ class DeliveryWaitInvestigation(DomainModel):
     verification_retry: VerificationRetryEvidence | None = None
     verifier_preparation: VerifierPreparationEvidence | None = None
     static_qa_missing_entry: StaticQaMissingEntryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    pre_context_recovery_input: PreContextRecoveryInputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     knowledge_preparation: KnowledgePreparationRetryEvidence | None = Field(
@@ -735,6 +766,29 @@ class DeliveryWaitInvestigation(DomainModel):
                 or self.permitted_resolutions != (DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,)
             ):
                 raise ValueError("static QA proof changed its original no-start facts")
+        pre_context = self.pre_context_recovery_input
+        if (DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT in self.permitted_resolutions) != (
+            pre_context is not None
+        ):
+            raise ValueError("预 Context 输入恢复缺少精确已批准来源和未调用证明")
+        if pre_context is not None and (
+            facts.role is not AgentRole.CODER
+            or facts.classification != "CONTEXT_CAPACITY"
+            or self.permitted_resolutions != (DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT,)
+            or self.missing
+            or pre_context.worktree_head_revision != self.source_revision
+            or self.invocation_start_sha256 is not None
+            or self.invocation_outcome_sha256 is not None
+            or self.original_authority is not None
+            or self.verifier_preparation is not None
+            or self.verification_retry is not None
+            or self.knowledge_preparation is not None
+            or self.knowledge_pause is not None
+            or self.rejected_output is not None
+            or self.rejected_knowledge is not None
+            or self.rejected_workspace_admission is not None
+        ):
+            raise ValueError("预 Context 输入恢复改变了原 Coder 容量等待事实")
         capacity = self.verifier_preparation
         if (
             capacity is not None
@@ -844,6 +898,15 @@ class DeliveryResolution(DomainModel):
     )
     submitted_at: AwareDatetime
     resolution_sha256: DispositionSha256
+    authorization_reference: NonEmptyStr | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    recovery_input_schedule_sha256: DispositionSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    pre_context_recovery_input: PreContextRecoveryInputEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     retry_failure: DeliveryRetryFailure | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -885,6 +948,23 @@ class DeliveryResolution(DomainModel):
 
     @model_validator(mode="after")
     def require_engineering_actor(self) -> Self:
+        if (self.resolution_kind is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT) != (
+            self.authorization_reference is not None
+            and self.recovery_input_schedule_sha256 is not None
+            and self.pre_context_recovery_input is not None
+        ):
+            raise ValueError("预 Context 输入恢复必须绑定完整独立工程决定")
+        if self.recovery_input_schedule_sha256 is not None and (
+            self.authorization_source != "engineering_operator_decision"
+            or self.operator_principal is None
+            or self.engineering_admission is not None
+            or self.retry_failure is not None
+            or self.retry_cause is not None
+            or self.pre_context_recovery_input is None
+            or self.pre_context_recovery_input.worktree_head_revision
+            != self.expected_source_revision
+        ):
+            raise ValueError("预 Context 输入恢复不能由冻结自动策略或重试事实授权")
         paused = self.knowledge_pause
         if paused is not None and (
             self.resolution_kind is not DeliveryResolutionKind.RESUME_UNINVOKED

@@ -14,6 +14,7 @@ from ai_software_engineer.context.execution_baseline import (
     ExecutionBaselineContext,
     PreservedWorktreeBaselineContext,
     ReappliedBaselineReferenceContext,
+    ScheduledBaselineReferenceContext,
     execution_baseline_from_context,
     parse_execution_baseline_context,
 )
@@ -26,12 +27,17 @@ from ai_software_engineer.domain.execution_baseline import (
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.orchestration.context import FileRunContextBuilder
 from ai_software_engineer.orchestration.execution_baseline import BaselineRunContextBuilder
+from ai_software_engineer.recovery.bounded_input import (
+    scheduled_reapply_context_sources,
+    validate_scheduled_reapply_context,
+)
 from ai_software_engineer.recovery.context import recovery_context_sources, validate_reapply_context
 from ai_software_engineer.recovery.models import CapturedChanges, RecoveryPlan
 from tests.agents.test_openai_compatible import _request
 from tests.manager.test_execution_baseline import Setup, authorize, setup
 from tests.orchestration.test_runner import _definitions
 from tests.recovery.test_authorization import make_plan
+from tests.recovery.test_inherited_reapply_inputs import inherited_input
 
 
 @pytest.mark.parametrize("role", [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER])
@@ -361,6 +367,67 @@ def test_coder_reapply_deduplicates_complete_patch_when_recovery_source_is_prese
             task,
             verifier=resolver,
         )
+
+
+def test_scheduled_inherited_patch_references_full_reapply_baseline(tmp_path: Path) -> None:
+    f = setup(tmp_path)
+    source = f.worktree.path / "src/app.py"
+    source.write_text(source.read_text() + "\nDATA = '" + "x" * 400_000 + "'\n")
+    baseline_plan = f.service.propose(f.target, input_mode=BaselineInputMode.CODER_REAPPLY)
+    binding = f.service.execute(baseline_plan.plan_sha256, authority=authorize(baseline_plan))
+    task = f.collector.facts.task
+    resolver = StoredCoderExecutionInputResolver(f.service.store)
+    complete = resolver.required_context(resolver.current(task, implementation=None, progress=None))
+    assert complete is not None
+    patch = complete.split("完整旧补丁:\n", 1)[1]
+    original = make_plan(tmp_path / "scheduled-recovery")
+    plan = RecoveryPlan.create(
+        **{
+            **original.to_wire(),
+            "input_mode": "coder_reapply",
+            "capture": CapturedChanges.from_capture(
+                replace(original.capture.to_capture(), patch=patch.encode())
+            ),
+            "inherited_reapply_inputs": (inherited_input(body="old complete patch\n"),),
+        }
+    )
+    decision_sha256 = "f" * 64
+    contexts = InMemoryContextStore()
+    context = BaselineRunContextBuilder(
+        FileRunContextBuilder(
+            f.repository,
+            sources=scheduled_reapply_context_sources(plan, decision_sha256, 0),
+            budget=ContextBudget(max_input_tokens=256_000, reserved_output_tokens=4_000),
+        ),
+        contexts,
+        resolver,
+    ).build(
+        task,
+        _definitions()[AgentRole.CODER],
+        attempt=1,
+        candidate_revision=binding.execution_source_revision,
+    )
+    baseline_section = next(
+        section for section in context.sections if section.name == "execution.baseline"
+    )
+    value = parse_execution_baseline_context(baseline_section.content)
+    assert isinstance(value, ScheduledBaselineReferenceContext)
+    assert value.schedule_sha256 == decision_sha256
+    assert value.retained_patch == binding.retained_patch
+    assert context.budget.used_input_tokens < 256_000
+    validate_scheduled_reapply_context(plan, decision_sha256, 0, context)
+    request = _request(
+        AgentRole.CODER,
+        source_revision=binding.execution_source_revision,
+        context_manifest_id=context.context_id,
+    ).model_copy(
+        update={
+            "task_id": task.id,
+            "execution_baseline_sha256": binding.binding_sha256,
+            "execution_base_ref": binding.execution_base_ref,
+        }
+    )
+    assert execution_baseline_from_context(context, request, task, verifier=resolver) == binding
 
 
 def test_historical_v1_body_and_finalized_context_stay_unchanged(tmp_path: Path) -> None:

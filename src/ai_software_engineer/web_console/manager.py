@@ -13,6 +13,7 @@ from ai_software_engineer.agents.structured import StructuredModelError
 from ai_software_engineer.context.ports import ContextBudgetExceeded
 from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
+    DeliveryResolutionKind,
     DeliveryWaitHandling,
     DeliveryWaitInvestigation,
     HandleDeliveryWait,
@@ -79,6 +80,8 @@ from .models import (
     ConsoleApprovalRequest,
     ConsoleCommandResult,
     ConsoleIntent,
+    ConsoleOperation,
+    ConsoleOperationStatus,
     ContinueDeliveryIntent,
     CreateProjectIntent,
     CreateRequirementIntent,
@@ -97,6 +100,7 @@ from .models import (
     ResumeExecutionBaselineIntent,
     UpdateRequirementIntent,
 )
+from .store import ConsoleOperationStore
 
 
 class TeamConsoleHost(Protocol):
@@ -160,10 +164,26 @@ class TeamConsoleHost(Protocol):
 class ManagerConsoleAdapter:
     """Keep checkpoint, approval and recovery mechanics behind one intent interface."""
 
-    def __init__(self, host: TeamConsoleHost) -> None:
+    def __init__(
+        self, host: TeamConsoleHost, *, operation_store: ConsoleOperationStore | None = None
+    ) -> None:
         self._host = host
+        self._operation_store = operation_store
 
-    def execute(self, intent: ConsoleIntent) -> ConsoleCommandResult:
+    def execute_operation(self, operation: ConsoleOperation) -> ConsoleCommandResult:
+        """Use only the durable, claimed Console Operation as human intent provenance."""
+        operation.validate_integrity()
+        if operation.status is not ConsoleOperationStatus.RUNNING:
+            raise ConsoleCommandRejected("COMMAND_REJECTED", "工程决定缺少当前操作记录")
+        if self._operation_store is None:
+            return self.execute(operation.intent)
+        if self._operation_store.get(operation.operation_id) != operation:
+            raise ConsoleCommandRejected("COMMAND_REJECTED", "工程决定的操作记录已变化")
+        return self.execute(operation.intent, operation=operation)
+
+    def execute(
+        self, intent: ConsoleIntent, *, operation: ConsoleOperation | None = None
+    ) -> ConsoleCommandResult:
         try:
             if isinstance(intent, CreateProjectIntent):
                 project = self._host.create_project(
@@ -496,6 +516,21 @@ class ManagerConsoleAdapter:
                         next_action=proof.next_action,
                         engineering_wait_investigation=proof,
                     )
+                if intent.resolution_kind is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT:
+                    if operation is None or operation.intent != intent:
+                        raise ConsoleCommandRejected(
+                            "COMMAND_REJECTED", "恢复输入决定必须来自当前操作记录"
+                        )
+                    authorization_reference = (
+                        "web-console-operation:"
+                        + operation.operation_id
+                        + ":"
+                        + operation.intent_sha256
+                        + ":"
+                        + operation.operation_sha256
+                    )
+                else:
+                    authorization_reference = None
                 resolution = self._host.resolve_delivery_wait(
                     ResolveDeliveryWait.model_validate(
                         {
@@ -503,6 +538,7 @@ class ManagerConsoleAdapter:
                             "resolution_kind": intent.resolution_kind,
                             "proof_sha256": intent.proof_sha256,
                             "submitted_at": datetime.now(UTC),
+                            "authorization_reference": authorization_reference,
                         }
                     ),
                     project_id=intent.project_id,

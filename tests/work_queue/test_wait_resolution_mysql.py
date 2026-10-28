@@ -36,6 +36,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
     DeliveryResolutionKind,
     OriginalInvocationAuthority,
+    PreContextRecoveryInputEvidence,
     StaticQaMissingEntryEvidence,
     VerificationRetryEvidence,
     VerifierPreparationEvidence,
@@ -209,12 +210,18 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
     role = variant[0] if isinstance(variant, tuple) else variant
     static_qa = isinstance(variant, tuple) and variant[1] in {"STATIC_QA", "STATIC_QA_RECLAIMED"}
     classification: Literal[
-        "PLATFORM_BUG", "EXECUTION_UNCERTAIN", "NONTRANSIENT_INFRA", "ENVIRONMENT_UNAVAILABLE"
+        "PLATFORM_BUG",
+        "EXECUTION_UNCERTAIN",
+        "NONTRANSIENT_INFRA",
+        "ENVIRONMENT_UNAVAILABLE",
+        "CONTEXT_CAPACITY",
     ] = (
         "ENVIRONMENT_UNAVAILABLE"
         if static_qa
         else "NONTRANSIENT_INFRA"
         if isinstance(variant, tuple) and variant[1] == "NONTRANSIENT_INFRA"
+        else "CONTEXT_CAPACITY"
+        if isinstance(variant, tuple) and variant[1] == "CONTEXT_CAPACITY"
         else "PLATFORM_BUG"
         if isinstance(variant, tuple) and variant[1] == "PLATFORM_BUG"
         else "EXECUTION_UNCERTAIN"
@@ -441,6 +448,46 @@ def test_policy_wait_resolution_rejects_a_valid_admission_for_different_policy(
         waiting.queue.resolve_wait(_policy_resolution(waiting, drift=True))
     assert waiting.resolution_events() == 0
     assert waiting.queue.get(waiting.step.work_item.id).status is WorkItemStatus.WAITING_HUMAN
+
+
+@pytest.mark.parametrize("waiting", [(AgentRole.CODER, "CONTEXT_CAPACITY")], indirect=True)
+def test_pre_context_schedule_requires_real_claim_and_consumes_without_budget_refund(
+    waiting: WaitingFixture,
+) -> None:
+    task = waiting.repository.get(waiting.step.boundary.task_id)
+    claim = waiting.queue.original_claim(waiting.claim.lease.id)
+    base = waiting.resolution(DeliveryResolutionKind.RESUME_UNINVOKED)
+    original = PreContextRecoveryInputEvidence(
+        plan_sha256="a" * 64,
+        authorization_sha256="b" * 64,
+        task_record_sha256="c" * 64,
+        dispatch_sha256="d" * 64,
+        seed_record_sha256="e" * 64,
+        source_inventory_sha256="f" * 64,
+        original_claim_sha256=digest(claim.to_wire()),
+        original_lease_id=claim.lease.id,
+        worktree_head_revision=SOURCE,
+    )
+    resolution = reseal(
+        base,
+        resolution_kind=DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT,
+        authorization_reference="test-human-resolution:pre-context",
+        recovery_input_schedule_sha256="1" * 64,
+        pre_context_recovery_input=original.to_wire(),
+    )
+    assert waiting.queue.consumed_recovery_input_resolution(task.id) is None
+    stale = original.model_copy(update={"original_claim_sha256": "9" * 64})
+    with pytest.raises(QueueConflict, match="原 claim"):
+        waiting.queue.resolve_wait(reseal(resolution, pre_context_recovery_input=stale.to_wire()))
+    assert waiting.resolution_events() == 0
+    ready = waiting.queue.resolve_wait(resolution)
+    assert ready.id == waiting.step.work_item.id
+    assert ready.dispatch_sequence == waiting.claim.work_item.dispatch_sequence + 1
+    assert ready.attempt == task.attempts == 1
+    assert waiting.repository.get(task.id) == task
+    assert waiting.queue.consumed_recovery_input_resolution(task.id) == resolution
+    assert waiting.queue.resolve_wait(resolution) == ready
+    assert waiting.resolution_events() == 1
 
 
 @pytest.mark.parametrize("waiting", [AgentRole.QA], indirect=True)

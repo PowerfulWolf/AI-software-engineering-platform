@@ -1,6 +1,10 @@
 """Receipt-bound seed application and at-most-once Coder invocation admission."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ai_software_engineer.agents import AgentRequest
 from ai_software_engineer.agents.continuation import ContinuationExecutionUncertain
@@ -23,6 +27,14 @@ from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecor
 from ai_software_engineer.redaction import source_inspection_scope
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
+if TYPE_CHECKING:
+    from ai_software_engineer.domain.event import StateEvent
+
+if TYPE_CHECKING:
+    from ai_software_engineer.manager.recovery_input_schedule import (
+        RecoveryInputResolutionReader,
+    )
+
 
 class RecoverySeedService(ClaimedRecoveryInvocationHistory):
     def __init__(
@@ -37,9 +49,16 @@ class RecoverySeedService(ClaimedRecoveryInvocationHistory):
         invocations: KnowledgeRecordStore,
         artifacts: ArtifactStore,
         guard: WorkerExecutionGuard | None = None,
+        schedule_queue: RecoveryInputResolutionReader | None = None,
+        schedule_records: KnowledgeRecordStore | None = None,
+        task_events: Callable[[str], tuple[StateEvent, ...]] | None = None,
     ) -> None:
         self.store, self.sealing, self.manager = store, sealing, manager
         self.dispatch, self.permissions, self.contexts = dispatch, permissions, contexts
+        if (schedule_queue is None) != (schedule_records is None):
+            raise ValueError("scheduled recovery input requires queue and decision store together")
+        self.schedule_queue, self.schedule_records = schedule_queue, schedule_records
+        self.task_events = task_events
         super().__init__(
             dispatch=dispatch,
             permissions=permissions,
@@ -151,7 +170,73 @@ class RecoverySeedService(ClaimedRecoveryInvocationHistory):
             or context.attempt != request.attempt
         ):
             raise RecoveryRejected("Coder context differs from authorized seed")
-        validate_reapply_context(plan, context)
+        schedule = None
+        if self.schedule_queue is not None and self.schedule_records is not None:
+            from ai_software_engineer.manager.recovery_input_schedule import (
+                require_consumed_recovery_input_schedule,
+            )
+
+            schedule = require_consumed_recovery_input_schedule(
+                self.schedule_queue,
+                self.schedule_records,
+                plan,
+                self.dispatch,
+                self.dispatch.task,
+            )
+        if schedule is None:
+            validate_reapply_context(plan, context)
+        else:
+            from ai_software_engineer.recovery.bounded_input import (
+                accepted_reapply_source_index,
+                validate_scheduled_reapply_context,
+            )
+
+            # The seed is normally the first bounded Coder Run.  If a restart
+            # reaches this gate after accepted progress, selecting source 0
+            # would silently replay an already consumed source.  Derive the
+            # selection from queue publications plus Task checkpoint events;
+            # without an event reader we fail closed once any accepted record
+            # exists instead of guessing from mutable worktree state.
+            lease = self.worker().lease
+            if lease is None:
+                raise RecoveryRejected("scheduled recovery input has no active Worker claim")
+            publications = lease.queue.accepted(request.task_id)
+            if self.task_events is None:
+                if publications:
+                    raise RecoveryRejected(
+                        "scheduled recovery input requires a durable Task event reader"
+                    )
+                selected_index = 0
+            else:
+                lineage = lease.queue
+                has_lineage = all(
+                    callable(getattr(lineage, name, None))
+                    for name in ("step", "original_claim")
+                )
+                if publications and not has_lineage:
+                    raise RecoveryRejected(
+                        "scheduled recovery input requires immutable queue lineage"
+                    )
+                retired_reader = getattr(lineage, "retired_rejected_outputs", None)
+                retired = (
+                    retired_reader(request.task_id)
+                    if callable(retired_reader)
+                    else ()
+                )
+                selected_index = accepted_reapply_source_index(
+                    plan,
+                    schedule.schedule_sha256,
+                    publications,
+                    self.task_events(request.task_id),
+                    self.artifacts,
+                    self.contexts,
+                    retired_rejected_outputs=retired,
+                    lineage=lineage if has_lineage else None,
+                )
+
+            validate_scheduled_reapply_context(
+                plan, schedule.schedule_sha256, selected_index, context
+            )
         self.verify(receipt)
         try:
             self.store.get_invocation(plan.plan_sha256)

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, Self, runtime_checkable
 from pydantic import Field, model_validator
 
 from ai_software_engineer.context.models import ContextBundle
+from ai_software_engineer.domain.artifact import Sha256
 from ai_software_engineer.domain.execution_baseline import (
     BaselineInputMode,
     ExecutionBaselineBinding,
@@ -114,6 +115,29 @@ class ReappliedBaselineReferenceContext(DomainModel):
         return self
 
 
+class ScheduledBaselineReferenceContext(DomainModel):
+    """Full retained patch is trusted in store and scheduled across Coder Contexts."""
+
+    schema_version: Literal["v4"] = "v4"
+    binding: ExecutionBaselineBinding
+    instructions: NonEmptyStr
+    patch_input: Literal["scheduled_recovery_source"] = "scheduled_recovery_source"
+    schedule_sha256: Sha256
+    complete_patch_uri: NonEmptyStr
+    retained_patch: RetainedExecutionPatch
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> Self:
+        self.binding.validate_integrity()
+        if (
+            self.binding.input_mode is not BaselineInputMode.CODER_REAPPLY
+            or self.retained_patch != self.binding.retained_patch
+            or not self.complete_patch_uri.startswith("recovery://")
+        ):
+            raise ValueError("分轮重应用基线引用与原完整补丁不一致")
+        return self
+
+
 @runtime_checkable
 class ExecutionBaselineContextVerifier(Protocol):
     """Trusted complete-store validation, never a model-supplied permission."""
@@ -124,7 +148,10 @@ class ExecutionBaselineContextVerifier(Protocol):
 def parse_execution_baseline_context(
     content: str,
 ) -> (
-    ExecutionBaselineContext | PreservedWorktreeBaselineContext | ReappliedBaselineReferenceContext
+    ExecutionBaselineContext
+    | PreservedWorktreeBaselineContext
+    | ReappliedBaselineReferenceContext
+    | ScheduledBaselineReferenceContext
 ):
     """Read the immutable v1/v2/v3 forms; an invalid version never falls back."""
     value = json.loads(content)
@@ -132,6 +159,8 @@ def parse_execution_baseline_context(
         return PreservedWorktreeBaselineContext.model_validate(value)
     if isinstance(value, dict) and value.get("schema_version") == "v3":
         return ReappliedBaselineReferenceContext.model_validate(value)
+    if isinstance(value, dict) and value.get("schema_version") == "v4":
+        return ScheduledBaselineReferenceContext.model_validate(value)
     return ExecutionBaselineContext.model_validate(value)
 
 
@@ -202,6 +231,44 @@ def execution_baseline_from_context(
             or patch.sha256 != value.retained_patch.sha256
         ):
             raise ValueError("重应用基线引用与完整 recovery.patch 不一致")
+    if isinstance(value, ScheduledBaselineReferenceContext):
+        from ai_software_engineer.recovery.bounded_input import RecoveryInputManifest
+
+        schedule_sections = tuple(
+            item for item in context.sections if item.name == "source:recovery.input_schedule"
+        )
+        if len(schedule_sections) != 1 or schedule_sections[0].truncated:
+            raise ValueError("分轮重应用基线缺少唯一完整的调度清单")
+        schedule = schedule_sections[0]
+        if hashlib.sha256(schedule.content.encode()).hexdigest() != schedule.sha256:
+            raise ValueError("分轮重应用清单摘要不一致")
+        manifest = RecoveryInputManifest.model_validate_json(schedule.content)
+        current_refs = tuple(
+            ref for ref in manifest.sources if ref.source_id == "recovery.patch"
+        )
+        if (
+            manifest.decision_sha256 != value.schedule_sha256
+            or len(current_refs) != 1
+            or current_refs[0].uri != value.complete_patch_uri
+            or current_refs[0].sha256 != value.retained_patch.sha256
+            or current_refs[0].bytes != value.retained_patch.bytes
+        ):
+            raise ValueError("分轮重应用基线与完整旧补丁清单不一致")
+        selected = manifest.sources[manifest.selected_index]
+        selected_sections = tuple(
+            item for item in context.sections if item.name == "source:" + selected.source_id
+        )
+        if len(selected_sections) != 1 or selected_sections[0].truncated:
+            raise ValueError("分轮重应用基线缺少所选完整补丁")
+        selected_section = selected_sections[0]
+        body = selected_section.content.encode("utf-8")
+        if (
+            selected_section.uri != selected.uri
+            or len(body) != selected.bytes
+            or hashlib.sha256(body).hexdigest() != selected.sha256
+            or selected_section.sha256 != selected.sha256
+        ):
+            raise ValueError("分轮重应用基线的所选补丁不完整")
     if verifier is not None:
         verifier.require_current(baseline, task)
     return baseline

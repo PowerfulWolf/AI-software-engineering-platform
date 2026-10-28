@@ -630,6 +630,7 @@ class CodexCliAgentAdapter:
         runner: CodexCommandRunner | None = None,
         initial_workspace_admission: InitialWorkspaceAdmission | None = None,
         candidate_commit_skill: CandidateCommitSkill | None = None,
+        candidate_precommit_validator: Callable[[AgentRequest], None] | None = None,
         execution_guard: ExecutionGuard | None = None,
         candidate_source: BoundCandidateSource | None = None,
         interruption_control: CoderInterruptionControl | None = None,
@@ -679,6 +680,7 @@ class CodexCliAgentAdapter:
         self._candidate_commit = candidate_commit_skill or GitCandidateCommitSkill(
             root, environment=environment
         )
+        self._candidate_precommit_validator = candidate_precommit_validator
         self._requests: dict[str, AgentRequest] = {}
         self._results: dict[str, AgentResult] = {}
 
@@ -1396,6 +1398,8 @@ class CodexCliAgentAdapter:
         reported = tuple(sorted(file.path for file in artifact.content.changed_files))
         if changed != reported:
             raise WorkspacePolicyError("Coder draft changed_files do not match the dirty worktree")
+        if self._candidate_precommit_validator is not None:
+            self._candidate_precommit_validator(request)
         committed = self._candidate_commit.finalize(
             CandidateCommitRequest(
                 task_id=request.task_id,

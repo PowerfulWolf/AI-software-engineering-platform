@@ -8,7 +8,7 @@ from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime
 from threading import Condition, Event, Lock, Thread, current_thread
 from time import monotonic
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic, capture_model_calls
 from ai_software_engineer.recovery.preparation_progress import (
@@ -36,6 +36,11 @@ class ConsoleCommandRejected(RuntimeError):
 
 class ManagerConsolePort(Protocol):
     def execute(self, intent: ConsoleIntent) -> ConsoleCommandResult: ...
+
+
+@runtime_checkable
+class OperationAwareManagerConsolePort(Protocol):
+    def execute_operation(self, operation: ConsoleOperation) -> ConsoleCommandResult: ...
 
 
 Clock = Callable[[], datetime]
@@ -157,7 +162,10 @@ class ProjectConsole:
                     running, self._preparation_store.append, clock=self._clock
                 ),
             ):
-                result = self._executor.execute(running.intent)
+                if isinstance(self._executor, OperationAwareManagerConsolePort):
+                    result = self._executor.execute_operation(running)
+                else:
+                    result = self._executor.execute(running.intent)
         except ServicePauseRequested as error:
             return self._store.fail(
                 running.operation_id,

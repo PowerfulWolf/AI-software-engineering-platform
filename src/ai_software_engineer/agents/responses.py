@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -176,6 +176,7 @@ class ResponsesAgentAdapter:
         max_turns: int = 40,
         max_tool_calls: int = 100,
         candidate_commit_skill: CandidateCommitSkill | None = None,
+        candidate_precommit_validator: Callable[[AgentRequest], None] | None = None,
         execution_guard: ExecutionGuard | None = None,
         initial_workspace_admission: InitialWorkspaceAdmission | None = None,
         interruption_control: CoderInterruptionControl | None = None,
@@ -220,6 +221,7 @@ class ResponsesAgentAdapter:
         self._max_turns = max_turns
         self._max_tool_calls = max_tool_calls
         self._candidate_commit = candidate_commit_skill or GitCandidateCommitSkill(root)
+        self._candidate_precommit_validator = candidate_precommit_validator
         self._requests: dict[str, AgentRequest] = {}
         self._results: dict[str, AgentResult] = {}
 
@@ -765,6 +767,7 @@ class ResponsesAgentAdapter:
                     initial_head,
                     artifact,
                     self._candidate_commit,
+                    self._candidate_precommit_validator,
                 )
                 _validate_git_result(
                     self._workspace_root,
@@ -1090,6 +1093,7 @@ def _finalize_coder_candidate(
     initial_head: str,
     artifact: Artifact,
     skill: CandidateCommitSkill,
+    candidate_precommit_validator: Callable[[AgentRequest], None] | None = None,
 ) -> Artifact:
     if request.work_slice is not None:
         validate_coder_slice_output(request.work_slice, artifact)
@@ -1103,6 +1107,8 @@ def _finalize_coder_candidate(
     if artifact.source_revision != initial_head or artifact.content.commit_sha != initial_head:
         raise ValueError("Coder draft does not bind the immutable source revision")
     reported = tuple(sorted(item.path for item in artifact.content.changed_files))
+    if candidate_precommit_validator is not None:
+        candidate_precommit_validator(request)
     result = skill.finalize(
         CandidateCommitRequest(
             task_id=request.task_id,

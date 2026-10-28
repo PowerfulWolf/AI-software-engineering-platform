@@ -954,6 +954,73 @@ if (
     raise RuntimeError("local stop capability is missing from the investigation model")
 resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"].append(local_stop_guard)
 
+recovery_input_resolution_guard = {
+    "if": {"properties": {"resolution_kind": {"const": "SCHEDULE_RECOVERY_INPUT"}}},
+    "then": {
+        "required": [
+            "authorization_reference",
+            "recovery_input_schedule_sha256",
+            "pre_context_recovery_input",
+            "operator_principal",
+        ],
+        "properties": {
+            "authorization_source": {"const": "engineering_operator_decision"},
+            "authorization_reference": {
+                "type": "string",
+                "pattern": (
+                    r"^web-console-operation:operation_[a-f0-9]{32}:"
+                    r"[a-f0-9]{64}:[a-f0-9]{64}$"
+                ),
+            },
+            "recovery_input_schedule_sha256": {"type": "string"},
+            "pre_context_recovery_input": {"type": "object"},
+            "engineering_admission": {"type": "null"},
+            "retry_failure": {"type": "null"},
+            "retry_cause": {"type": "null"},
+        },
+    },
+    "else": {
+        "properties": {
+            "authorization_reference": {"type": "null"},
+            "recovery_input_schedule_sha256": {"type": "null"},
+            "pre_context_recovery_input": {"type": "null"},
+        }
+    },
+}
+recovery_input_investigation_guard = {
+    "if": {
+        "properties": {
+            "permitted_resolutions": {
+                "contains": {"const": "SCHEDULE_RECOVERY_INPUT"}
+            }
+        }
+    },
+    "then": {
+        "required": ["pre_context_recovery_input"],
+        "properties": {
+            "pre_context_recovery_input": {"type": "object"},
+            "missing": {"maxItems": 0},
+            "disposition": {
+                "properties": {
+                    "facts": {
+                        "properties": {
+                            "role": {"const": "coder"},
+                            "classification": {"const": "CONTEXT_CAPACITY"},
+                        }
+                    }
+                }
+            },
+        },
+    },
+    "else": {"properties": {"pre_context_recovery_input": {"type": "null"}}},
+}
+resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
+    recovery_input_resolution_guard
+)
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"].append(
+    recovery_input_investigation_guard
+)
+
 if not wait_only:
     (
         Path(__file__).resolve().parents[1] / "schemas/engineering-wait-resolution.schema.json"
@@ -963,7 +1030,7 @@ if not wait_only:
 
 if wait_only:
     # Nested Console/settlement schemas have additional hand-written guards.
-    # Copy only the new static-QA definitions and guards from the canonical
+    # Copy only the new static-QA and recovery-input definitions and guards from the canonical
     # schema; full model regeneration would silently erase those guards.
     canonical = resolution_schema["$defs"]
     assert isinstance(canonical, dict)
@@ -1003,12 +1070,20 @@ if wait_only:
         expected_previous = [
             value
             for value in canonical["DeliveryResolutionKind"]["enum"]
-            if value != "STATIC_QA_MISSING_ENTRY"
+            if value not in {"STATIC_QA_MISSING_ENTRY", "SCHEDULE_RECOVERY_INPUT"}
         ]
-        if kind["enum"] not in (expected_previous, canonical["DeliveryResolutionKind"]["enum"]):
+        allowed_enums = (
+            expected_previous,
+            [*expected_previous, "STATIC_QA_MISSING_ENTRY"],
+            canonical["DeliveryResolutionKind"]["enum"],
+        )
+        if kind["enum"] not in allowed_enums:
             raise RuntimeError(f"{filename} has an unexpected resolution enum")
         kind["enum"] = canonical["DeliveryResolutionKind"]["enum"]
         definitions["StaticQaMissingEntryEvidence"] = canonical["StaticQaMissingEntryEvidence"]
+        definitions["PreContextRecoveryInputEvidence"] = canonical[
+            "PreContextRecoveryInputEvidence"
+        ]
         for model_name in ("DeliveryResolution", "DeliveryWaitInvestigation"):
             if model_name not in definitions:
                 continue
@@ -1016,8 +1091,13 @@ if wait_only:
             model["properties"]["static_qa_missing_entry"] = canonical[model_name]["properties"][
                 "static_qa_missing_entry"
             ]
+            model["properties"]["pre_context_recovery_input"] = canonical[model_name][
+                "properties"
+            ]["pre_context_recovery_input"]
             guards = model.setdefault("allOf", [])
             if model_name == "DeliveryResolution":
+                for name in ("authorization_reference", "recovery_input_schedule_sha256"):
+                    model["properties"][name] = canonical[model_name]["properties"][name]
                 for index, guard in enumerate(guards):
                     if (
                         guard.get("if", {})
@@ -1032,10 +1112,14 @@ if wait_only:
                     raise RuntimeError(f"{filename} lost the verifier preparation guard")
                 if static_guard not in guards:
                     guards.append(static_guard)
+                if recovery_input_resolution_guard not in guards:
+                    guards.append(recovery_input_resolution_guard)
             else:
                 for guard in investigation_guards:
                     if guard not in guards:
                         guards.append(guard)
+                if recovery_input_investigation_guard not in guards:
+                    guards.append(recovery_input_investigation_guard)
                 if filename not in (
                     "stopped-failure-budget-settlement.schema.json",
                     "stopped-unknown-budget-settlement.schema.json",

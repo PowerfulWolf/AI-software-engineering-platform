@@ -1612,6 +1612,7 @@ const engineeringResolutionLabels = {
   RETRY_KNOWLEDGE_PREPARATION: "扩大知识准备窗口并继续",
   RETRY_REJECTED_KNOWLEDGE_PREPARATION: "重新进行知识准备并继续",
   RETRY_REJECTED_WORKSPACE_ADMISSION: "修复工作区准入后继续原开发",
+  SCHEDULE_RECOVERY_INPUT: "批准完整补丁分轮输入并继续原开发",
 };
 const engineeringAuthorizationLabels = {
   engineering_operator_decision: "工程负责人明确决定",
@@ -2077,10 +2078,17 @@ function engineeringWaitDecision(request, step, proof) {
       verifier_preparation: decision.verifier_preparation},
     {static_qa_missing_entry: proof.static_qa_missing_entry,
       verifier_preparation: proof.verifier_preparation});
+  const matchesRecoveryInput = decision => decision?.resolution_kind !== "SCHEDULE_RECOVERY_INPUT" ||
+    decision.authorization_source === "engineering_operator_decision" &&
+    /^[a-f0-9]{64}$/.test(decision.recovery_input_schedule_sha256 || "") &&
+    typeof decision.authorization_reference === "string" &&
+    sameEngineeringWaitProofFacts(
+      {pre_context_recovery_input: decision.pre_context_recovery_input},
+      {pre_context_recovery_input: proof.pre_context_recovery_input});
   if (handling?.status === "RESOLVED" && handling.resolution?.proof_sha256 === handling.investigation.proof_sha256 &&
       engineeringResolutionLabels[handling.resolution.resolution_kind] && matchesKnowledge(handling.resolution) &&
       matchesRejected(handling.resolution) && matchesRejectedKnowledge(handling.resolution) && matchesWorkspace(handling.resolution) &&
-      matchesStaticQa(handling.resolution)) return handling.resolution;
+      matchesStaticQa(handling.resolution) && matchesRecoveryInput(handling.resolution)) return handling.resolution;
   const operation = operations.find(item => item.status === "SUCCEEDED" &&
     operationAction(item) === "RESOLVE_DELIVERY_WAIT" && sameEngineeringWaitIntent(item.intent, bound) &&
     operationResult(item)?.engineering_wait_resolution?.proof_sha256 === proof.proof_sha256 &&
@@ -2088,7 +2096,8 @@ function engineeringWaitDecision(request, step, proof) {
     matchesRejected(operationResult(item).engineering_wait_resolution) &&
     matchesRejectedKnowledge(operationResult(item).engineering_wait_resolution) &&
     matchesWorkspace(operationResult(item).engineering_wait_resolution) &&
-    matchesStaticQa(operationResult(item).engineering_wait_resolution));
+    matchesStaticQa(operationResult(item).engineering_wait_resolution) &&
+    matchesRecoveryInput(operationResult(item).engineering_wait_resolution));
   return operationResult(operation)?.engineering_wait_resolution || null;
 }
 function engineeringWaitCanResolve(request, step, proof) {
@@ -2106,7 +2115,11 @@ function engineeringWaitCanResolve(request, step, proof) {
       (kind !== "RETRY_REJECTED_KNOWLEDGE_PREPARATION" || matchingRejectedKnowledgePreparationEvidence(request, step, proof)) &&
       (kind !== "RETRY_REJECTED_WORKSPACE_ADMISSION" || matchingRejectedWorkspaceAdmissionEvidence(request, step, proof)) &&
       (kind !== "RETRY_REJECTED_CODER_OUTPUT" || matchingRejectedCoderOutputEvidence(request, step, proof)) &&
-      (kind !== "STATIC_QA_MISSING_ENTRY" || matchingStaticQaMissingEntryEvidence(request, step, proof)));
+      (kind !== "STATIC_QA_MISSING_ENTRY" || matchingStaticQaMissingEntryEvidence(request, step, proof)) &&
+      (kind !== "SCHEDULE_RECOVERY_INPUT" ||
+        step.role === "coder" && step.wait_disposition?.facts?.classification === "CONTEXT_CAPACITY" &&
+        /^[a-f0-9]{64}$/.test(proof.pre_context_recovery_input?.plan_sha256 || "") &&
+        /^[a-f0-9]{64}$/.test(proof.pre_context_recovery_input?.source_inventory_sha256 || "")));
 }
 async function submitEngineeringWaitOperation(intent, originalLocalStop = null) {
   const request = requestById(intent.delivery_id);

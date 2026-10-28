@@ -238,7 +238,7 @@ def _production_console_app(
         pause_control = ServicePauseControl(persist_stop=persist_pause)
         console = ProjectConsole(
             store=store,
-            executor=ManagerConsoleAdapter(host),
+            executor=ManagerConsoleAdapter(host, operation_store=store),
             operation_scope=owned_processes.operation_scope,
             pause_control=pause_control,
             preparation_store=open_preparation_progress_store(

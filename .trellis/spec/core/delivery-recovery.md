@@ -1,5 +1,60 @@
 # Explicit delivery recovery — T044
 
+## Pre-Context complete-source scheduling (2026-10-28)
+
+The exceptional bounded reapply path applies only to a verified Coder capacity wait
+whose original claimed Run has **no Context and no provider invocation start**. The
+approved `RecoveryPlan` must contain the full current retained patch and each inherited
+patch. A separate `SCHEDULE_RECOVERY_INPUT` engineering resolution records the operator,
+exact Plan/Task/dispatch/seed/wait/claim identities and complete ordered source digests.
+The queue consumes that resolution through its normal owner-fenced `WAIT_RESOLVED` event,
+keeps the same Task and WorkItem, advances the dispatch generation and does not refund or
+increment the original work attempt. Missing queue consumption, mismatched decision or
+tampered source bytes blocks the next Run before model admission.
+
+Production Context assembly removes the old all-source recovery sections only after
+the consumed decision is verified. It then builds one required complete source and a
+manifest that names all sources; no source body is truncated or represented only by a
+digest to the Coder. `RecoverySeedService.authorize` checks the selected first source
+under the existing execution lock before its at-most-once first invocation record.
+Subsequent Coder Runs derive the next index from accepted progress and Task events, not
+from model statements, file presence or the mutable worktree alone. The final candidate
+commit gate rereads this history and the current sealed Context. An invalid attempt
+preserves the existing draft and history for explicit recovery; it does not manufacture
+progress, a candidate, QA or Review.
+
+The Task's `target_base_revision` remains the exact approved Git commit. This path
+does not migrate it to a newer platform `main`. Once QA and Review accept the candidate,
+integration into newer `main` needs its own clean branch and regression evidence for
+the merged tree. Existing Requirement, ProductSpec, Design, Plan and all old execution
+facts remain unchanged. Rollback disables further schedule decisions but retains the
+versioned records and compatible Context readers so already scheduled Tasks remain
+auditable.
+
+### Schedule cardinality and queue lineage guards
+
+`RecoveryInputScheduleDecision.sources` is exactly three entries: the two ordered inherited
+patches followed by `recovery.patch`. The Pydantic contract and regenerated
+`schemas/recovery-input-schedule.schema.json` both use `minItems=maxItems=3`; a two-source
+record must fail at persistence rather than reach Context activation. Every accepted progress
+publication is checked against its Task checkpoint (`publication.checkpoint_sequence ==
+event.attempt == artifact.content.checkpoint_sequence`) and, when the queue reader is
+available, against the immutable `QueuedRoleStep` and original `QueueClaim` for its
+`work_item_id`/`lease_id` (task, role, attempt, checkpoint, dispatch generation, source
+revision and lease/assignment identity). Missing queue lineage is a fail-closed admission
+error; it is never inferred from a worktree or artifact digest.
+
+`RecoverySeedService.authorize` receives a fresh read-only Task-event callback for scheduled
+recovery. It derives the selected source with `accepted_reapply_source_index` under the
+current Worker claim. If accepted publications already exist but no durable event reader is
+available, admission is rejected instead of replaying source zero. The callback opens and
+closes a fresh MySQL repository per read so it cannot retain a stale transaction snapshot.
+
+Required regressions: exact-three schedule schema/model rejection; event-attempt/publication
+checkpoint mismatch; queue step/claim lineage mismatch; and first-run seed admission plus
+restart-after-accepted-progress source advancement. These checks do not rewrite prior
+Task, Artifact, event or queue history.
+
 ## Bounded Coder capture across several tracked files (2026-10-26)
 
 `GitWorktreeManager.capture_changes()` and `capture_legacy_changes()` both allow

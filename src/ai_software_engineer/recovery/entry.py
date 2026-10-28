@@ -21,6 +21,7 @@ from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.domain import (
     AgentRole,
     ProjectPreparation,
+    StateEvent,
     Task,
     TaskStatus,
     TeamRole,
@@ -1134,6 +1135,18 @@ class NativeRecoveryEntry:
         )
         binding = coordinator.open_coder(dispatch, definitions, recover=target_path.exists())
         contexts = FileContextStore(sidecar / "contexts")
+        from ai_software_engineer.manager.queue_capacity import production_role_queue
+
+        schedule_root = sidecar / "state/delivery-waits"
+
+        def read_task_events(task_id: str) -> tuple[StateEvent, ...]:
+            """Read a fresh Task event snapshot for bounded source selection."""
+            reader = MySqlTaskRepository(dsn)
+            try:
+                return reader.list_events(task_id)
+            finally:
+                reader.close()
+
         seed = RecoverySeedService(
             store=store,
             sealing=sealing,
@@ -1143,6 +1156,17 @@ class NativeRecoveryEntry:
             contexts=contexts,
             invocations=KnowledgeRecordStore(sidecar / "state/invocations"),
             artifacts=FileArtifactStore(sidecar / "artifacts", read_only=True),
+            schedule_queue=(
+                production_role_queue(self.config.require_mysql_dsn(self.environment))
+                if schedule_root.is_dir()
+                else None
+            ),
+            schedule_records=(
+                KnowledgeRecordStore(schedule_root, read_only=True)
+                if schedule_root.is_dir()
+                else None
+            ),
+            task_events=read_task_events,
         )
         if interruption is None:
             seed_record = seed.seed(binding.worktree)

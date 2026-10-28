@@ -865,7 +865,15 @@ class NativeCoderContinuation:
             )
 
             try:
-                require_recorded_session_empty(stop.session_proof, boot_continuity=boot_continuity)
+                if boot_continuity is None:
+                    # Preserve the original one-argument seam for existing
+                    # observers and test doubles; the bridge is only relevant
+                    # when a caller supplies an explicit continuity record.
+                    require_recorded_session_empty(stop.session_proof)
+                else:
+                    require_recorded_session_empty(
+                        stop.session_proof, boot_continuity=boot_continuity
+                    )
             except (OSError, ValueError, OwnedSessionUnknown) as error:
                 raise ContinuationRejected("原执行会话的完整停止状态无法确认") from error
             return

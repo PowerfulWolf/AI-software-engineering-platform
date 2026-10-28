@@ -10,6 +10,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import (
     AwareDatetime,
+    ConfigDict,
     Field,
     StringConstraints,
     TypeAdapter,
@@ -245,6 +246,26 @@ class InspectDeliveryWaitIntent(_DeliveryWaitIntent):
 
 
 class HandleDeliveryWaitIntent(_DeliveryWaitIntent):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "required": ["confirm_local_execution_stopped"],
+                        "properties": {"confirm_local_execution_stopped": {"const": True}},
+                    },
+                    "then": {
+                        "required": ["local_stop_reference"],
+                        "properties": {
+                            "local_stop_reference": {"type": "string"},
+                            "workspace_admission_adapter_contract": {"type": "null"},
+                        },
+                    },
+                    "else": {"properties": {"local_stop_reference": {"type": "null"}}},
+                }
+            ]
+        }
+    )
     action: Literal[ConsoleAction.HANDLE_DELIVERY_WAIT] = ConsoleAction.HANDLE_DELIVERY_WAIT
     workspace_admission_adapter_contract: WorkspaceAdmissionAdapterContract | None = Field(
         default=None, exclude_if=lambda value: value is None

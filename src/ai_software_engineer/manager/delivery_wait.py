@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
+from pydantic import TypeAdapter, ValidationError
+
 from ai_software_engineer.agents.fallback import ModelRouteAttemptStoreError, model_route_root
 from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore, ArtifactStoreError, artifact_digest
@@ -36,6 +38,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     InspectDeliveryWait,
     KnowledgePreparationRetryEvidence,
     OriginalInvocationAuthority,
+    PreContextRecoveryInputEvidence,
     RejectedCoderOutputEvidence,
     RejectedKnowledgePreparationEvidence,
     RejectedWorkspaceAdmissionEvidence,
@@ -96,6 +99,7 @@ from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightCheckpoint,
     DeliveryPreflightReceipt,
 )
+from ai_software_engineer.manager.dispatch import DispatchStoreError
 from ai_software_engineer.manager.engineering_authority import (
     EngineeringAuthority,
     EngineeringAuthorityRejected,
@@ -103,6 +107,13 @@ from ai_software_engineer.manager.engineering_authority import (
 )
 from ai_software_engineer.manager.knowledge_preparation_pause import (
     knowledge_preparation_pause_evidence,
+)
+from ai_software_engineer.manager.recovery_input_schedule import (
+    ConsoleOperationAuthorizationReference,
+    RecoveryInputPlanFacts,
+    RecoveryInputScheduleDecision,
+    get_recovery_input_schedule,
+    inspect_pre_context_recovery_input,
 )
 from ai_software_engineer.manager.rejected_knowledge_preparation import (
     rejected_assessment_for_work,
@@ -140,7 +151,8 @@ from ai_software_engineer.orchestration.continuation_models import (
     ExecutionInterruptionReceipt,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
-from ai_software_engineer.recovery.models import RecoveryScope
+from ai_software_engineer.recovery.bounded_input import complete_reapply_source_refs
+from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope
 from ai_software_engineer.recovery.store import FileRecoveryStore
 from ai_software_engineer.store import TaskRepository
 from ai_software_engineer.work_queue.execution_store import (
@@ -466,6 +478,7 @@ class DeliveryWaitService:
         budget_settlement: StoppedBudgetSettlementService | None = None,
         unknown_budget_settlement: StoppedUnknownBudgetSettlementService | None = None,
         contained_unknown_budget_settlement: ContainedUnknownBudgetSettlementService | None = None,
+        recovery_input_plan_reader: Callable[[Task], RecoveryInputPlanFacts] | None = None,
     ) -> None:
         self.repository, self.queue, self.sidecar_state = repository, queue, sidecar_state
         self.scope = scope
@@ -482,6 +495,7 @@ class DeliveryWaitService:
         self.budget_settlement = budget_settlement
         self.unknown_budget_settlement = unknown_budget_settlement
         self.contained_unknown_budget_settlement = contained_unknown_budget_settlement
+        self.recovery_input_plan_reader = recovery_input_plan_reader
         self.records = KnowledgeRecordStore(sidecar_state / "delivery-waits")
 
     def inspect(self, command: InspectDeliveryWait) -> DeliveryWaitInvestigation:
@@ -741,7 +755,11 @@ class DeliveryWaitService:
             not collector_failed
             and not proof.missing
             and proof.permitted_resolutions
-            and proof.permitted_resolutions != (DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,)
+            and proof.permitted_resolutions
+            not in {
+                (DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,),
+                (DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT,),
+            }
         ):
             try:
                 resolution = self._resolve(
@@ -973,6 +991,25 @@ class DeliveryWaitService:
 
     def _consume_verified_replay(self, resolution: DeliveryResolution) -> None:
         """A sealed unconsumed decision must reopen its exact current file proof."""
+        if resolution.resolution_kind is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT:
+            # The Plan SHA is full length; derive it from the sealed proof, never
+            # from the truncated Task suffix.
+            proof = self.records.get(
+                "wait-investigations", resolution.proof_sha256, DeliveryWaitInvestigation
+            )
+            pre_context = proof.pre_context_recovery_input
+            schedule = (
+                get_recovery_input_schedule(self.records, pre_context.plan_sha256)
+                if pre_context is not None
+                else None
+            )
+            if (
+                schedule is None
+                or schedule.schedule_sha256 != resolution.recovery_input_schedule_sha256
+                or schedule.authorization_reference != resolution.authorization_reference
+                or schedule.work_item_id != resolution.work_item_id
+            ):
+                raise DeliveryWaitRejected("预 Context 工程调度决定缺失或已变化")
         current_item = self.queue.get(resolution.work_item_id)
         paused = resolution.knowledge_pause
         pause_consumed = paused is not None and (
@@ -1038,8 +1075,11 @@ class DeliveryWaitService:
         self._require_proof_binding(proof, command)
         if command.resolution_kind not in proof.permitted_resolutions or proof.missing:
             raise DeliveryWaitRejected(proof.next_action)
-        if automatic and command.resolution_kind is DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY:
-            raise DeliveryWaitRejected("静态 QA 缺项恢复必须由工程责任人作精确决定")
+        if automatic and command.resolution_kind in {
+            DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,
+            DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT,
+        }:
+            raise DeliveryWaitRejected("此恢复必须由工程责任人作精确决定")
         item, step, task = self._current(command)
         guard = WorkerExecutionGuard()
         try:
@@ -1112,6 +1152,76 @@ class DeliveryWaitService:
                         retry_cause = receipt.cause
                         if receipt.cause == "provider_transient":
                             retry_failure = self._retry_failure(receipt)
+                schedule_sha256 = None
+                effective_authorization_reference: str | None = command.authorization_reference
+                if command.resolution_kind is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT:
+                    pre_context = proof.pre_context_recovery_input
+                    if (
+                        pre_context is None
+                        or self.recovery_input_plan_reader is None
+                        or command.authorization_reference is None
+                    ):
+                        raise DeliveryWaitRejected("预 Context 恢复缺少精确工程授权与完整来源")
+                    facts = self.recovery_input_plan_reader(task)
+                    sources = complete_reapply_source_refs(facts.plan)
+                    if (
+                        facts.plan.plan_sha256 != pre_context.plan_sha256
+                        or facts.authorization.authorization_sha256
+                        != pre_context.authorization_sha256
+                        or facts.task_record.record_sha256 != pre_context.task_record_sha256
+                        or facts.dispatch.dispatch_sha256 != pre_context.dispatch_sha256
+                        or facts.seed.record_sha256 != pre_context.seed_record_sha256
+                        or digest(tuple(source.to_wire() for source in sources))
+                        != pre_context.source_inventory_sha256
+                    ):
+                        raise DeliveryWaitRejected("批准的恢复计划或三份完整来源已变化")
+                    schedule = RecoveryInputScheduleDecision(
+                        plan_sha256=facts.plan.plan_sha256,
+                        task_id=task.id,
+                        task_intent_sha256=task_intent_sha256(task),
+                        target_base_revision=facts.plan.target_base_revision,
+                        authorization_sha256=facts.authorization.authorization_sha256,
+                        task_record_sha256=facts.task_record.record_sha256,
+                        dispatch_sha256=facts.dispatch.dispatch_sha256,
+                        seed_record_sha256=facts.seed.record_sha256,
+                        work_item_id=item.id,
+                        disposition_sha256=proof.disposition_sha256,
+                        task_revision=proof.task_revision,
+                        task_snapshot_sha256=proof.task_snapshot_sha256,
+                        step_sha256=proof.step_sha256,
+                        original_claim_sha256=pre_context.original_claim_sha256,
+                        original_lease_id=pre_context.original_lease_id,
+                        sources=sources,
+                        engineering_actor=self.principal,
+                        authorization_reference=command.authorization_reference,
+                        decided_at=command.submitted_at,
+                        schedule_sha256="0" * 64,
+                    )
+                    schedule = schedule.model_copy(
+                        update={"schedule_sha256": schedule.recompute_sha256()}
+                    )
+                    prior_schedule = get_recovery_input_schedule(
+                        self.records, schedule.plan_sha256
+                    )
+                    if prior_schedule is not None:
+                        excluded = {"authorization_reference", "decided_at", "schedule_sha256"}
+                        if prior_schedule.model_dump(mode="json", exclude=excluded) != (
+                            schedule.model_dump(mode="json", exclude=excluded)
+                        ):
+                            raise DeliveryWaitRejected(
+                                "原恢复输入调度已有不同的工程决定, 保留原等待"
+                            )
+                        schedule_sha256 = prior_schedule.schedule_sha256
+                        effective_authorization_reference = (
+                            prior_schedule.authorization_reference
+                        )
+                    else:
+                        schedule_sha256 = self.records.put(
+                            "recovery-input-schedules", schedule.plan_sha256, schedule
+                        ).schedule_sha256
+                        effective_authorization_reference = command.authorization_reference
+                else:
+                    effective_authorization_reference = command.authorization_reference
                 resolution = DeliveryResolution(
                     task_id=task.id,
                     work_item_id=item.id,
@@ -1133,6 +1243,14 @@ class DeliveryWaitService:
                     engineering_admission=admission,
                     submitted_at=command.submitted_at,
                     resolution_sha256="0" * 64,
+                    authorization_reference=effective_authorization_reference,
+                    recovery_input_schedule_sha256=schedule_sha256,
+                    pre_context_recovery_input=(
+                        proof.pre_context_recovery_input
+                        if command.resolution_kind
+                        is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT
+                        else None
+                    ),
                     retry_failure=retry_failure,
                     retry_cause=retry_cause,
                     original_authority=(
@@ -1389,6 +1507,7 @@ class DeliveryWaitService:
         )
         verification_retry = None
         verifier_preparation = None
+        pre_context_recovery_input = None
         knowledge_preparation = None
         knowledge_pause = None
         rejected_knowledge = None
@@ -1676,9 +1795,68 @@ class DeliveryWaitService:
         if rejected_outcome and not permitted:
             missing.append(DeliveryProofMissing.OUTCOME_REJECTED)
         if item.wait_disposition.facts.classification == "CONTEXT_CAPACITY":
-            if item.role not in {AgentRole.QA, AgentRole.REVIEWER}:
-                # Coder capacity recovery uses its original exact baseline PAUSE/RESUME path.
-                missing.append(DeliveryProofMissing.VERIFIER_PREPARATION_UNAVAILABLE)
+            if item.role is AgentRole.CODER:
+                if (
+                    start is not None
+                    or outcome is not None
+                    or self.recovery_input_plan_reader is None
+                    or self.artifacts is None
+                    or guard is None
+                ):
+                    missing.append(DeliveryProofMissing.INVOCATION_UNRECORDED)
+                else:
+                    try:
+                        guard.check_task_scope(task.id)
+                        plan_facts = self.recovery_input_plan_reader(task)
+                        recovery_scope = plan_facts.plan.source.scope
+                        if (
+                            recovery_scope.team_id != self.scope.team_id
+                            or recovery_scope.repository_id != self.scope.repository_id
+                            or recovery_scope.repository_root != self.scope.repository_root
+                        ):
+                            raise ValueError("恢复计划与当前工程范围不一致")
+                        claim, sources = inspect_pre_context_recovery_input(
+                            item=item,
+                            step=step,
+                            task=task,
+                            task_revision=self.repository.current_revision(task.id),
+                            state=self.sidecar_state,
+                            queue=self.queue,
+                            artifacts=self.artifacts,
+                            git=self.git,
+                            facts=plan_facts,
+                        )
+                        pre_context_recovery_input = PreContextRecoveryInputEvidence(
+                            plan_sha256=plan_facts.plan.plan_sha256,
+                            authorization_sha256=(
+                                plan_facts.authorization.authorization_sha256
+                            ),
+                            task_record_sha256=plan_facts.task_record.record_sha256,
+                            dispatch_sha256=plan_facts.dispatch.dispatch_sha256,
+                            seed_record_sha256=plan_facts.seed.record_sha256,
+                            source_inventory_sha256=digest(
+                                tuple(source.to_wire() for source in sources)
+                            ),
+                            original_claim_sha256=digest(claim.to_wire()),
+                            original_lease_id=claim.lease.id,
+                            worktree_head_revision=plan_facts.plan.target_base_revision,
+                        )
+                        permitted = (DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT,)
+                    except (
+                        ValueError,
+                        QueueError,
+                        OSError,
+                        KnowledgeError,
+                        ArtifactStoreError,
+                        ContextStoreError,
+                        GitWorkspaceError,
+                        ModelRouteAttemptStoreError,
+                        MutationInventoryRejected,
+                        RecoveryRejected,
+                        DispatchStoreError,
+                        ValidationError,
+                    ):
+                        missing.append(DeliveryProofMissing.CHECKPOINT_DRIFT)
             elif start is not None or outcome is not None:
                 missing.append(DeliveryProofMissing.INVOCATION_UNRECORDED)
             elif prerequisites is None or prerequisites.status != "READY":
@@ -1955,6 +2133,7 @@ class DeliveryWaitService:
             original_authority=original_authority,
             verification_retry=verification_retry,
             verifier_preparation=verifier_preparation,
+            pre_context_recovery_input=pre_context_recovery_input,
             static_qa_missing_entry=static_qa_missing_entry,
             knowledge_preparation=knowledge_preparation,
             knowledge_pause=knowledge_pause,
@@ -2437,6 +2616,7 @@ class DeliveryWaitService:
         original_authority: OriginalInvocationAuthority | None = None,
         verification_retry: VerificationRetryEvidence | None = None,
         verifier_preparation: VerifierPreparationEvidence | None = None,
+        pre_context_recovery_input: PreContextRecoveryInputEvidence | None = None,
         static_qa_missing_entry: StaticQaMissingEntryEvidence | None = None,
         knowledge_preparation: KnowledgePreparationRetryEvidence | None = None,
         knowledge_pause: KnowledgePreparationPauseEvidence | None = None,
@@ -2522,6 +2702,7 @@ class DeliveryWaitService:
             original_authority=original_authority,
             verification_retry=verification_retry,
             verifier_preparation=verifier_preparation,
+            pre_context_recovery_input=pre_context_recovery_input,
             static_qa_missing_entry=static_qa_missing_entry,
             knowledge_preparation=knowledge_preparation,
             knowledge_pause=knowledge_pause,
@@ -2546,6 +2727,10 @@ class DeliveryWaitService:
                 "工程责任人可核对并批准专用静态 FAIL 验收; 原计划验证命令未启动, "
                 "后续仍需独立 QA 和返工。"
                 if permitted == (DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,)
+                else "已核验原 Coder 输入超限发生在 Context 封存前, 原模型未启动, "
+                "批准的三份完整历史补丁可按独立工程决定逐轮送入同一 Task; "
+                "原计划、工作额度、工作区和审计历史保持不变。"
+                if permitted == (DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT,)
                 else (
                     "原开发因服务重启暂停。工作现场保留; 请先审阅并批准精确的更新执行基线计划接续。"
                 )
@@ -2638,23 +2823,42 @@ class DeliveryWaitService:
     def _require_decision_binding(
         self, prior: DeliveryResolution, command: ResolveDeliveryWait, *, automatic: bool = False
     ) -> None:
+        authorization_reference_matches = (
+            prior.authorization_reference == command.authorization_reference
+        )
         if (
-            prior.work_item_id,
-            prior.expected_disposition_sha256,
-            prior.expected_task_intent_sha256,
-            prior.expected_source_revision,
-            prior.expected_checkpoint_sequence,
-            prior.proof_sha256,
-            prior.resolution_kind,
-            prior.operator_principal,
-        ) != (
-            command.work_item_id,
-            command.expected_disposition_sha256,
-            command.expected_task_intent_sha256,
-            command.expected_source_revision,
-            command.expected_checkpoint_sequence,
-            command.proof_sha256,
-            command.resolution_kind,
-            None if automatic else self.principal,
+            prior.resolution_kind is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT
+            and command.resolution_kind is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT
+            and prior.pre_context_recovery_input is not None
+        ):
+            schedule = get_recovery_input_schedule(
+                self.records, prior.pre_context_recovery_input.plan_sha256
+            )
+            authorization_reference_matches = authorization_reference_matches or (
+                schedule is not None
+                and schedule.schedule_sha256 == prior.recovery_input_schedule_sha256
+                and schedule.authorization_reference == prior.authorization_reference
+                and schedule.engineering_actor == self.principal
+                and command.authorization_reference is not None
+                and _is_console_operation_reference(command.authorization_reference)
+            )
+        if (
+            prior.work_item_id != command.work_item_id
+            or prior.expected_disposition_sha256 != command.expected_disposition_sha256
+            or prior.expected_task_intent_sha256 != command.expected_task_intent_sha256
+            or prior.expected_source_revision != command.expected_source_revision
+            or prior.expected_checkpoint_sequence != command.expected_checkpoint_sequence
+            or prior.proof_sha256 != command.proof_sha256
+            or prior.resolution_kind is not command.resolution_kind
+            or prior.operator_principal != (None if automatic else self.principal)
+            or not authorization_reference_matches
         ):
             raise DeliveryWaitRejected("此等待已记录不同工程决定, 不能覆盖审计历史")
+
+
+def _is_console_operation_reference(value: str) -> bool:
+    try:
+        TypeAdapter(ConsoleOperationAuthorizationReference).validate_python(value)
+    except ValidationError:
+        return False
+    return True

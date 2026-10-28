@@ -1,0 +1,228 @@
+{
+  "$defs": {
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
+    },
+    "RecoveryInputSourceRef": {
+      "additionalProperties": false,
+      "description": "A complete approved patch identity; never a substitute for its actual bytes.",
+      "properties": {
+        "source_id": {
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "bytes": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source_id",
+        "uri",
+        "sha256",
+        "bytes"
+      ],
+      "title": "RecoveryInputSourceRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable one-source-per-accepted-Run authority for an existing Task.",
+  "properties": {
+    "kind": {
+      "const": "recovery_input_schedule",
+      "default": "recovery_input_schedule",
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "mode": {
+      "const": "one_complete_source_per_accepted_coder_run",
+      "default": "one_complete_source_per_accepted_coder_run",
+      "title": "Mode",
+      "type": "string"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "task_id": {
+      "minLength": 1,
+      "title": "Task Id",
+      "type": "string"
+    },
+    "task_intent_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Task Intent Sha256",
+      "type": "string"
+    },
+    "target_base_revision": {
+      "minLength": 1,
+      "title": "Target Base Revision",
+      "type": "string"
+    },
+    "authorization_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Authorization Sha256",
+      "type": "string"
+    },
+    "task_record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Task Record Sha256",
+      "type": "string"
+    },
+    "dispatch_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Dispatch Sha256",
+      "type": "string"
+    },
+    "seed_record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Seed Record Sha256",
+      "type": "string"
+    },
+    "work_item_id": {
+      "minLength": 1,
+      "title": "Work Item Id",
+      "type": "string"
+    },
+    "disposition_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Disposition Sha256",
+      "type": "string"
+    },
+    "task_revision": {
+      "minimum": 0,
+      "title": "Task Revision",
+      "type": "integer"
+    },
+    "task_snapshot_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Task Snapshot Sha256",
+      "type": "string"
+    },
+    "step_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Step Sha256",
+      "type": "string"
+    },
+    "original_claim_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Original Claim Sha256",
+      "type": "string"
+    },
+    "original_lease_id": {
+      "minLength": 1,
+      "title": "Original Lease Id",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/RecoveryInputSourceRef"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "title": "Sources",
+      "type": "array"
+    },
+    "engineering_actor": {
+      "$ref": "#/$defs/LocalOperatorPrincipal"
+    },
+    "authorization_reference": {
+      "pattern": "^web-console-operation:operation_[a-f0-9]{32}:[a-f0-9]{64}:[a-f0-9]{64}$",
+      "title": "Authorization Reference",
+      "type": "string"
+    },
+    "decided_at": {
+      "format": "date-time",
+      "title": "Decided At",
+      "type": "string"
+    },
+    "schedule_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Schedule Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "plan_sha256",
+    "task_id",
+    "task_intent_sha256",
+    "target_base_revision",
+    "authorization_sha256",
+    "task_record_sha256",
+    "dispatch_sha256",
+    "seed_record_sha256",
+    "work_item_id",
+    "disposition_sha256",
+    "task_revision",
+    "task_snapshot_sha256",
+    "step_sha256",
+    "original_claim_sha256",
+    "original_lease_id",
+    "sources",
+    "engineering_actor",
+    "authorization_reference",
+    "decided_at",
+    "schedule_sha256"
+  ],
+  "title": "RecoveryInputScheduleDecision",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/recovery-input-schedule.schema.json"
+}

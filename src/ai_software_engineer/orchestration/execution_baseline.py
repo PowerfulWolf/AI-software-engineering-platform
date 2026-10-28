@@ -8,6 +8,7 @@ from ai_software_engineer.context.execution_baseline import (
     ExecutionBaselineContext,
     PreservedWorktreeBaselineContext,
     ReappliedBaselineReferenceContext,
+    ScheduledBaselineReferenceContext,
     parse_execution_baseline_context,
 )
 from ai_software_engineer.context.models import ContextBundle, ContextSection, ContextSource
@@ -146,6 +147,7 @@ class BaselineRunContextBuilder:
             ExecutionBaselineContext
             | PreservedWorktreeBaselineContext
             | ReappliedBaselineReferenceContext
+            | ScheduledBaselineReferenceContext
         ) = (
             value
             if isinstance(historical, ExecutionBaselineContext)
@@ -160,8 +162,40 @@ class BaselineRunContextBuilder:
         recovery_sections = tuple(
             item for item in context.sections if item.name == "source:recovery.patch"
         )
+        schedule_sections = tuple(
+            item for item in context.sections if item.name == "source:recovery.input_schedule"
+        )
+        if source.baseline.input_mode is BaselineInputMode.CODER_REAPPLY and schedule_sections:
+            from ai_software_engineer.recovery.bounded_input import RecoveryInputManifest
+
+            if len(schedule_sections) != 1 or schedule_sections[0].truncated:
+                raise ContextSourceError("分轮重应用缺少唯一完整的输入调度清单")
+            manifest = RecoveryInputManifest.model_validate_json(schedule_sections[0].content)
+            current_refs = tuple(
+                ref for ref in manifest.sources if ref.source_id == "recovery.patch"
+            )
+            if (
+                len(current_refs) != 1
+                or current_refs[0].sha256 != source.baseline.retained_patch.sha256
+                or current_refs[0].bytes != source.baseline.retained_patch.bytes
+                or hashlib.sha256(schedule_sections[0].content.encode()).hexdigest()
+                != schedule_sections[0].sha256
+            ):
+                raise ContextSourceError("分轮重应用清单与完整执行基线补丁不一致")
+            payload = ScheduledBaselineReferenceContext(
+                binding=source.baseline,
+                retained_patch=source.baseline.retained_patch,
+                schedule_sha256=manifest.decision_sha256,
+                complete_patch_uri=current_refs[0].uri,
+                instructions=(
+                    "平台已验证当前目标基线和完整旧补丁, 并按获批工程决定逐轮提供完整来源。"
+                    "本轮只能按调度清单适配所选完整来源; 其他来源必须由后续 Coder 轮次读取。"
+                    "原历史不等于候选或验收, 最终候选仍须独立 QA 和 Review。"
+                ),
+            )
         if (
             source.baseline.input_mode is BaselineInputMode.CODER_REAPPLY
+            and not schedule_sections
             and not isinstance(historical, ExecutionBaselineContext)
             and len(recovery_sections) == 1
             and not recovery_sections[0].truncated

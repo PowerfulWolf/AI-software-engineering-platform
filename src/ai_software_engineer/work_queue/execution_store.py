@@ -254,6 +254,64 @@ def read_queue_workforce(cursor: DictCursor, now: datetime) -> WorkforceFacts:
 
 
 class MySqlRoleQueue(MySqlPersistentWorkQueue):
+    def consumed_recovery_input_resolution(self, task_id: str) -> DeliveryResolution | None:
+        """Return only a genuinely consumed same-Task input schedule decision."""
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            connection.cursor(DictCursor) as cursor,
+        ):
+            cursor.execute(
+                "SELECT e.payload_json FROM work_queue_events AS e "
+                "JOIN work_queue_items AS i ON i.id=e.work_item_id "
+                "WHERE i.task_id=%s AND e.event_type='WAIT_RESOLVED' ORDER BY e.sequence",
+                (task_id,),
+            )
+            rows = cursor.fetchall()
+        decisions: list[DeliveryResolution] = []
+        try:
+            for row in rows:
+                event = _RejectedOutputResolutionEvent.model_validate_json(
+                    str(row["payload_json"])
+                )
+                detail, decision = event.detail, event.detail.resolution
+                decision.validate_integrity()
+                if (
+                    detail.resolution_sha256 != decision.resolution_sha256
+                    or detail.next_work_item_id != event.work_item.id
+                    or event.work_item.task_id != task_id
+                    or detail.budget_refund
+                ):
+                    raise ValueError("consumed wait event changed its exact decision")
+                if decision.resolution_kind is not DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT:
+                    continue
+                original = decision.pre_context_recovery_input
+                if (
+                    original is None
+                    or decision.task_id != task_id
+                    or decision.work_item_id != event.work_item.id
+                    or event.work_item.status is not WorkItemStatus.READY
+                    or event.work_item.dispatch_sequence < 1
+                ):
+                    raise ValueError("consumed recovery schedule changed its original wait")
+                claim = self.original_claim(original.original_lease_id)
+                if (
+                    digest(claim.to_wire()) != original.original_claim_sha256
+                    or claim.work_item.id != decision.work_item_id
+                    or claim.work_item.dispatch_sequence + 1
+                    != event.work_item.dispatch_sequence
+                    or claim.work_item.checkpoint_sequence
+                    != event.work_item.checkpoint_sequence
+                ):
+                    raise ValueError("consumed recovery schedule changed its original claim")
+                decisions.append(decision)
+        except (ValueError, TypeError, KeyError, ValidationError) as error:
+            raise QueueCorruption(
+                "recovery input schedule consumption evidence is invalid"
+            ) from error
+        if len(decisions) > 1:
+            raise QueueCorruption("Task has duplicate consumed recovery input schedules")
+        return decisions[0] if decisions else None
+
     def static_qa_resolution_for_wait(
         self, item: QueuedWorkItem, *, knowledge_records: KnowledgeRecordStore | None = None
     ) -> DeliveryResolution | None:
@@ -2071,6 +2129,40 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     next_item, settled = self._static_qa_successor(
                         cursor, resolution, current, disposition, task, step, now
                     )
+                if resolution.resolution_kind is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT:
+                    pre_context = resolution.pre_context_recovery_input
+                    if (
+                        current.role is not AgentRole.CODER
+                        or disposition.facts.classification != "CONTEXT_CAPACITY"
+                        or any(
+                            value.startswith("context-capacity://")
+                            for value in disposition.facts.evidence_ids
+                        )
+                        or task.status is not TaskStatus.IMPLEMENTING
+                        or task.attempts != current.attempt
+                        or task.work_budget_exhausted
+                        or pre_context is None
+                        or pre_context.worktree_head_revision != step.boundary.source_revision
+                    ):
+                        raise QueueConflict("预 Context 恢复不属于当前原 Coder 容量等待")
+                    claims = self.claims_for_work_item(current.id)
+                    if len(claims) != 1 or (
+                        claims[0].lease.id != pre_context.original_lease_id
+                        or digest(claims[0].to_wire()) != pre_context.original_claim_sha256
+                        or claims[0].work_item.dispatch_sequence != current.dispatch_sequence
+                        or claims[0].work_item.checkpoint_sequence != current.checkpoint_sequence
+                    ):
+                        raise QueueConflict("预 Context 恢复的真实原 claim 已变化")
+                    cursor.execute(
+                        "SELECT id FROM work_queue_accepted_artifacts WHERE task_id=%s "
+                        "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.work_item_id'))=%s "
+                        "LIMIT 1 FOR UPDATE",
+                        (task.id, current.id),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict(
+                            "原 Coder 工作项已有接纳产出, 不能重领预 Context 容量等待"
+                        )
                 if (
                     resolution.resolution_kind is not DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY
                     and (
@@ -2161,7 +2253,11 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     if cursor.fetchone() is not None:
                         raise QueueConflict("知识暂停原工作项已完成推进")
                 if (
-                    resolution.resolution_kind is not DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY
+                    resolution.resolution_kind
+                    not in {
+                        DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,
+                        DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT,
+                    }
                     and disposition.facts.classification == "CONTEXT_CAPACITY"
                 ):
                     preparation = resolution.verifier_preparation

@@ -1,5 +1,45 @@
 # Same-Task execution baseline contract
 
+## Approved bounded `coder_reapply` input schedule (2026-10-28)
+
+When a recovery Coder's complete inherited patches plus current retained patch exceed the
+final model input limit **before a Context or provider start**, an engineering decision may
+schedule one complete source per serial Coder Run. The exact approved `RecoveryPlan`, Task,
+target Git revision, execution baseline, permissions and source bytes stay frozen. A
+schedule does not rebase the Task, change its attempt allowance, apply a patch, or create a
+candidate. If the approved target revision later differs from platform `main`, integration
+requires a separate source-base decision or a verified post-candidate integration; this
+schedule never silently changes it.
+
+`RecoveryInputScheduleDecision` is keyed by the full Plan SHA in the sidecar's
+`state/delivery-waits/recovery-input-schedules` store. It names every approved complete
+source in oldest inherited to current patch order, each with URI, SHA-256 and UTF-8 byte
+count. Only a matching, verified SQL `WAIT_RESOLVED` event for
+`SCHEDULE_RECOVERY_INPUT` activates it. A decision file alone grants no Context selection.
+The first Coder Context contains `recovery.origin`, `recovery.input_schedule`, and the
+first **complete** inherited patch. Each next source is selected only after a durable
+queue-accepted `CoderProgressArtifact` and its `IMPLEMENTING → CONTINUE_REQUIRED` Task
+event. The event, Artifact, Run, manifest, source revision, supersedes chain and complete
+source section must all match. Duplicate, skipped, truncated, changed or unaccepted
+progress cannot advance the source index.
+
+The execution baseline Context uses version `v4` only for this schedule. It references
+the unchanged complete retained patch by URI/SHA/bytes and the exact schedule SHA; the
+selected patch body appears once as a required Context source. The baseline verifier
+checks that reference against the sealed manifest and the source body. Legacy `v1`–`v3`
+Contexts retain their existing validation and bytes. Both Codex CLI and Responses
+candidate paths call the trusted coverage validator **before** `CandidateCommitSkill`
+creates a Git commit. It requires every earlier source's accepted progress and the
+current Run's full final source; early implementation reports become rejected output,
+not candidates. QA and Reviewer still work independently on the resulting single
+candidate SHA and may not receive Coder-only patch sources as verdict authority.
+
+Validation points: source inventory and per-Run Context unit tests; first seed and
+prepared-input admission; missing/changed SQL resolution rejection; progress event and
+publication tamper tests; both provider candidate-before-commit tests; same-Task recovery
+through independent QA/Review. Rollback disables new scheduling while preserving all
+sealed decisions, Contexts, Task events, queue records and existing v4 readers.
+
 ## Unaccepted committed candidate recovery (2026-10-25)
 
 ### Historical candidate capture compatibility
