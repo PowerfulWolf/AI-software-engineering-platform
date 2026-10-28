@@ -63,6 +63,9 @@ from ai_software_engineer.manager.legacy_local_execution import (
     LegacyLocalExecutionSurvey,
     TrustedLegacyLocalExecutionObserver,
 )
+from ai_software_engineer.manager.local_survey_observation import (
+    IsolatedLegacyLocalExecutionObserver,
+)
 from ai_software_engineer.manager.production_agents import ExecutionPlanDraft, TechnicalDesignDraft
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
@@ -400,7 +403,7 @@ def test_public_start_only_unknown_budget_preserves_history_and_recovers_exactly
     monkeypatch.setattr(TrustedLocalBootObserver, "observe", lambda _self: boot)
 
     def idle_survey(
-        _self: TrustedLegacyLocalExecutionObserver,
+        _self: object,
         *,
         worktree_root: Path,
         boot: LocalBootObservation,
@@ -416,6 +419,17 @@ def test_public_start_only_unknown_budget_preserves_history_and_recovers_exactly
         )
 
     monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", idle_survey)
+    monkeypatch.setattr(IsolatedLegacyLocalExecutionObserver, "observe", idle_survey)
+    with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+        wait_service = host._delivery_wait_service(
+            command,
+            project_id="project_test",
+            delivery_id=created.delivery_id,
+            repository=tasks,
+        )
+    contained = wait_service.contained_unknown_budget_settlement
+    assert contained is not None
+    assert isinstance(contained.local_execution_observer, IsolatedLegacyLocalExecutionObserver)
     proof = host.inspect_delivery_wait(
         InspectDeliveryWait.model_validate(
             command.model_dump(mode="python", include=set(InspectDeliveryWait.model_fields))
@@ -1000,6 +1014,19 @@ def test_public_contained_unknown_after_qa_feedback_keeps_historical_candidate(
     monkeypatch.setattr(TrustedLocalBootObserver, "observe", lambda _self: boot)
     monkeypatch.setattr(
         TrustedLegacyLocalExecutionObserver,
+        "observe",
+        lambda _self, *, worktree_root, boot: LegacyLocalExecutionSurvey.create(
+            worktree_path=str(worktree_root.resolve()),
+            machine_sha256=boot.machine_sha256,
+            boot_session_sha256=boot.boot_session_sha256,
+            account_sha256="c" * 64,
+            observed_at=datetime.now(UTC),
+            scanner_version="local-execution-v1",
+            blockers=(),
+        ),
+    )
+    monkeypatch.setattr(
+        IsolatedLegacyLocalExecutionObserver,
         "observe",
         lambda _self, *, worktree_root, boot: LegacyLocalExecutionSurvey.create(
             worktree_path=str(worktree_root.resolve()),

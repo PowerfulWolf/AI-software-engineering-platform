@@ -16,14 +16,23 @@ from ai_software_engineer.evaluation import FileEvaluationEventStore, HumanActio
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.contained_unknown_budget import (
     ContainedUnknownBudgetSettlementService,
+    verify_settled_contained_unknown,
 )
 from ai_software_engineer.manager.legacy_containment import LocalBootObservation
-from ai_software_engineer.manager.legacy_local_execution import LegacyLocalExecutionSurvey
+from ai_software_engineer.manager.legacy_local_execution import (
+    LegacyLocalExecutionSurvey,
+    LegacyRescuePrerequisiteError,
+    TrustedLegacyLocalExecutionObserver,
+)
+from ai_software_engineer.manager.local_survey_observation import (
+    IsolatedLegacyLocalExecutionObserver,
+)
 from ai_software_engineer.orchestration.continuation_models import ContinuationRejected
 from ai_software_engineer.runtime import _default_case_id
 from ai_software_engineer.team_view.engineering_history import engineering_history
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationOutcome
+from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 from tests.manager.test_completed_output_checkpoint import CompletedFixture
 from tests.manager.test_completed_output_checkpoint import completed as completed_fixture
 from tests.manager.test_stopped_unknown_budget import UnknownQueue, service_for
@@ -137,9 +146,7 @@ def test_public_handle_contains_exhausted_start_only_coder_with_exact_human_stop
     assert service.handle(command) == result
     sidecar = f.root / "history-sidecar"
     copytree(f.root / "delivery-waits", sidecar / "state/delivery-waits")
-    history = engineering_history(
-        sidecar, f.task, f.collector.scope, f.native.scope.requirement_id
-    )
+    history = engineering_history(sidecar, f.task, f.collector.scope, f.native.scope.requirement_id)
     assert any(entry.source_sha256 == result.handling_sha256 for entry in history)
     assert isinstance(f.queue, UnknownQueue) and f.queue.commits == 1
     published = FileEvaluationEventStore(f.root / "evaluations").list_for_case(
@@ -148,6 +155,103 @@ def test_public_handle_contains_exhausted_start_only_coder_with_exact_human_stop
     assert len(published) == 1 and isinstance(published[0], HumanActionEvent)
     assert published[0].action is HumanAction.SUPPLY_EVIDENCE
     assert "call_a7e4ebe2aed34bad899f8cc3588da3b5" in (published[0].note or "")
+
+
+@pytest.mark.parametrize("completed", ["start_only_unknown_exhausted"], indirect=True)
+def test_settled_unknown_source_uses_complete_isolated_survey_by_default(
+    completed: CompletedFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = completed
+    service = contained_service_for(f)
+    command = HandleDeliveryWait.model_validate(
+        {
+            **f.queue.command().to_wire(),
+            "confirm_local_execution_stopped": True,
+            "local_stop_reference": "call_a7e4ebe2aed34bad899f8cc3588da3b5",
+        }
+    )
+    result = service.handle(command)
+    assert result.budget_settlement_sha256 is not None
+    record = KnowledgeRecordStore(f.root / "delivery-preflight", read_only=True).get(
+        "contained-unknown-budget-settlements",
+        result.budget_settlement_sha256,
+        ContainedUnknownBudgetSettlement,
+    )
+
+    def forbid_in_process(
+        _observer: TrustedLegacyLocalExecutionObserver,
+        *,
+        worktree_root: Path,
+        boot: LocalBootObservation,
+    ) -> LegacyLocalExecutionSurvey:
+        raise AssertionError("settled source must not run the Host in-process survey")
+
+    calls: list[Path] = []
+
+    def isolated(
+        _observer: IsolatedLegacyLocalExecutionObserver,
+        *,
+        worktree_root: Path,
+        boot: LocalBootObservation,
+    ) -> LegacyLocalExecutionSurvey:
+        calls.append(worktree_root)
+        return FakeLocalObserver().observe(worktree_root=worktree_root, boot=boot)
+
+    monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", forbid_in_process)
+    monkeypatch.setattr(IsolatedLegacyLocalExecutionObserver, "observe", isolated)
+    guard = WorkerExecutionGuard()
+    with guard.task_scope(f.root / "queue-worker-locks", f.task.id):
+        capture = verify_settled_contained_unknown(
+            record,
+            repository=f.native.repository,
+            queue=cast(MySqlRoleQueue, f.queue),
+            state=f.root,
+            route_root=f.root / "model-routes",
+            artifacts=f.native.artifacts,
+            git=f.native.git,
+            guard=guard,
+            boot_observer=FakeBootObserver(f),
+        )
+    assert capture.capture_sha256 == record.retained_capture_sha256
+    assert calls == [Path(record.capture_start.worktree_path)]
+
+    def incomplete(
+        _observer: IsolatedLegacyLocalExecutionObserver,
+        *,
+        worktree_root: Path,
+        boot: LocalBootObservation,
+    ) -> LegacyLocalExecutionSurvey:
+        return LegacyLocalExecutionSurvey.create(
+            worktree_path=str(worktree_root),
+            machine_sha256=boot.machine_sha256,
+            boot_session_sha256=boot.boot_session_sha256,
+            account_sha256="c" * 64,
+            observed_at=datetime.now(UTC),
+            scanner_version="local-execution-v1",
+            blockers=("PROCESS_SCAN_INCOMPLETE",),
+        )
+
+    monkeypatch.setattr(IsolatedLegacyLocalExecutionObserver, "observe", incomplete)
+    original_task = f.task
+    original_events = f.native.repository.list_events(original_task.id)
+    with (
+        guard.task_scope(f.root / "queue-worker-locks", original_task.id),
+        pytest.raises(LegacyRescuePrerequisiteError) as blocked,
+    ):
+        verify_settled_contained_unknown(
+            record,
+            repository=f.native.repository,
+            queue=cast(MySqlRoleQueue, f.queue),
+            state=f.root,
+            route_root=f.root / "model-routes",
+            artifacts=f.native.artifacts,
+            git=f.native.git,
+            guard=guard,
+            boot_observer=FakeBootObserver(f),
+        )
+    assert blocked.value.code == "LEGACY_LOCAL_SURVEY_INCOMPLETE"
+    assert f.task == original_task
+    assert f.native.repository.list_events(original_task.id) == original_events
 
 
 @pytest.mark.parametrize("completed", ["start_only_unknown_exhausted"], indirect=True)

@@ -42,6 +42,16 @@ route or writer, and performs a fresh bounded local execution survey. The servic
 seal full current draft bytes and validate both Git and ignored legal files before SQL
 consumption. It must reject any incomplete, changed, unsafe or out-of-scope inventory.
 
+The production `ContainedUnknownBudgetSettlementService` composition and
+`verify_settled_contained_unknown(..., local_execution_observer=None)` use
+`IsolatedLegacyLocalExecutionObserver`. This includes later read-only recovery source checks,
+not only the initial HANDLE. The complete fixed OS survey, five-second deadline, worker identity,
+owned cleanup and `PROCESS_SCAN_INCOMPLETE` refusal remain as specified in
+[`isolated-local-execution-survey.md`](isolated-local-execution-survey.md). Explicit fake observers
+remain injectable in tests. A production fallback to `TrustedLegacyLocalExecutionObserver` in the
+Host interpreter can intermittently exhaust the same deadline under concurrent Python work;
+one idle observation cannot substitute for the later fresh recovery gates.
+
 Write the human declaration and immutable settlement/capture before the SQL CAS, then
 verify a replay against the terminal reducer, closed WorkItem, original unknown facts and
 current complete source. Publish the investigation into `delivery-waits/wait-investigations`
@@ -142,6 +152,7 @@ missing settlement. Historical stopped-UNKNOWN v1 records and schemas retain the
 | Budget remains or current claim/writer exists | Refuse terminal settlement; retain original Task and wait |
 | Outcome, route, accepted artifact, receipt, stop or checkpoint appears late | Refuse and preserve those original facts |
 | Missing or mismatched original start/claim/capture, policy, source, inventory or local survey | Refuse without SQL consumption or new authority |
+| Isolated survey returns `PROCESS_SCAN_INCOMPLETE` or an active blocker | Refuse settlement/recovery; no Task dispatch, seed or provider invocation |
 | Declaration omitted, reference omitted or principal lacks ENGINEERING duty | Refuse; GET/UI cannot supply it implicitly |
 | Exact replay after crash or SQL commit | Verify current facts and return the original settlement; do not append another event |
 | Earlier committed code and empty final Run-local patch | Keep the full Task-base patch for Coder reapply |
@@ -153,7 +164,14 @@ Good: a current human declaration closes only the exhausted old work and an exac
 reapplies all retained code under a new approval. Base: older stopped-UNKNOWN v1 and normal
 legacy start-only with remaining budget keep their original route and wire. Bad: invent a
 capture-stop, refund attempt 11, mutate the old verdict, accept only the empty final patch,
-or perform recovery in the same HANDLE Operation.
+or perform recovery in the same HANDLE Operation. Wrong: use an in-process survey in the
+production settlement or subsequent recovery reader while baseline recovery uses the isolated
+worker. Correct: both paths use the same isolated complete observer and still fail closed on any
+incomplete scan. `tests/manager/test_contained_unknown_budget.py` verifies the default and
+injected observer paths, including `PROCESS_SCAN_INCOMPLETE` refusal with unchanged old Task
+events; `test_contained_unknown_budget_public.py` covers the original
+UNKNOWN-to-independent-QA/Review flow. The public recovery source wraps any incomplete survey
+as a `RecoveryRejected` before dispatch through the existing `require_current` gate.
 
 Browser interaction verification uses an isolated test host. The Playwright fixture must
 refuse to launch any installed macOS system browser channel on an interactive workstation by default;

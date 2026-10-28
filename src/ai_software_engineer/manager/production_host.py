@@ -781,8 +781,8 @@ class TeamHost:
             ContainedUnknownBudgetSettlementService,
         )
         from ai_software_engineer.manager.legacy_containment import TrustedLocalBootObserver
-        from ai_software_engineer.manager.legacy_local_execution import (
-            TrustedLegacyLocalExecutionObserver,
+        from ai_software_engineer.manager.local_survey_observation import (
+            IsolatedLegacyLocalExecutionObserver,
         )
         from ai_software_engineer.manager.stopped_budget_settlement import (
             StoppedBudgetSettlementService,
@@ -918,7 +918,7 @@ class TeamHost:
                 artifacts=FileArtifactStore(workspace.directory("artifacts"), read_only=True),
                 principal=self._operator_principal,
                 boot_observer=TrustedLocalBootObserver(),
-                local_execution_observer=TrustedLegacyLocalExecutionObserver(),
+                local_execution_observer=IsolatedLegacyLocalExecutionObserver(),
                 evaluation_root=workspace.directory("evaluations"),
                 clock=lambda: datetime.now(UTC),
                 idle_scope=lambda: self._work_queue.idle_task_scope(task.id),

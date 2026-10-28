@@ -41,10 +41,7 @@ from ai_software_engineer.manager.legacy_containment import (
     LocalBootObserver,
     TrustedLocalBootObserver,
 )
-from ai_software_engineer.manager.legacy_local_execution import (
-    LegacyLocalExecutionObserver,
-    TrustedLegacyLocalExecutionObserver,
-)
+from ai_software_engineer.manager.legacy_local_execution import LegacyLocalExecutionObserver
 from ai_software_engineer.manager.stopped_budget_settlement import StoppedBudgetSettlementService
 from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCollector
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
@@ -521,8 +518,7 @@ class ContainedUnknownBudgetSettlementService:
                 investigation=proof,
                 status="BUDGET_EXHAUSTED",
                 summary=(
-                    "原开发调用没有最终记录; 已确认本机执行结束并完整保留草稿, "
-                    "原结果仍为 UNKNOWN。"
+                    "原开发调用没有最终记录; 已确认本机执行结束并完整保留草稿, 原结果仍为 UNKNOWN。"
                 ),
                 user_action="在原需求详情准备并精确批准恢复方案; 原执行历史和已消耗额度保留。",
                 recheck_when="新恢复方案独立批准后继续原需求。",
@@ -609,7 +605,15 @@ def verify_settled_contained_unknown(
     ):
         raise ContinuationRejected("start-only 收尾的完整草稿已变化")
     observer = boot_observer or TrustedLocalBootObserver()
-    local = local_execution_observer or TrustedLegacyLocalExecutionObserver()
+    local: LegacyLocalExecutionObserver
+    if local_execution_observer is None:
+        from ai_software_engineer.manager.local_survey_observation import (
+            IsolatedLegacyLocalExecutionObserver,
+        )
+
+        local = IsolatedLegacyLocalExecutionObserver()
+    else:
+        local = local_execution_observer
     boot = observer.observe()
     prior = settlement.containment
     if prior.local_execution_survey is None or (
