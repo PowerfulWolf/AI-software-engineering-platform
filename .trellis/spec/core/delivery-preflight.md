@@ -84,6 +84,11 @@ NativeVerificationWaitReason | None = None)` 接收注册执行器的 typed disc
 绝对路径、DSN、密码、环境变量或 provider 自由文本。字段为空时不进入 wire/hash，旧 receipt
 保持原 digest。工程调查的 `next_action` 将去重后的分类映射成中文处理提示；reason_code、原枚举值、
 hash 只保留在技术证据中，不能把英文内部枚举直接展示给产品用户。
+工程等待调查可以同时读取验证前提 receipt 和其他恢复证明；只有本次 `missing` 明确包含
+`PREREQUISITES_UNVERIFIED` 时，验证能力详情才可作为 `next_action`。例如旧 Coder
+`CONTEXT_CAPACITY` 的恢复证明因 checkpoint 漂移失败时仍保留前提 receipt 的哈希用于审计，
+但 `next_action` 必须指向实际缺失的恢复证明，不能把 QA/Review 尚未注册的验证能力误报为
+Coder 当前恢复的阻塞原因。QA/Review 的真实前提等待仍显示精确能力详情。
 
 ## 原角色内的受控 Python 验证
 

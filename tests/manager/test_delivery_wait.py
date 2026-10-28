@@ -2513,3 +2513,68 @@ def _assert_public_mixed_prerequisites(
     assert not queue.consumed and fixture.repository.get(task.id).to_wire() == before
     assert not list((tmp_path / "unused_registry").glob("native-role-verification/**"))
     assert not (tmp_path / "delivery-wait-authority").exists()
+
+
+def test_coder_capacity_checkpoint_drift_does_not_present_unrelated_verifier_wait(
+    native: Fixture,
+    tmp_path: Path,
+) -> None:
+    queue = WaitQueue(native)
+    task = native.repository.get(native.task.id)
+    assert queue.item.wait_disposition is not None
+    disposition = decide_delivery_disposition(
+        queue.item.wait_disposition.facts.model_copy(update={"classification": "CONTEXT_CAPACITY"})
+    )
+    queue.item = QueuedWorkItem.model_validate(
+        {
+            **queue.item.to_wire(),
+            "status": WorkItemStatus.WAITING_DEPENDENCY,
+            "wait_disposition": disposition.to_wire(),
+            "wait_reason": disposition.reason,
+        }
+    )
+    receipt = DeliveryPreflightReceipt(
+        scope=DeliveryPreflightScope(
+            team_id=native.scope.team_id,
+            project_id=native.scope.project_id,
+            repository_id=native.scope.repository_id,
+            requirement_id=native.scope.requirement_id,
+        ),
+        task_id=task.id,
+        source_revision=task.base_ref,
+        plan_sha256="d" * 64,
+        frozen_policy_sha256="e" * 64,
+        requirements_sha256="f" * 64,
+        observations=(
+            DeliveryPreflightObservation(
+                requirement_id="qa_exact_entry",
+                status="WAIT_ENGINEERING",
+                reason_code="CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED",
+                native_wait_reason=NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE,
+                native_wait_detail=(
+                    NativeVerificationCapabilityDetail.REQUIREMENT_EXECUTOR_UNREGISTERED
+                ),
+            ),
+        ),
+        status="WAIT_ENGINEERING",
+        checked_at=NOW,
+        receipt_sha256="0" * 64,
+    )
+    receipt = receipt.model_copy(
+        update={
+            "receipt_sha256": digest(receipt.model_dump(mode="json", exclude={"receipt_sha256"}))
+        }
+    )
+    receipt.validate_integrity()
+    proof = service(native, queue, tmp_path)._proof(
+        queue.item,
+        queue.bound,
+        task,
+        missing=(DeliveryProofMissing.CHECKPOINT_DRIFT,),
+        prerequisites=receipt,
+    )
+    assert proof.missing == (DeliveryProofMissing.CHECKPOINT_DRIFT,)
+    assert proof.prerequisite_receipt_sha256 == receipt.receipt_sha256
+    assert proof.permitted_resolutions == ()
+    assert "已授权注册执行能力" not in proof.next_action
+    assert "工程证明尚不完整" in proof.next_action

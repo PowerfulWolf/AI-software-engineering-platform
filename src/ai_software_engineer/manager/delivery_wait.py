@@ -1200,9 +1200,7 @@ class DeliveryWaitService:
                     schedule = schedule.model_copy(
                         update={"schedule_sha256": schedule.recompute_sha256()}
                     )
-                    prior_schedule = get_recovery_input_schedule(
-                        self.records, schedule.plan_sha256
-                    )
+                    prior_schedule = get_recovery_input_schedule(self.records, schedule.plan_sha256)
                     if prior_schedule is not None:
                         excluded = {"authorization_reference", "decided_at", "schedule_sha256"}
                         if prior_schedule.model_dump(mode="json", exclude=excluded) != (
@@ -1212,9 +1210,7 @@ class DeliveryWaitService:
                                 "原恢复输入调度已有不同的工程决定, 保留原等待"
                             )
                         schedule_sha256 = prior_schedule.schedule_sha256
-                        effective_authorization_reference = (
-                            prior_schedule.authorization_reference
-                        )
+                        effective_authorization_reference = prior_schedule.authorization_reference
                     else:
                         schedule_sha256 = self.records.put(
                             "recovery-input-schedules", schedule.plan_sha256, schedule
@@ -1247,8 +1243,7 @@ class DeliveryWaitService:
                     recovery_input_schedule_sha256=schedule_sha256,
                     pre_context_recovery_input=(
                         proof.pre_context_recovery_input
-                        if command.resolution_kind
-                        is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT
+                        if command.resolution_kind is DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT
                         else None
                     ),
                     retry_failure=retry_failure,
@@ -1828,9 +1823,7 @@ class DeliveryWaitService:
                         )
                         pre_context_recovery_input = PreContextRecoveryInputEvidence(
                             plan_sha256=plan_facts.plan.plan_sha256,
-                            authorization_sha256=(
-                                plan_facts.authorization.authorization_sha256
-                            ),
+                            authorization_sha256=(plan_facts.authorization.authorization_sha256),
                             task_record_sha256=plan_facts.task_record.record_sha256,
                             dispatch_sha256=plan_facts.dispatch.dispatch_sha256,
                             seed_record_sha256=plan_facts.seed.record_sha256,
@@ -2098,7 +2091,8 @@ class DeliveryWaitService:
             and task.work_budget_exhausted
             and item.role is AgentRole.CODER
             and item.wait_disposition.facts.classification == "EXECUTION_UNCERTAIN"
-            and set(missing) == {
+            and set(missing)
+            == {
                 DeliveryProofMissing.OUTCOME_UNKNOWN,
                 DeliveryProofMissing.STOP_UNRECORDED,
                 DeliveryProofMissing.CHECKPOINT_UNAVAILABLE,
@@ -2627,7 +2621,11 @@ class DeliveryWaitService:
         local_stop_confirmation_available: bool = False,
     ) -> DeliveryWaitInvestigation:
         assert item.wait_disposition is not None
-        preflight_detail_action = _preflight_detail_action(prerequisites)
+        preflight_detail_action = (
+            _preflight_detail_action(prerequisites)
+            if DeliveryProofMissing.PREREQUISITES_UNVERIFIED in missing
+            else None
+        )
         provider_failure_code: Literal["AUTHENTICATION_ERROR"] | None = (
             "AUTHENTICATION_ERROR"
             if start is not None

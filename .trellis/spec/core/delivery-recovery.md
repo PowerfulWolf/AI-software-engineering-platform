@@ -1,9 +1,35 @@
 # Explicit delivery recovery — T044
 
+## Orchestrator Context at a pre-Coder capacity wait (2026-10-28)
+
+`inspect_pre_context_recovery_input` verifies the complete Context store before it
+authorizes a bounded recovery-input schedule. The normal orchestration preparation
+can seal an `ORCHESTRATOR` Context for the Task before the first Coder Context or
+provider invocation exists. The negative scan may admit only a fully validated
+Context whose `task_id`, `attempt` and `source_revision` match the current waiting
+Task, WorkItem attempt and approved target base, with `role=ORCHESTRATOR`.
+`FileContextStore.get` must still verify the original full bytes and Context ID.
+
+Any same-Task Coder, QA or Reviewer Context, or an Orchestrator Context from a
+different attempt or source, refuses this pre-Context route. Invocation starts,
+outcomes, model routes, accepted Coder artifacts and dirty worktree inventory
+remain independent negative gates. In particular, an Orchestrator Context cannot
+stand in for a missing Coder Context, permit a second model invocation or grant a
+candidate/QA/Review verdict. This repairs a false `CHECKPOINT_DRIFT` caused by
+treating every same-Task Context as a Coder Context; the old Context and queue
+facts are not rewritten.
+
+Regression: `tests/manager/test_recovery_input_schedule.py` checks exact
+Orchestrator acceptance, every other role, source/attempt drift, and real sealed
+invocation and model-route negatives. Existing K1 waits can be re-inspected via
+the public engineering wait operation after a controlled idle reload. Rollback
+only disables the new pre-Context schedule path; retain all immutable Context,
+wait, plan and execution records.
+
 ## Pre-Context complete-source scheduling (2026-10-28)
 
 The exceptional bounded reapply path applies only to a verified Coder capacity wait
-whose original claimed Run has **no Context and no provider invocation start**. The
+whose original claimed Run has **no Coder Context and no provider invocation start**. The
 approved `RecoveryPlan` must contain the full current retained patch and each inherited
 patch. A separate `SCHEDULE_RECOVERY_INPUT` engineering resolution records the operator,
 exact Plan/Task/dispatch/seed/wait/claim identities and complete ordered source digests.

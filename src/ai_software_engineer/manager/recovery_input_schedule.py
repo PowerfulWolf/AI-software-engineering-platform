@@ -285,7 +285,7 @@ def inspect_pre_context_recovery_input(
         artifact.producer.role is AgentRole.CODER for artifact in artifacts.list_for_task(task.id)
     ):
         raise ValueError("预 Context 容量等待已有 Coder 产出")
-    _require_no_coder_start(state, task.id)
+    _require_no_coder_start(state, task, item.attempt)
     worktree = seed.capture.to_capture().worktree
     if worktree.task_id != task.id or worktree.head_revision != task.base_ref:
         raise ValueError("预 Context 容量等待的 seed 与原 Coder worktree 不一致")
@@ -301,7 +301,8 @@ def inspect_pre_context_recovery_input(
     return claim, sources
 
 
-def _require_no_coder_start(state: Path, task_id: str) -> None:
+def _require_no_coder_start(state: Path, task: Task, attempt: int) -> None:
+    task_id = task.id
     context_root = state.parent / "contexts"
     if context_root.exists():
         if context_root.is_symlink() or not context_root.is_dir():
@@ -313,8 +314,15 @@ def _require_no_coder_start(state: Path, task_id: str) -> None:
         for path in context_paths:
             if path.is_symlink() or not path.is_file() or not path.name.startswith("ctx_"):
                 raise ValueError("预 Context 容量调查发现无法验证的 Context 记录")
-            if contexts.get(path.stem).task_id == task_id:
-                raise ValueError("原 Task 已封存 Context, 不属于预 Context 容量恢复")
+            context = contexts.get(path.stem)
+            if context.task_id == task_id and not (
+                context.role is AgentRole.ORCHESTRATOR
+                and context.attempt == attempt
+                and context.source_revision == task.base_ref
+            ):
+                raise ValueError(
+                    "原 Task 已封存非本次编排准备的 Context, 不属于预 Context 容量恢复"
+                )
     invocation_root = state / "invocations"
     if invocation_root.exists():
         invocations = KnowledgeRecordStore(invocation_root, read_only=True)

@@ -12,6 +12,18 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as SchemaValidationError
 from pydantic import ValidationError
 
+from ai_software_engineer.agents.fallback import (
+    FileModelRouteAttemptStore,
+    ModelRouteAttempt,
+    model_route_root,
+)
+from ai_software_engineer.agents.models import (
+    AgentErrorCode,
+    AgentFailure,
+    AgentResult,
+    AgentRunStatus,
+)
+from ai_software_engineer.context import FileContextBuilder, FileContextStore
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
@@ -20,6 +32,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     ResolveDeliveryWait,
 )
 from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal
+from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.evaluation import (
     HumanAction,
@@ -32,6 +45,7 @@ from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.legacy_audit import EngineeringHumanActionRecorder
 from ai_software_engineer.manager.recovery_input_schedule import (
     RecoveryInputScheduleDecision,
+    _require_no_coder_start,
     get_recovery_input_schedule,
     require_consumed_recovery_input_schedule,
 )
@@ -43,7 +57,9 @@ from ai_software_engineer.web_console import (
     ProjectConsole,
     ResolveDeliveryWaitIntent,
 )
-from tests.domain.factories import make_task
+from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
+from tests.agents.test_openai_compatible import _coder_request
+from tests.domain.factories import make_agent, make_task
 
 PLAN = "a" * 64
 BASE = "b" * 40
@@ -51,6 +67,118 @@ NOW = datetime(2026, 10, 28, 10, tzinfo=UTC)
 AUTHORIZATION_REFERENCE = (
     "web-console-operation:operation_" + "1" * 32 + ":" + "2" * 64 + ":" + "3" * 64
 )
+
+
+def test_pre_context_recovery_allows_exact_orchestrator_preparation_context(
+    tmp_path: Path,
+) -> None:
+    """A sealed orchestration Context is not a Coder invocation or Coder Context."""
+    sidecar = tmp_path / "sidecar"
+    state = sidecar / "state"
+    task = make_task().model_copy(
+        update={"repository": str(tmp_path), "base_ref": BASE, "attempts": 1}
+    )
+    context = FileContextBuilder(tmp_path, make_agent().permissions).build(
+        task, AgentRole.ORCHESTRATOR, attempt=1
+    )
+    FileContextStore(sidecar / "contexts").put(context)
+
+    _require_no_coder_start(state, task, 1)
+
+
+@pytest.mark.parametrize(
+    ("role", "attempt", "source_revision"),
+    [
+        (AgentRole.CODER, 1, BASE),
+        (AgentRole.QA, 1, BASE),
+        (AgentRole.REVIEWER, 1, BASE),
+        (AgentRole.ORCHESTRATOR, 2, BASE),
+        (AgentRole.ORCHESTRATOR, 1, "c" * 40),
+    ],
+)
+def test_pre_context_recovery_rejects_other_same_task_contexts(
+    tmp_path: Path, role: AgentRole, attempt: int, source_revision: str
+) -> None:
+    sidecar = tmp_path / "sidecar"
+    task = make_task().model_copy(
+        update={"repository": str(tmp_path), "base_ref": BASE, "attempts": 1}
+    )
+    observed = task.model_copy(update={"base_ref": source_revision})
+    context = FileContextBuilder(tmp_path, make_agent().permissions).build(
+        observed, role, attempt=attempt
+    )
+    FileContextStore(sidecar / "contexts").put(context)
+
+    with pytest.raises(ValueError, match="非本次编排准备"):
+        _require_no_coder_start(sidecar / "state", task, 1)
+
+
+@pytest.mark.parametrize("record_kind", ["invocation", "route"])
+def test_pre_context_recovery_does_not_mask_started_model_records(
+    tmp_path: Path, record_kind: str
+) -> None:
+    sidecar = tmp_path / "sidecar"
+    state = sidecar / "state"
+    task = make_task().model_copy(
+        update={"repository": str(tmp_path), "base_ref": BASE, "attempts": 1}
+    )
+    context = FileContextBuilder(tmp_path, make_agent().permissions).build(
+        task, AgentRole.ORCHESTRATOR, attempt=1
+    )
+    FileContextStore(sidecar / "contexts").put(context)
+    request = _coder_request().model_copy(
+        update={
+            "task_id": task.id,
+            "source_revision": BASE,
+            "context_manifest_id": context.context_id,
+        }
+    )
+    if record_kind == "invocation":
+        start = DeliveryInvocationStart(
+            work_item_id="work_started_coder",
+            checkpoint_sequence=2,
+            request=request,
+            lease_id="lease_started_coder",
+            started_at=NOW,
+            start_sha256="0" * 64,
+        )
+        start = start.model_copy(
+            update={"start_sha256": digest(start.model_dump(mode="json", exclude={"start_sha256"}))}
+        )
+        KnowledgeRecordStore(state / "invocations").put(
+            "invocation-starts", start.work_item_id, start
+        )
+        expected = "模型调用开始"
+    else:
+        result = AgentResult(
+            run_id=request.run_id,
+            task_id=request.task_id,
+            role=request.role,
+            attempt=request.attempt,
+            source_revision=request.source_revision,
+            context_manifest_id=request.context_manifest_id,
+            status=AgentRunStatus.FAILED,
+            error=AgentFailure(
+                code=AgentErrorCode.PROVIDER_ERROR,
+                message="provider failed",
+                transient=False,
+            ),
+        )
+        route = ModelRouteAttempt.create(
+            request=request,
+            route_index=1,
+            provider="test",
+            model="test",
+            started_at=NOW,
+            completed_at=NOW,
+            result=result,
+            fallback=False,
+        )
+        FileModelRouteAttemptStore(model_route_root(sidecar)).append(route)
+        expected = "模型路由执行"
+
+    with pytest.raises(ValueError, match=expected):
+        _require_no_coder_start(state, task, 1)
 
 
 def _sources() -> tuple[RecoveryInputSourceRef, ...]:
@@ -130,9 +258,7 @@ def _fixture() -> tuple[Task, RecoveryInputScheduleDecision, DeliveryResolution]
         recovery_input_schedule_sha256=schedule.schedule_sha256,
         pre_context_recovery_input=proof,
     )
-    resolution = resolution.model_copy(
-        update={"resolution_sha256": resolution.recompute_sha256()}
-    )
+    resolution = resolution.model_copy(update={"resolution_sha256": resolution.recompute_sha256()})
     return task, schedule, resolution
 
 
@@ -167,9 +293,12 @@ def test_schedule_file_requires_consumed_wait_and_exact_complete_sources(
         is None
     )
     queue.consumed_recovery_input_resolution = lambda _task_id: resolution
-    assert require_consumed_recovery_input_schedule(
-        cast("Any", queue), records, cast("Any", plan), cast("Any", dispatch), task
-    ) == schedule
+    assert (
+        require_consumed_recovery_input_schedule(
+            cast("Any", queue), records, cast("Any", plan), cast("Any", dispatch), task
+        )
+        == schedule
+    )
     changed = resolution.model_copy(update={"recovery_input_schedule_sha256": "9" * 64})
     changed = changed.model_copy(update={"resolution_sha256": changed.recompute_sha256()})
     queue.consumed_recovery_input_resolution = lambda _task_id: changed
