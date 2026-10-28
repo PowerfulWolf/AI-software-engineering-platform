@@ -99,6 +99,11 @@ node --test tests/team_view/*.test.cjs
 
 真实布局测试单独放在 `tests/team_view/browser/`，防止不具备浏览器的轻量环境静默跳过验证。
 需有 Playwright Node 包与 Chrome；使用独立临时 profile，全量拦截 `http://ui.test/` 请求。
+macOS 交互工作站默认拒绝 Playwright 启动任何系统浏览器 channel：系统 Chrome 无头进程曾在应用注册阶段
+以 SIGABRT 退出，并弹出 Google Chrome 意外退出提示，即使日常浏览器使用正常。
+仅在独立测试主机上明确设置 `ASE_UI_ALLOW_SYSTEM_CHROME=1` 后才允许该启动；本机
+代码检查可运行 `browser-launch-guard.test.cjs` 和 JS 语法检查，但不能把它们记作
+浏览器交互验证。使用 `ASE_UI_BROWSER_CHANNEL=chromium` 的隔离 CI 仍可运行真实布局测试。
 可复用已有安装，将其 node_modules 加入 `NODE_PATH`，也可在仓库外安装：
 
 ```sh
@@ -106,8 +111,8 @@ npm install --prefix /tmp/ase-ui-test-deps playwright
 NODE_PATH=/tmp/ase-ui-test-deps/node_modules node --test tests/team_view/browser/*.test.cjs
 ```
 
-有 Playwright 自带浏览器的 CI 可使用 `ASE_UI_BROWSER_CHANNEL=chromium`。浏览器启动受限时应申请
-测试进程权限，不能把跳过测试当作验证通过。仅检查 DOM hidden 属性不足以证明遮罩真正关闭。
+有 Playwright 自带浏览器的 CI 可使用 `ASE_UI_BROWSER_CHANNEL=chromium`。浏览器启动受限时应在
+独立测试主机验证，不能把跳过测试当作验证通过。仅检查 DOM hidden 属性不足以证明遮罩真正关闭。
 
 本机日常浏览器可正常使用，并不能证明受限无头测试进程有启动权限。需要离线
 Chromium 合成验证时，可按 [`tools/browser-verifier-image/README.md`](../../tools/browser-verifier-image/README.md)

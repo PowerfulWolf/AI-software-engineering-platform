@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
+const { assertSafeBrowserLaunch } = require("./browser-launch-guard.cjs");
 const { operationManifest } = require("../console-capabilities-fixture.cjs");
 const assets = path.resolve(__dirname, "../../../src/ai_software_engineer/team_view");
 const operation = (status = "QUEUED", overrides = {}) => ({
@@ -13,7 +14,10 @@ const operation = (status = "QUEUED", overrides = {}) => ({
   ...overrides,
 });
 async function ui(t, options = {}) {
-  const browser = await chromium.launch({ channel: process.env.ASE_UI_BROWSER_CHANNEL || "chrome", headless: true });
+  const channel = process.env.ASE_UI_BROWSER_CHANNEL || "chrome";
+  assertSafeBrowserLaunch({platform: process.platform, channel,
+    allowSystemChrome: process.env.ASE_UI_ALLOW_SYSTEM_CHROME});
+  const browser = await chromium.launch({ channel, headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage();
   page.setDefaultTimeout(3000);
