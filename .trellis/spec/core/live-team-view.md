@@ -894,6 +894,113 @@ deletion. Reload the service after active operations finish, then read the exist
 The same in-flight/finished Task remains the source of truth. Do not set Task status to DONE or clear
 historical blockers in storage to make the page look correct.
 
+## Manager action binding must use the same active successor proof (2026-10-28)
+
+### Scope and signatures
+
+This contract applies when a recovery or continuation dispatch is committed in MySQL before the
+native Requirement checkpoint is published. The read projection and the Manager action path must
+select the same successor from one immutable native history prefix and one repeatable-read SQL
+snapshot. A read-side successor is not a durable checkpoint and must never be written back to the
+Requirement journal or Task row.
+
+```python
+active_successor_dispatch(
+    checkpoint: ProjectDeliveryCheckpoint,
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+    dispatches: Iterable[DeliveryAllocation],
+    *,
+    task_status: Callable[[str], str | None],
+) -> DeliveryAllocation | None
+
+TeamHost._delivery_wait_binding(
+    project_id: str,
+    delivery_id: str,
+    item_task_id: str,
+) -> tuple[ProjectDeliveryCheckpoint, DeliveryAllocation | None]
+
+TeamHost._delivery_wait_service(
+    command: InspectDeliveryWait,
+    *,
+    project_id: str,
+    delivery_id: str,
+) -> DeliveryWaitInvestigation
+```
+
+`active_successor_dispatch` is the single validator used by `ProductionTeamReader` and
+`TeamHost`. It receives the complete validated native history, all typed dispatch rows for the
+repository, and a status lookup bound to the same SQL snapshot. A recovery allocation must carry
+`recovery_of_task_id`, `recovery_of_delivery_id`, and
+`recovery_source_checkpoint_sha256`; a continuation allocation must carry its exact source Task
+and Delivery. The selected successor is the unique non-terminal Task committed after the native
+checkpoint. `dispatch_id`, `dispatch_sha256`, Task ID/revision/status and the source checkpoint
+digest are the fields copied into a temporary effective checkpoint for validation only.
+
+### Action/read contract
+
+- `_delivery_wait_binding` first accepts a WorkItem whose Task is the native checkpoint Task. If
+  that does not match, it calls the shared successor validator and accepts only the exact successor
+  Task for the same Delivery, Repository and repository root. An unrelated Project WorkItem is
+  rejected with the controlled foreign-work-item error.
+- `_delivery_wait_service` uses the successor dispatch SHA and a recomputed effective checkpoint
+  when a successor is selected. The effective checkpoint is an in-memory projection; it is not
+  persisted, does not advance the native sequence, and does not alter the immutable predecessor
+  checkpoint or Task history.
+- `_handle_current_wait_once`, baseline proposal/execute/resume actions, and the Team read
+  projection must all use the same lineage validator. A terminal native checkpoint may therefore
+  have an active successor WorkItem while publication is pending, but the old blocker remains
+  historical until native attachment is durable.
+- Every SQL query needed for dispatch decoding and Task status runs inside one read-only
+  consistent snapshot. The filesystem catalog and native history are read-only. No action path may
+  repair a missing checkpoint by direct SQL, fabricate a dispatch, or call a model merely to make
+  the projection advance.
+
+### Validation and error matrix
+
+| Input facts | Required result |
+| --- | --- |
+| Native Task matches the waiting WorkItem | Bind native checkpoint; preserve native dispatch SHA |
+| One committed non-terminal successor with exact Delivery/Repository/source-checkpoint lineage | Bind successor and validate through effective checkpoint |
+| Successor Task is DONE/BLOCKED/FAILED or not materialized in SQL | No active successor; keep native projection |
+| Recovery source Task, Delivery, or checkpoint digest differs | Reject with a lineage error; no action and no write |
+| Multiple live successors or dispatch committed at/before the checkpoint | Reject as ambiguous/stale; do not choose by timestamp/title |
+| WorkItem belongs to another Project/Requirement or repository root | Reject as foreign work item |
+| Native history is not the current history head or has scope drift | Reject the read/action; retain all durable facts |
+| SQL snapshot, catalog, or dispatch payload is unavailable/invalid | Fail closed; never infer current execution |
+
+### Good / Base / Bad
+
+- **Good:** the K1 native checkpoint remains BLOCKED, the exact recovery successor is
+  `IMPLEMENTING` with a `CONTEXT_CAPACITY` wait, and both Team GET and `INSPECT_DELIVERY_WAIT`
+  show the successor WorkItem while preserving the old checkpoint as history.
+- **Base:** no successor is committed yet; both paths continue to show the native checkpoint and
+  its original wait facts.
+- **Bad:** accept a same-named WorkItem from another Requirement, treat a lease expiry as proof of
+  liveness, select one of two successors, or write the successor Task into the native journal
+  before its normal attachment event.
+
+### Required regression and stored-data handling
+
+`tests/manager/test_active_successor.py` must cover exact lineage acceptance, source-checkpoint
+mismatch, multiple-live rejection, foreign WorkItem rejection, and the native-checkpoint-lagging
+binding used by `INSPECT_DELIVERY_WAIT`. Manager delivery-wait and baseline action tests must assert
+that the effective checkpoint carries the successor dispatch SHA/Task revision and that its digest
+is recomputed. Team read tests must prove the same successor is selected from the same snapshot.
+Run at minimum:
+
+```text
+.venv/bin/pytest -q tests/manager/test_active_successor.py \
+  tests/manager/test_team_host.py tests/team_view/test_summary_detail_reader.py \
+  tests/team_view/test_live.py
+```
+
+No SQL migration, Requirement journal rewrite, Task reset, artifact deletion, or checkpoint repair
+is allowed. Existing K1 predecessor, successor, waits, claims and dispatch commits remain
+append-only. Release the compatible service while idle, refresh the Project, and continue through
+the public inspect/resolve/continue operations. Rollback is a code-only revert before consuming a
+new wait decision; after a successor operation is consumed, retain a compatible reader and use a
+forward fix so the immutable lineage remains readable.
+
 ### Bug analysis: recovery runs while the page still shows the failed predecessor
 
 1. **Root cause (B/D/E)**: dispatch/SQL advancement precedes native checkpoint publication. The

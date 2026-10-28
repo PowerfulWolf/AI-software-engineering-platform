@@ -39,6 +39,7 @@ from ai_software_engineer.knowledge.gaps import GapRoute, KnowledgeGap, Knowledg
 from ai_software_engineer.knowledge.models import digest as knowledge_digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.knowledge.views import read_gap_view
+from ai_software_engineer.manager.active_successor import active_successor_dispatch
 from ai_software_engineer.manager.delivery import _delivery_id
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
@@ -3038,44 +3039,23 @@ def _active_successor_dispatch(
     while Coder, QA, or Reviewer is executing.  Project the live successor instead of
     leaving the parent Requirement and Team queues on the previous BLOCKED checkpoint.
     """
-    cp = native.checkpoint
-    known_tasks = _native_task_sources(native)
     cursor.execute(
         "SELECT * FROM dispatch_commits WHERE repository_id = %s",
-        (cp.repository_id,),
+        (native.checkpoint.repository_id,),
     )
-    candidates: list[DeliveryAllocation] = []
-    for row in cursor.fetchall():
-        dispatch = _decode_allocation(row)
-        if dispatch.task_id == cp.task_id or dispatch.committed_at <= cp.checkpointed_at:
-            continue
-        source_task_id: str | None = None
-        source_delivery_id: str | None = None
-        if isinstance(dispatch, RecoveryDispatchRecord):
-            source_task_id = str(dispatch.task.metadata.get("recovery_of_task_id", ""))
-            source_delivery_id = str(dispatch.task.metadata.get("recovery_of_delivery_id", ""))
-            if source_delivery_id == cp.delivery_id and (
-                source_task_id != cp.task_id
-                or dispatch.task.metadata.get("recovery_source_checkpoint_sha256")
-                != cp.checkpoint_sha256
-            ):
-                raise ValueError("active recovery source checkpoint mismatch")
-        elif isinstance(dispatch, ContinuationDispatchRecord):
-            source_task_id = str(dispatch.source_task_id)
-            source_delivery_id = str(dispatch.source_delivery_id)
-        if source_task_id not in known_tasks or source_delivery_id != cp.delivery_id:
-            continue
-        cursor.execute("SELECT status FROM tasks WHERE id = %s", (dispatch.task_id,))
+    dispatches = tuple(_decode_allocation(row) for row in cursor.fetchall())
+
+    def task_status(task_id: str) -> str | None:
+        cursor.execute("SELECT status FROM tasks WHERE id = %s", (task_id,))
         task_row = cursor.fetchone()
-        if task_row is None:
-            continue
-        if str(task_row["status"]) not in _TERMINAL:
-            candidates.append(dispatch)
-    if not candidates:
-        return None
-    if len(candidates) != 1:
-        raise ValueError("ambiguous active successor dispatch")
-    return candidates[0]
+        return None if task_row is None else str(task_row["status"])
+
+    return active_successor_dispatch(
+        native.checkpoint,
+        native.history,
+        dispatches,
+        task_status=task_status,
+    )
 
 
 class _ArtifactClaimPayload(DomainModel):

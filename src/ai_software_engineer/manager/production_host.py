@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pymysql.cursors import DictCursor
+
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource
@@ -29,7 +31,7 @@ from ai_software_engineer.domain.engineering_authority import (
     LocalOperatorPrincipal,
     OperatorDuty,
 )
-from ai_software_engineer.domain.enums import AgentRole, WorkItemStatus
+from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.execution_baseline import (
     BaselineContinuationMode,
     ExecutionBaselineBinding,
@@ -43,6 +45,7 @@ from ai_software_engineer.knowledge_selection import (
     effective_project_knowledge_paths,
     effective_team_knowledge_paths,
 )
+from ai_software_engineer.manager.active_successor import active_successor_dispatch
 from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
     BaselineOperatorAuthorization,
@@ -62,10 +65,12 @@ from ai_software_engineer.manager.delivery import (
     UnifiedProjectEntryService,
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryNextAction,
     DeliveryStage,
     ProjectDeliveryCheckpoint,
 )
 from ai_software_engineer.manager.delivery_wait import DeliveryWaitService
+from ai_software_engineer.manager.dispatch import DeliveryAllocation
 from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 from ai_software_engineer.manager.preparation import PrepareProjectResult
 from ai_software_engineer.manager.production_backend import (
@@ -106,6 +111,7 @@ from ai_software_engineer.spec_documents import (
     TeamSpecDocumentStore,
 )
 from ai_software_engineer.store import MySqlTaskRepository
+from ai_software_engineer.store.mysql_repository import open_mysql_connection
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.work_queue import DispatcherLoop
 from ai_software_engineer.work_queue.dispatcher import OwnerTokenFactory, RunDemandBuilder
@@ -280,9 +286,30 @@ class TeamHost:
             MySqlTaskRepository(self._config.require_mysql_dsn(self._environment))
         ) as repository:
             for checkpoint in native:
-                if checkpoint.task_id is None or checkpoint.stage is not DeliveryStage.DELIVERING:
+                direct_waiting = (
+                    tuple(
+                        item
+                        for item in self._work_queue.items_for_task(checkpoint.task_id)
+                        if item.status
+                        in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+                        and item.wait_disposition is not None
+                        and item.wait_disposition.responsibility
+                        is DeliveryResponsibility.ENGINEERING
+                    )
+                    if checkpoint.task_id is not None
+                    else ()
+                )
+                successor = (
+                    None
+                    if direct_waiting
+                    else self._active_successor_dispatch(project_id, checkpoint)
+                )
+                if checkpoint.stage is not DeliveryStage.DELIVERING and successor is None:
                     continue
-                task = repository.get(checkpoint.task_id)
+                task_id = successor.task_id if successor is not None else checkpoint.task_id
+                if task_id is None:
+                    continue
+                task = repository.get(task_id)
                 if task.engineering_policy is None or not task.engineering_policy.allowance(
                     EngineeringCapability.DELIVERY_WAIT_RESOLUTION
                 ):
@@ -716,10 +743,50 @@ class TeamHost:
         from ai_software_engineer.multi_directory.production import approved_joint_context_sources
 
         parent = self._runtime(project_id).requirements.status(delivery_id).checkpoint
-        matching = tuple(child for child in parent.children if child.checkpoint == native)
+        # A recovery successor is attached to the same native child before its
+        # journal checkpoint is published.  The effective checkpoint used by
+        # baseline collection carries the successor Task/dispatch, so full
+        # checkpoint equality would incorrectly reject the still-valid parent
+        # knowledge scope.  Delivery/repository/root remain the exact public
+        # binding and duplicate children fail closed.
+        matching = tuple(
+            child
+            for child in parent.children
+            if (
+                child.checkpoint.delivery_id == native.delivery_id
+                and child.checkpoint.repository_id == native.repository_id
+                and child.checkpoint.repository_root == native.repository_root
+            )
+        )
         if len(matching) != 1:
             raise ValueError("基线调查的父需求与精确原交付任务不一致")
         return approved_joint_context_sources(parent, matching[0].unit_id)
+
+    @staticmethod
+    def _effective_baseline_checkpoint(
+        native: ProjectDeliveryCheckpoint,
+        successor: DeliveryAllocation,
+        *,
+        task_revision: int,
+        task_status: TaskStatus,
+    ) -> ProjectDeliveryCheckpoint:
+        """Project a live successor for baseline validation without journal mutation."""
+        projected = native.model_copy(
+            update={
+                "dispatch_commit_id": successor.id,
+                "dispatch_commit_sha256": successor.dispatch_sha256,
+                "task_id": successor.task_id,
+                "task_revision": task_revision,
+                "task_status": task_status,
+                "stage": DeliveryStage.DELIVERING,
+                "next_action": DeliveryNextAction.RUN_DELIVERY,
+                "failure_code": None,
+                "failure_summary": None,
+                "failed_stage": None,
+                "checkpointed_at": max(native.checkpointed_at, successor.committed_at),
+            }
+        )
+        return projected.model_copy(update={"checkpoint_sha256": projected.recompute_sha256()})
 
     def _baseline_native_checkpoint(
         self,
@@ -734,9 +801,29 @@ class TeamHost:
         else:
             candidates = (runtime.entry.status(delivery_id).checkpoint,)
         matching = tuple(candidate for candidate in candidates if candidate.task_id == task_id)
-        if len(matching) != 1:
+        if len(matching) > 1:
             raise ValueError("工程执行基线不属于当前 Project Requirement 的唯一原交付任务")
-        native = matching[0]
+        if len(matching) == 1:
+            native = matching[0]
+        else:
+            successor_matches: list[tuple[ProjectDeliveryCheckpoint, DeliveryAllocation]] = []
+            for candidate in candidates:
+                successor = self._active_successor_dispatch(project_id, candidate)
+                if successor is not None and successor.task_id == task_id:
+                    successor_matches.append((candidate, successor))
+            if len(successor_matches) != 1:
+                raise ValueError("工程执行基线不属于当前 Project Requirement 的唯一原交付任务")
+            source, successor = successor_matches[0]
+            with closing(
+                MySqlTaskRepository(self._config.require_mysql_dsn(self._environment))
+            ) as repository:
+                task = repository.get(successor.task_id)
+                native = self._effective_baseline_checkpoint(
+                    source,
+                    successor,
+                    task_revision=repository.current_revision(task.id),
+                    task_status=task.status,
+                )
         if native.repository_id is None or native.task_id is None:
             raise ValueError("工程执行基线缺少当前需求的仓库和交付任务")
         return native
@@ -766,6 +853,68 @@ class TeamHost:
         )
         return resolution
 
+    def _active_successor_dispatch(
+        self,
+        project_id: str,
+        checkpoint: ProjectDeliveryCheckpoint,
+    ) -> DeliveryAllocation | None:
+        """Read the unique live successor while the native checkpoint lags it."""
+        runtime = self._runtime(project_id)
+        catalog = ProjectDeliveryCheckpointCatalog(
+            runtime.project.repository_registry().registry_root
+        )
+        history = catalog.for_delivery(checkpoint.delivery_id).list(checkpoint.delivery_id)
+        dsn = self._config.require_mysql_dsn(self._environment)
+        connection = open_mysql_connection(dsn)
+        try:
+            with connection.cursor(DictCursor) as cursor:
+                cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                cursor.execute(
+                    "SELECT * FROM dispatch_commits WHERE repository_id=%s",
+                    (checkpoint.repository_id,),
+                )
+                from ai_software_engineer.manager.mysql_dispatch_authority import (
+                    _decode_allocation,
+                )
+
+                dispatches = tuple(_decode_allocation(row) for row in cursor.fetchall())
+
+                def task_status(task_id: str) -> str | None:
+                    cursor.execute("SELECT status FROM tasks WHERE id=%s", (task_id,))
+                    row = cursor.fetchone()
+                    return None if row is None else str(row["status"])
+
+                return active_successor_dispatch(
+                    checkpoint,
+                    history,
+                    dispatches,
+                    task_status=task_status,
+                )
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def _delivery_wait_binding(
+        self,
+        project_id: str,
+        delivery_id: str,
+        item_task_id: str,
+    ) -> tuple[ProjectDeliveryCheckpoint, DeliveryAllocation | None]:
+        """Bind a waiting WorkItem to the native checkpoint or its exact successor."""
+        runtime = self._runtime(project_id)
+        if delivery_id.startswith("delivery_multi_"):
+            checkpoint = runtime.requirements.status(delivery_id).checkpoint
+            candidates = tuple(child.checkpoint for child in checkpoint.children)
+        else:
+            candidates = (runtime.entry.status(delivery_id).checkpoint,)
+        for native in candidates:
+            if native.task_id == item_task_id:
+                return native, None
+            successor = self._active_successor_dispatch(project_id, native)
+            if successor is not None and successor.task_id == item_task_id:
+                return native, successor
+        raise ValueError("工程工作项不属于当前 Project Requirement")
+
     def _delivery_wait_service(
         self,
         command: InspectDeliveryWait,
@@ -793,24 +942,15 @@ class TeamHost:
         )
         from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCollector
 
-        runtime = self._runtime(project_id)
         item = self._work_queue.get(command.work_item_id)
-        if delivery_id.startswith("delivery_multi_"):
-            checkpoint = runtime.requirements.status(delivery_id).checkpoint
-            candidates = tuple(child.checkpoint for child in checkpoint.children)
-        else:
-            candidates = (runtime.entry.status(delivery_id).checkpoint,)
-        native = next(
-            (
-                candidate
-                for candidate in candidates
-                if candidate.task_id == item.task_id
-                and candidate.repository_id == item.repository_id
-            ),
-            None,
+        native, dispatch_override = self._delivery_wait_binding(
+            project_id,
+            delivery_id,
+            item.task_id,
         )
-        if native is None:
+        if native.repository_id != item.repository_id:
             raise ValueError("工程工作项不属于当前 Project Requirement")
+        runtime = self._runtime(project_id)
         workspace = next(
             (
                 workspace
@@ -822,6 +962,17 @@ class TeamHost:
         if workspace is None or str(workspace.repository_root) != native.repository_root:
             raise ValueError("工程工作项没有精确注册的 Repository workspace")
         task = repository.get(item.task_id)
+        if dispatch_override is not None:
+            native = native.model_copy(
+                update={
+                    "dispatch_commit_id": dispatch_override.id,
+                    "dispatch_commit_sha256": dispatch_override.dispatch_sha256,
+                    "task_id": task.id,
+                    "task_revision": repository.current_revision(task.id),
+                    "task_status": task.status,
+                }
+            )
+            native = native.model_copy(update={"checkpoint_sha256": native.recompute_sha256()})
 
         def consume(resolution: DeliveryResolution) -> None:
             self._work_queue.resolve_wait(resolution)
@@ -839,7 +990,11 @@ class TeamHost:
             / item.repository_id,
             branch_names={task.id: task.branch_name},
         )
-        dispatch_sha256 = native.dispatch_commit_sha256
+        dispatch_sha256 = (
+            dispatch_override.dispatch_sha256
+            if dispatch_override is not None
+            else native.dispatch_commit_sha256
+        )
         if dispatch_sha256 is None:
             raise ValueError("当前交付缺少 dispatch 绑定")
         collector = DeliveryWaitFactCollector(
