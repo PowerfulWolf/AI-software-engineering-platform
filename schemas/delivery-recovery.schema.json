@@ -846,6 +846,47 @@
               "input_mode"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "properties": {
+                  "contained_unknown_settlement_sha256": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "contained_unknown_settlement_sha256"
+                ]
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "coder_reapply"
+              },
+              "context_capacity_input": {
+                "type": "null"
+              },
+              "workspace_snapshot": {
+                "type": "null"
+              },
+              "scope_supplement": {
+                "type": "null"
+              },
+              "quarantined_paths": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "input_mode"
+            ]
+          }
         }
       ]
     },
@@ -1045,6 +1086,19 @@
           ],
           "default": null,
           "title": "Stopped Unknown Settlement Sha256"
+        },
+        "contained_unknown_settlement_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contained Unknown Settlement Sha256"
         }
       },
       "required": [
@@ -1149,6 +1203,62 @@
                 "type": "string"
               },
               "context_capacity_receipt_sha256": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "failed_run_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "stopped_unknown_settlement_sha256": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "stopped_unknown_settlement_sha256"
+            ]
+          },
+          "then": {
+            "properties": {
+              "failed_run_id": {
+                "type": "string"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "contained_unknown_settlement_sha256": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "failed_run_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "contained_unknown_settlement_sha256": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "contained_unknown_settlement_sha256"
+            ]
+          },
+          "then": {
+            "properties": {
+              "failed_run_id": {
+                "type": "string"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "stopped_unknown_settlement_sha256": {
                 "type": "null"
               }
             },

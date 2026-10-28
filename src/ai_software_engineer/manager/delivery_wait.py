@@ -89,6 +89,9 @@ from ai_software_engineer.manager.candidate_test_entry_absence import (
     observe_accepted_candidate_test_entry_absence,
 )
 from ai_software_engineer.manager.capacity_input_reader import claimed_verifier_capacity
+from ai_software_engineer.manager.contained_unknown_budget import (
+    ContainedUnknownBudgetSettlementService,
+)
 from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightCheckpoint,
     DeliveryPreflightReceipt,
@@ -462,6 +465,7 @@ class DeliveryWaitService:
         clock: Callable[[], datetime] | None = None,
         budget_settlement: StoppedBudgetSettlementService | None = None,
         unknown_budget_settlement: StoppedUnknownBudgetSettlementService | None = None,
+        contained_unknown_budget_settlement: ContainedUnknownBudgetSettlementService | None = None,
     ) -> None:
         self.repository, self.queue, self.sidecar_state = repository, queue, sidecar_state
         self.scope = scope
@@ -477,6 +481,7 @@ class DeliveryWaitService:
         self.clock = clock or (lambda: datetime.now(UTC))
         self.budget_settlement = budget_settlement
         self.unknown_budget_settlement = unknown_budget_settlement
+        self.contained_unknown_budget_settlement = contained_unknown_budget_settlement
         self.records = KnowledgeRecordStore(sidecar_state / "delivery-waits")
 
     def inspect(self, command: InspectDeliveryWait) -> DeliveryWaitInvestigation:
@@ -502,13 +507,24 @@ class DeliveryWaitService:
     def handle(self, command: HandleDeliveryWait) -> DeliveryWaitHandling:
         """Collect once and use frozen policy; requesting handling adds no authority."""
         self._reject_baseline_pause(command.work_item_id)
-        if self.budget_settlement is not None or self.unknown_budget_settlement is not None:
+        if any(
+            service is not None
+            for service in (
+                self.budget_settlement,
+                self.unknown_budget_settlement,
+                self.contained_unknown_budget_settlement,
+            )
+        ):
             replay_guard = WorkerExecutionGuard()
             with replay_guard.task_scope(
                 self.sidecar_state / "queue-worker-locks",
                 self.queue.get(command.work_item_id).task_id,
             ):
-                for service in (self.budget_settlement, self.unknown_budget_settlement):
+                for service in (
+                    self.budget_settlement,
+                    self.unknown_budget_settlement,
+                    self.contained_unknown_budget_settlement,
+                ):
                     if service is not None:
                         replay = service.replay(command, replay_guard)
                         if replay is not None:
@@ -595,6 +611,16 @@ class DeliveryWaitService:
                 workspace_refusal = self._workspace_admission_evidence(
                     item, step, task, start, outcome, self._receipt(task, start)
                 )
+                if command.confirm_local_execution_stopped is True:
+                    if self.contained_unknown_budget_settlement is None:
+                        raise DeliveryWaitRejected("平台尚未启用 start-only 本机执行隔离")
+                    contained_proof = self._collect(item, step, task, guard=guard)
+                    contained = self.contained_unknown_budget_settlement.try_settle(
+                        command, task, item, step, contained_proof, guard
+                    )
+                    if contained is not None:
+                        return contained
+                    raise DeliveryWaitRejected("当前等待不符合 start-only 本机执行隔离条件")
                 # Exhausted UNKNOWN work has no interruption receipt. Its separate
                 # exact stop/absence/capture verifier must run before ordinary
                 # reconciliation, which correctly rejects unknown causes/output.
@@ -1883,6 +1909,38 @@ class DeliveryWaitService:
         # separate provider-transient allowance is exhausted.
         if missing:
             permitted = ()
+        local_stop_available = False
+        if (
+            self.contained_unknown_budget_settlement is not None
+            and guard is not None
+            and start is not None
+            and outcome is None
+            and receipt is None
+            and observed_stop is None
+            and task.work_budget_exhausted
+            and item.role is AgentRole.CODER
+            and item.wait_disposition.facts.classification == "EXECUTION_UNCERTAIN"
+            and set(missing) == {
+                DeliveryProofMissing.OUTCOME_UNKNOWN,
+                DeliveryProofMissing.STOP_UNRECORDED,
+                DeliveryProofMissing.CHECKPOINT_UNAVAILABLE,
+            }
+        ):
+            try:
+                local_stop_available = self.contained_unknown_budget_settlement.eligible(
+                    task, item, step, guard
+                )
+            except (
+                ContinuationRejected,
+                ValueError,
+                OSError,
+                QueueError,
+                KnowledgeError,
+                GitWorkspaceError,
+            ):
+                local_stop_available = False
+            if local_stop_available:
+                missing.append(DeliveryProofMissing.BUDGET_EXHAUSTED)
         return self._proof(
             item,
             step,
@@ -1904,6 +1962,7 @@ class DeliveryWaitService:
             rejected_workspace_admission=rejected_workspace_admission,
             rejected_output=rejected_output,
             observed_stop=observed_stop,
+            local_stop_confirmation_available=local_stop_available,
         )
 
     def _claimed_knowledge_preparation(
@@ -2385,6 +2444,7 @@ class DeliveryWaitService:
         rejected_workspace_admission: RejectedWorkspaceAdmissionEvidence | None = None,
         rejected_output: RejectedCoderOutputEvidence | None = None,
         observed_stop: ExecutionCaptureStop | None = None,
+        local_stop_confirmation_available: bool = False,
     ) -> DeliveryWaitInvestigation:
         assert item.wait_disposition is not None
         preflight_detail_action = _preflight_detail_action(prerequisites)
@@ -2480,6 +2540,7 @@ class DeliveryWaitService:
             else None,
             permitted_resolutions=permitted,
             missing=missing,
+            local_stop_confirmation_available=local_stop_confirmation_available,
             next_action=(
                 "候选提交缺少冻结计划指定的验收测试文件。原 QA 验证准备与模型均未开始; "
                 "工程责任人可核对并批准专用静态 FAIL 验收; 原计划验证命令未启动, "

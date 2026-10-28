@@ -55,6 +55,18 @@ for name in (
     for generated in schemas.values():
         if name in generated.get("$defs", {}):
             generated["$defs"][name]["allOf"] = engineering_wire["$defs"][name]["allOf"]
+# Keep the historical stopped-failure v1 Schema byte-compatible. Its records
+# never carry the separate start-only confirmation capability.
+historical_investigation = schemas["stopped-failure-budget-settlement"]["$defs"][
+    "DeliveryWaitInvestigation"
+]
+historical_investigation["properties"].pop("local_stop_confirmation_available", None)
+historical_investigation["allOf"] = [
+    guard
+    for guard in historical_investigation["allOf"]
+    if guard.get("if", {}).get("properties", {}).get("local_stop_confirmation_available")
+    != {"const": True}
+]
 for name in ("CreateRequirementIntent", "UpdateRequirementIntent"):
     roots = definitions[name]["properties"]["repository_roots"]
     roots["uniqueItems"] = True
@@ -109,6 +121,11 @@ definitions["ConsoleApprovalRequest"]["allOf"] = [
         },
         "then": {"properties": {"kind": {"const": "coder_scope"}}},
     }
+]
+definitions["HandleDeliveryWaitIntent"]["allOf"] = [
+    run_path(str(Path(__file__).with_name("sync-contained-unknown-contracts.py")))[
+        "HANDLE_CONFIRMATION_GUARD"
+    ]
 ]
 definitions["ConsoleCommandResult"]["oneOf"] = [
     {

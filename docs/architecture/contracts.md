@@ -1,5 +1,14 @@
 # 角色、权限与 Artifact 契约
 
+最后一次本机 Coder 调用只有 `invocation-start` 与 `capture-start`、没有结果或停止记录，且
+冻结普通工作额度耗尽时，平台不能把启动记录当成执行结束或给旧 Task 补造结果。
+只读工程调查可给出精确的本机停止确认资格；有 ENGINEERING 职责的维护者以可信引用
+明确确认同机同账户、未迁移远端、全部派生工具结束且不再写原工作区后，公开 HANDLE
+封存独立人工审计与完整草稿，在 Task/队列 fence 下将旧 Task 结算为 `BLOCKED`。
+原 Run 始终保留 UNKNOWN；新的同需求恢复计划必须保留 Task 基线至当前的完整补丁，
+经单独精确审批后由新 Coder、QA、Reviewer 执行。见
+[start-only UNKNOWN 结算规范](../../.trellis/spec/core/contained-unknown-budget-recovery.md)。
+
 主角色 invocation start 不证明 provider 已启动。已接纳 progress 与同基线获批完整草稿
 可按精确 Plan 身份共同准入；后续新 progress 仍执行自身完整 inventory 契约。
 旧可信 adapter 的独占 pre-provider 准入拒绝，仅在完整 start/outcome/唯一 route、原 claim、

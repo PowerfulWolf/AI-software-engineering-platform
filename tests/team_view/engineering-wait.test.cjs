@@ -611,6 +611,35 @@ test("platform repair retry handles the exact original wait instead of only insp
   assert.doesNotMatch(h.context.copiedReport, /WORKSPACE_CAPTURE_REJECTED|STOP_UNRECORDED/);
 });
 
+test("contained UNKNOWN confirmation replaces generic retry and disappears after settlement", async () => {
+  const h = harness();
+  h.task.project_id = h.request.project_id;
+  h.run("consoleOperationContractVersion = 12");
+  h.step.wait_disposition.facts.classification = "EXECUTION_UNCERTAIN";
+  const missing = ["OUTCOME_UNKNOWN", "STOP_UNRECORDED", "CHECKPOINT_UNAVAILABLE", "BUDGET_EXHAUSTED"];
+  const result = handling(h, "PLATFORM_ATTENTION", missing);
+  Object.assign(result.investigation, {
+    kind: "delivery_wait_investigation",
+    local_stop_confirmation_available: true,
+    original_run_id: "run_original_coder",
+  });
+  const before = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.equal(control(before, "平台修复后重新处理"), undefined);
+  const stale = control(before, "记录本机停止确认并处理旧任务");
+  assert.ok(stale);
+  const checkbox = descend(before).find(item => item.tagName === "INPUT" && item.type === "checkbox");
+  const reference = descend(before).find(item => item.tagName === "INPUT" && item.type === "text");
+  checkbox.checked = true;
+  reference.value = "call_exact_user_reply";
+  result.status = "BUDGET_EXHAUSTED";
+  await stale.events.click();
+  assert.equal(h.run("submitted.length"), 0, "retained confirmation callback cannot post after settlement");
+  const after = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  assert.equal(control(after, "记录本机停止确认并处理旧任务"), undefined);
+  assert.doesNotMatch(text(after), /填写可信授权记录 ID 后主动提交/);
+  assert.match(text(after), /已结算旧任务/);
+});
+
 test("incremental wait rendering refreshes changed capture diagnosis with the same proof", () => {
   const h = harness();
   const result = handling(h, "PLATFORM_ATTENTION", ["OUTCOME_UNKNOWN", "CHECKPOINT_UNAVAILABLE"]);

@@ -66,6 +66,11 @@ from ai_software_engineer.read_record_scope import (
     recovery_record_read_scope,
 )
 from ai_software_engineer.recovery.allocation import RecoveryAllocator
+from ai_software_engineer.recovery.contained_unknown import (
+    CONTAINED_UNKNOWN_BUDGET_SUMMARY,
+    ContainedUnknownRecoverySourceReader,
+    require_contained_unknown_capture,
+)
 from ai_software_engineer.recovery.context import (
     approved_parent_context,
     preserved_native_verdict_context,
@@ -319,6 +324,7 @@ class NativeRecoveryEntry:
         failed_context_id: str,
         capacity_receipt_sha256: str | None = None,
         stopped_unknown_settlement_sha256: str | None = None,
+        contained_unknown_settlement_sha256: str | None = None,
         input_mode: RecoveryInputMode | None = None,
         target_branch_name: BranchName | None = None,
         approved_scope_sha256: str | None = None,
@@ -335,7 +341,21 @@ class NativeRecoveryEntry:
             repository_root=prepared.repository_root,
             delivery_id=delivery_id,
         )
-        if stopped_unknown_settlement_sha256 is not None:
+        if contained_unknown_settlement_sha256 is not None:
+            if capacity_receipt_sha256 is not None or stopped_unknown_settlement_sha256 is not None:
+                raise RecoveryRejected("恢复来源必须绑定唯一的精确执行事实")
+            original = ContainedUnknownRecoverySourceReader(self.config, self.environment).inspect(
+                scope, contained_unknown_settlement_sha256
+            )
+            if (failed_run_id, failed_context_id) != (
+                original.source.failed_run_id,
+                original.source.failed_context_id,
+            ):
+                raise RecoveryRejected("恢复入口与已核验的原未知结果调用不一致")
+            if approved_scope_sha256 or scope_approval_reference or coder_scope_request:
+                raise RecoveryRejected("未知结果额度恢复不能扩展原需求的开发范围")
+            input_mode = "coder_reapply"
+        elif stopped_unknown_settlement_sha256 is not None:
             if capacity_receipt_sha256 is not None:
                 raise RecoveryRejected("恢复来源必须绑定唯一的精确执行事实")
             original = StoppedUnknownRecoverySourceReader(self.config, self.environment).inspect(
@@ -381,7 +401,10 @@ class NativeRecoveryEntry:
             input_mode = "coder_reapply"
         supplement = (
             None
-            if original.source.stopped_unknown_settlement_sha256 is not None
+            if (
+                original.source.stopped_unknown_settlement_sha256 is not None
+                or original.source.contained_unknown_settlement_sha256 is not None
+            )
             else inspect_recovery_scope_supplement(
                 manager, old, original, request=coder_scope_request
             )
@@ -410,13 +433,19 @@ class NativeRecoveryEntry:
             base_revision=original.source.effective_base_revision,
         )
         captured = CapturedChanges.from_capture(capture)
-        if original.source.stopped_unknown_settlement_sha256 is not None:
+        if (
+            original.source.stopped_unknown_settlement_sha256 is not None
+            or original.source.contained_unknown_settlement_sha256 is not None
+        ):
             current_capture = CapturedChanges.from_capture(
                 manager.capture_legacy_changes(
                     old, source_permissions, denied_paths=original.denied_paths
                 )
             )
-            require_stopped_unknown_capture(original, captured, current_capture)
+            if original.source.contained_unknown_settlement_sha256 is not None:
+                require_contained_unknown_capture(original, captured, current_capture)
+            else:
+                require_stopped_unknown_capture(original, captured, current_capture)
             # The two captures have distinct bases. Recheck the complete source
             # after the Run-local observation before publishing either as a Plan.
             manager.verify_legacy_capture(
@@ -513,6 +542,11 @@ class NativeRecoveryEntry:
             repository_root=checkpoint.repository_root,
             delivery_id=checkpoint.delivery_id,
         )
+        if checkpoint.failure_summary == CONTAINED_UNKNOWN_BUDGET_SUMMARY:
+            if request is not None:
+                raise RecoveryRejected("未知结果额度恢复不能扩展原需求的开发范围")
+            ContainedUnknownRecoverySourceReader(self.config, self.environment).discover(scope)
+            return None
         if checkpoint.failure_summary == STOPPED_UNKNOWN_BUDGET_SUMMARY:
             if request is not None:
                 raise RecoveryRejected("未知结果额度恢复不能扩展原需求的开发范围")
@@ -564,7 +598,11 @@ class NativeRecoveryEntry:
             repository_root=checkpoint.repository_root,
             delivery_id=checkpoint.delivery_id,
         )
-        if checkpoint.failure_summary == STOPPED_UNKNOWN_BUDGET_SUMMARY:
+        if checkpoint.failure_summary == CONTAINED_UNKNOWN_BUDGET_SUMMARY:
+            source = ContainedUnknownRecoverySourceReader(self.config, self.environment).discover(
+                scope
+            )
+        elif checkpoint.failure_summary == STOPPED_UNKNOWN_BUDGET_SUMMARY:
             source = StoppedUnknownRecoverySourceReader(self.config, self.environment).discover(
                 scope
             )
@@ -590,6 +628,7 @@ class NativeRecoveryEntry:
             failed_context_id=source.source.failed_context_id,
             capacity_receipt_sha256=source.source.context_capacity_receipt_sha256,
             stopped_unknown_settlement_sha256=source.source.stopped_unknown_settlement_sha256,
+            contained_unknown_settlement_sha256=source.source.contained_unknown_settlement_sha256,
             approved_scope_sha256=approved_scope_sha256,
             scope_approval_reference=scope_approval_reference,
             coder_scope_request=coder_scope_request,

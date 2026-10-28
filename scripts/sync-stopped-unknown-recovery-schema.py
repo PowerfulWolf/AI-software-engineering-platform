@@ -37,9 +37,13 @@ def synchronize(schema: Schema) -> Schema:
             nodes.append(_object(definitions[name]))
         for node in nodes:
             if name == "RecoverySource":
-                _object(node["properties"])["stopped_unknown_settlement_sha256"] = deepcopy(
-                    _object(expected["properties"])["stopped_unknown_settlement_sha256"]
-                )
+                for field in (
+                    "stopped_unknown_settlement_sha256",
+                    "contained_unknown_settlement_sha256",
+                ):
+                    _object(node["properties"])[field] = deepcopy(
+                        _object(expected["properties"])[field]
+                    )
             rules = _array(node.setdefault("allOf", []))
             for rule in _array(expected["allOf"]):
                 if rule not in rules:

@@ -24,7 +24,9 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryWaitHandling,
     DeliveryWaitInvestigation,
     EngineeringDispositionRecord,
+    HandleDeliveryWait,
     InspectDeliveryWait,
+    LocalStopReference,
 )
 from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding, FullGitRevision
 from ai_software_engineer.domain.identity import ProjectId, TeamId
@@ -247,6 +249,24 @@ class HandleDeliveryWaitIntent(_DeliveryWaitIntent):
     workspace_admission_adapter_contract: WorkspaceAdmissionAdapterContract | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    confirm_local_execution_stopped: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    local_stop_reference: LocalStopReference | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def require_exact_local_stop_declaration(self) -> Self:
+        HandleDeliveryWait.model_validate(
+            {
+                **self.model_dump(mode="python", include=set(InspectDeliveryWait.model_fields)),
+                "confirm_local_execution_stopped": self.confirm_local_execution_stopped,
+                "local_stop_reference": self.local_stop_reference,
+                "workspace_admission_adapter_contract": self.workspace_admission_adapter_contract,
+            }
+        )
+        return self
 
 
 class ResolveDeliveryWaitIntent(_DeliveryWaitIntent):

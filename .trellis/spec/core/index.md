@@ -38,6 +38,9 @@
 
 ## Files
 
+- [Contained start-only UNKNOWN budget recovery](contained-unknown-budget-recovery.md): exact
+  local human declaration, exhausted Task settlement and full same-Requirement successor.
+
 - [Stopped UNKNOWN budget recovery](stopped-unknown-budget-recovery.md): exact exhausted
   execution settlement, preserved UNKNOWN history and same-Requirement approved successor.
 

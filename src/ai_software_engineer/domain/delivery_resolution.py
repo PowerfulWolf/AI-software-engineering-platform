@@ -7,7 +7,7 @@ import json
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, Field, StrictBool, StrictInt, model_validator
+from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstraints, model_validator
 
 from ai_software_engineer.agents.execution import PausedInvocationProof
 from ai_software_engineer.domain.agent import AgentPermissions
@@ -38,6 +38,11 @@ from ai_software_engineer.domain.workforce import ModelSelection, RoleAssignment
 from ai_software_engineer.domain.workspace_admission_contract import (
     WorkspaceAdmissionAdapterContract,
 )
+
+LocalStopReference = Annotated[
+    str,
+    StringConstraints(min_length=8, max_length=256, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$"),
+]
 
 
 class DeliveryResolutionKind(StrEnum):
@@ -426,6 +431,22 @@ class HandleDeliveryWait(InspectDeliveryWait):
     workspace_admission_adapter_contract: WorkspaceAdmissionAdapterContract | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    confirm_local_execution_stopped: Literal[True] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    local_stop_reference: LocalStopReference | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def require_exact_local_stop_declaration(self) -> Self:
+        if (self.confirm_local_execution_stopped is True) != (
+            self.local_stop_reference is not None
+        ):
+            raise ValueError("本机停止确认必须同时提供明确声明和可信答复引用")
+        if self.confirm_local_execution_stopped and self.workspace_admission_adapter_contract:
+            raise ValueError("本机停止确认不能与工作区部署声明混用")
+        return self
 
 
 class DeliveryWaitInvestigation(DomainModel):
@@ -481,6 +502,9 @@ class DeliveryWaitInvestigation(DomainModel):
     )
     permitted_resolutions: tuple[DeliveryResolutionKind, ...] = ()
     missing: tuple[DeliveryProofMissing, ...] = ()
+    local_stop_confirmation_available: StrictBool = Field(
+        default=False, exclude_if=lambda value: value is False
+    )
     next_action: NonEmptyStr
     inspected_at: AwareDatetime
     proof_sha256: DispositionSha256
@@ -523,6 +547,24 @@ class DeliveryWaitInvestigation(DomainModel):
             ):
                 raise ValueError("verifier pause investigation changed its exact role or source")
         ensure_unique(self.missing, "missing engineering proof")
+        if self.local_stop_confirmation_available and (
+            facts.role is not AgentRole.CODER
+            or facts.classification != "EXECUTION_UNCERTAIN"
+            or self.original_run_id is None
+            or self.invocation_start_sha256 is None
+            or self.invocation_outcome_sha256 is not None
+            or self.interruption_receipt_sha256 is not None
+            or self.process_stop_sha256 is not None
+            or self.permitted_resolutions
+            or set(self.missing)
+            != {
+                DeliveryProofMissing.OUTCOME_UNKNOWN,
+                DeliveryProofMissing.STOP_UNRECORDED,
+                DeliveryProofMissing.CHECKPOINT_UNAVAILABLE,
+                DeliveryProofMissing.BUDGET_EXHAUSTED,
+            }
+        ):
+            raise ValueError("本机停止确认入口缺少精确耗尽的 Coder start-only 事实")
         paused = self.knowledge_pause
         if (
             DeliveryResolutionKind.RESUME_UNINVOKED in self.permitted_resolutions

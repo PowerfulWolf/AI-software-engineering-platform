@@ -186,6 +186,7 @@ def _owners(payload: WirePayload) -> set[str]:
     if record.get("kind") in {
         "stopped_failure_budget_settlement",
         "stopped_unknown_budget_settlement",
+        "contained_unknown_budget_settlement",
     }:
         task = record.get("task")
         task_id = task.get("id") if isinstance(task, dict) else None

@@ -31,6 +31,11 @@ for filename, model in (
         )
         for name in ("DeliveryResolution", "DeliveryWaitInvestigation", "DeliveryWaitHandling"):
             schema["$defs"][name]["allOf"] = engineering["$defs"][name]["allOf"]
+        console = json.loads((root / "console-operation.schema.json").read_text(encoding="utf-8"))
+        handle = console["$defs"]["HandleDeliveryWaitIntent"]
+        if "confirm_local_execution_stopped" not in handle["properties"] or not handle.get("allOf"):
+            raise RuntimeError("canonical local-stop HANDLE guard is not published")
+        schema["$defs"]["HandleDeliveryWaitIntent"]["allOf"] = handle["allOf"]
         schema["$defs"]["RejectedKnowledgePreparationEvidence"] = engineering["$defs"][
             "RejectedKnowledgePreparationEvidence"
         ]

@@ -23,6 +23,9 @@ class StateDeletionScope(DomainModel):
 def verified_state_record(
     path: Path, sidecar: Path, payload: WirePayload, expected: StateDeletionScope
 ) -> WirePayload:
+    from ai_software_engineer.domain.contained_unknown_budget import (
+        ContainedUnknownBudgetSettlement,
+    )
     from ai_software_engineer.domain.delivery_resolution import (
         DeliveryResolution,
         DeliveryWaitHandling,
@@ -49,6 +52,9 @@ def verified_state_record(
         "stopped-unknown-budget-handlings": DeliveryWaitHandling,
         "stopped-unknown-budget-captures": CapturedMutations,
         "stopped-unknown-budget-settlements": StoppedUnknownBudgetSettlement,
+        "contained-unknown-budget-handlings": DeliveryWaitHandling,
+        "contained-unknown-budget-captures": CapturedMutations,
+        "contained-unknown-budget-settlements": ContainedUnknownBudgetSettlement,
         "wait-investigations": DeliveryWaitInvestigation,
         "wait-handling-proofs": DeliveryWaitInvestigation,
         "wait-resolutions": DeliveryResolution,
@@ -154,7 +160,12 @@ def verified_state_record(
         keys.add(record.checkpoint_sha256)
     elif isinstance(record, CapturedMutations):
         keys.add(record.capture_sha256)
-    elif isinstance(record, StoppedFailureBudgetSettlement | StoppedUnknownBudgetSettlement):
+    elif isinstance(
+        record,
+        StoppedFailureBudgetSettlement
+        | StoppedUnknownBudgetSettlement
+        | ContainedUnknownBudgetSettlement,
+    ):
         keys.add(record.settlement_sha256)
     elif isinstance(record, EngineeringAdmission):
         keys.add(record.plan_sha256)
@@ -176,6 +187,24 @@ def verified_state_record(
         )
         if namespace == "wait-handlings":
             keys.add(record.record_key)
+        elif namespace == "contained-unknown-budget-handlings":
+            if record.budget_settlement_sha256 is None:
+                raise ValueError("contained UNKNOWN handling lacks its settlement")
+            settlement = KnowledgeRecordStore(path.parent, read_only=True).get(
+                "contained-unknown-budget-settlements",
+                record.budget_settlement_sha256,
+                ContainedUnknownBudgetSettlement,
+            )
+            settlement.validate_integrity()
+            if settlement.investigation != proof or record.status != "BUDGET_EXHAUSTED":
+                raise ValueError("contained UNKNOWN handling differs from its settlement")
+            command = command.model_copy(
+                update={
+                    "confirm_local_execution_stopped": True,
+                    "local_stop_reference": settlement.human_confirmation.reference,
+                }
+            )
+            keys.add(digest(command.to_wire()))
         else:
             keys.add(digest(command.to_wire()))
             if record.resolution is not None:

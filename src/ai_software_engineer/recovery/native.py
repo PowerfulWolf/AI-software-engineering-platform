@@ -126,9 +126,10 @@ class NativeRecoverySource:
     accepted_progress: CoderProgressArtifact | None = None
     capacity_receipt: ContextCapacityReceipt | None = None
     capacity_input: ContextCapacityRecoveryInput | None = None
-    # Supplied only by the dedicated stopped-unknown settlement reader.  It is
-    # an immutable capture of the real old worktree, never an Agent result.
+    # Supplied only by dedicated UNKNOWN settlement readers. These immutable
+    # captures describe the real old worktree, never an Agent result.
     stopped_unknown_capture: CapturedMutations | None = None
+    contained_unknown_capture: CapturedMutations | None = None
 
 
 def _is_recoverable_terminal_coder_route(

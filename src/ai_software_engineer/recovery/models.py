@@ -236,9 +236,24 @@ class RecoverySource(DomainModel):
                         "properties": {
                             "failed_run_id": {"type": "string"},
                             "context_capacity_receipt_sha256": {"type": "null"},
+                            "contained_unknown_settlement_sha256": {"type": "null"},
                         },
                     },
-                }
+                },
+                {
+                    "if": {
+                        "required": ["contained_unknown_settlement_sha256"],
+                        "properties": {"contained_unknown_settlement_sha256": {"type": "string"}},
+                    },
+                    "then": {
+                        "required": ["failed_run_id"],
+                        "properties": {
+                            "failed_run_id": {"type": "string"},
+                            "context_capacity_receipt_sha256": {"type": "null"},
+                            "stopped_unknown_settlement_sha256": {"type": "null"},
+                        },
+                    },
+                },
             ]
         }
     )
@@ -277,6 +292,9 @@ class RecoverySource(DomainModel):
     stopped_unknown_settlement_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    contained_unknown_settlement_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     parent_delivery_id: DeliveryId | None = None
     parent_checkpoint_sha256: StageSha256 | None = None
 
@@ -300,6 +318,14 @@ class RecoverySource(DomainModel):
                 raise ValueError("stopped unknown settlement requires its real original Run")
             if self.context_capacity_receipt_sha256 is not None:
                 raise ValueError("stopped unknown settlement cannot be combined with capacity")
+        if self.contained_unknown_settlement_sha256 is not None:
+            if self.failed_run_id is None:
+                raise ValueError("contained unknown settlement requires its real original Run")
+            if (
+                self.context_capacity_receipt_sha256 is not None
+                or self.stopped_unknown_settlement_sha256 is not None
+            ):
+                raise ValueError("contained unknown settlement must be a unique source")
         return self
 
     @property
@@ -565,7 +591,30 @@ class RecoveryPlan(DomainModel):
                             "quarantined_paths": {"type": "null"},
                         },
                     },
-                }
+                },
+                {
+                    "if": {
+                        "required": ["source"],
+                        "properties": {
+                            "source": {
+                                "required": ["contained_unknown_settlement_sha256"],
+                                "properties": {
+                                    "contained_unknown_settlement_sha256": {"type": "string"}
+                                },
+                            }
+                        },
+                    },
+                    "then": {
+                        "required": ["input_mode"],
+                        "properties": {
+                            "input_mode": {"const": "coder_reapply"},
+                            "context_capacity_input": {"type": "null"},
+                            "workspace_snapshot": {"type": "null"},
+                            "scope_supplement": {"type": "null"},
+                            "quarantined_paths": {"type": "null"},
+                        },
+                    },
+                },
             ]
         }
     )
@@ -652,7 +701,10 @@ class RecoveryPlan(DomainModel):
 
     @model_validator(mode="after")
     def validate_stopped_unknown(self) -> Self:
-        if self.source.stopped_unknown_settlement_sha256 is not None and (
+        if (
+            self.source.stopped_unknown_settlement_sha256 is not None
+            or self.source.contained_unknown_settlement_sha256 is not None
+        ) and (
             self.input_mode != "coder_reapply"
             or self.context_capacity_input is not None
             or self.workspace_snapshot is not None

@@ -166,6 +166,7 @@ def completed(
     stopped_failure = isinstance(problem, str) and problem.startswith("stopped_failure")
     rejected_output = isinstance(problem, str) and problem.startswith("invalid_")
     stopped_unknown = isinstance(problem, str) and problem.startswith("stopped_unknown")
+    start_only_unknown = problem == "start_only_unknown_exhausted"
     variant = (
         problem.removeprefix("invalid_")
         if isinstance(problem, str) and problem.startswith("invalid_")
@@ -181,6 +182,7 @@ def completed(
             "stopped_provider_exhausted",
             "stopped_unknown_exhausted",
             "stopped_unknown_completed_exhausted",
+            "start_only_unknown_exhausted",
             "stopped_failure_exhausted",
         }
         else 5,
@@ -193,6 +195,7 @@ def completed(
             or stopped_provider
             or stopped_failure
             or stopped_unknown
+            or start_only_unknown
         ):
             # Baseline migration requires a semantic branch frozen in a fresh
             # NEW Task. Never alter a sealed invocation or an existing Task row.
@@ -245,6 +248,14 @@ def completed(
 
         monkeypatch.setattr(CodexCliAgentAdapter, "run", forbidden_model)
         queue = CompletedQueue(native)
+        if start_only_unknown:
+            queue.original = queue.original.model_copy(
+                update={
+                    "model_selection": queue.original.model_selection.model_copy(
+                        update={"route_kind": "codex_cli"}
+                    )
+                }
+            )
         native.claim = queue.original
         if stopped_provider or stopped_failure:
             # Permanent provider failure introduces no new mutations. The lawful
@@ -341,6 +352,7 @@ def completed(
             "missing_stop",
             "stopped_provider_missing_stop",
             "stopped_failure_missing_stop",
+            "start_only_unknown_exhausted",
         }:
             ledger.put_capture_stop(capture_stop)
         result = (
@@ -381,7 +393,7 @@ def completed(
         )
         outcome = _outcome(start, result)
         records = KnowledgeRecordStore(tmp_path / "invocations")
-        if not stopped_unknown:
+        if not (stopped_unknown or start_only_unknown):
             records.put("invocation-outcomes", queue.item.id, outcome)
         if stopped_failure:
             FileModelRouteAttemptStore(tmp_path / "model-routes").append(

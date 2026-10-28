@@ -1869,7 +1869,13 @@ function engineeringCollectionNotice(proof, handling) {
     ? "已核验原执行停止，但进度封存校验未通过。平台维护者修复后需要重新处理，当前不能直接继续。"
     : engineeringCollectionFailureNotice;
 }
-function engineeringMissingGuidance(item, captureRefused = false) {
+function engineeringMissingGuidance(item, captureRefused = false, localStopAvailable = false) {
+  if (localStopAvailable && item === "STOP_UNRECORDED") return [
+    "原执行缺少停止记录", "有权限的工程维护者", "核对原调用及全部派生工具确已结束，提供可信授权记录 ID，由平台重新核验并保留旧结果未知。", "本机停止声明提交并经平台处理后复查。",
+  ];
+  if (localStopAvailable && item === "BUDGET_EXHAUSTED") return [
+    "旧任务执行额度已用完", "需求负责人", "平台仅能结算旧任务；后续仍需对同一需求的新恢复方案单独精确审批。", "旧任务结算并生成可审阅的恢复方案后复查。",
+  ];
   if (captureRefused && item === "OUTCOME_UNKNOWN") return [
     "原执行没有已接纳的完成结果", "ASE 平台", "原执行停止已核验，平台需在完整保留进度后接续开发。", "进度封存问题修复后重新处理。",
   ];
@@ -2030,6 +2036,21 @@ function engineeringWaitProof(request, step) {
   return operationAction(operation) === "HANDLE_DELIVERY_WAIT" ? engineeringWaitHandlingFromOperation(operation, request, step)?.investigation || null
     : matchingEngineeringWaitProof(operationResult(operation)?.engineering_wait_investigation, request, step);
 }
+function engineeringLocalStopConfirmationFacts(request, task, step, proof = engineeringWaitProof(request, step)) {
+  const required = ["OUTCOME_UNKNOWN", "STOP_UNRECORDED", "CHECKPOINT_UNAVAILABLE", "BUDGET_EXHAUSTED"];
+  if (consoleOperationContractVersion < 12 || !consoleSupportsOperation("HANDLE_DELIVERY_WAIT") ||
+      request.stage !== "DELIVERING" || request.execution?.responsibility !== "engineering" ||
+      task?.request_id !== request.id || task.project_id !== request.project_id ||
+      task.task_id !== step.wait_disposition?.facts.task_id || step.role !== "coder" ||
+      step.wait_disposition.facts.role !== "coder" ||
+      step.wait_disposition.responsibility !== "engineering" || !step.status?.startsWith("WAITING_") ||
+      proof?.kind !== "delivery_wait_investigation" || proof.local_stop_confirmation_available !== true ||
+      !/^run_[a-z0-9_]+$/.test(proof.original_run_id || "") ||
+      proof.missing.length !== required.length || new Set(proof.missing).size !== required.length ||
+      !required.every(item => proof.missing.includes(item)) || proof.permitted_resolutions.length) return null;
+  return {bound: engineeringWaitIntent(request, step), proof_sha256: proof.proof_sha256,
+    original_run_id: proof.original_run_id};
+}
 function engineeringWaitDecision(request, step, proof) {
   if (!proof) return null;
   const bound = engineeringWaitIntent(request, step);
@@ -2087,17 +2108,28 @@ function engineeringWaitCanResolve(request, step, proof) {
       (kind !== "RETRY_REJECTED_CODER_OUTPUT" || matchingRejectedCoderOutputEvidence(request, step, proof)) &&
       (kind !== "STATIC_QA_MISSING_ENTRY" || matchingStaticQaMissingEntryEvidence(request, step, proof)));
 }
-async function submitEngineeringWaitOperation(intent) {
+async function submitEngineeringWaitOperation(intent, originalLocalStop = null) {
   const request = requestById(intent.delivery_id);
   const current = request && engineeringWaitSteps(request).find(({step}) =>
     sameEngineeringWaitIntent(intent, engineeringWaitIntent(request, step)));
   const proof = current && engineeringWaitProof(request, current.step);
+  const handling = current && engineeringWaitHandling(request, current.step);
   const completedPlan = current && engineeringCurrentCompletedPlan(request, current.task, current.step);
+  const confirmsLocalStop = intent.confirm_local_execution_stopped != null || intent.local_stop_reference != null;
+  const currentLocalStop = current && engineeringLocalStopConfirmationFacts(request, current.task, current.step, proof);
   if (!current || !canControlCurrentTeam() || !consoleSupportsOperation(intent.action) ||
       activeOperation(request.id, request.project_id) ||
       !["INSPECT_DELIVERY_WAIT", "HANDLE_DELIVERY_WAIT", "RESOLVE_DELIVERY_WAIT"].includes(intent.action) ||
       (intent.action !== "INSPECT_DELIVERY_WAIT" && completedPlan) ||
       (intent.action === "HANDLE_DELIVERY_WAIT" && knowledgePreparationWaitExhausted(current.step, proof)) ||
+      (confirmsLocalStop && (intent.action !== "HANDLE_DELIVERY_WAIT" ||
+        ["RESOLVED", "BUDGET_EXHAUSTED"].includes(handling?.status) ||
+        !originalLocalStop || !currentLocalStop ||
+        !sameEngineeringWaitIntent(currentLocalStop.bound, originalLocalStop.bound) ||
+        currentLocalStop.proof_sha256 !== originalLocalStop.proof_sha256 ||
+        currentLocalStop.original_run_id !== originalLocalStop.original_run_id ||
+        intent.confirm_local_execution_stopped !== true ||
+        typeof intent.local_stop_reference !== "string" || !intent.local_stop_reference.trim())) ||
       (intent.action === "RESOLVE_DELIVERY_WAIT" &&
       (!proof || proof.proof_sha256 !== intent.proof_sha256 ||
        !(proof.permitted_resolutions || []).includes(intent.resolution_kind) ||
@@ -2109,6 +2141,54 @@ async function submitEngineeringWaitOperation(intent) {
     return null;
   }
   return submitOperation(intent);
+}
+function engineeringLocalStopConfirmationBox(request, task, step, proof, handling, decision, running, controlUnavailable) {
+  const facts = engineeringLocalStopConfirmationFacts(request, task, step, proof);
+  if (!facts || decision || ["RESOLVED", "BUDGET_EXHAUSTED"].includes(handling?.status)) return null;
+  const panel = viewGroup(el("section", undefined, "engineering-local-stop-panel"),
+    "engineering-local-stop:" + step.work_item_id);
+  panel.append(el("h4", "原执行停止确认 · 工程维护"),
+    el("p", "原 Coder 执行 · " + facts.original_run_id, "paths"),
+    el("p", "平台已核对当前可见的本机执行与原 Coder 记录，但检查不能代替原调用及派生工具的结束声明。原结果仍未知；本次确认只允许平台结算已用尽的旧任务，不会将旧结果认定为成功，也不会自动启动新的交付。"));
+  if (running) {
+    panel.append(el("p", "当前操作尚未结束，请等待平台返回结果。", "muted"));
+    return panel;
+  }
+  if (controlUnavailable || !canControlCurrentTeam() || !consoleSupportsOperation("HANDLE_DELIVERY_WAIT")) {
+    panel.append(el("p", "当前无法提交工程确认，请等待服务和需求控制恢复。", "muted"));
+    return panel;
+  }
+  const form = viewBlock(el("div", undefined, "engineering-local-stop-form"),
+    "engineering-local-stop-form", [facts, consoleOperationContractVersion, consoleSupportedActions]);
+  const declaration = el("label", undefined, "settings-checkbox-control");
+  const checkbox = el("input");
+  checkbox.type = "checkbox";
+  checkbox.setAttribute("aria-label", "确认原 Coder 调用及全部派生工具已结束");
+  declaration.append(checkbox, el("span", "我以有权限的工程维护者身份确认：这次原 Coder 调用始终在当前这台电脑、同一账户本地执行，未迁移或远程运行；该调用及全部派生工具现已结束，今后不能再写入原 Coder 工作区。"));
+  const referenceLabel = el("label", undefined, "engineering-local-stop-reference");
+  referenceLabel.append(el("span", "已封存的授权记录 ID"));
+  const reference = el("input");
+  reference.type = "text";
+  reference.autocomplete = "off";
+  reference.spellcheck = false;
+  reference.maxLength = 256;
+  reference.placeholder = "HumanActionEvent、resolution 或授权答复 ID";
+  referenceLabel.append(reference);
+  const submit = deliveryButton("记录本机停止确认并处理旧任务", () => {
+    if (!checkbox.checked || !reference.value.trim()) return null;
+    return submitEngineeringWaitOperation({
+      ...facts.bound, action: "HANDLE_DELIVERY_WAIT", confirm_local_execution_stopped: true,
+      local_stop_reference: reference.value.trim(),
+    }, facts);
+  }, "primary");
+  const update = () => setDeliveryControlDisabled(submit, !checkbox.checked || !reference.value.trim());
+  checkbox.addEventListener("change", update);
+  reference.addEventListener("input", update);
+  update();
+  form.append(declaration, referenceLabel,
+    el("p", "只填写已通过可信工程通道保存的授权记录引用。查看页面、重新检查状态和填写表单都不会提交确认；点击按钮后平台仍会重新核对当前事实。", "muted"), submit);
+  panel.append(form);
+  return panel;
 }
 function engineeringGuidanceList(...descriptions) {
   const list = el("ol", undefined, "engineering-guidance-list");
@@ -2177,7 +2257,8 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
     target.append(el("strong", "当前尚未解决的事项"));
     const list = el("ul", undefined, "engineering-wait-issues");
     for (const item of missing) {
-      const [title, owner, action, recheck] = engineeringMissingGuidance(item, engineeringCaptureRefusal(proof, handling));
+      const [title, owner, action, recheck] = engineeringMissingGuidance(item,
+        engineeringCaptureRefusal(proof, handling), proof.local_stop_confirmation_available === true);
       const entry = el("li", undefined, "engineering-wait-issue");
       entry.append(el("strong", title), el("p", "处理方 · " + owner, "muted"), el("p", action),
         el("p", "何时复查 · " + recheck, "muted"));
@@ -2351,6 +2432,15 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
       facts.user = consoleOperationVersionMismatchMessage;
     } else facts.user += " " + consoleOperationVersionMismatchMessage;
   }
+  if (ownerTask && !active && !decision && handling?.status !== "BUDGET_EXHAUSTED" &&
+      engineeringLocalStopConfirmationFacts(request, ownerTask, step, proof)) {
+    facts.platform = "可在收到有权限工程维护者的精确停止声明后，核验并结算已耗尽额度的旧任务；旧结果继续保持未知。";
+    facts.user = "核对下方原执行停止声明，填写可信授权记录 ID 后主动提交。旧任务结算后，仍需单独审批同一需求的新恢复方案。";
+  }
+  if (handling?.status === "BUDGET_EXHAUSTED") {
+    facts.platform = "已结算旧任务，原执行结果仍未知；平台将通过同一需求准备新的精确恢复方案。";
+    facts.user = "刷新需求详情，审阅随后提出的恢复方案；批准后仍需新的开发、独立测试和评审。";
+  }
   const controlUnavailable = deliveryControlUnavailableReason();
   if (controlUnavailable) {
     facts.platform = active || decision ? facts.platform + " " + controlUnavailable.reason : controlUnavailable.reason;
@@ -2417,7 +2507,8 @@ async function copyEngineeringWaitReport(request, handling) {
   const failure = current && engineeringLegacyRescueFailure(request, current.task, current.step,
     engineeringLegacyRescueFacts(request, current.task, current.step, proof, handling));
   const missing = (proof?.missing || []).map(item => {
-    const [title, owner, action, recheck] = engineeringMissingGuidance(item, engineeringCaptureRefusal(proof, handling));
+    const [title, owner, action, recheck] = engineeringMissingGuidance(item,
+      engineeringCaptureRefusal(proof, handling), proof.local_stop_confirmation_available === true);
     return [(completedPlan || providerPlan ? "原调查记录事项 · " : "待处理事项 · ") + title, "处理方 · " + (failure ? "ASE 平台维护者" : rescue ? "ASE 平台与工程授权者" : owner),
       "具体处理 · " + (providerPlan ? "这是原调查保存的记录；当前续跑方案已核验停止并封存完整合法进度，原认证失败保持。先确认执行前提已修复，再按当前方案决定。"
         : completedPlan ? "这是原调查保存的缺项，当前精确恢复方案已补齐停止和进度核验；开发报告内容仍未知，按当前方案决定。"
@@ -2521,6 +2612,7 @@ function engineeringWaitBox(request, task, step) {
   const controlUnavailable = deliveryControlUnavailableReason();
   const facts = engineeringWaitCurrentFacts(request, step, proof, handling, decision, running);
   const rescue = engineeringLegacyRescueFacts(request, task, step, proof, handling);
+  const localStop = engineeringLocalStopConfirmationFacts(request, task, step, proof);
   const rescueFailure = engineeringLegacyRescueFailure(request, task, step, rescue);
   const overview = viewBlock(el("dl", undefined, "engineering-wait-facts"), "engineering-wait-facts", facts);
   for (const [key, title] of [["happened", "发生了什么"], ["preservation", "开发进度"], ["platform", "平台可以做什么"], ["user", "你需要做什么"]]) {
@@ -2549,13 +2641,13 @@ function engineeringWaitBox(request, task, step) {
   } else if (canControlCurrentTeam() && !running) {
     const canResolve = engineeringWaitCanResolve(request, step, proof);
     const actions = viewBlock(el("div", undefined, "engineering-wait-actions"), "engineering-wait-actions",
-      [bound, proof, handling, Boolean(rescue), canResolve, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || failurePlan?.plan_sha256 || null, Boolean(providerRetry), Boolean(stoppedFailureRetry)]);
-    if (!completedPlan && !providerRetry && !stoppedFailureRetry && consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && !knowledgePreparationWaitExhausted(step, proof) &&
+      [bound, proof, handling, Boolean(rescue), Boolean(localStop), canResolve, canControlCurrentTeam(), consoleOperationContractVersion, consoleSupportedActions, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || failurePlan?.plan_sha256 || null, Boolean(providerRetry), Boolean(stoppedFailureRetry)]);
+    if (!completedPlan && !providerRetry && !stoppedFailureRetry && !localStop && consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && !knowledgePreparationWaitExhausted(step, proof) &&
       !["NEEDS_AUTHORIZATION", "PLATFORM_ATTENTION", "BUDGET_EXHAUSTED", "WAITING_PREREQUISITES"].includes(handling?.status))
       actions.append(deliveryButton(engineeringWaitHandlingLabel(step), () => submitEngineeringWaitOperation({
         ...bound, action: "HANDLE_DELIVERY_WAIT",
       }), "primary"));
-    if (!completedPlan && !providerRetry && !stoppedFailureRetry && consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && !knowledgePreparationWaitExhausted(step, proof) && handling?.status === "PLATFORM_ATTENTION")
+    if (!completedPlan && !providerRetry && !stoppedFailureRetry && !localStop && consoleSupportsOperation("HANDLE_DELIVERY_WAIT") && !canResolve && !knowledgePreparationWaitExhausted(step, proof) && handling?.status === "PLATFORM_ATTENTION")
       actions.append(deliveryButton("平台修复后重新处理", () => submitEngineeringWaitOperation({
         ...bound, action: "HANDLE_DELIVERY_WAIT",
       }), "primary"));
@@ -2591,6 +2683,9 @@ function engineeringWaitBox(request, task, step) {
   if (handling?.status === "PLATFORM_ATTENTION") actionRow.append(viewBlock(button("复制处理报告", () =>
     copyEngineeringWaitReport(request, handling), "secondary engineering-wait-report"), "engineering-wait-report", [request.title, handling]));
   if (actionRow.children.length) management.append(actionRow);
+  const localStopConfirmation = engineeringLocalStopConfirmationBox(
+    request, task, step, proof, handling, decision, running, controlUnavailable);
+  if (localStopConfirmation) management.append(localStopConfirmation);
   const technical = viewGroup(engineeringDetails("调查绑定详情", step.work_item_id + ":binding"),
     "engineering-wait-binding:" + step.work_item_id);
   technical.classList.add("engineering-wait-binding");

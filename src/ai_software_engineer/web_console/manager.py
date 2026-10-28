@@ -466,6 +466,9 @@ class ManagerConsoleAdapter:
                         bound["workspace_admission_adapter_contract"] = (
                             intent.workspace_admission_adapter_contract.to_wire()
                         )
+                    if intent.confirm_local_execution_stopped is not None:
+                        bound["confirm_local_execution_stopped"] = True
+                        bound["local_stop_reference"] = intent.local_stop_reference
                     handling = self._host.handle_delivery_wait(
                         HandleDeliveryWait.model_validate(bound),
                         project_id=intent.project_id,

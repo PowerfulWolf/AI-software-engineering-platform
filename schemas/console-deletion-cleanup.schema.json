@@ -5294,6 +5294,11 @@
             }
           ],
           "default": null
+        },
+        "local_stop_confirmation_available": {
+          "default": false,
+          "title": "Local Stop Confirmation Available",
+          "type": "boolean"
         }
       },
       "required": [
@@ -6152,6 +6157,84 @@
             "properties": {
               "static_qa_missing_entry": {
                 "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "local_stop_confirmation_available"
+            ],
+            "properties": {
+              "local_stop_confirmation_available": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "invocation_start_sha256"
+            ],
+            "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "invocation_start_sha256": {
+                "type": "string"
+              },
+              "invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "process_stop_sha256": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "maxItems": 0
+              },
+              "missing": {
+                "minItems": 4,
+                "maxItems": 4,
+                "allOf": [
+                  {
+                    "contains": {
+                      "const": "OUTCOME_UNKNOWN"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "STOP_UNRECORDED"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "CHECKPOINT_UNAVAILABLE"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "BUDGET_EXHAUSTED"
+                    }
+                  }
+                ]
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "role": {
+                        "const": "coder"
+                      },
+                      "classification": {
+                        "const": "EXECUTION_UNCERTAIN"
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -8555,6 +8638,34 @@
             }
           ],
           "default": null
+        },
+        "confirm_local_execution_stopped": {
+          "anyOf": [
+            {
+              "const": true,
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confirm Local Execution Stopped"
+        },
+        "local_stop_reference": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 8,
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Local Stop Reference"
         }
       },
       "required": [
@@ -8568,7 +8679,41 @@
         "expected_checkpoint_sha256"
       ],
       "title": "HandleDeliveryWaitIntent",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "confirm_local_execution_stopped"
+            ],
+            "properties": {
+              "confirm_local_execution_stopped": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "local_stop_reference"
+            ],
+            "properties": {
+              "local_stop_reference": {
+                "type": "string"
+              },
+              "workspace_admission_adapter_contract": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "local_stop_reference": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "ImplementationAcceptanceMapping": {
       "additionalProperties": false,

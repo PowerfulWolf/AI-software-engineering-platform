@@ -1602,6 +1602,41 @@ main[data-page="requests"] #detail {
   padding-top: 12px;
   border-top: 1px solid #e7dccb;
 }
+.engineering-local-stop-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #c6d6f1;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: #edf3ff;
+}
+.engineering-local-stop-panel > h4,
+.engineering-local-stop-panel > p,
+.engineering-local-stop-form > p {
+  margin: 0;
+}
+.engineering-local-stop-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.engineering-local-stop-reference {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  font-weight: 600;
+}
+.engineering-local-stop-reference > input {
+  min-width: 0;
+  width: 100%;
+}
+.engineering-local-stop-form > button {
+  justify-self: start;
+  max-width: 100%;
+  white-space: normal;
+}
 .engineering-wait-binding > summary {
   color: #796b59;
   font-size: 0.8125rem;

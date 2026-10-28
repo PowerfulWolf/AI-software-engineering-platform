@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from ai_software_engineer.domain import Task
+from ai_software_engineer.domain.contained_unknown_budget import ContainedUnknownBudgetSettlement
 from ai_software_engineer.domain.execution_baseline import BaselinePurpose
 from ai_software_engineer.evaluation import (
     EvaluationCaseId,
@@ -11,11 +12,40 @@ from ai_software_engineer.evaluation import (
     HumanActionEvent,
 )
 from ai_software_engineer.knowledge.audit import KnowledgeHumanActionRecorder
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import BaselineOperatorAuthorization
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.workspace_admission_contract import (
     WorkspaceAdmissionAdapterContractStore,
 )
+
+
+def contained_unknown_human_event(
+    settlement: ContainedUnknownBudgetSettlement,
+    case_id: EvaluationCaseId,
+    records: KnowledgeRecordStore,
+) -> HumanActionEvent:
+    """Bind the auditable human action to its immutable resolution artifact."""
+    settlement.validate_integrity()
+    confirmation = settlement.human_confirmation
+    confirmation.validate_integrity()
+    return HumanActionEvent(
+        event_id="evalevt_contained_unknown_" + settlement.settlement_sha256[:32],
+        case_id=case_id,
+        task_id=settlement.task.id,
+        occurred_at=confirmation.confirmed_at,
+        action=HumanAction.SUPPLY_EVIDENCE,
+        evidence_uri=(
+            records.root
+            / records._name("contained-unknown-budget-settlements", settlement.settlement_sha256)
+        ).absolute().as_uri(),
+        note=(
+            "工程主体根据用户精确答复 "
+            + confirmation.reference
+            + " 确认旧 Coder 始终本机同账户、未远迁, 全部派生工具已结束且不会再写现场; "
+            "原结果与停止记录保持 UNKNOWN, 已消耗普通工作额度。"
+        ),
+    )
 
 
 class EngineeringHumanActionRecorder:

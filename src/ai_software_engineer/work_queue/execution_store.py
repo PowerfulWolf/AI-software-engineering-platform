@@ -75,6 +75,9 @@ from ai_software_engineer.work_queue.ports import (
 
 if TYPE_CHECKING:
     from ai_software_engineer.agents.models import AgentRequest
+    from ai_software_engineer.domain.contained_unknown_budget import (
+        ContainedUnknownBudgetSettlement,
+    )
     from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
     from ai_software_engineer.domain.stopped_unknown_budget import StoppedUnknownBudgetSettlement
     from ai_software_engineer.manager.baseline_models import BaselineContinueAuthorization
@@ -1120,14 +1123,28 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
     def settle_stopped_budget(
         self,
         cursor: DictCursor,
-        settlement: StoppedFailureBudgetSettlement | StoppedUnknownBudgetSettlement,
+        settlement: StoppedFailureBudgetSettlement
+        | StoppedUnknownBudgetSettlement
+        | ContainedUnknownBudgetSettlement,
         *,
         validate_current: Callable[[], None] | None = None,
     ) -> None:
         """Append Task/event/queue together inside the caller's idle authority fence."""
         settlement.validate_integrity()
-        if settlement.kind == "stopped_unknown_budget_settlement" and validate_current is None:
+        if (
+            settlement.kind
+            in {
+                "stopped_unknown_budget_settlement",
+                "contained_unknown_budget_settlement",
+            }
+            and validate_current is None
+        ):
             raise QueueConflict("未知结果额度收尾缺少最终原执行核验")
+        event_type = (
+            "CONTAINED_UNKNOWN_BUDGET_SETTLED"
+            if settlement.kind == "contained_unknown_budget_settlement"
+            else "STOPPED_BUDGET_SETTLED"
+        )
         task, proof, event = settlement.task, settlement.investigation, settlement.event
         self._lock_authority(cursor)
         cursor.execute(
@@ -1186,8 +1203,8 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
         if previous_event is not None:
             cursor.execute(
                 "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
-                "AND event_type='STOPPED_BUDGET_SETTLED' ORDER BY sequence",
-                (item.id,),
+                "AND event_type=%s ORDER BY sequence",
+                (item.id, event_type),
             )
             publications = cursor.fetchall()
             if (
@@ -1252,7 +1269,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             cursor,
             closed,
             from_status=item.status,
-            event_type="STOPPED_BUDGET_SETTLED",
+            event_type=event_type,
             lease_id=None,
             occurred_at=event.occurred_at,
             detail={

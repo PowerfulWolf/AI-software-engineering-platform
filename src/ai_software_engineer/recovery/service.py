@@ -142,7 +142,10 @@ class RecoveryAuthorizationService:
         plan = self._approved_plan(plan_sha256)
         plan.validate_integrity()
         plan.require_execution_supported()
-        if plan.source.stopped_unknown_settlement_sha256 is not None:
+        if (
+            plan.source.stopped_unknown_settlement_sha256 is not None
+            or plan.source.contained_unknown_settlement_sha256 is not None
+        ):
             from ai_software_engineer.recovery.current import _uses_standard_native_capture_window
 
             if _uses_standard_native_capture_window(verifier):
@@ -207,7 +210,10 @@ class RecoveryAuthorizationService:
     def _require_current(self, plan: RecoveryPlan) -> None:
         plan.validate_integrity()
         plan.require_execution_supported()
-        if plan.source.stopped_unknown_settlement_sha256 is not None:
+        if (
+            plan.source.stopped_unknown_settlement_sha256 is not None
+            or plan.source.contained_unknown_settlement_sha256 is not None
+        ):
             from ai_software_engineer.recovery.current import _uses_standard_native_capture_window
 
             verifier = self._native_facts_verifier()

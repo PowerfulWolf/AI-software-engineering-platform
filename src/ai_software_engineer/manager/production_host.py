@@ -777,6 +777,13 @@ class TeamHost:
 
         from ai_software_engineer.agents.fallback import model_route_root
         from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+        from ai_software_engineer.manager.contained_unknown_budget import (
+            ContainedUnknownBudgetSettlementService,
+        )
+        from ai_software_engineer.manager.legacy_containment import TrustedLocalBootObserver
+        from ai_software_engineer.manager.legacy_local_execution import (
+            TrustedLegacyLocalExecutionObserver,
+        )
         from ai_software_engineer.manager.stopped_budget_settlement import (
             StoppedBudgetSettlementService,
         )
@@ -899,6 +906,20 @@ class TeamHost:
                 collector=collector,
                 git=git,
                 artifacts=FileArtifactStore(workspace.directory("artifacts"), read_only=True),
+                clock=lambda: datetime.now(UTC),
+                idle_scope=lambda: self._work_queue.idle_task_scope(task.id),
+            ),
+            contained_unknown_budget_settlement=ContainedUnknownBudgetSettlementService(
+                repository=repository,
+                queue=self._work_queue,
+                records=KnowledgeRecordStore(workspace.directory("state") / "delivery-preflight"),
+                collector=collector,
+                git=git,
+                artifacts=FileArtifactStore(workspace.directory("artifacts"), read_only=True),
+                principal=self._operator_principal,
+                boot_observer=TrustedLocalBootObserver(),
+                local_execution_observer=TrustedLegacyLocalExecutionObserver(),
+                evaluation_root=workspace.directory("evaluations"),
                 clock=lambda: datetime.now(UTC),
                 idle_scope=lambda: self._work_queue.idle_task_scope(task.id),
             ),

@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from runpy import run_path
 from typing import Annotated
 
 from pydantic import Field, TypeAdapter
@@ -943,6 +944,16 @@ for proof_name in ("DeliveryResolution", "DeliveryWaitInvestigation"):
         }
     )
 
+local_stop_guard = run_path(str(Path(__file__).with_name("sync-contained-unknown-contracts.py")))[
+    "LOCAL_STOP_GUARD"
+]
+if (
+    "local_stop_confirmation_available"
+    not in resolution_schema["$defs"]["DeliveryWaitInvestigation"]["properties"]
+):
+    raise RuntimeError("local stop capability is missing from the investigation model")
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"].append(local_stop_guard)
+
 if not wait_only:
     (
         Path(__file__).resolve().parents[1] / "schemas/engineering-wait-resolution.schema.json"
@@ -975,6 +986,9 @@ if wait_only:
     )
     if len(investigation_guards) != 2:
         raise RuntimeError("static QA investigation guards are incomplete")
+    local_stop_property = canonical["DeliveryWaitInvestigation"]["properties"][
+        "local_stop_confirmation_available"
+    ]
     for filename in (
         "engineering-wait-resolution.schema.json",
         "console-deletion-cleanup.schema.json",
@@ -1022,6 +1036,13 @@ if wait_only:
                 for guard in investigation_guards:
                     if guard not in guards:
                         guards.append(guard)
+                if filename not in (
+                    "stopped-failure-budget-settlement.schema.json",
+                    "stopped-unknown-budget-settlement.schema.json",
+                ):
+                    model["properties"]["local_stop_confirmation_available"] = local_stop_property
+                    if local_stop_guard not in guards:
+                        guards.append(local_stop_guard)
         path.write_text(json.dumps(nested, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 checkpoint_schema = RejectedCoderOutputCheckpoint.model_json_schema()

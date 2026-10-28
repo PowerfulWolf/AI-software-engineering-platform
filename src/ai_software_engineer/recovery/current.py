@@ -23,6 +23,10 @@ from ai_software_engineer.manager.production_backend import (
 from ai_software_engineer.manager.production_rules import production_rules
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.read_record_scope import recovery_record_read_scope
+from ai_software_engineer.recovery.contained_unknown import (
+    ContainedUnknownRecoverySourceReader,
+    require_contained_unknown_capture,
+)
 from ai_software_engineer.recovery.context_capacity import LegacyContextCapacitySourceReader
 from ai_software_engineer.recovery.models import (
     CapturedChanges,
@@ -122,7 +126,7 @@ class NativeRecoveryFactsVerifier:
     ) -> NativeRecoveryFacts:
         """Observe a settled UNKNOWN source on both sides of exact capture validation.
 
-        Each `_inspect` independently checks the complete stopped source, target,
+        Each `_inspect` independently checks the complete source, target,
         current mutation inventory and retained draft. The caller invokes this
         only for the standard native verifier, within one synchronous gate.
         """
@@ -131,9 +135,9 @@ class NativeRecoveryFactsVerifier:
             plan.require_execution_supported()
             if (
                 plan.source.stopped_unknown_settlement_sha256 is None
-                or not _uses_standard_native_inspection(self)
-            ):
-                raise ValueError("capture window requires standard stopped UNKNOWN inspection")
+                and plan.source.contained_unknown_settlement_sha256 is None
+            ) or not _uses_standard_native_inspection(self):
+                raise ValueError("capture window requires standard settled UNKNOWN inspection")
             first = self._inspect(plan)
         except Exception as error:
             raise RecoveryRejected(
@@ -153,7 +157,10 @@ class NativeRecoveryFactsVerifier:
     def _inspect(self, plan: RecoveryPlan) -> NativeRecoveryFacts:
         original = self._read_source(plan)
         target = self._target_preflight(plan, original)
-        if plan.source.stopped_unknown_settlement_sha256 is not None:
+        if (
+            plan.source.stopped_unknown_settlement_sha256 is not None
+            or plan.source.contained_unknown_settlement_sha256 is not None
+        ):
             current_capture = CapturedChanges.from_capture(
                 target.manager.capture_legacy_changes(
                     plan.capture.to_capture().worktree,
@@ -161,7 +168,10 @@ class NativeRecoveryFactsVerifier:
                     denied_paths=original.denied_paths,
                 )
             )
-            require_stopped_unknown_capture(original, plan.capture, current_capture)
+            if plan.source.contained_unknown_settlement_sha256 is not None:
+                require_contained_unknown_capture(original, plan.capture, current_capture)
+            else:
+                require_stopped_unknown_capture(original, plan.capture, current_capture)
             facts = self._target_facts(plan, target)
             target.manager.verify_legacy_capture(
                 current_capture.to_capture(),
@@ -224,7 +234,11 @@ class NativeRecoveryFactsVerifier:
     def _read_source(self, plan: RecoveryPlan) -> NativeRecoverySource:
         plan.require_execution_supported()
         source = plan.source
-        if source.stopped_unknown_settlement_sha256 is not None:
+        if source.contained_unknown_settlement_sha256 is not None:
+            original = ContainedUnknownRecoverySourceReader(
+                self._config, self._environment
+            ).inspect(source.scope, source.contained_unknown_settlement_sha256)
+        elif source.stopped_unknown_settlement_sha256 is not None:
             original = StoppedUnknownRecoverySourceReader(self._config, self._environment).inspect(
                 source.scope, source.stopped_unknown_settlement_sha256
             )
