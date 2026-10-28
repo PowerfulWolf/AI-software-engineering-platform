@@ -8,6 +8,9 @@ Before adding another recovery exception, read
   a local execution window is not a provider outage or a QA FAIL.
 - Distinguish materialization, admission, model invocation, accepted progress, candidate and
   role verdict. None implies the others. Check claim ownership and stopped execution first.
+- When a terminal Task still projects `candidate_revision`, did QA FAIL or Review REJECT already
+  send work back to Coder? Classify the latest sealed role/event and exact settlement before
+  choosing candidate verification; a historical candidate is not the latest solution.
 - Can the same authorized Task/branch safely continue at its last checkpoint? Use WorkItem
   wait/retry for recoverable new work; do not create a terminal Task just to force a successor.
 - Which authorization changed: business content, source/base, scope, permission, capability,

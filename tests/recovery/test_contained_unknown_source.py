@@ -117,6 +117,316 @@ def test_contained_unknown_reader_missing_environment_never_initializes_stores(
     assert not Path(config.platform_root).exists()
 
 
+def test_settled_unknown_after_qa_feedback_routes_to_coder_before_old_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_software_engineer.domain import TaskStatus
+    from ai_software_engineer.manager.delivery import ProjectDeliveryResult, ResumeProjectDelivery
+    from ai_software_engineer.manager.delivery_checkpoint import (
+        DeliveryFailureCode,
+        DeliveryStage,
+    )
+    from ai_software_engineer.recovery.contained_unknown import CONTAINED_UNKNOWN_BUDGET_SUMMARY
+    from ai_software_engineer.recovery.resume import (
+        DeliveryResumeController,
+        DeliveryResumeOutcome,
+        DeliveryResumeResult,
+    )
+    from tests.e2e.test_delivery_checkpoint import _checkpoint, _full_fields
+
+    checkpoint = _checkpoint(
+        tmp_path,
+        **{
+            **_full_fields(),
+            "stage": DeliveryStage.BLOCKED,
+            "task_status": TaskStatus.BLOCKED,
+            "failed_stage": DeliveryStage.DELIVERING,
+            "failure_code": DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED,
+            "failure_summary": CONTAINED_UNKNOWN_BUDGET_SUMMARY,
+        },
+    )
+    entry = Mock()
+    entry.status.return_value = ProjectDeliveryResult(checkpoint=checkpoint)
+    verification = Mock()
+    verification.latest_project.return_value = None
+    verification.propose_project.side_effect = AssertionError(
+        "historical QA candidate cannot replace the settled Coder recovery"
+    )
+    controller = DeliveryResumeController(
+        config=ProductionConfig(
+            platform_root=str(tmp_path / "platform"),
+            model_routes=(
+                ProviderRouteConfig(
+                    provider="offline", model="offline", kind=ModelProviderKind.CODEX_CLI
+                ),
+            ),
+        ),
+        environment={},
+        backend=Mock(),
+        entry=entry,
+        recovery=Mock(),
+        verification=verification,
+    )
+    expected = DeliveryResumeResult(
+        outcome=DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
+        checkpoint=checkpoint,
+        next_action="Approve the exact retained Coder recovery plan.",
+        recovery_plan_sha256="d" * 64,
+    )
+    coder = Mock(return_value=expected)
+    monkeypatch.setattr(controller, "_continue_coder_recovery", coder)
+
+    command = ResumeProjectDelivery(delivery_id=checkpoint.delivery_id)
+    assert controller.resume(command) == expected
+    coder.assert_called_once_with(checkpoint, command)
+    verification.propose_project.assert_not_called()
+
+
+def test_contained_unknown_candidate_lineage_requires_feedback_and_exact_projection(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.domain import AgentRole, TaskStatus
+    from ai_software_engineer.domain.enums import QaReportStatus
+    from ai_software_engineer.domain.event import StateEvent
+    from ai_software_engineer.recovery.contained_unknown import (
+        require_contained_unknown_candidate_lineage,
+    )
+    from tests.domain.factories import make_implementation_artifact, make_qa_artifact
+    from tests.manager.test_dispatch import RecordingDispatchStore, _facts, _service
+
+    request, workforce = _facts(tmp_path)
+    dispatch = _service(RecordingDispatchStore(), workforce, request).commit_dispatch(request)
+    task = dispatch.task.model_copy(update={"status": TaskStatus.BLOCKED, "attempts": 1})
+    candidate_revision = "b" * 40
+    candidate = StateEvent(
+        event_id="evt_unknown_prior_candidate",
+        task_id=task.id,
+        from_status=TaskStatus.IMPLEMENTING,
+        to_status=TaskStatus.QA,
+        actor=AgentRole.ORCHESTRATOR,
+        reason="candidate_ready",
+        artifact_ids=("art_impl_001",),
+        source_revision=candidate_revision,
+        occurred_at=task.updated_at,
+    )
+    feedback = StateEvent(
+        event_id="evt_unknown_prior_feedback",
+        task_id=task.id,
+        from_status=TaskStatus.QA,
+        to_status=TaskStatus.IMPLEMENTING,
+        actor=AgentRole.ORCHESTRATOR,
+        reason="qa_failed_route_to_coder",
+        artifact_ids=("art_qa_001",),
+        source_revision=candidate_revision,
+        occurred_at=task.updated_at,
+    )
+    terminal = StateEvent(
+        event_id="evt_unknown_last_coder",
+        task_id=task.id,
+        from_status=TaskStatus.IMPLEMENTING,
+        to_status=TaskStatus.BLOCKED,
+        actor=AgentRole.ORCHESTRATOR,
+        reason="fixture stopped UNKNOWN",
+        artifact_ids=(),
+        source_revision=candidate_revision,
+        occurred_at=task.updated_at,
+    )
+    events = (candidate, feedback, terminal)
+    implementation = make_implementation_artifact().model_copy(
+        update={
+            "task_id": task.id,
+            "source_revision": candidate_revision,
+            "content": make_implementation_artifact().content.model_copy(
+                update={"commit_sha": candidate_revision}
+            ),
+        }
+    )
+    qa = make_qa_artifact().model_copy(
+        update={
+            "task_id": task.id,
+            "source_revision": candidate_revision,
+            "content": make_qa_artifact().content.model_copy(
+                update={"status": QaReportStatus.FAIL}
+            ),
+        }
+    )
+    artifact_map = {implementation.artifact_id: implementation, qa.artifact_id: qa}
+    artifacts = Mock()
+    artifacts.get.side_effect = artifact_map.__getitem__
+    require_contained_unknown_candidate_lineage(candidate_revision, task, events, artifacts)
+    require_contained_unknown_candidate_lineage(None, task, events, artifacts)
+
+    for projected, history in (
+        ("c" * 40, events),
+        (candidate_revision, (candidate, terminal)),
+        (
+            candidate_revision,
+            (candidate, feedback.model_copy(update={"artifact_ids": ()}), terminal),
+        ),
+        (
+            candidate_revision,
+            (candidate, feedback.model_copy(update={"reason": "other"}), terminal),
+        ),
+    ):
+        with pytest.raises(ValueError, match="candidate"):
+            require_contained_unknown_candidate_lineage(projected, task, history, artifacts)
+    for changed in (
+        qa.model_copy(update={"task_id": "task_foreign"}),
+        qa.model_copy(update={"source_revision": "c" * 40}),
+        qa.model_copy(
+            update={"content": qa.content.model_copy(update={"status": QaReportStatus.PASS})}
+        ),
+        qa.model_copy(update={"parent_artifact_ids": ("art_foreign",)}),
+    ):
+        artifacts.get.side_effect = {
+            implementation.artifact_id: implementation,
+            qa.artifact_id: changed,
+        }.__getitem__
+        with pytest.raises(ValueError, match="candidate"):
+            require_contained_unknown_candidate_lineage(candidate_revision, task, events, artifacts)
+    require_contained_unknown_candidate_lineage(None, task, (terminal,), artifacts)
+
+    # A retry can supersede an earlier sealed QA report from another candidate.
+    prior_revision = "c" * 40
+    prior_implementation = implementation.model_copy(
+        update={
+            "artifact_id": "art_impl_previous",
+            "source_revision": prior_revision,
+            "content": implementation.content.model_copy(update={"commit_sha": prior_revision}),
+            "producer": implementation.producer.model_copy(update={"run_id": "run_impl_previous"}),
+        }
+    )
+    prior_qa = qa.model_copy(
+        update={
+            "artifact_id": "art_qa_previous",
+            "source_revision": prior_revision,
+            "parent_artifact_ids": (prior_implementation.artifact_id,),
+            "producer": qa.producer.model_copy(update={"run_id": "run_qa_previous"}),
+        }
+    )
+    current_qa = qa.model_copy(update={"supersedes": prior_qa.artifact_id})
+    artifact_map = {
+        implementation.artifact_id: implementation,
+        current_qa.artifact_id: current_qa,
+        prior_qa.artifact_id: prior_qa,
+        prior_implementation.artifact_id: prior_implementation,
+    }
+    artifacts.get.side_effect = artifact_map.__getitem__
+    require_contained_unknown_candidate_lineage(None, task, events, artifacts)
+    artifact_map["art_impl_foreign"] = prior_implementation.model_copy(
+        update={"artifact_id": "art_impl_foreign", "task_id": "task_foreign"}
+    )
+    for predecessor in (
+        prior_qa.model_copy(update={"task_id": "task_foreign"}),
+        prior_qa.model_copy(update={"producer": qa.producer}),
+        prior_qa.model_copy(update={"parent_artifact_ids": ("art_impl_foreign",)}),
+    ):
+        artifact_map[prior_qa.artifact_id] = predecessor
+        with pytest.raises(ValueError, match=r"candidate|feedback"):
+            require_contained_unknown_candidate_lineage(None, task, events, artifacts)
+
+
+def test_contained_unknown_review_feedback_requires_sealed_reject(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.domain import AgentRole, TaskStatus
+    from ai_software_engineer.domain.enums import ReviewVerdict
+    from ai_software_engineer.domain.event import StateEvent
+    from ai_software_engineer.recovery.contained_unknown import (
+        require_contained_unknown_candidate_lineage,
+    )
+    from tests.domain.factories import (
+        make_implementation_artifact,
+        make_qa_artifact,
+        make_review_artifact,
+    )
+    from tests.manager.test_dispatch import RecordingDispatchStore, _facts, _service
+
+    request, workforce = _facts(tmp_path)
+    dispatch = _service(RecordingDispatchStore(), workforce, request).commit_dispatch(request)
+    task = dispatch.task.model_copy(update={"status": TaskStatus.BLOCKED, "attempts": 1})
+    revision = "b" * 40
+    implementation = make_implementation_artifact().model_copy(
+        update={
+            "task_id": task.id,
+            "source_revision": revision,
+            "content": make_implementation_artifact().content.model_copy(
+                update={"commit_sha": revision}
+            ),
+        }
+    )
+    qa = make_qa_artifact().model_copy(update={"task_id": task.id, "source_revision": revision})
+    review = make_review_artifact().model_copy(
+        update={
+            "task_id": task.id,
+            "source_revision": revision,
+            "content": make_review_artifact().content.model_copy(
+                update={"verdict": ReviewVerdict.REJECT}
+            ),
+        }
+    )
+    artifacts = Mock()
+    artifact_map = {a.artifact_id: a for a in (implementation, qa, review)}
+    artifacts.get.side_effect = artifact_map.__getitem__
+    candidate = StateEvent(
+        event_id="evt_prior_candidate_review",
+        task_id=task.id,
+        from_status=TaskStatus.IMPLEMENTING,
+        to_status=TaskStatus.QA,
+        actor=AgentRole.ORCHESTRATOR,
+        reason="candidate_ready",
+        artifact_ids=(implementation.artifact_id,),
+        source_revision=revision,
+        occurred_at=task.updated_at,
+    )
+    qa_pass = candidate.model_copy(
+        update={
+            "event_id": "evt_prior_qa_pass",
+            "from_status": TaskStatus.QA,
+            "to_status": TaskStatus.REVIEW,
+            "reason": "qa_passed",
+            "artifact_ids": (qa.artifact_id,),
+        }
+    )
+    feedback = candidate.model_copy(
+        update={
+            "event_id": "evt_prior_review_reject",
+            "from_status": TaskStatus.REVIEW,
+            "to_status": TaskStatus.IMPLEMENTING,
+            "reason": "review_rejected_route_to_coder",
+            "artifact_ids": (review.artifact_id,),
+        }
+    )
+    terminal = candidate.model_copy(
+        update={
+            "event_id": "evt_last_unknown_after_review",
+            "from_status": TaskStatus.IMPLEMENTING,
+            "to_status": TaskStatus.BLOCKED,
+            "reason": "fixture stopped UNKNOWN",
+            "artifact_ids": (),
+        }
+    )
+    events = (candidate, qa_pass, feedback, terminal)
+    require_contained_unknown_candidate_lineage(None, task, events, artifacts)
+    prior_review = review.model_copy(
+        update={
+            "artifact_id": "art_review_previous",
+            "supersedes": None,
+            "producer": review.producer.model_copy(update={"run_id": "run_review_previous"}),
+        }
+    )
+    artifact_map[prior_review.artifact_id] = prior_review
+    artifact_map[review.artifact_id] = review.model_copy(
+        update={"supersedes": prior_review.artifact_id}
+    )
+    require_contained_unknown_candidate_lineage(None, task, events, artifacts)
+    artifact_map[review.artifact_id] = review.model_copy(
+        update={"content": review.content.model_copy(update={"verdict": ReviewVerdict.APPROVE})}
+    )
+    with pytest.raises(ValueError, match="candidate"):
+        require_contained_unknown_candidate_lineage(None, task, events, artifacts)
+
+
 def test_contained_unknown_complete_recovery_capture_cannot_drop_or_change_draft(
     tmp_path: Path,
 ) -> None:

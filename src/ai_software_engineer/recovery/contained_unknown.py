@@ -17,11 +17,17 @@ from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import AgentPermissions, AgentRole, Task, TaskStatus
-from ai_software_engineer.domain.artifact import Sha256
+from ai_software_engineer.domain.artifact import (
+    ImplementationReportArtifact,
+    QaReportArtifact,
+    ReviewReportArtifact,
+    Sha256,
+)
 from ai_software_engineer.domain.contained_unknown_budget import (
     CONTAINED_UNKNOWN_BUDGET_REASON,
     ContainedUnknownBudgetSettlement,
 )
+from ai_software_engineer.domain.enums import QaReportStatus, ReviewVerdict
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure
 from ai_software_engineer.git import GitWorktreeManager
@@ -52,6 +58,10 @@ from ai_software_engineer.recovery.native import (
     _require_native_active,
     read_approved_stages,
 )
+from ai_software_engineer.recovery.verification_snapshot import (
+    candidate_event,
+    terminal_candidate_requires_coder_recovery,
+)
 from ai_software_engineer.recovery.workspace_snapshot import (
     _existing_task_scope,
     _terminal_sql_facts,
@@ -67,6 +77,141 @@ from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 CONTAINED_UNKNOWN_BUDGET_SUMMARY = CONTAINED_UNKNOWN_BUDGET_REASON.removeprefix(
     "BUDGET_EXHAUSTED: "
 )
+
+
+def require_contained_unknown_candidate_lineage(
+    projected_revision: str | None,
+    task: Task,
+    events: tuple[StateEvent, ...],
+    artifacts: FileArtifactStore,
+) -> None:
+    """Allow a retained candidate only after verified feedback and newer Coder work."""
+    candidate_events = tuple(
+        event
+        for event in events
+        if event.to_status is TaskStatus.QA
+        and event.reason in {"candidate_ready", "candidate_recovered"}
+    )
+    if projected_revision is None and not candidate_events:
+        return
+    if not candidate_events:
+        raise ValueError("contained unknown candidate has no event")
+    try:
+        _, candidate = candidate_event(events)
+        newer_coder_work = terminal_candidate_requires_coder_recovery(task, events)
+    except RecoveryRejected as error:
+        raise ValueError("contained unknown candidate lineage is invalid") from error
+    if (
+        projected_revision is not None and candidate.source_revision != projected_revision
+    ) or not newer_coder_work:
+        raise ValueError("contained unknown candidate is not prior to interrupted Coder work")
+    if len(candidate.artifact_ids) != 1:
+        raise ValueError("contained unknown candidate has no unique implementation")
+    implementation = artifacts.get(candidate.artifact_ids[0])
+    if (
+        not isinstance(implementation, ImplementationReportArtifact)
+        or implementation.task_id != task.id
+        or implementation.source_revision != candidate.source_revision
+        or implementation.content.commit_sha != candidate.source_revision
+        or implementation.producer.role is not AgentRole.CODER
+    ):
+        raise ValueError("contained unknown candidate implementation differs")
+    feedback = events[-2]
+    if len(feedback.artifact_ids) != 1:
+        raise ValueError("contained unknown candidate feedback must have one artifact")
+    report = artifacts.get(feedback.artifact_ids[0])
+    if (
+        report.task_id != task.id
+        or report.source_revision != candidate.source_revision
+        or report.producer.run_id == implementation.producer.run_id
+        or report.producer.agent_id == implementation.producer.agent_id
+    ):
+        raise ValueError("contained unknown candidate feedback provenance differs")
+    if feedback.from_status is TaskStatus.QA:
+        if (
+            not isinstance(report, QaReportArtifact)
+            or report.producer.role is not AgentRole.QA
+            or report.content.status is not QaReportStatus.FAIL
+            or report.parent_artifact_ids != (implementation.artifact_id,)
+        ):
+            raise ValueError("contained unknown candidate QA feedback differs")
+    else:
+        assert feedback.from_status is TaskStatus.REVIEW
+        qa_pass_event = events[-3]
+        if len(qa_pass_event.artifact_ids) != 1:
+            raise ValueError("contained unknown candidate accepted QA is missing")
+        accepted_qa = artifacts.get(qa_pass_event.artifact_ids[0])
+        if (
+            not isinstance(accepted_qa, QaReportArtifact)
+            or accepted_qa.task_id != task.id
+            or accepted_qa.source_revision != candidate.source_revision
+            or accepted_qa.producer.role is not AgentRole.QA
+            or accepted_qa.producer.agent_id == implementation.producer.agent_id
+            or accepted_qa.producer.run_id == implementation.producer.run_id
+            or accepted_qa.content.status is not QaReportStatus.PASS
+            or accepted_qa.parent_artifact_ids != (implementation.artifact_id,)
+            or not isinstance(report, ReviewReportArtifact)
+            or report.producer.role is not AgentRole.REVIEWER
+            or report.producer.agent_id
+            in {
+                implementation.producer.agent_id,
+                accepted_qa.producer.agent_id,
+            }
+            or report.producer.run_id == accepted_qa.producer.run_id
+            or report.content.verdict is not ReviewVerdict.REJECT
+            or report.parent_artifact_ids != (accepted_qa.artifact_id,)
+        ):
+            raise ValueError("contained unknown candidate Review feedback differs")
+        _require_superseded_feedback(accepted_qa, artifacts, task)
+    _require_superseded_feedback(report, artifacts, task)
+
+
+def _require_superseded_feedback(
+    report: QaReportArtifact | ReviewReportArtifact,
+    artifacts: FileArtifactStore,
+    task: Task,
+) -> None:
+    """Read every sealed same-Task report predecessor without changing its old candidate."""
+    seen_ids = {report.artifact_id}
+    seen_runs = {report.producer.run_id}
+    current = report
+    for _ in range(1_000):
+        if current.supersedes is None:
+            return
+        previous = artifacts.get(current.supersedes)
+        if (
+            type(previous) is not type(report)
+            or previous.task_id != task.id
+            or previous.producer.role is not report.producer.role
+            or previous.artifact_id in seen_ids
+            or previous.producer.run_id in seen_runs
+            or len(previous.parent_artifact_ids) != 1
+        ):
+            raise ValueError("contained unknown superseded feedback lineage differs")
+        assert isinstance(previous, (QaReportArtifact, ReviewReportArtifact))
+        parent = artifacts.get(previous.parent_artifact_ids[0])
+        if isinstance(previous, QaReportArtifact):
+            valid_parent = (
+                isinstance(parent, ImplementationReportArtifact)
+                and parent.task_id == task.id
+                and parent.producer.role is AgentRole.CODER
+                and parent.source_revision == previous.source_revision
+                and parent.content.commit_sha == previous.source_revision
+            )
+        else:
+            valid_parent = (
+                isinstance(parent, QaReportArtifact)
+                and parent.task_id == task.id
+                and parent.producer.role is AgentRole.QA
+                and parent.source_revision == previous.source_revision
+                and parent.content.status is QaReportStatus.PASS
+            )
+        if not valid_parent:
+            raise ValueError("contained unknown superseded feedback parent differs")
+        seen_ids.add(previous.artifact_id)
+        seen_runs.add(previous.producer.run_id)
+        current = previous
+    raise ValueError("contained unknown superseded feedback chain is too long")
 
 
 @dataclass(frozen=True)
@@ -255,7 +400,6 @@ class ContainedUnknownRecoverySourceReader:
         if (
             cp.stage is not DeliveryStage.BLOCKED
             or cp.task_status is not TaskStatus.BLOCKED
-            or cp.candidate_revision is not None
             or cp.failure_summary != CONTAINED_UNKNOWN_BUDGET_SUMMARY
         ):
             raise ValueError("not the exact contained unknown exhausted checkpoint")
@@ -293,6 +437,10 @@ class ContainedUnknownRecoverySourceReader:
                 cp, history, sidecar=root, project_id=project.manifest.project_id
             )
             task, revision, dispatch, planner, events = facts
+            artifacts = FileArtifactStore(root / "artifacts", read_only=True)
+            require_contained_unknown_candidate_lineage(
+                cp.candidate_revision, task, events, artifacts
+            )
             if (
                 bound.dispatch_sha256 != dispatch.dispatch_sha256
                 or events[-1] != settlement.event
@@ -380,7 +528,7 @@ class ContainedUnknownRecoverySourceReader:
                 queue=queue,
                 state=root / "state",
                 route_root=model_route_root(root),
-                artifacts=FileArtifactStore(root / "artifacts", read_only=True),
+                artifacts=artifacts,
                 git=manager,
                 guard=guard,
             )
@@ -411,7 +559,7 @@ class ContainedUnknownRecoverySourceReader:
                     queue=queue,
                     state=root / "state",
                     route_root=model_route_root(root),
-                    artifacts=FileArtifactStore(root / "artifacts", read_only=True),
+                    artifacts=artifacts,
                     git=manager,
                     guard=guard,
                 )

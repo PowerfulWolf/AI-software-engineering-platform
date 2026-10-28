@@ -42,6 +42,7 @@ from ai_software_engineer.domain import (
     TaskStatus,
     WorkItemStatus,
 )
+from ai_software_engineer.domain.artifact import Artifact
 from ai_software_engineer.domain.contained_unknown_budget import ContainedUnknownBudgetSettlement
 from ai_software_engineer.domain.delivery_resolution import HandleDeliveryWait, InspectDeliveryWait
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
@@ -83,6 +84,10 @@ from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationOutcome
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
+from tests.manager.test_capacity_preserved_feedback_public import (
+    _failed_qa,
+    _progress,
+)
 from tests.manager.test_production_backend import (
     _git,
     _git_output,
@@ -91,6 +96,8 @@ from tests.manager.test_production_backend import (
 )
 from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
 from tests.manager.test_production_continuation import Invocation, _coder_draft
+from tests.manager.test_public_context_capacity_baseline import public_capacity_host
+from tests.manager.test_same_base_capacity_baseline import _independent_report
 from tests.recovery.test_execution import OfflineFactory
 
 
@@ -566,7 +573,6 @@ def test_public_start_only_unknown_budget_preserves_history_and_recovers_exactly
     )
     assert all(path.read_bytes() == body for path, body in original_records.items())
     assert (stopped.workspace / "hello.txt").read_text() == "partially implemented\n"
-
     # Advance the target main independently. The preserved draft conflicts with
     # this greeting, so only the newly approved Coder may perform reapplication.
     (repository / "hello.txt").write_text("new base greeting\n")
@@ -670,3 +676,330 @@ def test_public_start_only_unknown_budget_preserves_history_and_recovers_exactly
     assert _git_output("rev-parse", "HEAD", cwd=repository) == latest_main
     assert (repository / "hello.txt").read_text() == "new base greeting\n"
     assert (stopped.workspace / "hello.txt").read_text() == "partially implemented\n"
+
+
+@pytest.mark.mysql
+def test_public_contained_unknown_after_qa_feedback_keeps_historical_candidate(
+    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An older QA candidate is not a substitute for the final UNKNOWN Coder work."""
+    repository = tmp_path / "target"
+    repository.mkdir()
+    (repository / "hello.txt").write_text("hello\n")
+    _git("init", "-b", "main", cwd=repository)
+    _git("add", "hello.txt", cwd=repository)
+    _git("commit", "-m", "initial", cwd=repository)
+    prepared: list[AgentRequest] = []
+    invoked: list[AgentRequest] = []
+    prototype = public_capacity_host(
+        tmp_path=tmp_path,
+        repository=repository,
+        mysql_dsn=mysql_dsn,
+        monkeypatch=monkeypatch,
+        preparation_requests=prepared,
+        invoked=invoked,
+        should_reject=lambda _: False,
+    )
+    original_complete = _ScriptedStructuredClient.complete
+
+    def joint_complete(
+        self: _ScriptedStructuredClient,
+        *,
+        instructions: str,
+        input_payload: Mapping[str, object],
+        output_schema: Mapping[str, object],
+        timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
+    ) -> StructuredModelResult:
+        title = output_schema.get("title")
+        if title == "ManagerCoordinationDraft":
+            actions = cast(list[str], input_payload["advertised_actions"])
+            return StructuredModelResult(
+                payload={
+                    "action": "PROPOSE_RECOVERY"
+                    if "PROPOSE_RECOVERY" in actions
+                    else "WAITING_HUMAN",
+                    "summary": "Final UNKNOWN Coder work retained after independent QA feedback.",
+                    "next_action": "Approve an exact Coder reapply plan for the same Requirement.",
+                    "responsible_actor": "Engineering approver",
+                    "resume_condition": "A current exact recovery plan is approved.",
+                },
+                duration_ms=0,
+            )
+        if title in {"JointTechnicalDesign", "JointExecutionPlan"}:
+            (unit,) = DirectoryScope.model_validate(input_payload["scope"]).units
+            draft = original_complete(
+                self,
+                instructions="",
+                input_payload={},
+                output_schema=(
+                    TechnicalDesignDraft.model_json_schema()
+                    if title == "JointTechnicalDesign"
+                    else ExecutionPlanDraft.model_json_schema()
+                ),
+                timeout_seconds=timeout_seconds,
+            ).payload
+            payload = (
+                {
+                    "product_spec_sha256": input_payload["product_spec_sha256"],
+                    "summary": "Inspect the exact candidate greeting.",
+                    "blocking_issues": [],
+                    "units": [
+                        {"unit_id": unit.id, "requirement_ids": ["req_001"], "design": draft}
+                    ],
+                }
+                if title == "JointTechnicalDesign"
+                else {
+                    "design_sha256": input_payload["design_sha256"],
+                    "units": [{"unit_id": unit.id, "plan": draft}],
+                    "integration_checks": [],
+                }
+            )
+            return StructuredModelResult(payload=payload, duration_ms=0)
+        return original_complete(
+            self,
+            instructions=instructions,
+            input_payload=input_payload,
+            output_schema=output_schema,
+            timeout_seconds=timeout_seconds,
+            input_images=input_images,
+        )
+
+    monkeypatch.setattr(_ScriptedStructuredClient, "complete", joint_complete)
+    host = TeamHost(
+        config=prototype._config.model_copy(
+            update={
+                "execution_retry_policy": ExecutionRetryPolicy(
+                    coder=StageRetryPolicy(max_attempts=3)
+                )
+            }
+        ),
+        environment=prototype._environment,
+        structured_clients=_ScriptedClientFactory(),
+        delivery_route_adapters=production_delivery.ConfiguredDeliveryRouteAdapterFactory(),
+    )
+    calls: list[Invocation] = []
+
+    class ReportRunner:
+        def __init__(self, adapter: CodexCliAgentAdapter, request: AgentRequest) -> None:
+            self.adapter, self.request = adapter, request
+
+        def run(
+            self,
+            argv: tuple[str, ...],
+            *,
+            cwd: Path,
+            environment: Mapping[str, str],
+            stdin: str,
+            timeout_seconds: float,
+        ) -> CodexInvocationResult:
+            del environment, stdin, timeout_seconds
+            adapter, request = self.adapter, self.request
+            guard = cast(WorkerExecutionGuard, adapter._execution_guard)
+            assert guard.lease is not None
+            calls.append(
+                Invocation(
+                    request,
+                    guard.lease.claim,
+                    cwd,
+                    _git_output("branch", "--show-current", cwd=cwd),
+                    _git_output("rev-parse", "HEAD", cwd=cwd),
+                    adapter._model,
+                )
+            )
+            assert calls[-1].input_head == request.source_revision
+            artifact: Artifact
+            if request.role is AgentRole.CODER:
+                (cwd / "hello.txt").write_text(
+                    "hello from the team" if request.attempt <= 2 else "post-QA draft\n"
+                )
+                artifact = (
+                    _progress(adapter, request)
+                    if request.attempt == 1
+                    else _coder_draft(adapter, request)
+                )
+                artifact = artifact.model_copy(
+                    update={
+                        "supersedes": (request.expected_supersedes_by_kind or {}).get(artifact.kind)
+                    }
+                )
+            elif request.role is AgentRole.QA:
+                artifact = _failed_qa(adapter, request, cwd, tmp_path)
+            else:
+                artifact = _independent_report(adapter, request, cwd, tmp_path)
+            Path(argv[argv.index("--output-last-message") + 1]).write_text(
+                artifact.model_dump_json()
+            )
+            return CodexInvocationResult(returncode=0)
+
+    class LostFinalStop(SubprocessCodexCommandRunner):
+        def run_observed(
+            self,
+            argv: tuple[str, ...],
+            *,
+            cwd: Path,
+            environment: Mapping[str, str],
+            stdin: str,
+            timeout_seconds: float,
+            observer: Callable[[CodexInvocationResult], None],
+        ) -> CodexInvocationResult:
+            output_path = argv[argv.index("--output-last-message") + 1]
+            result = super().run_observed(
+                (
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; import sys; sys.stdin.read(); "
+                    "Path('hello.txt').write_text('last UNKNOWN draft\\n'); "
+                    "Path(sys.argv[1]).write_text('{}')",
+                    output_path,
+                ),
+                cwd=cwd,
+                environment=environment,
+                stdin=stdin,
+                timeout_seconds=min(timeout_seconds, 10),
+                observer=lambda _: None,
+            )
+            assert result.process_stop is not None and result.returncode == 0
+            raise OwnedProcessesUncertain("fixture lost final Coder stop")
+
+    class PostFeedbackUnknown(CodexCliAgentAdapter):
+        def run(self, request: AgentRequest) -> AgentResult:
+            invoked.append(request)
+            guard = cast(WorkerExecutionGuard, self._execution_guard)
+            if request.role is AgentRole.CODER and request.attempt == 3:
+                assert guard.lease is not None
+                calls.append(
+                    Invocation(
+                        request,
+                        guard.lease.claim,
+                        self._workspace_root,
+                        _git_output("branch", "--show-current", cwd=self._workspace_root),
+                        _git_output("rev-parse", "HEAD", cwd=self._workspace_root),
+                        self._model,
+                    )
+                )
+                self._runner = LostFinalStop(guard)
+            else:
+                self._runner = ReportRunner(self, request)
+            return super().run(request)
+
+    monkeypatch.setattr(production_delivery, "CodexCliAgentAdapter", PostFeedbackUnknown)
+    service = host.requirement_entry()
+    created = service.create(
+        CreateRequirement(name="Post-feedback UNKNOWN", repository_roots=(str(repository),))
+    ).checkpoint
+    product = service.reply(
+        ReplyToProduct(
+            delivery_id=created.delivery_id,
+            expected_checkpoint_sha256=created.checkpoint_sha256,
+            message="Keep the required final newline.",
+        )
+    ).checkpoint
+    service.approve(
+        ApproveProductSpec(
+            delivery_id=created.delivery_id,
+            expected_checkpoint_sha256=product.checkpoint_sha256,
+            approval_reference="approved-post-feedback-unknown-product",
+        )
+    )
+    assert [(request.role, request.attempt) for request in invoked] == [
+        (AgentRole.CODER, 1),
+        (AgentRole.CODER, 2),
+        (AgentRole.QA, 2),
+        (AgentRole.CODER, 3),
+    ]
+    (child,) = service.status(created.delivery_id).checkpoint.children
+    assert child.checkpoint.task_id is not None
+    assert child.checkpoint.candidate_revision is not None
+    (item,) = tuple(
+        value
+        for value in host.work_queue.items_for_task(child.checkpoint.task_id)
+        if value.status is not WorkItemStatus.CLOSED
+    )
+    assert item.wait_disposition is not None
+    disposition = item.wait_disposition
+    sidecar = host.projects()[0].root / "repositories" / child.checkpoint.repository_id
+    reports = FileArtifactStore(sidecar / "artifacts", read_only=True)
+    with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+        original = tasks.get(child.checkpoint.task_id)
+        before_events = tasks.list_events(original.id)
+    (feedback,) = tuple(
+        event for event in before_events if event.reason == "qa_failed_route_to_coder"
+    )
+    assert len(feedback.artifact_ids) == 1
+    report = reports.get(feedback.artifact_ids[0])
+    assert isinstance(report, QaReportArtifact) and report.content.status is QaReportStatus.FAIL
+    (candidate_event,) = tuple(
+        event for event in before_events if event.reason == "candidate_ready"
+    )
+    assert report.parent_artifact_ids == candidate_event.artifact_ids
+    boot = LocalBootObservation(
+        machine_sha256="a" * 64,
+        boot_session_sha256="b" * 64,
+        booted_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    monkeypatch.setattr(TrustedLocalBootObserver, "observe", lambda _self: boot)
+    monkeypatch.setattr(
+        TrustedLegacyLocalExecutionObserver,
+        "observe",
+        lambda _self, *, worktree_root, boot: LegacyLocalExecutionSurvey.create(
+            worktree_path=str(worktree_root.resolve()),
+            machine_sha256=boot.machine_sha256,
+            boot_session_sha256=boot.boot_session_sha256,
+            account_sha256="c" * 64,
+            observed_at=datetime.now(UTC),
+            scanner_version="local-execution-v1",
+            blockers=(),
+        ),
+    )
+    command = HandleDeliveryWait(
+        work_item_id=item.id,
+        expected_disposition_sha256=disposition.disposition_sha256,
+        expected_task_intent_sha256=disposition.facts.task_intent_sha256,
+        expected_source_revision=disposition.facts.source_revision,
+        expected_checkpoint_sequence=disposition.facts.checkpoint_sequence,
+        confirm_local_execution_stopped=True,
+        local_stop_reference="call_post_feedback_unknown_stop_confirmation",
+    )
+    proof = host.inspect_delivery_wait(
+        InspectDeliveryWait.model_validate(
+            command.model_dump(mode="python", include=set(InspectDeliveryWait.model_fields))
+        ),
+        project_id="project_test",
+        delivery_id=created.delivery_id,
+    )
+    assert proof.local_stop_confirmation_available
+    handled = host.handle_delivery_wait(
+        command, project_id="project_test", delivery_id=created.delivery_id
+    )
+    assert handled.status == "BUDGET_EXHAUSTED"
+    with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+        settled = tasks.get(original.id)
+        settled_events = tasks.list_events(original.id)
+    assert settled.status is TaskStatus.BLOCKED
+    assert settled_events[:-1] == before_events
+    synchronized = host.resume_delivery(
+        ResumeProjectDelivery(delivery_id=created.delivery_id), project_id="project_test"
+    )
+    assert isinstance(synchronized, JointDeliveryResult)
+    assert synchronized.checkpoint.stage is JointStage.BLOCKED
+    proposed = host.resume_delivery(
+        ResumeProjectDelivery(delivery_id=created.delivery_id), project_id="project_test"
+    )
+    assert isinstance(proposed, JointDeliveryResumeResult)
+    assert proposed.continuation.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED, (
+        proposed.continuation.next_action,
+        proposed.continuation.diagnostic,
+    )
+    assert proposed.continuation.recovery_plan_file is not None
+    _, plan = host.recovery_entry().open_plan(Path(proposed.continuation.recovery_plan_file))
+    assert plan.source.task_id == original.id
+    assert plan.source.contained_unknown_settlement_sha256 == handled.budget_settlement_sha256
+    assert plan.source.parent_delivery_id == created.delivery_id
+    assert plan.input_mode == "coder_reapply"
+    assert "+last UNKNOWN draft" in plan.capture.patch
+    assert plan.capture.branch_name == original.branch_name
+    assert len(invoked) == 4 and host.work_queue.get(item.id).status is WorkItemStatus.CLOSED
+    with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+        assert tasks.get(original.id) == settled
+        assert tasks.list_events(original.id) == settled_events

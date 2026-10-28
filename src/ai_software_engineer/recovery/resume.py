@@ -51,6 +51,7 @@ from ai_software_engineer.read_record_scope import (
     finish_recovery_record_reads,
     recovery_record_read_scope,
 )
+from ai_software_engineer.recovery.contained_unknown import CONTAINED_UNKNOWN_BUDGET_SUMMARY
 from ai_software_engineer.recovery.context import approved_parent_context
 from ai_software_engineer.recovery.entry import (
     NativeRecoveryEntry,
@@ -192,6 +193,17 @@ class DeliveryResumeController:
         status = self._entry.status(command.delivery_id)
         current = status.checkpoint
         diagnostic = getattr(status, "diagnostic", None)
+        # A candidate from an earlier attempt is historical once QA/Review
+        # returned work to Coder.  The exact settled UNKNOWN source verifies
+        # that event chain and the final retained Coder workspace before a
+        # successor can be proposed; it must take precedence over QA replay.
+        if (
+            current.stage is DeliveryStage.BLOCKED
+            and current.task_id is not None
+            and current.task_status is TaskStatus.BLOCKED
+            and current.failure_summary == CONTAINED_UNKNOWN_BUDGET_SUMMARY
+        ):
+            return self._continue_coder_recovery(current, command)
         # A preparation mismatch is a read-side fact, not permission to replay
         # the old cursor.  A sealed candidate is the one deliberate exception:
         # its QA/Review verification can still be proposed or consumed against

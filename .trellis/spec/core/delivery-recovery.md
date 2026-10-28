@@ -2199,8 +2199,11 @@ dispatch_sha256
   dispatch; `allocation_preparation_sha256` separately validates the preparation used by the current
   successor Task. If that successor Coder also fails before a candidate, the same `resume` flow emits
   another fresh recovery plan and Task instead of assuming only one recovery attempt.
-- A terminal Task with a durable candidate first gets independent QA/Reviewer verification. Missing
-  approval returns `VERIFICATION_APPROVAL_REQUIRED` with the exact plan path/digest and next command.
+- A terminal Task with a durable candidate first gets independent QA/Reviewer verification, unless
+  an exact later Coder failure has been settled through the contained-UNKNOWN budget contract.
+  That post-feedback case follows the separately approved Coder recovery source, preserving the
+  historical candidate and verdict. Missing candidate-verification approval returns
+  `VERIFICATION_APPROVAL_REQUIRED` with the exact plan path/digest and next command.
 - A conclusive QA criterion/test `FAIL` or Reviewer rejection routes the next Coder request from the
   preceding candidate commit, not from the Task's original `base_ref`. A QA environment/tool
   `ERROR` with no criterion/test `FAIL` is inconclusive and routes to a fresh verification plan,
@@ -2268,7 +2271,8 @@ dispatch_sha256
 | Recovery/remediation Coder fails again without candidate | Follow allocation ancestry; publish next recovery plan | 0 |
 | Joint child source is frozen and configured checkout advanced | Keep frozen source lineage; build target preparation and plan from the current Project backend/current clean HEAD | 0 |
 | QA/Review routed Coder restarts at old Task base while worktree retains Candidate V1 | Reject before provider admission; implementation bug | 0 |
-| Terminal retry Task retains a validated earlier candidate | Publish candidate-verification plan before failed-Coder recovery | 0 |
+| Terminal retry Task retains a validated earlier candidate, without a later contained-UNKNOWN settlement | Publish candidate-verification plan before failed-Coder recovery | 0 |
+| Historical candidate, QA FAIL/Review REJECT, then exact contained-UNKNOWN Coder settlement | Verify the feedback-to-Coder event chain and publish Coder reapply recovery plan | 0 |
 | Approved recovery plan, no invocation | Fresh recovery Task: Coder → QA → Reviewer | 3+ bounded retries |
 | Recovery Task already terminal, Delivery not updated | Adopt terminal Task result | 0 |
 | Candidate, no current verification plan | Publish plan and exact approval command | 0 |
