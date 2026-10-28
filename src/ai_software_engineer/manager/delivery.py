@@ -1082,11 +1082,16 @@ class UnifiedProjectEntryService:
             "recovery_source_checkpoint_sha256": plan.source.checkpoint_sha256,
             "recovery_target_preparation_sha256": plan.target_preparation_sha256,
         }
+        # A contained UNKNOWN Coder may follow a rejected historical candidate.
+        # Source inspection authenticates that feedback lineage before plan sealing.
         if (
             current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
             or current.checkpoint_sha256 != plan.source.checkpoint_sha256
             or current.task_id != plan.source.task_id
-            or current.candidate_revision is not None
+            or (
+                current.candidate_revision is not None
+                and plan.source.contained_unknown_settlement_sha256 is None
+            )
             or dispatch.recovery_plan_sha256 != plan.plan_sha256
             or dispatch.task_id != plan.new_task_id
             or dispatch.repository_id != plan.source.scope.repository_id

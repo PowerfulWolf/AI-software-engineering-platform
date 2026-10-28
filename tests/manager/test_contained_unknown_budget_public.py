@@ -13,6 +13,7 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Never, cast
+from unittest.mock import Mock
 
 import pytest
 from pymysql.cursors import DictCursor
@@ -30,6 +31,7 @@ from ai_software_engineer.agents.codex_cli import (
     SubprocessCodexCommandRunner,
 )
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
+from ai_software_engineer.agents.model_input import FinalModelInputCapacityExceeded
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.domain import (
@@ -51,10 +53,13 @@ from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager import production_backend, production_delivery, production_host
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
+    DeliveryCommandRejected,
     ReplyToProduct,
     ResumeProjectDelivery,
+    UnifiedProjectEntryService,
 )
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
+from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
 from ai_software_engineer.manager.legacy_containment import (
     LocalBootObservation,
     TrustedLocalBootObserver,
@@ -80,7 +85,7 @@ from ai_software_engineer.orchestration.continuation_store import FileContinuati
 from ai_software_engineer.orchestration.retry import RetryResult
 from ai_software_engineer.owned_processes import OwnedProcessesUncertain
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry, NativeRecoveryExecution
-from ai_software_engineer.recovery.models import RecoveryRejected
+from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected
 from ai_software_engineer.recovery.resume import DeliveryResumeOutcome, JointDeliveryResumeResult
 from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
 from ai_software_engineer.recovery.seed import RecoverySeedService
@@ -752,8 +757,12 @@ def test_public_start_only_unknown_budget_preserves_history_and_recovers_exactly
 
 
 @pytest.mark.mysql
+@pytest.mark.parametrize("capacity_reentry", [False, True], ids=["attach", "capacity-reentry"])
 def test_public_contained_unknown_after_qa_feedback_keeps_historical_candidate(
-    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    mysql_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capacity_reentry: bool,
 ) -> None:
     """An older QA candidate is not a substitute for the final UNKNOWN Coder work."""
     repository = tmp_path / "target"
@@ -852,6 +861,8 @@ def test_public_contained_unknown_after_qa_feedback_keeps_historical_candidate(
         delivery_route_adapters=production_delivery.ConfiguredDeliveryRouteAdapterFactory(),
     )
     calls: list[Invocation] = []
+    recovered_task_id: str | None = None
+    refuse_recovery_input = False
 
     class ReportRunner:
         def __init__(self, adapter: CodexCliAgentAdapter, request: AgentRequest) -> None:
@@ -936,6 +947,17 @@ def test_public_contained_unknown_after_qa_feedback_keeps_historical_candidate(
             raise OwnedProcessesUncertain("fixture lost final Coder stop")
 
     class PostFeedbackUnknown(CodexCliAgentAdapter):
+        def prepare_input(self, request: AgentRequest) -> None:
+            if refuse_recovery_input and request.task_id == recovered_task_id:
+                assert self._input_budget is not None
+                maximum = self._input_budget._resolver.get_context(
+                    request.context_manifest_id
+                ).budget.max_input_tokens
+                raise FinalModelInputCapacityExceeded(
+                    estimated_input_tokens=maximum + 1, max_input_tokens=maximum
+                )
+            super().prepare_input(request)
+
         def run(self, request: AgentRequest) -> AgentResult:
             invoked.append(request)
             guard = cast(WorkerExecutionGuard, self._execution_guard)
@@ -1078,7 +1100,9 @@ def test_public_contained_unknown_after_qa_feedback_keeps_historical_candidate(
         proposed.continuation.diagnostic,
     )
     assert proposed.continuation.recovery_plan_file is not None
-    _, plan = host.recovery_entry().open_plan(Path(proposed.continuation.recovery_plan_file))
+    recovery = host.recovery_entry()
+    path = Path(proposed.continuation.recovery_plan_file)
+    store, plan = recovery.open_plan(path)
     assert plan.source.task_id == original.id
     assert plan.source.contained_unknown_settlement_sha256 == handled.budget_settlement_sha256
     assert plan.source.parent_delivery_id == created.delivery_id
@@ -1089,3 +1113,127 @@ def test_public_contained_unknown_after_qa_feedback_keeps_historical_candidate(
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         assert tasks.get(original.id) == settled
         assert tasks.list_events(original.id) == settled_events
+
+    # The old candidate was rejected by QA and belongs to the historical Task.
+    # Exact approval must still attach the new Coder Task to this blocked child.
+    recovery.approve(
+        path,
+        confirmed_plan=plan.plan_sha256,
+        reference="approved post-feedback contained UNKNOWN recovery",
+    )
+    sealed = store.get_task_record(plan.plan_sha256)
+    recovered_task_id = sealed.task.id
+
+    def entry_dispatch(candidate_plan: RecoveryPlan, task: object) -> RecoveryDispatchRecord:
+        dispatch = cast(RecoveryDispatchRecord, Mock(spec=RecoveryDispatchRecord))
+        dispatch.id = "dispatch_commit_" + candidate_plan.plan_sha256
+        dispatch.recovery_plan_sha256 = candidate_plan.plan_sha256
+        dispatch.repository_id = candidate_plan.source.scope.repository_id
+        dispatch.task_id = candidate_plan.new_task_id
+        dispatch.task = task
+        dispatch.dispatch_sha256 = "d" * 64
+        return dispatch
+
+    # A generic failed recovery cannot reinterpret a retained candidate as
+    # prior QA feedback. The sealed contained-UNKNOWN source is essential.
+    ordinary = RecoveryPlan.create(
+        **{
+            **plan.to_wire(),
+            "source": plan.source.model_copy(update={"contained_unknown_settlement_sha256": None}),
+        }
+    )
+    ordinary_task = sealed.task.model_copy(
+        update={
+            "id": ordinary.new_task_id,
+            "metadata": {
+                **sealed.task.metadata,
+                "recovery_plan_sha256": ordinary.plan_sha256,
+            },
+        }
+    )
+    historical = service.status(created.delivery_id).checkpoint.children[0].checkpoint
+    with pytest.raises(DeliveryCommandRejected, match="terminal Delivery"):
+        host.project_entry("project_test").begin_recovery(
+            ordinary,
+            entry_dispatch(ordinary, ordinary_task),
+            at=datetime.now(UTC),
+        )
+    assert service.status(created.delivery_id).checkpoint.children[0].checkpoint == historical
+
+    if not capacity_reentry:
+        started = host.project_entry("project_test").begin_recovery(
+            plan, entry_dispatch(plan, sealed.task), at=datetime.now(UTC)
+        )
+        assert started.checkpoint.stage is DeliveryStage.DELIVERING
+        assert started.checkpoint.task_id == plan.new_task_id
+        assert started.checkpoint.candidate_revision is None
+        assert started.checkpoint.previous_checkpoint_sha256 == historical.checkpoint_sha256
+        return
+
+    refuse_recovery_input = True
+    rejected_attachments: list[str] = []
+
+    def reject_after_seed(
+        _entry: UnifiedProjectEntryService,
+        candidate_plan: RecoveryPlan,
+        _dispatch: RecoveryDispatchRecord,
+        *,
+        at: datetime,
+    ) -> Never:
+        del at
+        rejected_attachments.append(candidate_plan.plan_sha256)
+        raise DeliveryCommandRejected("recovery does not match the terminal Delivery")
+
+    # Match the persisted failure boundary: the seed, Task and capacity wait are
+    # durable, but the parent Delivery has not attached the successor yet. This
+    # fixture creates a final-input wait; K1 failed earlier during Context build.
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(UnifiedProjectEntryService, "begin_recovery", reject_after_seed)
+        with pytest.raises(DeliveryCommandRejected, match="terminal Delivery"):
+            host.resume_delivery(
+                ResumeProjectDelivery(delivery_id=created.delivery_id),
+                project_id="project_test",
+            )
+    assert rejected_attachments == [plan.plan_sha256]
+    assert service.status(created.delivery_id).checkpoint.children[0].checkpoint == historical
+    dispatch = recovery._dispatch_for(store, plan)
+    seed = store.get_seed(plan.plan_sha256)
+    with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+        before_task = tasks.get(plan.new_task_id)
+    assert dispatch.task_id == seed.capture.task_id == before_task.id == plan.new_task_id
+    assert dispatch.recovery_plan_sha256 == plan.plan_sha256
+    with pytest.raises(RecoveryRecordMissing):
+        store.get_invocation(plan.plan_sha256)
+    waiting = tuple(
+        item
+        for item in host.work_queue.items_for_task(plan.new_task_id)
+        if item.status is WorkItemStatus.WAITING_DEPENDENCY
+    )
+    assert len(waiting) == 1
+    assert waiting[0].wait_disposition is not None
+    assert waiting[0].wait_disposition.facts.classification == "CONTEXT_CAPACITY"
+    assert len(invoked) == 4
+
+    reopened = TeamHost(
+        config=host._config,
+        environment=host._environment,
+        structured_clients=_ScriptedClientFactory(),
+        delivery_route_adapters=production_delivery.ConfiguredDeliveryRouteAdapterFactory(),
+    )
+    pending = reopened.resume_delivery(
+        ResumeProjectDelivery(delivery_id=created.delivery_id), project_id="project_test"
+    )
+    assert isinstance(pending, JointDeliveryResult)
+    assert len(invoked) == 4
+    assert pending.checkpoint.children[0].checkpoint.task_id == plan.new_task_id
+    assert pending.checkpoint.children[0].checkpoint.candidate_revision is None
+    reopened_recovery = reopened.recovery_entry()
+    reopened_store, loaded = reopened_recovery.open_plan(path)
+    assert loaded == plan
+    assert reopened_store.get_task_record(plan.plan_sha256) == sealed
+    assert reopened_store.get_seed(plan.plan_sha256) == seed
+    assert reopened_recovery._dispatch_for(reopened_store, plan) == dispatch
+    with pytest.raises(RecoveryRecordMissing):
+        reopened_store.get_invocation(plan.plan_sha256)
+    with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+        assert tasks.get(plan.new_task_id) == before_task

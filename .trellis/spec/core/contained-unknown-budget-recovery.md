@@ -113,6 +113,17 @@ child `ProjectDeliveryCheckpoint.failure_summary`, `candidate_revision`, `task_i
 remains `CONTINUE_DELIVERY` against the joint parent's exact checkpoint digest; no API or
 Schema field changes.
 
+`UnifiedProjectEntryService.begin_recovery` must preserve this classification when it
+attaches an approved successor. Its normal terminal-candidate refusal applies to all other
+recovery sources; only a plan with the exact contained-UNKNOWN settlement discriminator may
+attach across a non-null historical candidate. The existing terminal child checkpoint digest,
+old Task identity, new Task/dispatch metadata and approved target base must still match.
+The new child checkpoint clears the historical candidate and binds the new Task. A failure
+after dispatch/seed but before this attachment must be replayed through the public Continue
+with the same plan and dispatch identity; seed verification and invocation gates still run,
+and the original failed Operation remains in history. This path never treats the historical
+candidate as a QA PASS or skips independent Coder, QA or Review.
+
 The old QA verdict, candidate and UNKNOWN Run remain immutable. The new plan must carry
 the complete Task-base patch and verification feedback into `coder_reapply`; approval and
 new independent Coder, QA and Reviewer claims remain separate. A parent joint Requirement
@@ -157,7 +168,9 @@ missing settlement. Historical stopped-UNKNOWN v1 records and schemas retain the
 | Exact replay after crash or SQL commit | Verify current facts and return the original settlement; do not append another event |
 | Earlier committed code and empty final Run-local patch | Keep the full Task-base patch for Coder reapply |
 | Historical candidate, QA FAIL/Review REJECT, then settled UNKNOWN Coder | Route to exact Coder recovery; verify candidate/event lineage and preserve complete patch and feedback |
+| Same source and approved successor already has dispatch, seed, SQL Task and a pre-model capacity wait, while old child is still BLOCKED | Public Continue reuses those exact facts, attaches the new Task, clears the historical candidate and keeps the capacity wait; no second model start |
 | Candidate has no later Coder failure, or projected revision differs from event | Keep candidate verification or reject mismatched source; no Coder recovery authority |
+| Non-contained recovery source with a non-null terminal candidate | `begin_recovery` rejects; no new child checkpoint |
 | New plan lacks exact approval or independent QA/Review | Do not dispatch or mark DONE |
 
 Good: a current human declaration closes only the exhausted old work and an exact successor
@@ -170,7 +183,11 @@ worker. Correct: both paths use the same isolated complete observer and still fa
 incomplete scan. `tests/manager/test_contained_unknown_budget.py` verifies the default and
 injected observer paths, including `PROCESS_SCAN_INCOMPLETE` refusal with unchanged old Task
 events; `test_contained_unknown_budget_public.py` covers the original
-UNKNOWN-to-independent-QA/Review flow. The public recovery source wraps any incomplete survey
+UNKNOWN-to-independent-QA/Review flow, the post-feedback candidate attachment and a new-Host
+public Continue after dispatch/seed/Task plus a pre-model capacity wait. The test checks exact
+reuse of the approved plan, dispatch, seed and Task, unchanged old checkpoint before reentry,
+cleared historical candidate after reentry and no second invocation. The public recovery source
+wraps any incomplete survey
 as a `RecoveryRejected` before dispatch through the existing `require_current` gate.
 
 Browser interaction verification uses an isolated test host. The Playwright fixture must
