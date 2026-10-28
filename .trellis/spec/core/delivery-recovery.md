@@ -1193,6 +1193,20 @@ stored integrity/lineage only and may return valid historical data after current
 future consumers may proceed. There is no permanent grant in a stored hash and no lock implied by
 the comparison. Dispatch still needs a durable current-fact/allocation fence and seed admission.
 
+Approval and Task sealing are separate durable writes. If an operation stops after publishing an
+approved authorization but before publishing its Task record, an ordinary same-Requirement
+`CONTINUE_DELIVERY` may replay only that authorization's exact saved command/reference through
+`NativeRecoveryEntry.approve`, then require the current facts and seal the same Task before
+`resume_execution`. It must not invent a second human decision, infer approval from the missing
+Task, or start a seed/provider while sealing is absent. An existing valid Task record follows the
+normal execution path without repeating approval. Missing or rejected authorization, corrupt Task
+record, changed source/target, or conflicting replay still fail closed and preserve the old history.
+Calling `resume_execution` directly from an approved-but-unsealed checkpoint is wrong because it
+requires `task-<plan_sha256>.json`; replaying the stored approval through `approve` first is the
+correct path. The public regression asserts the authorization bytes stay equal, the missing Task
+becomes the same sealed Task ID, and the old UNKNOWN Run remains unchanged through independent
+Coder, QA and Reviewer completion.
+
 | Case | Required result |
 |---|---|
 | Valid approved draft | One sealed Task input; no dispatch or DB Task mutation |
@@ -1201,12 +1215,16 @@ the comparison. Dispatch still needs a durable current-fact/allocation fence and
 | Different Task text under decided record identity | Conflict, preserve first record |
 | Corrupt JSON/envelope/hash or unsafe file | Fail closed via existing store guards |
 | Current logical checkout becomes dirty | Historical get allowed; require_current rejects |
+| Approved authorization exists but Task seal is missing | Ordinary Continue replays the exact saved approval, seals once, then resumes the same Requirement |
+| No approved authorization or stale facts at replay | No Task seal, dispatch, seed or provider call |
 
 Good: real native offline fixture seals, reopens, revalidates with old source untouched. Base: exact
 replay without another write. Bad: treat raw `get_task_record()` as a fresh dispatch permission.
 Required tests: `test_task_record.py` wire/schema, missing auth, replay, conflict, corruption, secret,
 Task status/attempt/ID/metadata/digest/base/auth rejection; `test_current.py` real native sealing and
-stale-current rejection. Generic store crash/concurrency/path protections remain under full regression.
+stale-current rejection; `test_contained_unknown_budget_public.py` authorization-without-seal public
+Continue regression through independent Coder, QA and Reviewer. Generic store crash/concurrency/path
+protections remain under full regression.
 
 Schema integration guard: model-generated JSON Schema is not yet a repository-registered schema.
 Every `schemas/*.schema.json` requires the Draft 2020-12 `$schema` and unique project `$id`; the global

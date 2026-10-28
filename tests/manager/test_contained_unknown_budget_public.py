@@ -74,11 +74,14 @@ from ai_software_engineer.orchestration.continuation_models import (
     ExecutionCaptureStop,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
+from ai_software_engineer.orchestration.retry import RetryResult
 from ai_software_engineer.owned_processes import OwnedProcessesUncertain
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry, NativeRecoveryExecution
 from ai_software_engineer.recovery.models import RecoveryRejected
 from ai_software_engineer.recovery.resume import DeliveryResumeOutcome, JointDeliveryResumeResult
+from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
 from ai_software_engineer.recovery.seed import RecoverySeedService
+from ai_software_engineer.recovery.store import RecoveryRecordMissing
 from ai_software_engineer.runtime import _default_case_id
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
@@ -103,15 +106,28 @@ from tests.recovery.test_execution import OfflineFactory
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    "late_artifact",
-    [None, "before", "at_fence", "late_capture_stop"],
-    ids=["deliver", "late-raw-artifact", "late-artifact-at-SQL-fence", "late-original-stop"],
+    ("late_artifact", "unsealed_approval"),
+    [
+        (None, False),
+        (None, True),
+        ("before", False),
+        ("at_fence", False),
+        ("late_capture_stop", False),
+    ],
+    ids=[
+        "deliver",
+        "approved-but-unsealed-continue",
+        "late-raw-artifact",
+        "late-artifact-at-SQL-fence",
+        "late-original-stop",
+    ],
 )
 def test_public_start_only_unknown_budget_preserves_history_and_recovers_exactly(
     tmp_path: Path,
     mysql_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
     late_artifact: Literal["before", "at_fence", "late_capture_stop"] | None,
+    unsealed_approval: bool,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -618,21 +634,64 @@ def test_public_start_only_unknown_budget_preserves_history_and_recovers_exactly
         factories.append(result)
         return result
 
-    def execute_offline(entry: NativeRecoveryEntry, plan_path: Path) -> NativeRecoveryExecution:
-        store, exact = entry.open_plan(plan_path)
-        delivery = entry.execute(plan_path, route_factory=factory)
-        return NativeRecoveryExecution(exact, entry._dispatch_for(store, exact), delivery)
+    resume_native = NativeRecoveryEntry.resume_execution
 
-    monkeypatch.setattr(NativeRecoveryEntry, "resume_execution", execute_offline)
+    def resume_offline(entry: NativeRecoveryEntry, plan_path: Path) -> NativeRecoveryExecution:
+        execute_native = entry.execute
+
+        def execute_with_offline_factory(path: Path) -> RetryResult:
+            return execute_native(path, route_factory=factory)
+
+        with monkeypatch.context() as offline:
+            offline.setattr(entry, "execute", execute_with_offline_factory)
+            return resume_native(entry, plan_path)
+
+    if unsealed_approval:
+        # The first public approval can persist its exact human decision and then
+        # lose the sealing step. A later ordinary Continue must finish that same
+        # approval before any new Task, seed, invocation or provider call exists.
+        store, _ = recovery.open_plan(path)
+        reference = "exact latest-main recovery; original UNKNOWN retained"
+
+        def fail_after_authorization(
+            _service: RecoveryTaskSealingService, _plan_sha256: str
+        ) -> None:
+            raise RecoveryRejected("simulated post-authorization interruption")
+
+        with monkeypatch.context() as interrupted:
+            interrupted.setattr(RecoveryTaskSealingService, "seal", fail_after_authorization)
+            with pytest.raises(RecoveryRejected, match="simulated post-authorization interruption"):
+                recovery.approve(path, confirmed_plan=plan.plan_sha256, reference=reference)
+        authorization = store.get_authorization(plan.plan_sha256)
+        assert authorization.decision.approved
+        with pytest.raises(RecoveryRecordMissing):
+            store.get_task_record(plan.plan_sha256)
+        with pytest.raises(RecoveryRecordMissing):
+            store.get_seed(plan.plan_sha256)
+        with pytest.raises(RecoveryRecordMissing):
+            store.get_invocation(plan.plan_sha256)
+        assert len(calls) == 1
+        with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+            assert tasks.get(original.id) == settled
+            assert tasks.list_events(original.id) == settled_events
+
+    monkeypatch.setattr(NativeRecoveryEntry, "resume_execution", resume_offline)
     delivered = host.resume_delivery(
         ResumeProjectDelivery(
             delivery_id=created.delivery_id,
-            approved_plan_sha256=plan.plan_sha256,
-            approval_reference="exact latest-main recovery; original UNKNOWN retained",
+            approved_plan_sha256=None if unsealed_approval else plan.plan_sha256,
+            approval_reference=(
+                None
+                if unsealed_approval
+                else "exact latest-main recovery; original UNKNOWN retained"
+            ),
         ),
         project_id="project_test",
     )
-    assert isinstance(delivered, JointDeliveryResult)
+    assert isinstance(delivered, JointDeliveryResult), delivered
+    if unsealed_approval:
+        assert store.get_authorization(plan.plan_sha256) == authorization
+        assert store.get_task_record(plan.plan_sha256).task.id == plan.new_task_id
     assert delivered.checkpoint.delivery_id == created.delivery_id
     assert delivered.checkpoint.stage is JointStage.DONE, delivered.checkpoint
     (finished,) = delivered.checkpoint.children

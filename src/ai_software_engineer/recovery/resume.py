@@ -982,6 +982,17 @@ class DeliveryResumeController:
         if authorization is None or not authorization.decision.approved:
             return self._recovery_approval_required(current, plan, path)
         try:
+            if command.approved_plan_sha256 is None:
+                try:
+                    store.get_task_record(plan.plan_sha256)
+                except RecoveryRecordMissing:
+                    # Approval and Task sealing are separate durable writes. Reuse the
+                    # exact saved human decision if the first operation stopped between them.
+                    self._recovery.approve(
+                        path,
+                        confirmed_plan=plan.plan_sha256,
+                        reference=authorization.command.approval_reference,
+                    )
             finish_recovery_record_reads()
             execution = self._recovery.resume_execution(path)
         except RecoveryRejected as error:

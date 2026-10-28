@@ -929,6 +929,8 @@ exact paths 补入本次恢复的 read/write 权限。它不能引入 glob、目
 
 恢复事件仍完整记录，但其 CaseStartedEvent 使用 `included=false`，避免将同一需求恢复成功
 再计入一个新自主交付样本；原失败评估记录保留。恢复批准及 Task metadata 提供人工决策归属。
+若恢复批准已落盘而 Task 封存尚未完成，原需求的普通继续操作复用该批准的精确引用，重新核验当前
+事实并补完同一 Task 封存；不能因此创建新批准、跳过 seed 准入或重跑已开始的模型调用。
 完整签名、错误矩阵和限制见 [恢复规范](../../.trellis/spec/core/delivery-recovery.md)。
 
 ## Spec Center 与持续学习契约
