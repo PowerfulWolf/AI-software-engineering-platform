@@ -29,6 +29,7 @@ cleanup() {
 trap cleanup EXIT
 cp -- "$script_dir/Dockerfile.probe" "$build_context/Dockerfile"
 cp -- "$script_dir/probe.cjs" "$build_context/probe.cjs"
+chmod 0444 "$build_context/probe.cjs"
 docker build --network none --pull=false --build-arg "BASE_IMAGE=$base_image" \
   -t "$probe_tag" "$build_context"
 docker run --name "$probe_name" --label "org.ase.synthetic-probe.owner=$owner_token" --rm --pull never --network none --read-only \

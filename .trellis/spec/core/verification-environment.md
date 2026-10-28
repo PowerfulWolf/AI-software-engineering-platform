@@ -824,3 +824,34 @@ claim generations, `delivery-recovery.md` requires exact public engineering
 recovery and complete no-start evidence before another static claim. Ordinary
 QA after a repaired candidate still needs real controlled executors and
 independent verification.
+
+## Synthetic browser image probe under a restrictive caller umask (2026-10-29)
+
+### Scope and command contract
+
+`tools/browser-verifier-image/verify.sh MANIFEST` is an offline image/profile probe,
+not a registered K1 browser executor or a QA receipt. It copies `probe.cjs` into a
+private temporary Docker build context, sets that copied file to mode `0444` before
+`docker build`, and removes its owned probe image/container on exit. The source file
+and host workspace permissions are unchanged. This explicit mode is required because
+the probe image copies the file as root but runs Node as nonroot `pwuser`; a caller's
+`umask 077` otherwise makes the copied file unreadable and causes a false `EACCES`.
+
+### Validation and error matrix
+
+| Observation | Required result |
+| --- | --- |
+| `umask 077` and a verified cached image manifest | Real synthetic render/click/PNG and denial probes run as `pwuser`; exit 0 and remove exact owned resources. |
+| Copy or mode change fails | Fail before Docker build; private context is removed. |
+| Render, denial check or Docker cleanup fails | Exit nonzero with a diagnostic; never report K1 candidate coverage or a role verdict. |
+
+Good: `bash tools/browser-verifier-image/test-verify-umask.sh MANIFEST` reports
+`umask_077_synthetic_probe=PASS resources_cleaned=PASS` after checking the real
+render/click and expected denials. Base: a normal caller umask still uses the same
+fixed probe image/profile. Bad: relying on inherited file mode or broadening the
+container's source/rootfs write permission to make the script readable.
+
+The regression compares owned probe container/image inventories before and after
+and asserts the renderer's output plus actual network and file-write denials. This
+probe is a reproducibility gate for the fixed outer Docker profile only; a
+candidate- and claim-bound browser executor requires separate proof and admission.
