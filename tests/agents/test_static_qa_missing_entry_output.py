@@ -66,6 +66,7 @@ def _subject() -> tuple[AgentRequest, TrustedStaticQaMissingEntryOutputContract,
         sealed_no_start_proof_sha256="d" * 64,
         authority_sha256="e" * 64,
         claim_sha256="f" * 64,
+        all_criterion_ids=("ac_models_01",),
     )
     template = make_qa_artifact()
     evidence = template.evidence[0].model_copy(
@@ -118,6 +119,44 @@ def test_exact_static_qa_fail_is_admissible_without_a_command_claim() -> None:
     validate_static_qa_missing_entry_output(request, report, contract)
 
 
+def test_static_qa_report_must_cover_every_current_task_criterion() -> None:
+    request, original_contract, report = _subject()
+    contract = original_contract.model_copy(
+        update={"all_criterion_ids": ("ac_models_01", "ac_other_01")}
+    )
+    with pytest.raises(VerificationOutputRejected):
+        validate_static_qa_missing_entry_output(request, report, contract)
+
+    unrelated = report.content.criteria_results[0].model_copy(
+        update={
+            "criterion_id": "ac_other_01",
+            "status": QaCriterionStatus.NOT_TESTED,
+            "evidence_ids": (),
+        }
+    )
+    complete = report.model_copy(
+        update={
+            "content": report.content.model_copy(
+                update={"criteria_results": (*report.content.criteria_results, unrelated)}
+            )
+        }
+    )
+    validate_static_qa_missing_entry_output(request, complete, contract)
+    foreign = unrelated.model_copy(update={"criterion_id": "ac_foreign_01"})
+    with pytest.raises(VerificationOutputRejected):
+        validate_static_qa_missing_entry_output(
+            request,
+            complete.model_copy(
+                update={
+                    "content": complete.content.model_copy(
+                        update={"criteria_results": (*complete.content.criteria_results, foreign)}
+                    )
+                }
+            ),
+            contract,
+        )
+
+
 def test_multiple_frozen_rows_for_one_file_preserve_all_affected_criteria() -> None:
     request = _request(AgentRole.QA).model_copy(
         update={"input_artifact_ids": ("art_plan_001", "art_impl_001")}
@@ -157,6 +196,7 @@ def test_multiple_frozen_rows_for_one_file_preserve_all_affected_criteria() -> N
         sealed_no_start_proof_sha256="d" * 64,
         authority_sha256="e" * 64,
         claim_sha256="f" * 64,
+        all_criterion_ids=("ac_models_01", "ac_other_01"),
     )
     assert len(contract.missing) == 1
     assert contract.missing[0].criterion_ids == ("ac_models_01", "ac_other_01")
@@ -204,6 +244,7 @@ def test_exact_missing_pytest_node_reaches_independent_qa_contract() -> None:
         sealed_no_start_proof_sha256="d" * 64,
         authority_sha256="e" * 64,
         claim_sha256="f" * 64,
+        all_criterion_ids=("ac_models_01", "ac_other_01"),
     )
     assert contract.missing[0].path == path
     assert contract.missing[0].criterion_ids == ("ac_models_01", "ac_other_01")

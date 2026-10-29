@@ -19,7 +19,7 @@ observe_accepted_candidate_test_entry_absence(
 ) -> CandidateTestEntryAbsenceObservation
 static_qa_missing_entry_output_contract(
     request, *, observation, sealed_no_start_proof_sha256,
-    authority_sha256, claim_sha256
+    authority_sha256, claim_sha256, all_criterion_ids
 ) -> TrustedStaticQaMissingEntryOutputContract
 validate_static_qa_missing_entry_output(request, artifact, contract) -> None
 ```
@@ -62,7 +62,23 @@ existing file without the frozen direct source binding, includes each complete
 collection were `NOT_RUN`. The QA output gate rereads current authority, claim,
 candidate and proof; it accepts only a QA-authored `FAIL`, no `tests_run`, one
 file proof evidence, `MISSING_PLANNED_TEST_ENTRY` findings and `NOT_TESTED`
-for unrelated criteria. The ordinary FAIL route sends findings to Coder.
+for unrelated criteria. The internal contract binds the complete acceptance
+criterion ID set from the same current Task snapshot checked by the claim
+proof. Its prompt lists all IDs, the proof-affected FAIL IDs and the remaining
+NOT_TESTED IDs. The output gate requires `criteria_results` to cover the
+complete Task set exactly once before a QA report is accepted by the adapter;
+the Orchestrator repeats that check before routing. This prevents a report
+that covers only the source-gap criteria from being accepted by the adapter
+and rejected later by the Orchestrator. The ordinary FAIL route sends findings
+to Coder.
+
+The investigation `next_action` is guidance derived from the sealed source-gap
+observation, never an additional permission. A file-only observation retains
+the historical wording byte for byte. A named-node observation says the file
+exists and lacks only a direct source binding; a mixed observation describes
+both kinds of gaps. Both state that the original command and dynamic collection
+did not run. The text must not claim the file is missing for a node-only proof
+or claim that dynamic pytest collection cannot find the node.
 
 ## Validation and error matrix
 
@@ -72,11 +88,13 @@ for unrelated criteria. The ordinary FAIL route sends findings to Coder.
 | Direct function or named alias reexport | No gap observation |
 | Star import, assignment, decorators, dynamic top-level or malformed source | No static decision; preserve wait |
 | Missing file | Existing missing-file observation and unchanged digest |
+| Node-only or mixed source gap | Investigation guidance identifies the actual gap; permitted resolution remains the same exact one-use kind |
 | Sealed missing-file proof plus a different row with a new node gap | Recheck the old proof in files-only mode; retain its exact digest |
 | Missing file plus unrelated existing source above 64,000 bytes | Preserve the provable missing-file observation; make no claim about that node |
 | Missing file plus drifted or unreadable Git blob for another row | Reject the entire observation; publish no partial proof |
 | Changed candidate, Plan, original no-start or current claim | Reject decision/output; no role verdict |
 | QA claims command ran, PASS, wrong evidence or unrelated criterion PASS | Reject output |
+| QA omits any current Task criterion or adds a foreign criterion | Reject before accepting its artifact or queue result |
 
 ## Good, base and bad cases
 
@@ -100,7 +118,8 @@ old scope wire. `tests/agents/test_static_qa_adapter_transport.py` checks the
 actual PromptBuilder text and internal contract. `tests/manager/test_public_static_qa_node_gap.py` uses isolated
 MySQL and public Host APIs to check Inspect → Resolve → new QA claim →
 proof-bound FAIL → Coder routing. It must also show the original candidate and
-history remain intact. Ruff, strict Mypy, schema generation and the older
+history remain intact, and the prompt must include the complete Task criterion
+set. Ruff, strict Mypy, schema generation and the older
 missing-file public integration are release gates.
 
 ## Wrong and correct
@@ -114,6 +133,14 @@ selector, then let separately claimed QA inspect it and author the verdict.
 
 No migration or production DB/sidecar rewrite is required. Existing K1 Task,
 candidate, old start-only UNKNOWN and `WAIT/NOT_STARTED` records remain intact.
+Previously sealed investigation text and its SHA remain immutable. A node-gap
+investigation sealed before corrected guidance but not yet consumed requires a
+fresh public inspection after the new version; an already consumed decision is
+read by its sealed proof and is not rewritten.
+An already accepted QA artifact that omits Task criteria cannot be reinterpreted
+as a valid verdict by this prospective output gate. Preserve its exact bytes,
+original claim, failed Orchestrator result and wait; recovery requires a
+separate exact engineering decision and fresh independent QA claim.
 Before a new public static decision, rollback the platform change at an idle
 boundary. After a decision or role artifact is sealed, preserve compatible
 readers and fix forward; never erase the new audit trail or replay a consumed

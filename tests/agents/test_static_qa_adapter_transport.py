@@ -109,13 +109,14 @@ def test_named_node_static_qa_prompt_reports_exact_source_gap(tmp_path: Path) ->
     node = path + "::test_production_a_to_b_live"
     contract = file_contract.model_copy(
         update={
+            "all_criterion_ids": ("ac_models_01", "ac_other_01"),
             "missing": (
                 StaticQaMissingEntry(
                     path=path,
                     criterion_ids=file_contract.missing[0].criterion_ids,
                     node_ids=(node,),
                 ),
-            )
+            ),
         }
     )
     provider = ConditionalStaticQaEvidenceProvider(None, lambda *_: contract, lambda *_: contract)
@@ -129,6 +130,9 @@ def test_named_node_static_qa_prompt_reports_exact_source_gap(tmp_path: Path) ->
     assert "verification is NOT_RUN" in text
     assert "Dynamic pytest collection was not run" in text
     assert "Missing planned test file" not in text
+    assert "current Task criterion ID: ac_models_01, ac_other_01" in text
+    assert "Mark proof-affected criterion IDs FAIL with this proof: ac_models_01" in text
+    assert "Mark every other criterion NOT_TESTED with no evidence: ac_other_01" in text
     assert contract.proof_uri in text
 
 

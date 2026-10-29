@@ -166,6 +166,11 @@ def test_public_static_qa_named_node_gap_routes_real_fail_to_coder(
         assert "Named-node source gap in existing candidate file" in stdin
         assert "Dynamic pytest collection was not run" in stdin
         assert "Missing planned test file" not in stdin
+        assert (
+            "current Task criterion ID: "
+            + ", ".join(criterion.id for criterion in before.acceptance_criteria)
+            in stdin
+        )
         request = current_qa[0]
         match = re.search(r"static-qa-missing-entry://([0-9a-f]{64})", stdin)
         assert match is not None

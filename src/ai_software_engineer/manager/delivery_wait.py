@@ -268,6 +268,31 @@ def _reobserve_sealed_static_qa_absence(
     )
 
 
+def _static_qa_next_action(
+    observation: CandidateTestEntryAbsenceObservation | None,
+) -> str:
+    if observation is None:
+        raise DeliveryWaitRejected("静态 QA 工程提示缺少当前候选观察")
+    has_named_node = any(entry.node_id is not None for entry in observation.missing)
+    if not has_named_node:
+        # Preserve the exact wording and digest of the historical file-only path.
+        return (
+            "候选提交缺少冻结计划指定的验收测试文件。原 QA 验证准备与模型均未开始; "
+            "工程责任人可核对并批准专用静态 FAIL 验收; 原计划验证命令未启动, "
+            "后续仍需独立 QA 和返工。"
+        )
+    has_missing_file = any(entry.node_id is None for entry in observation.missing)
+    source_gap = (
+        "候选提交既有冻结验收测试文件缺失, 也有现存测试文件缺少冻结 pytest 函数节点的直接源码绑定。"
+        if has_missing_file
+        else "候选提交的冻结验收测试文件已存在, 但冻结 pytest 函数节点缺少直接源码绑定。"
+    )
+    return (
+        source_gap + "原 QA 验证准备与模型均未开始; 工程责任人可核对并批准专用静态 FAIL 验收; "
+        "原计划验证命令及动态收集均未运行, 后续仍需独立 QA 和返工。"
+    )
+
+
 def current_static_qa_for_claim(
     *,
     request: StaticQaRequestIdentity,
@@ -1674,6 +1699,7 @@ class DeliveryWaitService:
             except (ValueError, QueueError, OSError, KnowledgeError):
                 missing.append(DeliveryProofMissing.VERIFIER_PREPARATION_UNAVAILABLE)
         static_qa_missing_entry = None
+        static_qa_observation: CandidateTestEntryAbsenceObservation | None = None
         consumed_static_qa = (
             self.queue.static_qa_resolution_for_wait(
                 item,
@@ -1734,6 +1760,7 @@ class DeliveryWaitService:
             except (ArtifactStoreError, ValueError, OSError):
                 pass
             else:
+                static_qa_observation = static_observation
                 self.records.put(
                     "static-qa-observations",
                     static_observation.observation_sha256,
@@ -2150,6 +2177,7 @@ class DeliveryWaitService:
             verifier_preparation=verifier_preparation,
             pre_context_recovery_input=pre_context_recovery_input,
             static_qa_missing_entry=static_qa_missing_entry,
+            static_qa_observation=static_qa_observation,
             knowledge_preparation=knowledge_preparation,
             knowledge_pause=knowledge_pause,
             rejected_knowledge=rejected_knowledge,
@@ -2633,6 +2661,7 @@ class DeliveryWaitService:
         verifier_preparation: VerifierPreparationEvidence | None = None,
         pre_context_recovery_input: PreContextRecoveryInputEvidence | None = None,
         static_qa_missing_entry: StaticQaMissingEntryEvidence | None = None,
+        static_qa_observation: CandidateTestEntryAbsenceObservation | None = None,
         knowledge_preparation: KnowledgePreparationRetryEvidence | None = None,
         knowledge_pause: KnowledgePreparationPauseEvidence | None = None,
         rejected_knowledge: RejectedKnowledgePreparationEvidence | None = None,
@@ -2742,9 +2771,7 @@ class DeliveryWaitService:
             missing=missing,
             local_stop_confirmation_available=local_stop_confirmation_available,
             next_action=(
-                "候选提交缺少冻结计划指定的验收测试文件。原 QA 验证准备与模型均未开始; "
-                "工程责任人可核对并批准专用静态 FAIL 验收; 原计划验证命令未启动, "
-                "后续仍需独立 QA 和返工。"
+                _static_qa_next_action(static_qa_observation)
                 if permitted == (DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,)
                 else "已核验原 Coder 输入超限发生在 Context 封存前, 原模型未启动, "
                 "批准的三份完整历史补丁可按独立工程决定逐轮送入同一 Task; "

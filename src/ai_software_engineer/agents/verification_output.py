@@ -106,10 +106,15 @@ class TrustedStaticQaMissingEntryOutputContract(DomainModel):
     observation_sha256: Sha256
     implementation_artifact_id: NonEmptyStr
     missing: tuple[StaticQaMissingEntry, ...] = Field(min_length=1)
+    all_criterion_ids: tuple[AcceptanceCriterionId, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_proof_shape(self) -> TrustedStaticQaMissingEntryOutputContract:
         ensure_unique((entry.path for entry in self.missing), "missing static QA paths")
+        ensure_unique(self.all_criterion_ids, "static QA Task criterion IDs")
+        affected = {criterion_id for entry in self.missing for criterion_id in entry.criterion_ids}
+        if not affected.issubset(self.all_criterion_ids):
+            raise ValueError("static QA source gap cites a criterion outside the current Task")
         if self.proof_uri != "static-qa-missing-entry://" + self.proof_sha256:
             raise ValueError("static QA proof does not bind the exact candidate")
         return self
@@ -122,6 +127,7 @@ def static_qa_missing_entry_output_contract(
     sealed_no_start_proof_sha256: str,
     authority_sha256: str,
     claim_sha256: str,
+    all_criterion_ids: tuple[AcceptanceCriterionId, ...],
 ) -> TrustedStaticQaMissingEntryOutputContract:
     """Construct only from trusted application facts, never model-authored data."""
     observation.validate_integrity()
@@ -159,6 +165,7 @@ def static_qa_missing_entry_output_contract(
         claim_sha256=claim_sha256,
         observation_sha256=observation.observation_sha256,
         implementation_artifact_id=observation.implementation_artifact_id,
+        all_criterion_ids=all_criterion_ids,
         missing=tuple(
             StaticQaMissingEntry(
                 path=path,
@@ -211,7 +218,9 @@ def validate_static_qa_missing_entry_output(
     missing = contract.missing
     affected = {criterion_id for entry in missing for criterion_id in entry.criterion_ids}
     results = {item.criterion_id: item for item in artifact.content.criteria_results}
-    if not affected.issubset(results):
+    if len(artifact.content.criteria_results) != len(contract.all_criterion_ids) or set(
+        results
+    ) != set(contract.all_criterion_ids):
         raise VerificationOutputRejected(VerificationOutputRule.COVERAGE)
     for criterion_id, result in results.items():
         if criterion_id in affected:

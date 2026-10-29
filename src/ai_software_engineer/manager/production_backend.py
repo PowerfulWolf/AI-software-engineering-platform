@@ -1441,12 +1441,18 @@ class ProductionProjectDeliveryBackend:
                     )
                     if proof is None:
                         return None
+                    current_task = active_runtime.task_repository.get(request.task_id)
+                    if digest(current_task.to_wire()) != proof.task_snapshot_sha256:
+                        raise DeliveryWaitRejected("静态 QA 当前 Task 验收准则已变化")
                     return static_qa_missing_entry_output_contract(
                         request,
                         observation=proof.observation,
                         sealed_no_start_proof_sha256=proof.resolution.proof_sha256,
                         authority_sha256=proof.resolution.resolution_sha256,
                         claim_sha256=proof.claim_sha256,
+                        all_criterion_ids=tuple(
+                            criterion.id for criterion in current_task.acceptance_criteria
+                        ),
                     )
 
                 selected_adapters = selected_adapters.with_static_qa_contract_resolver(

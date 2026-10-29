@@ -151,6 +151,14 @@ class ConditionalStaticQaEvidenceProvider:
                     f"{entry.path}: direct source binding is absent for frozen pytest "
                     f"selector(s) {', '.join(entry.node_ids)}."
                 )
+        affected = {
+            criterion_id for entry in contract.missing for criterion_id in entry.criterion_ids
+        }
+        unaffected = tuple(
+            criterion_id
+            for criterion_id in contract.all_criterion_ids
+            if criterion_id not in affected
+        )
         return VerificationEvidence(
             text=(
                 "Trusted static QA evidence:\n"
@@ -163,7 +171,18 @@ class ConditionalStaticQaEvidenceProvider:
                 "in this proof-only route. Return only a "
                 "qa-report FAIL with tests_run empty, each affected criterion FAIL citing this "
                 "proof, and one MISSING_PLANNED_TEST_ENTRY major or blocker finding per path. "
-                "Do not claim a PASS, a command result, or coverage of other criteria."
+                "The qa-report criteria_results must contain exactly one result for every "
+                "current Task criterion ID: "
+                + ", ".join(contract.all_criterion_ids)
+                + ". Mark proof-affected criterion IDs FAIL with this proof: "
+                + ", ".join(
+                    criterion_id
+                    for criterion_id in contract.all_criterion_ids
+                    if criterion_id in affected
+                )
+                + ". Mark every other criterion NOT_TESTED with no evidence: "
+                + (", ".join(unaffected) if unaffected else "none")
+                + ". Do not claim a PASS, a command result, or verified coverage of other criteria."
             ),
             output_contract=contract,
         )
