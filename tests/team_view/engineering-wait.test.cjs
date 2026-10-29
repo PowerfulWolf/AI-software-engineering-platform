@@ -148,6 +148,31 @@ function staticQaMissingEntry(h) {
   return proof;
 }
 
+function rejectedStaticQaOutput(h) {
+  const proof = investigation(h);
+  h.step.role = h.step.wait_disposition.facts.role = "qa";
+  h.step.status = "WAITING_DEPENDENCY";
+  h.step.wait_disposition.facts.classification = "PLATFORM_BUG";
+  h.task.status = "QA";
+  proof.permitted_resolutions = ["RETRY_REJECTED_STATIC_QA_OUTPUT"];
+  proof.original_run_id = "run_previous_qa";
+  proof.invocation_start_sha256 = digest("1");
+  proof.invocation_outcome_sha256 = digest("2");
+  const all = Array.from({length: 25}, (_, index) => `ac_${String(index + 1).padStart(2, "0")}`);
+  proof.rejected_static_qa_output = {
+    task_id: proof.task_id, work_item_id: proof.work_item_id,
+    candidate_revision: proof.source_revision, static_resolution_sha256: digest("3"),
+    previous_qa_artifact_id: "art_qa_rejected", previous_qa_sha256: digest("4"),
+    previous_run_id: proof.original_run_id, previous_context_manifest_id: "ctx_" + digest("5"),
+    previous_lease_id: "lease_previous_qa", previous_claim_sha256: digest("6"),
+    previous_dispatch_sequence: 4, invocation_start_sha256: proof.invocation_start_sha256,
+    invocation_outcome_sha256: proof.invocation_outcome_sha256,
+    all_criterion_ids: all, reported_criterion_ids: all.slice(0, 16),
+    missing_criterion_ids: all.slice(16),
+  };
+  return proof;
+}
+
 function knowledgePreparation(h, role = "coder", manual = true) {
   const result = handling(h, "NEEDS_AUTHORIZATION", [], manual);
   h.step.role = h.step.wait_disposition.facts.role = role;
@@ -963,6 +988,43 @@ test("static QA missing entry hides stale or unbound proof and retained button r
     assert.equal(control(current, "交由独立 QA 确认测试入口缺失"), undefined, mutation);
     await decide.events.click();
     assert.equal(h.run("submitted.length"), 0, mutation);
+  }
+});
+
+test("rejected static QA output exposes a proof-bound recovery decision", async () => {
+  const h = harness();
+  const proof = rejectedStaticQaOutput(h);
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const decide = control(box, "修复被拒 QA 产出并重新验收");
+  assert.ok(decide);
+  assert.match(text(box), /验收准则覆盖不完整/);
+  assert.match(text(box), /新的独立 QA 工作项/);
+  assert.match(text(box), /不会重放或改写旧报告/);
+  await decide.events.click();
+  const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+  assert.equal(intent.action, "RESOLVE_DELIVERY_WAIT");
+  assert.equal(intent.resolution_kind, "RETRY_REJECTED_STATIC_QA_OUTPUT");
+  assert.equal(intent.proof_sha256, proof.proof_sha256);
+  assert.equal(Object.hasOwn(intent, "rejected_static_qa_output"), false);
+});
+
+test("rejected static QA output rejects incomplete or stale evidence", async () => {
+  for (const mutation of [
+    'proof.rejected_static_qa_output.missing_criterion_ids = []',
+    'proof.rejected_static_qa_output.reported_criterion_ids = proof.rejected_static_qa_output.all_criterion_ids',
+    'proof.rejected_static_qa_output.previous_qa_sha256 = "bad"',
+    'proof.rejected_static_qa_output.previous_run_id = "run_other"',
+    'proof.invocation_outcome_sha256 = "bad"',
+    'data.step.wait_disposition.facts.classification = "ENVIRONMENT_UNAVAILABLE"',
+    'data.task.status = "REVIEW"',
+  ]) {
+    const h = harness();
+    rejectedStaticQaOutput(h);
+    const before = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.equal(control(before, "修复被拒 QA 产出并重新验收") !== undefined, true, mutation);
+    h.run(mutation);
+    const after = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.equal(control(after, "修复被拒 QA 产出并重新验收"), undefined, mutation);
   }
 });
 
