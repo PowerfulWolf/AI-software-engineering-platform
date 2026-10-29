@@ -68,8 +68,8 @@ class UninvokedClaimBoundary:
     checkpoint_sequence: int
     dispatch_sequence: int
     observed_at: datetime
-    run_id: str
-    context_manifest_id: str
+    run_id: str | None
+    context_manifest_id: str | None
 
 
 @dataclass(frozen=True)
@@ -556,10 +556,11 @@ class CapacityInputReader:
         native_root = self.state / "continuations" / marker.task_id
         if self._capacity_ledger_exists(native_root):
             native = FileContinuationStore(native_root, task_id=marker.task_id)
-            for prefix in ("capture-start", "capture-stop", "receipt", "admission"):
-                path = native_root / f"{prefix}-{marker.run_id}.json"
-                if path.exists() or path.is_symlink():
-                    raise ValueError("容量停止的原 Run 已有原生执行记录, 不能证明未调用")
+            if marker.run_id is not None:
+                for prefix in ("capture-start", "capture-stop", "receipt", "admission"):
+                    path = native_root / f"{prefix}-{marker.run_id}.json"
+                    if path.exists() or path.is_symlink():
+                        raise ValueError("容量停止的原 Run 已有原生执行记录, 不能证明未调用")
             for path in native_root.iterdir():
                 if not path.name.endswith(".json"):
                     continue

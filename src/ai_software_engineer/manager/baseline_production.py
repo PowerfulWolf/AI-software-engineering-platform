@@ -11,10 +11,11 @@ import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import AwareDatetime, Field, JsonValue, TypeAdapter, model_validator
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents.execution import ExecutionStop, SynchronousToolLoopStop
@@ -58,6 +59,7 @@ from ai_software_engineer.domain.workforce import RoleAssignment
 from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound
 from ai_software_engineer.git.mutation import capture_mutation_inventory
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSpec
+from ai_software_engineer.knowledge.claim_identity import claim_identity_sha256
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
@@ -81,6 +83,7 @@ from ai_software_engineer.manager.baseline_native_rules import build_native_rule
 from ai_software_engineer.manager.capacity_input_reader import (
     CapacityInputReader,
     PriorInvocationFence,
+    UninvokedClaimBoundary,
 )
 from ai_software_engineer.manager.completed_output_checkpoint import (
     CompletedCoderOutputReason,
@@ -102,6 +105,7 @@ from ai_software_engineer.manager.knowledge_invocation_proof import (
     read_capacity_claim_snapshot,
     read_failed_knowledge_claims,
     read_replay_guarded_claims,
+    require_no_knowledge_claim_activity,
 )
 from ai_software_engineer.manager.knowledge_isolation import (
     KnowledgePreparationIsolationProof,
@@ -374,6 +378,79 @@ class BaselineContinueCommand(DomainModel):
     reference: NonEmptyStr = Field(max_length=2000)
 
 
+class ReclaimedUninvokedClaimObservation(DomainModel):
+    """A queue reclaim fact, never a native stop or model outcome."""
+
+    kind: Literal["reclaimed_uninvoked_claim_observation"] = (
+        "reclaimed_uninvoked_claim_observation"
+    )
+    lease_id: NonEmptyStr
+    task_id: TaskId
+    work_item_id: NonEmptyStr
+    claim_sha256: Sha256
+    next_claim_sha256: Sha256
+    blocking_start_sha256: Sha256
+    dispatch_sequence: int = Field(ge=0)
+    claimed_at: AwareDatetime
+    expired_at: AwareDatetime
+    reclaim_event_sequence: int = Field(ge=1)
+    reclaim_event_sha256: Sha256
+    observation_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_observation(self) -> Self:
+        if self.expired_at <= self.claimed_at:
+            raise ValueError("回收 claim 的结束时间早于领取时间")
+        if self.observation_sha256 != digest(
+            self.model_dump(mode="json", exclude={"observation_sha256"})
+        ):
+            raise ValueError("回收 claim 观察摘要不一致")
+        return self
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        lease_id: str,
+        task_id: str,
+        work_item_id: str,
+        claim_sha256: str,
+        next_claim_sha256: str,
+        blocking_start_sha256: str,
+        dispatch_sequence: int,
+        claimed_at: datetime,
+        expired_at: datetime,
+        reclaim_event_sequence: int,
+        reclaim_event_sha256: str,
+    ) -> Self:
+        value = cls.model_construct(
+            lease_id=lease_id,
+            task_id=task_id,
+            work_item_id=work_item_id,
+            claim_sha256=claim_sha256,
+            next_claim_sha256=next_claim_sha256,
+            blocking_start_sha256=blocking_start_sha256,
+            dispatch_sequence=dispatch_sequence,
+            claimed_at=claimed_at,
+            expired_at=expired_at,
+            reclaim_event_sequence=reclaim_event_sequence,
+            reclaim_event_sha256=reclaim_event_sha256,
+            observation_sha256="0" * 64,
+        )
+        return cls.model_validate(
+            value.model_copy(
+                update={
+                    "observation_sha256": digest(
+                        value.model_dump(mode="json", exclude={"observation_sha256"})
+                    )
+                }
+            ).to_wire()
+        )
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+
+
 class BaselineInvocationProof(DomainModel):
     work_item_id: NonEmptyStr
     step_sha256: Sha256
@@ -391,6 +468,9 @@ class BaselineInvocationProof(DomainModel):
         default=(), exclude_if=lambda value: not value
     )
     replay_guarded_claims: tuple[ReplayGuardedClaimObservation, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+    reclaimed_uninvoked_claims: tuple[ReclaimedUninvokedClaimObservation, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
     legacy_containment: LegacyExecutionContainment | None = Field(
@@ -439,6 +519,7 @@ class BaselineInvocationProof(DomainModel):
                 )
                 or self.knowledge_only_claims
                 or self.replay_guarded_claims
+                or self.reclaimed_uninvoked_claims
                 or self.preflight_checkpoint_sha256s
                 or self.context_capacity_receipt_sha256s
             ):
@@ -460,6 +541,24 @@ class BaselineInvocationProof(DomainModel):
             observation.validate_integrity()
             if observation.blocking_start_sha256 != self.start_sha256:
                 raise ValueError("重领观察没有绑定此精确原调用")
+        if self.reclaimed_uninvoked_claims and self.proof_kind != "legacy_execution_contained":
+            raise ValueError("回收未调用观察只能附着旧执行隔离事实")
+        if len({value.lease_id for value in self.reclaimed_uninvoked_claims}) != len(
+            self.reclaimed_uninvoked_claims
+        ):
+            raise ValueError("回收未调用观察含重复历史 claim")
+        for reclaimed_observation in self.reclaimed_uninvoked_claims:
+            reclaimed_observation.validate_integrity()
+            if (
+                reclaimed_observation.work_item_id != self.work_item_id
+                or reclaimed_observation.blocking_start_sha256 != self.start_sha256
+                or self.legacy_containment is None
+                or reclaimed_observation.task_id
+                != self.legacy_containment.original_start.request.task_id
+                or reclaimed_observation.next_claim_sha256
+                != claim_identity_sha256(self.legacy_containment.original_claim)
+            ):
+                raise ValueError("回收未调用观察未绑定当前原调用及其真实后续 claim")
         if self.proof_kind == "stopped_execution_without_outcome":
             proof = self.stopped_execution
             if (
@@ -1604,6 +1703,199 @@ class ProductionBaselineFactCollector:
             self._require_stopped(receipt.process_stop, receipt.request)
         return receipts
 
+    def _reclaimed_uninvoked_claims(
+        self,
+        task: Task,
+        item: QueuedWorkItem,
+        claims: tuple[QueueClaim, ...],
+        start: DeliveryInvocationStart | None,
+        legacy: LegacyExecutionContainment | None,
+    ) -> tuple[ReclaimedUninvokedClaimObservation, ...]:
+        if not claims or start is None:
+            return ()
+        next_claim = self.queue.original_claim(start.lease_id)
+        if legacy is None:
+            historical = self._historical_legacy(task, start, next_claim)
+            legacy = historical[0] if historical is not None else None
+        if legacy is None or legacy.original_start != start:
+            return ()
+        cursor = self._idle_cursor
+        if not self._scope_held or cursor is None:
+            raise ValueError("回收 claim 调查缺少任务锁和队列屏障")
+        if (
+            next_claim != legacy.original_claim
+            or next_claim.work_item.dispatch_sequence != item.dispatch_sequence
+            or next_claim.claimed_at > start.started_at
+        ):
+            raise ValueError("回收 claim 后续调用与真实领取事实不一致")
+        result: list[ReclaimedUninvokedClaimObservation] = []
+        for claim in claims:
+            if claim.lease.id == start.lease_id:
+                continue
+            if self.queue.original_claim(claim.lease.id) != claim:
+                raise ValueError("回收 claim 原始领取事实已变化")
+            if (
+                claim.work_item.id != item.id
+                or claim.work_item.task_id != task.id
+                or claim.work_item.role is not item.role
+                or claim.work_item.attempt != item.attempt
+                or claim.work_item.checkpoint_sequence != item.checkpoint_sequence
+                or claim.work_item.dispatch_sequence + 1
+                != next_claim.work_item.dispatch_sequence
+            ):
+                continue  # Other preflight/knowledge facts retain their existing gates.
+            preflight_root = self.state / "delivery-preflight"
+            preflight_receipts: tuple[DeliveryPreflightReceipt, ...] = ()
+            if CapacityInputReader._capacity_ledger_exists(preflight_root):
+                preflight = KnowledgeRecordStore(preflight_root, read_only=True)
+                preflight_receipts = preflight.list(
+                    "preflight-receipts", DeliveryPreflightReceipt
+                )
+                if any(
+                    value.lease_id == claim.lease.id
+                    for value in preflight.list(
+                        "preflight-checkpoints", DeliveryPreflightCheckpoint
+                    )
+                ) or any(
+                    value.lease_id == claim.lease.id
+                    for value in preflight.list(
+                        "context-capacity-receipts", ContextCapacityReceipt
+                    )
+                ):
+                    continue
+            step = self.queue.step_for_claim(claim)
+            self._require_step(item, step)
+            if step.boundary.source_revision != start.request.source_revision:
+                raise ValueError("回收 claim 与后续调用源版本不一致")
+            cursor.execute(
+                "SELECT lease_id,work_item_id,task_id,state,expires_at,ended_at "
+                "FROM work_queue_claims WHERE lease_id=%s",
+                (claim.lease.id,),
+            )
+            rows = cursor.fetchall()
+            if len(rows) != 1:
+                raise ValueError("回收 claim 缺少唯一租约状态")
+            row = rows[0]
+            ended_at = datetime.fromisoformat(str(row["ended_at"]))
+            expires_at = datetime.fromisoformat(str(row["expires_at"]))
+            if (
+                row["lease_id"] != claim.lease.id
+                or row["work_item_id"] != item.id
+                or row["task_id"] != task.id
+                or row["state"] != "EXPIRED"
+                or ended_at.tzinfo is None
+                or expires_at.tzinfo is None
+                or not (
+                    claim.claimed_at < claim.lease.expires_at
+                    <= expires_at <= ended_at < next_claim.claimed_at <= start.started_at
+                )
+            ):
+                raise ValueError("回收 claim 租约结束或后续领取时序不可验证")
+            for receipt in preflight_receipts:
+                receipt.validate_integrity()
+                if (
+                    receipt.task_id == task.id
+                    and receipt.scope.team_id == self.scope.team_id
+                    and receipt.scope.project_id == self.scope.project_id
+                    and receipt.scope.repository_id == self.scope.repository_id
+                    and receipt.scope.requirement_id == self.requirement_id
+                    and receipt.source_revision == start.request.source_revision
+                    and claim.claimed_at <= receipt.checked_at <= ended_at
+                ):
+                    raise ValueError("回收 claim 已有执行前检查收据, 不能证明未调用")
+            cursor.execute(
+                "SELECT sequence,event_type,work_item_id,lease_id,from_status,to_status,"
+                "occurred_at,payload_json FROM work_queue_events "
+                "WHERE lease_id=%s AND event_type='LEASE_EXPIRED'",
+                (claim.lease.id,),
+            )
+            events = cursor.fetchall()
+            if len(events) != 1:
+                raise ValueError("回收 claim 缺少唯一过期事件")
+            event = events[0]
+            occurred_at = datetime.fromisoformat(str(event["occurred_at"]))
+            payload = TypeAdapter(dict[str, JsonValue]).validate_json(str(event["payload_json"]))
+            if set(payload) != {"work_item", "detail"} or payload["detail"] != {}:
+                raise ValueError("回收 claim 事件载荷不完整")
+            requeued = QueuedWorkItem.model_validate(payload["work_item"])
+            mutable = {
+                "status", "dispatch_sequence", "wait_reason", "wait_disposition",
+                "available_at", "updated_at",
+            }
+            if (
+                not isinstance(event["sequence"], int)
+                or event["sequence"] < 1
+                or event["event_type"] != "LEASE_EXPIRED"
+                or (event["work_item_id"], event["lease_id"])
+                != (item.id, claim.lease.id)
+                or event["from_status"] not in {"LEASED", "RUNNING"}
+                or event["to_status"] != "RETRY_SCHEDULED"
+                or occurred_at != ended_at
+                or requeued.status is not WorkItemStatus.RETRY_SCHEDULED
+                or requeued.dispatch_sequence != claim.work_item.dispatch_sequence + 1
+                or requeued.wait_reason != f"lease_expired:{claim.lease.id}"
+                or requeued.updated_at != ended_at
+                or requeued.available_at is None
+                or requeued.available_at <= ended_at
+                or requeued.model_dump(exclude=mutable)
+                != claim.work_item.model_dump(exclude=mutable)
+            ):
+                raise ValueError("回收 claim 过期事件与真实队列世代不一致")
+            cursor.execute(
+                "SELECT sequence FROM work_queue_events "
+                "WHERE lease_id=%s AND event_type='CLAIMED'",
+                (next_claim.lease.id,),
+            )
+            next_events = cursor.fetchall()
+            if len(next_events) != 1 or not (
+                event["sequence"] < next_events[0]["sequence"]
+            ):
+                raise ValueError("回收 claim 事件未先于后续真实领取")
+            require_no_knowledge_claim_activity(
+                state=self.state,
+                task=task,
+                item=item,
+                scope=self.scope,
+                requirement_id=getattr(self, "knowledge_requirement_id", self.requirement_id),
+                lease_id=claim.lease.id,
+            )
+            self._capacity_input_reader().require_claim_not_started(
+                UninvokedClaimBoundary(
+                    task_id=task.id,
+                    work_item_id=item.id,
+                    lease_id=claim.lease.id,
+                    role=item.role,
+                    attempt=item.attempt,
+                    checkpoint_sequence=item.checkpoint_sequence,
+                    dispatch_sequence=claim.work_item.dispatch_sequence,
+                    observed_at=ended_at,
+                    run_id=None,
+                    context_manifest_id=None,
+                ),
+                allow_later_claims=True,
+            )
+            result.append(
+                ReclaimedUninvokedClaimObservation.create(
+                    lease_id=claim.lease.id,
+                    task_id=task.id,
+                    work_item_id=item.id,
+                    claim_sha256=claim_identity_sha256(claim),
+                    next_claim_sha256=claim_identity_sha256(next_claim),
+                    blocking_start_sha256=start.start_sha256,
+                    dispatch_sequence=claim.work_item.dispatch_sequence,
+                    claimed_at=claim.claimed_at,
+                    expired_at=ended_at,
+                    reclaim_event_sequence=event["sequence"],
+                    reclaim_event_sha256=digest(
+                        {
+                            key: str(value) if key in {"occurred_at", "payload_json"} else value
+                            for key, value in event.items()
+                        }
+                    ),
+                )
+            )
+        return tuple(sorted(result, key=lambda observation: observation.dispatch_sequence))
+
     def _invocations(
         self,
         task: Task,
@@ -1728,13 +2020,21 @@ class ProductionBaselineFactCollector:
                 isolated_lease_ids=isolated_lease_ids,
             )
             knowledge_leases = {marker.lease_id for marker in knowledge_markers}
+            remaining_claims = tuple(
+                claim
+                for claim in preflight_claims
+                if claim.lease.id not in capacity_leases | knowledge_leases | replay_leases
+            )
+            reclaimed = self._reclaimed_uninvoked_claims(
+                task, item, remaining_claims, start, legacy
+            )
+            reclaimed_leases = {value.lease_id for value in reclaimed}
             markers = self._preflight_markers(
                 task,
                 item,
                 tuple(
-                    claim
-                    for claim in preflight_claims
-                    if claim.lease.id not in capacity_leases | knowledge_leases | replay_leases
+                    claim for claim in remaining_claims
+                    if claim.lease.id not in reclaimed_leases
                 ),
             )
             step = (
@@ -1853,6 +2153,7 @@ class ProductionBaselineFactCollector:
                         ),
                         knowledge_only_claims=knowledge_markers,
                         replay_guarded_claims=replay_markers,
+                        reclaimed_uninvoked_claims=reclaimed,
                         proof_kind=proof_kind,
                         stopped_execution=stopped,
                         legacy_containment=containment

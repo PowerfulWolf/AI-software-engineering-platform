@@ -1,5 +1,6 @@
 """Legacy rescue keeps UNKNOWN honest and requires independently observed OS containment."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from subprocess import SubprocessError
@@ -34,6 +35,11 @@ from ai_software_engineer.manager.baseline_production import (
     BaselineExecuteCommand,
     BaselineProposeCommand,
     ProductionBaselineFactCollector,
+)
+from ai_software_engineer.manager.capacity_input_reader import PriorInvocationFence
+from ai_software_engineer.manager.delivery_preflight import (
+    DeliveryPreflightReceipt,
+    DeliveryPreflightScope,
 )
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.manager.legacy_containment import (
@@ -195,6 +201,164 @@ def test_exact_new_observation_preserves_original_unknown_and_complete_claim(
     assert proof.legacy_containment == containment
     assert proof.outcome_sha256 is None and proof.interruption_receipt_sha256 is None
     assert before == {path: path.read_bytes() for path in collector.state.rglob("*.json")}
+
+
+@pytest.mark.parametrize("receipt_only", [False, True])
+def test_legacy_rescue_covers_earlier_reclaimed_claim_without_model_start(
+    tmp_path: Path, receipt_only: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collector, task, item, original = legacy_fixture(tmp_path)
+    later_at = original.original_claim.claimed_at + timedelta(hours=2)
+    expired_at = original.original_claim.claimed_at + timedelta(hours=1)
+    old = _claim(
+        item.model_copy(update={"status": WorkItemStatus.READY, "wait_reason": None,
+                                "wait_disposition": None}),
+        "lease_uninvoked_before_reclaim",
+    )
+    old = QueueClaim(
+        work_item=old.work_item,
+        assignment=old.assignment.model_copy(
+            update={"id": "assignment_uninvoked_before_reclaim"}
+        ),
+        lease=old.lease.model_copy(
+            update={"assignment_id": "assignment_uninvoked_before_reclaim"}
+        ),
+        model_selection=old.model_selection,
+        worker_id=old.worker_id,
+        claimed_at=old.claimed_at,
+    )
+    next_claim = original.original_claim
+    next_claim = QueueClaim(
+        work_item=next_claim.work_item.model_copy(
+            update={"dispatch_sequence": 1, "updated_at": later_at}
+        ),
+        assignment=next_claim.assignment.model_copy(update={"assigned_at": later_at}),
+        lease=next_claim.lease.model_copy(
+            update={"acquired_at": later_at, "expires_at": later_at + timedelta(hours=1)}
+        ),
+        model_selection=next_claim.model_selection.model_copy(update={"selected_at": later_at}),
+        worker_id=next_claim.worker_id,
+        claimed_at=later_at,
+    )
+    contained = LegacyExecutionContainment.create(
+        scope=original.scope,
+        requirement_id=original.requirement_id,
+        dispatch_sha256=original.dispatch_sha256,
+        task_intent_sha256=original.task_intent_sha256,
+        original_start=original.original_start,
+        original_claim=next_claim,
+        boot=original.boot,
+    )
+    current = item.model_copy(update={"dispatch_sequence": 1})
+    step = QueuedRoleStep(
+        work_item=current,
+        boundary=RoleRunBoundary(
+            task.id, AgentRole.CODER, item.attempt, item.checkpoint_sequence,
+            original.original_start.request.source_revision,
+        ),
+        allocation_sha256=collector.allocation.dispatch_sha256,
+    )
+
+    class Queue(MySqlRoleQueue):
+        def __init__(self) -> None:
+            pass
+
+        def original_claim(self, lease_id: str) -> QueueClaim:
+            return {old.lease.id: old, next_claim.lease.id: next_claim}[lease_id]
+
+        def claims_for_work_item(self, identity: str) -> tuple[QueueClaim, ...]:
+            assert identity == item.id
+            return old, next_claim
+
+        def step_for_claim(self, claim: QueueClaim) -> QueuedRoleStep:
+            return step.model_copy(update={"work_item": claim.work_item})
+
+        def step_for_invocation(self, identity: str, baseline: str | None) -> QueuedRoleStep:
+            assert identity == item.id and baseline is None
+            return step
+
+    class Cursor:
+        def __init__(self) -> None:
+            self.rows: list[dict[str, object]] = []
+
+        def execute(self, query: str, parameters: tuple[str, ...]) -> None:
+            if "work_queue_claims" in query:
+                assert parameters == (old.lease.id,)
+                self.rows = [{"lease_id": old.lease.id, "work_item_id": item.id,
+                              "task_id": task.id, "state": "EXPIRED",
+                              "expires_at": old.lease.expires_at.isoformat(),
+                              "ended_at": expired_at.isoformat()}]
+            elif "event_type='CLAIMED'" in query:
+                assert parameters == (next_claim.lease.id,)
+                self.rows = [{"sequence": 101}]
+            else:
+                assert parameters == (old.lease.id,)
+                requeued = old.work_item.model_copy(update={
+                    "status": WorkItemStatus.RETRY_SCHEDULED,
+                    "dispatch_sequence": 1,
+                    "wait_reason": f"lease_expired:{old.lease.id}",
+                    "available_at": expired_at + timedelta(minutes=1),
+                    "updated_at": expired_at,
+                })
+                self.rows = [{"sequence": 100, "event_type": "LEASE_EXPIRED",
+                              "work_item_id": item.id, "lease_id": old.lease.id,
+                              "from_status": "RUNNING", "to_status": "RETRY_SCHEDULED",
+                              "occurred_at": expired_at.isoformat(),
+                              "payload_json": json.dumps({
+                                  "work_item": requeued.to_wire(), "detail": {}
+                              })}]
+
+        def fetchall(self) -> list[dict[str, object]]:
+            return self.rows
+
+    collector.queue = Queue()
+    collector.route_root = tmp_path / "model-routes"
+    (tmp_path / "knowledge" / "runs").mkdir(parents=True)
+    collector._scope_held = True
+    collector._idle_cursor = Cursor()  # type: ignore[assignment]
+    if receipt_only:
+        receipt = DeliveryPreflightReceipt(
+            scope=DeliveryPreflightScope(
+                team_id=collector.scope.team_id,
+                project_id=collector.scope.project_id,
+                repository_id=collector.scope.repository_id,
+                requirement_id=collector.requirement_id,
+            ),
+            task_id=task.id,
+            source_revision=original.original_start.request.source_revision,
+            plan_sha256="d" * 64,
+            frozen_policy_sha256="e" * 64,
+            requirements_sha256="f" * 64,
+            observations=(),
+            status="WAIT_ENGINEERING",
+            checked_at=old.claimed_at + timedelta(minutes=30),
+            receipt_sha256="0" * 64,
+        )
+        receipt = receipt.model_copy(update={
+            "receipt_sha256": digest(receipt.model_dump(mode="json", exclude={"receipt_sha256"}))
+        })
+        KnowledgeRecordStore(collector.state / "delivery-preflight").put(
+            "preflight-receipts", receipt.receipt_sha256, receipt
+        )
+        with pytest.raises(ValueError, match="执行前检查收据"):
+            collector._invocations(task, (current,), (), (), legacy=contained)
+        return
+    (proof,) = collector._invocations(task, (current,), (), (), legacy=contained)
+    assert proof.proof_kind == "legacy_execution_contained"
+    assert len(proof.reclaimed_uninvoked_claims) == 1
+    assert proof.reclaimed_uninvoked_claims[0].lease_id == old.lease.id
+    monkeypatch.setattr(
+        collector, "_historical_legacy",
+        lambda *_: (contained, Mock(binding_sha256="e" * 64)),
+    )
+    monkeypatch.setattr(
+        collector,
+        "_prior_invocation_fence",
+        lambda *_: PriorInvocationFence(contained.original_start),
+    )
+    (replayed,) = collector._invocations(task, (current,), (), (), legacy=None)
+    assert replayed.reclaimed_uninvoked_claims == proof.reclaimed_uninvoked_claims
+    assert replayed.legacy_binding_sha256 == "e" * 64
 
 
 def test_legacy_unknown_consumes_next_work_and_cannot_refund_or_infer_already_reserved(

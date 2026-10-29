@@ -337,6 +337,31 @@ def _knowledge_lanes(
     return tuple(lanes)
 
 
+def require_no_knowledge_claim_activity(
+    *, state: Path, task: Task, item: QueuedWorkItem, scope: EngineeringScope,
+    requirement_id: str, lease_id: str,
+) -> None:
+    """A reclaimed claim with no Run must also have no knowledge preparation."""
+    for lane in _knowledge_lanes(
+        state=state, task=task, item=item, scope=scope, requirement_id=requirement_id
+    ):
+        old_intents = {
+            intent.intent_sha256
+            for intent in lane.intents
+            if intent.claim is not None and intent.claim.lease.id == lease_id
+        }
+        for intent in lane.intents:
+            intent.validate_integrity()
+            if intent.claim is not None and intent.claim.lease.id == lease_id:
+                raise ValueError("回收 claim 已有知识准备调用, 不能证明未调用")
+        for outcome in lane.outcomes:
+            outcome.validate_integrity()
+            if outcome.intent.claim is not None and outcome.intent.claim.lease.id == lease_id:
+                raise ValueError("回收 claim 已有知识准备结果, 不能证明未调用")
+        if any(record.intent_sha256 in old_intents for record in lane.observations):
+            raise ValueError("回收 claim 已有知识执行记录, 不能证明未调用")
+
+
 def _validated_knowledge_invocations(
     *,
     state: Path,

@@ -36,6 +36,9 @@ def standalone_regenerated(tmp_path_factory: pytest.TempPathFactory) -> dict[str
         "knowledge-stage-workflow",
         "completed-coder-output-unavailable",
         "stopped-provider-failure",
+        "baseline-invocation-proof",
+        "baseline-quiescence-proof",
+        "reclaimed-uninvoked-claim-observation",
     ):
         (schemas / f"{name}.schema.json").unlink()
     command = (sys.executable, str(scripts / "sync-legacy-rescue-schemas.py"))
@@ -46,6 +49,24 @@ def standalone_regenerated(tmp_path_factory: pytest.TempPathFactory) -> dict[str
     return {name: json.loads(body) for name, body in first.items()}
 
 
+@pytest.mark.parametrize(
+    "name, title",
+    [
+        ("baseline-invocation-proof", "BaselineInvocationProof"),
+        ("baseline-quiescence-proof", "BaselineQuiescenceProof"),
+        ("reclaimed-uninvoked-claim-observation", "ReclaimedUninvokedClaimObservation"),
+    ],
+)
+def test_reclaimed_claim_proof_schemas_regenerate_standalone(
+    standalone_regenerated: dict[str, Any], name: str, title: str,
+) -> None:
+    fresh = standalone_regenerated[name + ".schema.json"]
+    published = json.loads((ROOT / "schemas" / (name + ".schema.json")).read_text())
+    assert fresh == published
+    assert fresh["title"] == title
+    Draft202012Validator.check_schema(fresh)
+
+
 @pytest.fixture(scope="module")
 def generated_bundle(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict[str, Any]]:
     root = tmp_path_factory.mktemp("repair-schema-regeneration")
@@ -53,7 +74,11 @@ def generated_bundle(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict
     scripts.mkdir()
     schemas = root / "schemas"
     schemas.mkdir()
-    for name in ("generate-repair-schemas.py", "sync-legacy-rescue-schemas.py"):
+    for name in (
+        "generate-repair-schemas.py",
+        "sync-contained-unknown-contracts.py",
+        "sync-legacy-rescue-schemas.py",
+    ):
         shutil.copyfile(ROOT / "scripts" / name, scripts / name)
     shutil.copyfile(
         ROOT / "schemas" / "engineering-wait-resolution.schema.json",
@@ -81,7 +106,12 @@ def test_fresh_embedded_capacity_guards_keep_no_refund_and_legacy_finished_budge
     schema = generated_bundle[name + ".schema.json"]
     canonical = json.loads((ROOT / "schemas/engineering-wait-resolution.schema.json").read_text())
     for model in ("VerifierPreparationEvidence", "DeliveryWaitInvestigation"):
-        assert schema["$defs"][model]["allOf"] == canonical["$defs"][model]["allOf"]
+        expected = canonical["$defs"][model]["allOf"]
+        actual = schema["$defs"][model]["allOf"]
+        # JSON Schema array order is not semantic. Keep the guard set exact;
+        # the historical generator may append its compatibility guard later.
+        assert len(actual) == len(expected)
+        assert all(guard in actual for guard in expected)
     validator = Draft202012Validator(
         {
             "$defs": schema["$defs"],

@@ -16,6 +16,11 @@ from ai_software_engineer.manager.baseline_models import (
     BaselineContinueAuthorization,
     ExecutionBaselinePlan,
 )
+from ai_software_engineer.manager.baseline_production import (
+    BaselineInvocationProof,
+    BaselineQuiescenceProof,
+    ReclaimedUninvokedClaimObservation,
+)
 from ai_software_engineer.manager.completed_output_checkpoint import (
     CompletedCoderOutputUnavailableProof,
 )
@@ -63,6 +68,9 @@ MODELS = (
     KnowledgePreparationIsolationProof,
     RejectedCandidateOutputProof,
     RejectedCandidateExpiredOwnerSettlement,
+    BaselineQuiescenceProof,
+    BaselineInvocationProof,
+    ReclaimedUninvokedClaimObservation,
 )
 UPDATED = {
     "ExecutionBaselineBinding",
@@ -98,6 +106,8 @@ UPDATED = {
     "KnowledgePreparationIsolationProof",
     "RejectedCandidateOutputProof",
     "RejectedCandidateExpiredOwnerSettlement",
+    "BaselineQuiescenceProof",
+    "ReclaimedUninvokedClaimObservation",
 }
 
 
@@ -125,6 +135,9 @@ def main() -> None:
         ("knowledge-preparation-isolation", KnowledgePreparationIsolationProof),
         ("rejected-candidate-output", RejectedCandidateOutputProof),
         ("rejected-candidate-owner-settlement", RejectedCandidateExpiredOwnerSettlement),
+        ("baseline-quiescence-proof", BaselineQuiescenceProof),
+        ("baseline-invocation-proof", BaselineInvocationProof),
+        ("reclaimed-uninvoked-claim-observation", ReclaimedUninvokedClaimObservation),
     )
     standalone_names = {f"{filename}.schema.json" for filename, _ in standalone}
     for filename, model in standalone:

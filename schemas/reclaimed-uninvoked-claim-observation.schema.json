@@ -1,0 +1,90 @@
+{
+  "additionalProperties": false,
+  "description": "A queue reclaim fact, never a native stop or model outcome.",
+  "properties": {
+    "kind": {
+      "const": "reclaimed_uninvoked_claim_observation",
+      "default": "reclaimed_uninvoked_claim_observation",
+      "title": "Kind",
+      "type": "string"
+    },
+    "lease_id": {
+      "minLength": 1,
+      "title": "Lease Id",
+      "type": "string"
+    },
+    "task_id": {
+      "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "work_item_id": {
+      "minLength": 1,
+      "title": "Work Item Id",
+      "type": "string"
+    },
+    "claim_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Claim Sha256",
+      "type": "string"
+    },
+    "next_claim_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Next Claim Sha256",
+      "type": "string"
+    },
+    "blocking_start_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Blocking Start Sha256",
+      "type": "string"
+    },
+    "dispatch_sequence": {
+      "minimum": 0,
+      "title": "Dispatch Sequence",
+      "type": "integer"
+    },
+    "claimed_at": {
+      "format": "date-time",
+      "title": "Claimed At",
+      "type": "string"
+    },
+    "expired_at": {
+      "format": "date-time",
+      "title": "Expired At",
+      "type": "string"
+    },
+    "reclaim_event_sequence": {
+      "minimum": 1,
+      "title": "Reclaim Event Sequence",
+      "type": "integer"
+    },
+    "reclaim_event_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Reclaim Event Sha256",
+      "type": "string"
+    },
+    "observation_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Observation Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "lease_id",
+    "task_id",
+    "work_item_id",
+    "claim_sha256",
+    "next_claim_sha256",
+    "blocking_start_sha256",
+    "dispatch_sequence",
+    "claimed_at",
+    "expired_at",
+    "reclaim_event_sequence",
+    "reclaim_event_sha256",
+    "observation_sha256"
+  ],
+  "title": "ReclaimedUninvokedClaimObservation",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/reclaimed-uninvoked-claim-observation.schema.json"
+}

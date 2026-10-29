@@ -135,6 +135,24 @@ Unknown work is not refunded or classified as provider failure. Exact queue cons
 old WorkItem/history and reserves a distinct next work attempt/WorkItem. New Run and Context require
 a real claim and the original permissions; independent QA/Review and same-candidate gates remain.
 
+### Reclaimed claim before the legacy invocation
+
+The real claim immediately before the contained invocation may have expired without an invocation
+start. Under the Task lock and queue SQL fence, inspect its immutable claim, exact dispatch
+generation, lease end, `LEASE_EXPIRED` event and the later `CLAIMED` event in order. Require no Run,
+Context, knowledge preparation, model route, preflight checkpoint, capacity receipt or matching
+preflight receipt in that claim's observed lifetime. A preflight receipt is written before its
+checkpoint; a crash between those writes is activity, even when the checkpoint is absent. Its
+integrity, Task, Team, Project, Repository, Requirement, source and checked time must be inspected;
+matching activity refuses the uninvoked proof. An unreadable ledger also refuses. Do not infer
+no-start solely from a missing checkpoint or expired lease.
+
+Seal the independent `ReclaimedUninvokedClaimObservation` inside `BaselineInvocationProof` and
+`BaselineQuiescenceProof`; retain the old Run and all prior claim facts. The corresponding
+standalone generated JSON Schemas are `reclaimed-uninvoked-claim-observation.schema.json`,
+`baseline-invocation-proof.schema.json` and `baseline-quiescence-proof.schema.json`. Rescanning
+with a published legacy binding must reproduce the same proof without a new claim or budget change.
+
 ## Validation matrix
 | Case | Behavior |
 | --- | --- |
@@ -144,6 +162,8 @@ a real claim and the original permissions; independent QA/Review and same-candid
 | Start-only capture binds exact current facts | Validate it read-only, then allow new containment facts; preserve its bytes |
 | Start-only capture is malformed, mismatched, or worktree-drifted | Reject rescue and preserve the original UNKNOWN history |
 | Missing original claim/start or nonlocal execution | Reject; no new invocation |
+| Exact earlier expired claim, no preparation or execution facts | Seal reclaimed uninvoked proof and preserve old Run |
+| Receipt written before preflight checkpoint, or unreadable preflight ledger | Reject uninvoked proof; keep queue and history unchanged |
 | Rescue authorization without exact same-device attestation | Reject before queue/source effects |
 | Platform policy admission or changed source/input mode | Reject; explicit engineering decision required |
 | Dirty/protected/ignored/staged drift or incomplete body | Preserve full现场; no reset/clear |
