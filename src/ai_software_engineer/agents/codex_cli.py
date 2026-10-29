@@ -1630,10 +1630,12 @@ def _compile_prompt(
         if request.role is not AgentRole.QA:
             raise CodexCliConfigurationError("static QA contract is QA-only")
         role_instruction = (
-            "Independently inspect the exact candidate and trusted missing-entry proof. "
+            "Independently inspect the exact candidate and trusted source-gap proof. "
             "Do not run tests or any planned verification command. Return only a "
             "qa-report with FAIL, no tests_run, and proof-bound findings for each "
-            "missing planned test entry. Do not claim a command or PASS. "
+            "missing planned test entry. A named-node proof establishes only a direct "
+            "source binding gap, not the result of dynamic pytest collection. "
+            "Do not claim a command or PASS. "
         )
     # PromptBuilder JSON content is a structured object, not a second escaped
     # JSON string. Preserve every value while avoiding redundant serialization.

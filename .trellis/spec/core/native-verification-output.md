@@ -175,3 +175,25 @@ MySQL/browser/live A→B acceptance remains `NOT_RUN` until an ordinary QA run
 executes it against a repaired candidate. Rejected knowledge assessments must
 remain replayable from the versioned scope, without weakening the ordinary
 QA/Reviewer output contracts or hiding unresolved knowledge gaps.
+
+## Frozen named pytest source gap
+
+For an exact frozen `python -m pytest ... path::test_function` row, the same
+static QA no-start decision may use a bounded candidate Git blob observation
+when the planned file exists but its simple module contains no direct function
+definition or named reexport for that function. The observation binds the full
+node ID, candidate blob, accepted Plan/implementation and candidate SHA. It
+proves a direct **source binding gap**, not the result of dynamic pytest
+collection or product behavior. Star imports, assignments, dynamic top-level
+statements, decorator-driven definitions, malformed source and changed blobs
+are uncertain and cannot use this route. Existing missing-file observation
+wires omit the new optional node field and retain their old SHA.
+
+The trusted contract groups affected criteria by source path and gives QA the
+exact missing node IDs. QA must still independently return a proof-bound
+`FAIL` with no `tests_run`; unrelated criteria remain `NOT_TESTED`. The original
+browser, MySQL and live A→B checks remain `NOT_RUN`. The public wait, current
+claim and output fences above remain unchanged. A direct function or explicit
+named alias reexport does not produce a node gap; ambiguous source preserves
+`WAITING_DEPENDENCY`. The focused Git/agent tests and isolated public MySQL
+wait → QA FAIL → Coder fixture are release gates.

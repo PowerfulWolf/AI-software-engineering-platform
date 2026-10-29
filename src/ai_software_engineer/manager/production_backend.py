@@ -1229,6 +1229,7 @@ class ProductionProjectDeliveryBackend:
             RecoveryInputScheduleDecision,
             require_consumed_recovery_input_schedule,
         )
+
         schedule_root = facts.workspace.directory("state") / "delivery-waits"
 
         def scheduled_recovery_input(
@@ -1777,6 +1778,7 @@ class ProductionProjectDeliveryBackend:
             selected_adapters = selected_adapters.wrap_initial_workspace_admission(
                 wrap_rejected_knowledge_admission
             )
+
         def validate_scheduled_context(
             request: AgentRequest, recovery_plan: RecoveryPlan, context: ContextBundle
         ) -> bool:
@@ -2034,9 +2036,7 @@ class ProductionProjectDeliveryBackend:
             if selected is None:
                 raise ValueError("scheduled Coder source is missing")
             recovery_plan, decision, index = selected
-            return scheduled_reapply_context_sources(
-                recovery_plan, decision.schedule_sha256, index
-            )
+            return scheduled_reapply_context_sources(recovery_plan, decision.schedule_sha256, index)
 
         run_contexts = FileRunContextBuilder(
             facts.workspace.repository_root,
@@ -2121,11 +2121,16 @@ class ProductionProjectDeliveryBackend:
             ):
                 raise ValueError("static QA knowledge scope changed its candidate or parents")
             by_path: dict[str, list[str]] = {}
+            nodes_by_path: dict[str, list[str]] = {}
             for entry in observation.missing:
                 criteria = by_path.setdefault(entry.path, [])
                 for criterion_id in entry.requirement.criterion_ids:
                     if criterion_id not in criteria:
                         criteria.append(criterion_id)
+                if entry.node_id is not None:
+                    nodes = nodes_by_path.setdefault(entry.path, [])
+                    if entry.node_id not in nodes:
+                        nodes.append(entry.node_id)
             return StaticQaKnowledgeScope(
                 task_id=task.id,
                 source_revision=base.source_revision,
@@ -2138,7 +2143,11 @@ class ProductionProjectDeliveryBackend:
                 plan_artifact_id=observation.plan_artifact_id,
                 implementation_artifact_id=observation.implementation_artifact_id,
                 missing=tuple(
-                    StaticQaMissingEntry(path=path, criterion_ids=tuple(criteria))
+                    StaticQaMissingEntry(
+                        path=path,
+                        criterion_ids=tuple(criteria),
+                        node_ids=tuple(nodes_by_path[path]) if path in nodes_by_path else None,
+                    )
                     for path, criteria in by_path.items()
                 ),
             )

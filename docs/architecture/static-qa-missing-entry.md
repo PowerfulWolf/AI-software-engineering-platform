@@ -6,6 +6,15 @@ missing regular-file path to an exact planned QA command row. It is a read-only
 observation: the existing `WAIT/NOT_STARTED` remains in place, and no QA verdict or
 queue decision follows from this observation alone.
 
+For the later K1 candidate `ec178521719a9b1ce0a9d1eb97505e77fe0c3cc7`,
+the planned Python file exists but the exact frozen pytest function selection
+has no direct definition or named reexport in that file. A separate bounded
+Git-blob/AST observation may record this direct source gap when the module has
+only simple, unambiguous declarations and imports. It does not assert that
+pytest could not dynamically collect a test, and it never executes candidate
+imports. Ambiguous source keeps the original engineering wait. Historical
+missing-file proof wires and SHA remain unchanged.
+
 `TrustedStaticQaMissingEntryOutputContract` is a separate application-owned output
 gate for an independently claimed QA run. Given an authenticated, sealed
 no-start proof and the exact candidate observation, it permits only a commandless
@@ -33,6 +42,12 @@ ran. The ordinary QA/Reviewer source view resumes on the repaired candidate. A
 safe Plan directory suffix `/**` expands only against the base and candidate Git
 trees to exact tracked paths, with the normal read/deny and bounded-input checks;
 other glob syntax and missing exact dependencies remain rejected.
+
+For a named-node proof, the trusted output and knowledge scope carry the full
+frozen selection and explicitly say the original verification is `NOT_RUN`.
+Independently claimed QA may fail source adequacy with proof-bound findings;
+the platform does not create its verdict. The current Task, claim, Plan and Git
+blob are reread at output acceptance just as for a missing file.
 
 If the first post-decision QA claim has a sealed `READY/NOT_STARTED` preparation
 but its lease expires before a durable model invocation start, a later adjacent

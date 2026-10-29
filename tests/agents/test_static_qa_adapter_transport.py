@@ -20,6 +20,7 @@ from ai_software_engineer.agents.models import AgentRequest
 from ai_software_engineer.agents.openai_compatible import PromptPayload
 from ai_software_engineer.agents.ports import AgentConfigurationError
 from ai_software_engineer.agents.verification_output import (
+    StaticQaMissingEntry,
     TrustedStaticQaMissingEntryOutputContract,
     VerificationOutputRejected,
 )
@@ -100,6 +101,35 @@ def test_static_qa_evidence_resolves_fresh_at_prompt_and_output(tmp_path: Path) 
     active[0] = contract.model_copy(update={"claim_sha256": "0" * 64})
     with pytest.raises(VerificationOutputRejected):
         builder.validate_output_current(request, tmp_path, None, contract)
+
+
+def test_named_node_static_qa_prompt_reports_exact_source_gap(tmp_path: Path) -> None:
+    request, file_contract, _ = _subject()
+    path = "tests/learning_collection/test_live_a_to_b.py"
+    node = path + "::test_production_a_to_b_live"
+    contract = file_contract.model_copy(
+        update={
+            "missing": (
+                StaticQaMissingEntry(
+                    path=path,
+                    criterion_ids=file_contract.missing[0].criterion_ids,
+                    node_ids=(node,),
+                ),
+            )
+        }
+    )
+    provider = ConditionalStaticQaEvidenceProvider(None, lambda *_: contract, lambda *_: contract)
+    prompt = VerificationEvidencePromptBuilder(
+        StaticPromptBuilder(), provider, tmp_path, None
+    ).build(request)
+    text = prompt.messages[-1].content
+    assert prompt.verification_output_contract == contract
+    assert "Named-node source gap in existing candidate file" in text
+    assert f"selector(s) {node}" in text
+    assert "verification is NOT_RUN" in text
+    assert "Dynamic pytest collection was not run" in text
+    assert "Missing planned test file" not in text
+    assert contract.proof_uri in text
 
 
 @pytest.mark.parametrize("defect", ["none", "stale_claim", "pass"])

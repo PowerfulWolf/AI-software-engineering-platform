@@ -315,7 +315,9 @@ def public_capacity_host(
             return result.model_copy(update={"artifact": artifact})
 
     monkeypatch.setattr(
-        production_backend, "ConfiguredStructuredClientFactory", lambda *_: _ScriptedClientFactory()
+        production_backend,
+        "ConfiguredStructuredClientFactory",
+        lambda *_, **__: _ScriptedClientFactory(),
     )
     monkeypatch.setattr(_ScriptedStructuredClient, "complete", source_inspection)
     monkeypatch.setattr(production_delivery, "CodexCliAgentAdapter", CapacityThenDelivery)

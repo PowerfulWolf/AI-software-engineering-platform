@@ -247,6 +247,27 @@ class StaticQaPreContextIdentity:
     source_revision: str
 
 
+def _reobserve_sealed_static_qa_absence(
+    *,
+    original: CandidateTestEntryAbsenceObservation,
+    task: Task,
+    repository: TaskRepository,
+    source_revision: str,
+    queue: DeliveryWaitQueue,
+    artifacts: ArtifactStore,
+) -> CandidateTestEntryAbsenceObservation:
+    """Recheck the sealed proof using its original missing-file/node semantics."""
+    return observe_accepted_candidate_test_entry_absence(
+        repository_root=Path(task.repository),
+        task=task,
+        repository=repository,
+        source_revision=source_revision,
+        accepted=queue.accepted(task.id),
+        artifacts=artifacts,
+        include_named_nodes=any(entry.node_id is not None for entry in original.missing),
+    )
+
+
 def current_static_qa_for_claim(
     *,
     request: StaticQaRequestIdentity,
@@ -319,12 +340,12 @@ def current_static_qa_for_claim(
         CandidateTestEntryAbsenceObservation,
     )
     observation.validate_integrity()
-    current = observe_accepted_candidate_test_entry_absence(
-        repository_root=Path(task.repository),
+    current = _reobserve_sealed_static_qa_absence(
+        original=observation,
         task=task,
         repository=repository,
         source_revision=request.source_revision,
-        accepted=queue.accepted(task.id),
+        queue=queue,
         artifacts=artifacts,
     )
     if current != observation or (
@@ -1673,12 +1694,12 @@ class DeliveryWaitService:
                 CandidateTestEntryAbsenceObservation,
             )
             original_observation.validate_integrity()
-            current_observation = observe_accepted_candidate_test_entry_absence(
-                repository_root=Path(task.repository),
+            current_observation = _reobserve_sealed_static_qa_absence(
+                original=original_observation,
                 task=task,
                 repository=self.repository,
                 source_revision=step.boundary.source_revision,
-                accepted=self.queue.accepted(task.id),
+                queue=self.queue,
                 artifacts=self.artifacts,
             )
             if current_observation != original_observation:

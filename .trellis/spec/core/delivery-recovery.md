@@ -3792,3 +3792,22 @@ exercise Inspect → Resolve → new claim → proof-bound independent FAIL. Rol
 stops new admission and leaves all historical records intact; no direct SQL or
 sidecar rewrite is authorized. This K1 wait is repaired through the public
 interface after a controlled release, using the existing Task and candidate.
+
+## Named pytest node source gap under the same static QA wait
+
+The existing `STATIC_QA_MISSING_ENTRY` decision may also bind an exact frozen
+`path::test_function` source gap when the planned file is present at the
+accepted candidate SHA. The read-only observer parses only a bounded, simple
+module and proves no direct definition or named reexport of that function.
+It does not run pytest or establish dynamic collection behavior. Ambiguous
+source returns no observation. The original `NOT_STARTED`, accepted Plan and
+implementation, current Task/Requirement, historical claims and one-use
+queue decision checks above are all still mandatory; this source proof cannot
+turn an unsupported verifier into a partial READY group.
+
+After the public decision, only a fresh independent QA claim may report a
+proof-bound `FAIL` with no tests_run. The ordinary FAIL path returns to ASE
+Coder, whose new candidate must later receive complete real QA and Reviewer
+checks. Existing missing-file observation wires and digests remain unchanged.
+An old K1 Coder start-only UNKNOWN fact and a manual collect-only command are
+not QA verdicts or proof that the current verifier ran.

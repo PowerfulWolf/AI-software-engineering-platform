@@ -7,9 +7,10 @@ before using it in any future recovery decision.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, cast
 
 from pydantic import Field, model_validator
 
@@ -45,6 +46,11 @@ _ENVIRONMENT = {
     "GIT_TERMINAL_PROMPT": "0",
 }
 _GIT = ("/usr/bin/git", "--literal-pathspecs", "-c", "core.fsmonitor=false")
+_MAX_TEST_SOURCE_BYTES = 64_000
+
+
+class _OversizedStaticTestSource(ValueError):
+    """A present source is too large for a bounded node-level observation."""
 
 
 def _git(root: Path, *arguments: str, limit: int = 4096) -> bytes:
@@ -98,10 +104,84 @@ def _missing_regular_entry(root: Path, revision: str, path: str) -> bool:
     raise AssertionError("unreachable")
 
 
+def _exact_python_function_node(argv: tuple[str, ...], path: str) -> str | None:
+    """Only the frozen one-function pytest form can support a source-level proof."""
+    if (
+        len(argv) != 5
+        or argv[:4] != ("python", "-m", "pytest", "-q")
+        or not path.endswith(".py")
+        or not PurePosixPath(path).name.startswith("test_")
+        or not argv[4].startswith(path + "::")
+    ):
+        return None
+    function = argv[4][len(path) + 2 :]
+    if re.fullmatch(r"test_[A-Za-z0-9_]*", function) is None:
+        return None
+    return argv[4]
+
+
+def _candidate_blob(root: Path, revision: str, path: str) -> bytes:
+    entry = _entry(root, revision, path)
+    if entry is None:
+        raise ValueError("candidate test file disappeared")
+    parts = entry.split(b" ")
+    if (
+        len(parts) != 3
+        or parts[0] not in {b"100644", b"100755"}
+        or parts[1] != b"blob"
+        or re.fullmatch(rb"[a-f0-9]{40,64}", parts[2]) is None
+    ):
+        raise ValueError("candidate test file is not a regular Git blob")
+    oid = parts[2].decode("ascii")
+    size_raw = _git(root, "cat-file", "-s", oid, limit=32).strip()
+    if not size_raw.isdigit():
+        raise ValueError("candidate test blob has no stable size")
+    if int(size_raw) > _MAX_TEST_SOURCE_BYTES:
+        raise _OversizedStaticTestSource("candidate test source exceeds static inspection bound")
+    body = _git(root, "cat-file", "blob", oid, limit=_MAX_TEST_SOURCE_BYTES)
+    if len(body) != int(size_raw):
+        raise ValueError("candidate test source changed during inspection")
+    return body
+
+
+def _missing_direct_python_test_node(root: Path, revision: str, path: str, node_id: str) -> bool:
+    """Prove only a direct source gap; never infer actual pytest collection.
+
+    Imports can have side effects. A source that consists solely of a docstring
+    and named imports has no direct definition/reexport of the selected function.
+    Dynamic module statements, star imports and unknown syntax give no proof.
+    """
+    try:
+        module = ast.parse(_candidate_blob(root, revision, path).decode("utf-8"), path)
+    except (_OversizedStaticTestSource, SyntaxError, UnicodeDecodeError):
+        # Bounded or non-Python source proves no node gap for this row. Git
+        # identity, object read and size/body drift failures still fail closed.
+        return False
+    function = node_id.rsplit("::", 1)[1]
+    for index, statement in enumerate(module.body):
+        if (
+            index == 0
+            and isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Constant)
+            and isinstance(statement.value.value, str)
+        ):
+            continue
+        if isinstance(statement, ast.ImportFrom) and all(
+            alias.name != "*" for alias in statement.names
+        ):
+            if any((alias.asname or alias.name) == function for alias in statement.names):
+                return False
+            continue
+        # A direct definition exists, or source execution might synthesize one.
+        return False
+    return True
+
+
 class MissingPlannedTestEntry(DomainModel):
     requirement: PlannedVerificationRequirement
     requirement_sha256: Sha256
     path: NonEmptyStr
+    node_id: NonEmptyStr | None = None
 
     @model_validator(mode="after")
     def validate_binding(self) -> Self:
@@ -117,6 +197,11 @@ class MissingPlannedTestEntry(DomainModel):
         ):
             raise ValueError("missing entry must bind an exact frozen QA command row")
         _exact_test_path(self.path)
+        if self.node_id is not None and (
+            self.requirement.argv is None
+            or _exact_python_function_node(self.requirement.argv, self.path) != self.node_id
+        ):
+            raise ValueError("missing node must be the exact frozen pytest function selector")
         return self
 
 
@@ -150,9 +235,14 @@ class CandidateTestEntryAbsenceObservation(DomainModel):
         return observation.model_copy(update={"observation_sha256": observation.recompute_sha256()})
 
     def recompute_sha256(self) -> str:
-        return role_verification_digest(
-            self.model_dump(mode="json", exclude={"observation_sha256"})
-        )
+        # The historical v1 digest included optional nulls in each frozen row.
+        # Omit only the newly added absent node field, leaving those bytes intact.
+        payload = self.model_dump(mode="json", exclude={"observation_sha256"})
+        records = cast(list[dict[str, object]], payload["missing"])
+        for record, entry in zip(records, self.missing, strict=True):
+            if entry.node_id is None:
+                record.pop("node_id", None)
+        return role_verification_digest(payload)
 
     def validate_integrity(self) -> None:
         type(self).model_validate(self.to_wire())
@@ -166,8 +256,9 @@ def observe_candidate_test_entry_absence(
     task: Task,
     plan: PlanArtifact,
     implementation: ImplementationReportArtifact,
+    include_named_nodes: bool = True,
 ) -> CandidateTestEntryAbsenceObservation:
-    """Inspect exact frozen QA rows at a full candidate SHA without running code."""
+    """Inspect frozen QA rows; files-only mode revalidates sealed old proofs."""
     root = repository_root.absolute()
     revision = implementation.source_revision
     rows = plan.content.verification_requirements
@@ -193,13 +284,27 @@ def observe_candidate_test_entry_absence(
         if row.role is not AgentRole.QA or row.argv is None:
             continue
         for path in row.planned_new_files:
-            entry = MissingPlannedTestEntry(
-                requirement=row,
-                requirement_sha256=role_verification_digest(row.to_wire()),
-                path=path,
-            )
             if _missing_regular_entry(root, revision, path):
-                missing.append(entry)
+                missing.append(
+                    MissingPlannedTestEntry(
+                        requirement=row,
+                        requirement_sha256=role_verification_digest(row.to_wire()),
+                        path=path,
+                    )
+                )
+            elif (
+                include_named_nodes
+                and (node_id := _exact_python_function_node(row.argv, path)) is not None
+                and _missing_direct_python_test_node(root, revision, path, node_id)
+            ):
+                missing.append(
+                    MissingPlannedTestEntry(
+                        requirement=row,
+                        requirement_sha256=role_verification_digest(row.to_wire()),
+                        path=path,
+                        node_id=node_id,
+                    )
+                )
     if not missing:
         raise ValueError("candidate contains every planned test entry")
     observation = CandidateTestEntryAbsenceObservation.create(
@@ -225,6 +330,7 @@ def observe_accepted_candidate_test_entry_absence(
     source_revision: str,
     accepted: tuple[AcceptedRoleArtifact, ...],
     artifacts: ArtifactStore,
+    include_named_nodes: bool = True,
 ) -> CandidateTestEntryAbsenceObservation:
     """Bind the Git-tree absence to the accepted Plan and candidate lineage.
 
@@ -292,4 +398,5 @@ def observe_accepted_candidate_test_entry_absence(
         task=task,
         plan=plan,
         implementation=implementation,
+        include_named_nodes=include_named_nodes,
     )

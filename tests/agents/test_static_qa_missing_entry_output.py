@@ -162,6 +162,61 @@ def test_multiple_frozen_rows_for_one_file_preserve_all_affected_criteria() -> N
     assert contract.missing[0].criterion_ids == ("ac_models_01", "ac_other_01")
 
 
+def test_exact_missing_pytest_node_reaches_independent_qa_contract() -> None:
+    request = _request(AgentRole.QA).model_copy(
+        update={"input_artifact_ids": ("art_plan_001", "art_impl_001")}
+    )
+    path = "tests/learning_collection/test_live_a_to_b.py"
+    node = path + "::test_production_a_to_b_live"
+    rows = tuple(
+        PlannedVerificationRequirement(
+            id=f"verify_live_{index}",
+            role=AgentRole.QA,
+            criterion_ids=(criterion_id,),
+            argv=("python", "-m", "pytest", "-q", node),
+            verification_levels=("e2e",),
+            planned_new_files=(path,),
+        )
+        for index, criterion_id in enumerate(("ac_models_01", "ac_other_01"), start=1)
+    )
+    observation = CandidateTestEntryAbsenceObservation.create(
+        task_id=request.task_id,
+        task_intent_sha256="a" * 64,
+        candidate_revision=request.source_revision,
+        plan_artifact_id="art_plan_001",
+        plan_artifact_sha256="b" * 64,
+        plan_requirements_sha256=role_verification_digest([row.to_wire() for row in rows]),
+        implementation_artifact_id="art_impl_001",
+        implementation_artifact_sha256="c" * 64,
+        missing=tuple(
+            MissingPlannedTestEntry(
+                requirement=row,
+                requirement_sha256=role_verification_digest(row.to_wire()),
+                path=path,
+                node_id=node,
+            )
+            for row in rows
+        ),
+    )
+    contract = static_qa_missing_entry_output_contract(
+        request,
+        observation=observation,
+        sealed_no_start_proof_sha256="d" * 64,
+        authority_sha256="e" * 64,
+        claim_sha256="f" * 64,
+    )
+    assert contract.missing[0].path == path
+    assert contract.missing[0].criterion_ids == ("ac_models_01", "ac_other_01")
+    assert contract.missing[0].node_ids == (node,)
+    contract.model_validate(contract.to_wire())
+
+
+def test_legacy_static_qa_contract_omits_node_extension() -> None:
+    _, contract, _ = _subject()
+    assert contract.missing[0].node_ids is None
+    assert "node_ids" not in contract.model_dump(mode="json", exclude_none=True)["missing"][0]
+
+
 @pytest.mark.parametrize(
     "defect",
     [

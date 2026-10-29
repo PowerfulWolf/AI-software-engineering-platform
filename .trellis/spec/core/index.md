@@ -38,6 +38,9 @@
 
 ## Files
 
+- [Frozen named pytest source gap](static-qa-node-gap.md): exact Git/AST proof,
+  unchanged missing-file hashes, public no-start decision and independent QA FAIL.
+
 - [Contained start-only UNKNOWN budget recovery](contained-unknown-budget-recovery.md): exact
   local human declaration, exhausted Task settlement and full same-Requirement successor.
 

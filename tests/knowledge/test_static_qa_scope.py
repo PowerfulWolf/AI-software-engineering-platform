@@ -9,6 +9,11 @@ from ai_software_engineer.agents.structured import StructuredModelResult
 from ai_software_engineer.agents.verification_output import StaticQaMissingEntry
 from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.knowledge.agents import KnowledgeConsultation
+from ai_software_engineer.knowledge.assessment_validation import (
+    STATIC_QA_KNOWLEDGE_INSTRUCTIONS,
+    STATIC_QA_NODE_KNOWLEDGE_INSTRUCTIONS,
+    StaticQaKnowledgeProjection,
+)
 from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
 from ai_software_engineer.knowledge.models import KnowledgeSnapshot
 from ai_software_engineer.knowledge.runtime import StaticQaKnowledgeScope
@@ -33,6 +38,31 @@ def _scope(task_id: str, source_revision: str, criterion_id: str) -> StaticQaKno
             StaticQaMissingEntry(path="tests/browser.test.cjs", criterion_ids=(criterion_id,)),
         ),
     )
+
+
+def test_named_node_scope_names_only_the_direct_source_gap() -> None:
+    legacy = _scope("task_static", "a" * 40, "ac_001")
+    baseline = StaticQaKnowledgeProjection(scope=legacy, parent_context_manifest_id="ctx_legacy")
+    assert baseline.consultation_payload()["assessment_boundary"] == (
+        STATIC_QA_KNOWLEDGE_INSTRUCTIONS
+    )
+    assert "node_ids" not in baseline.consultation_payload()["run_scope"]["missing"][0]
+
+    entry = legacy.missing[0].model_copy(
+        update={"node_ids": ("tests/test_live.py::test_production_a_to_b_live",)}
+    )
+    named = StaticQaKnowledgeProjection(
+        scope=legacy.model_copy(update={"missing": (entry,)}),
+        parent_context_manifest_id="ctx_named",
+    )
+    payload = named.consultation_payload()
+    assert payload["assessment_boundary"] == STATIC_QA_NODE_KNOWLEDGE_INSTRUCTIONS
+    assert (
+        "does not prove the result of dynamic pytest collection" in payload["assessment_boundary"]
+    )
+    assert payload["run_scope"]["missing"][0]["node_ids"] == [
+        "tests/test_live.py::test_production_a_to_b_live"
+    ]
 
 
 def test_static_qa_consults_only_proof_scope_but_preserves_complete_context(

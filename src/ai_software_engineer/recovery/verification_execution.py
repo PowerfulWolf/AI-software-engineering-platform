@@ -139,13 +139,28 @@ class ConditionalStaticQaEvidenceProvider:
             return self._delegate.evidence_for(request, workspace_root, execution_guard)
         if request.role is not AgentRole.QA:
             raise VerificationOutputRejected(VerificationOutputRule.IDENTITY)
-        paths = ", ".join(entry.path for entry in contract.missing)
+        observations = []
+        for entry in contract.missing:
+            if entry.node_ids is None:
+                observations.append(
+                    f"Missing planned test file in the candidate Git tree: {entry.path}."
+                )
+            else:
+                observations.append(
+                    "Named-node source gap in existing candidate file "
+                    f"{entry.path}: direct source binding is absent for frozen pytest "
+                    f"selector(s) {', '.join(entry.node_ids)}."
+                )
         return VerificationEvidence(
             text=(
-                "Trusted static QA evidence: the candidate Git tree lacks these frozen planned "
-                f"test entries: {paths}. Cite the exact proof URI {contract.proof_uri} and its "
+                "Trusted static QA evidence:\n"
+                + "\n".join(observations)
+                + f"\nCite the exact proof URI {contract.proof_uri} and its "
                 f"SHA-256 {contract.proof_sha256}. The original controlled planned "
-                "verification did not start; do not run that missing test. Return only a "
+                "verification is NOT_RUN and did not start. Dynamic pytest collection was "
+                "not run; this source observation does not establish a collection result "
+                "or business behavior. Do not run the frozen planned verification command "
+                "in this proof-only route. Return only a "
                 "qa-report FAIL with tests_run empty, each affected criterion FAIL citing this "
                 "proof, and one MISSING_PLANNED_TEST_ENTRY major or blocker finding per path. "
                 "Do not claim a PASS, a command result, or coverage of other criteria."

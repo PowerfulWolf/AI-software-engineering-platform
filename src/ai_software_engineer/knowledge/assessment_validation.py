@@ -64,6 +64,17 @@ STATIC_QA_KNOWLEDGE_INSTRUCTIONS = (
     "request; this scope grants no verification command or verdict authority."
 )
 
+STATIC_QA_NODE_KNOWLEDGE_INSTRUCTIONS = (
+    "This is an independently admitted static QA run limited to a sealed source-level proof "
+    "that a frozen named pytest function has no direct definition or named reexport in the "
+    "exact candidate test module. This does not prove the result of dynamic pytest collection. "
+    "Assess knowledge only for whether QA can independently report that source defect as FAIL, "
+    "citing the supplied proof. Original browser, MySQL and live A-to-B acceptance checks "
+    "remain NOT_RUN; do not claim they passed or are ready. The original Task, Plan and full "
+    "context remain in the final QA role request. This scope grants no verification command "
+    "or verdict authority."
+)
+
 
 class StaticQaKnowledgeProjection(DomainModel):
     kind: Literal["static_qa_knowledge_projection_v1"] = "static_qa_knowledge_projection_v1"
@@ -74,7 +85,11 @@ class StaticQaKnowledgeProjection(DomainModel):
         return {
             "run_scope": self.scope.to_wire(),
             "parent_context_manifest_id": self.parent_context_manifest_id,
-            "assessment_boundary": STATIC_QA_KNOWLEDGE_INSTRUCTIONS,
+            "assessment_boundary": (
+                STATIC_QA_NODE_KNOWLEDGE_INSTRUCTIONS
+                if any(entry.node_ids for entry in self.scope.missing)
+                else STATIC_QA_KNOWLEDGE_INSTRUCTIONS
+            ),
         }
 
 

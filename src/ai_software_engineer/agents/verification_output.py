@@ -72,6 +72,17 @@ class TrustedVerificationOutputContract(DomainModel):
 class StaticQaMissingEntry(DomainModel):
     path: NonEmptyStr
     criterion_ids: tuple[AcceptanceCriterionId, ...] = Field(min_length=1)
+    node_ids: tuple[NonEmptyStr, ...] | None = None
+
+    @model_validator(mode="after")
+    def exact_source_nodes(self) -> StaticQaMissingEntry:
+        if self.node_ids is not None:
+            if not self.node_ids:
+                raise ValueError("static QA nodes cannot be an empty set")
+            ensure_unique(self.node_ids, "missing static QA nodes")
+            if any(not node_id.startswith(self.path + "::") for node_id in self.node_ids):
+                raise ValueError("static QA node does not belong to the frozen test path")
+        return self
 
 
 class TrustedStaticQaMissingEntryOutputContract(DomainModel):
@@ -125,11 +136,16 @@ def static_qa_missing_entry_output_contract(
     ):
         raise VerificationOutputRejected(VerificationOutputRule.IDENTITY)
     by_path: dict[str, list[AcceptanceCriterionId]] = {}
+    nodes_by_path: dict[str, list[str]] = {}
     for entry in observation.missing:
         criteria = by_path.setdefault(entry.path, [])
         for criterion_id in entry.requirement.criterion_ids:
             if criterion_id not in criteria:
                 criteria.append(criterion_id)
+        if entry.node_id is not None:
+            nodes = nodes_by_path.setdefault(entry.path, [])
+            if entry.node_id not in nodes:
+                nodes.append(entry.node_id)
     return TrustedStaticQaMissingEntryOutputContract(
         request_sha256=role_verification_digest(request.to_wire()),
         task_id=request.task_id,
@@ -144,7 +160,11 @@ def static_qa_missing_entry_output_contract(
         observation_sha256=observation.observation_sha256,
         implementation_artifact_id=observation.implementation_artifact_id,
         missing=tuple(
-            StaticQaMissingEntry(path=path, criterion_ids=tuple(criteria))
+            StaticQaMissingEntry(
+                path=path,
+                criterion_ids=tuple(criteria),
+                node_ids=tuple(nodes_by_path[path]) if path in nodes_by_path else None,
+            )
             for path, criteria in by_path.items()
         ),
     )
