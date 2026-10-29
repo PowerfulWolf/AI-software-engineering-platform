@@ -28,6 +28,7 @@ from ai_software_engineer.owned_spawn import spawn_owned_query
 
 _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_RESULT_BYTES = 64 * 1024
+_MAX_COMPLETE_SURVEY_ATTEMPTS = 3
 _ENVIRONMENT = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"}
 _LOGGER = logging.getLogger(__name__)
 type _Pid = Annotated[StrictInt, Field(ge=1, le=2147483647)]
@@ -219,6 +220,16 @@ class IsolatedLegacyLocalExecutionObserver:
     def observe(
         self, *, worktree_root: Path, boot: LocalBootObservation
     ) -> LegacyLocalExecutionSurvey:
+        for attempt in range(_MAX_COMPLETE_SURVEY_ATTEMPTS):
+            survey, retryable = self._observe_once(worktree_root=worktree_root, boot=boot)
+            if not retryable or attempt + 1 == _MAX_COMPLETE_SURVEY_ATTEMPTS:
+                return survey
+        raise AssertionError("bounded survey loop has no final result")
+
+    def _observe_once(
+        self, *, worktree_root: Path, boot: LocalBootObservation
+    ) -> tuple[LegacyLocalExecutionSurvey, bool]:
+        """Retry only a validated child result after its owned session has stopped."""
         started = time.monotonic()
         deadline = started + TrustedLegacyLocalExecutionObserver.MAX_SCAN_SECONDS
         root = worktree_root.resolve(strict=True)
@@ -226,6 +237,7 @@ class IsolatedLegacyLocalExecutionObserver:
             raise ValueError("本机执行调查的工作区不存在")
         uid = os.getuid()
         phase: LocalSurveyPhase | None = None
+        retryable = False
         try:
             _remaining(deadline)
             if uid != os.geteuid():
@@ -240,8 +252,9 @@ class IsolatedLegacyLocalExecutionObserver:
             result = _observe_survey_worker(request)
             phase = result.incomplete_phase
             if phase is None:
-                return result.survey
+                return result.survey, False
             survey = result.survey
+            retryable = survey.blockers == ("PROCESS_SCAN_INCOMPLETE",)
         except Exception:
             survey = LegacyLocalExecutionSurvey.create(
                 worktree_path=str(root),
@@ -264,7 +277,7 @@ class IsolatedLegacyLocalExecutionObserver:
                 "elapsed_seconds": elapsed,
             },
         )
-        return survey
+        return survey, retryable
 
 
 def _observe_survey_worker(request: LocalSurveyRequest) -> LocalSurveyResult:

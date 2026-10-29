@@ -55,7 +55,7 @@ complete survey integrity and exact root/machine/boot/account/scanner before acc
 
 ## 3. Launch, identity and complete survey order
 
-The facade starts exactly one fixed manager/local_survey_worker.py via spawn_owned_query:
+Each complete survey attempt starts exactly one fixed manager/local_survey_worker.py via spawn_owned_query:
 selected sys.executable, -I -S -B, cwd /, PATH=/usr/bin:/bin:/usr/sbin:/sbin, LANG=C, LC_ALL=C.
 Use private stdin/stdout/stderr files and no shell. The worker adds only its own fixed source
 root and selected interpreter dependency directory, without site.main, addsitedir, .pth or
@@ -98,6 +98,38 @@ Cleanup may take the existing bounded time to establish safety after failure; el
 past the original deadline refuses success. Nonzero child exit, stderr, malformed output or
 LocalSurveyObservationError maps to the existing incomplete survey, with fixed safe phase
 logging only. Never return raw validation or OS exception text.
+
+## 4a. Bounded fresh retry for transient incomplete current surveys
+
+`IsolatedLegacyLocalExecutionObserver.observe(worktree_root, boot)` may start at most three
+**independent, complete** fixed-worker surveys when a valid `LocalSurveyResult` from the
+previous worker has exactly `blockers=(PROCESS_SCAN_INCOMPLETE,)` and a matching
+`incomplete_phase`. Each attempt re-resolves the root, observes the actual parent identity,
+creates a new request SHA and original `started + 5.0s` deadline, runs the complete
+before/path/after/final sequence, validates the result and proves the entire owned worker
+session stopped. The next attempt starts only after that proof. This is a new current
+observation, not an extension of a prior five-second window and not a merge of partial
+observations. Maximum cumulative survey work is three fixed windows plus the existing
+bounded cleanup needed on failure; no new public field or persisted authority is created.
+
+A complete idle or active result returns immediately. `PROCESS_STATE_UNKNOWN`, any active
+blocker, or a mixture of active and `PROCESS_SCAN_INCOMPLETE` never retries. Parent identity
+failure, invalid protocol/digest, worker nonzero/stderr, malformed result, deadline failure
+outside a validated child result, or uncertain owned-process cleanup also returns one
+synthetic incomplete survey without retry. After three valid incomplete results, return
+the final incomplete survey and keep recovery blocked. No result from an earlier attempt
+can establish idle, historical stop, source integrity or admission; normal downstream
+`require_idle()`, fresh capture and approval gates still apply.
+
+Good: a full worker reports an incomplete final PID identity, its owned process group is
+proved stopped, and a fresh second complete worker reports idle. Base: the first complete
+worker reports `WORKTREE_PROCESS_ACTIVE` and no second worker starts. Bad: retry a worker
+whose protocol or cleanup failed, retry a result with an active/unknown blocker, accept
+partial first-attempt paths, or increase one worker's deadline. Deterministic tests in
+`tests/manager/test_local_survey_observation.py` assert fresh request SHA/deadline,
+incomplete→idle, incomplete→active/unknown, three incomplete attempts, and no retry on
+parent/worker failure. Existing real owned-worker tests continue to prove complete
+cleanup and no startup-code execution.
 
 ## 5. Validation matrix and required tests
 

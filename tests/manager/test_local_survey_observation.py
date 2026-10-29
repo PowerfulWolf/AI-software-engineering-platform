@@ -84,6 +84,128 @@ def result(value: LocalSurveyRequest, worker_pid: int = 777) -> LocalSurveyResul
     )
 
 
+def test_facade_retries_only_complete_owned_scan_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[LocalSurveyRequest] = []
+
+    def capture(pid: int) -> tuple[str, OwnedProcessIdentity | None]:
+        return (
+            "fixture-native-boot",
+            OwnedProcessIdentity(
+                process_id=pid, group_id=10, session_id=10, birth_identity="fixture-birth"
+            ),
+        )
+
+    def worker(value: LocalSurveyRequest) -> LocalSurveyResult:
+        requests.append(value)
+        if len(requests) == 1:
+            return LocalSurveyResult(
+                request_sha256=value.request_sha256,
+                worker_pid=777,
+                survey=survey(value, blockers=("PROCESS_SCAN_INCOMPLETE",)),
+                incomplete_phase="process_identity_final",
+            )
+        return result(value)
+
+    monkeypatch.setattr(observation, "observe_current_process", capture)
+    monkeypatch.setattr(observation, "_observe_survey_worker", worker)
+    report = IsolatedLegacyLocalExecutionObserver().observe(worktree_root=tmp_path, boot=BOOT)
+    assert report.blockers == ()
+    assert len(requests) == 2
+    assert requests[0].request_sha256 != requests[1].request_sha256
+    assert requests[0].deadline == requests[0].started + 5
+    assert requests[1].deadline == requests[1].started + 5
+
+
+@pytest.mark.parametrize(
+    ("second_blockers", "expected_attempts"),
+    [
+        (("WORKTREE_PROCESS_ACTIVE",), 2),
+        (("PROCESS_STATE_UNKNOWN",), 2),
+        (("PROCESS_SCAN_INCOMPLETE", "WORKTREE_PROCESS_ACTIVE"), 2),
+        (("PROCESS_SCAN_INCOMPLETE",), 3),
+    ],
+)
+def test_facade_retry_stops_on_active_unknown_or_exhaustion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    second_blockers: tuple[str, ...],
+    expected_attempts: int,
+) -> None:
+    calls = 0
+
+    def capture(pid: int) -> tuple[str, OwnedProcessIdentity | None]:
+        return (
+            "fixture-native-boot",
+            OwnedProcessIdentity(
+                process_id=pid, group_id=10, session_id=10, birth_identity="fixture-birth"
+            ),
+        )
+
+    def worker(value: LocalSurveyRequest) -> LocalSurveyResult:
+        nonlocal calls
+        calls += 1
+        blockers = ("PROCESS_SCAN_INCOMPLETE",) if calls == 1 else second_blockers
+        return LocalSurveyResult(
+            request_sha256=value.request_sha256,
+            worker_pid=777,
+            survey=survey(value, blockers=blockers),
+            incomplete_phase=("paths_before" if "PROCESS_SCAN_INCOMPLETE" in blockers else None),
+        )
+
+    monkeypatch.setattr(observation, "observe_current_process", capture)
+    monkeypatch.setattr(observation, "_observe_survey_worker", worker)
+    report = IsolatedLegacyLocalExecutionObserver().observe(worktree_root=tmp_path, boot=BOOT)
+    assert report.blockers == second_blockers
+    assert calls == expected_attempts
+
+
+def test_facade_never_retries_worker_protocol_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+
+    def capture(pid: int) -> tuple[str, OwnedProcessIdentity | None]:
+        return (
+            "fixture-native-boot",
+            OwnedProcessIdentity(
+                process_id=pid, group_id=10, session_id=10, birth_identity="fixture-birth"
+            ),
+        )
+
+    def malformed(_value: LocalSurveyRequest) -> LocalSurveyResult:
+        nonlocal calls
+        calls += 1
+        raise LocalSurveyObservationError
+
+    monkeypatch.setattr(observation, "observe_current_process", capture)
+    monkeypatch.setattr(observation, "_observe_survey_worker", malformed)
+    report = IsolatedLegacyLocalExecutionObserver().observe(worktree_root=tmp_path, boot=BOOT)
+    assert report.blockers == ("PROCESS_SCAN_INCOMPLETE",)
+    assert calls == 1
+
+
+def test_facade_never_retries_parent_identity_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observations = 0
+
+    def missing(_pid: int) -> tuple[str, OwnedProcessIdentity | None]:
+        nonlocal observations
+        observations += 1
+        return "fixture-native-boot", None
+
+    def forbidden(_value: LocalSurveyRequest) -> LocalSurveyResult:
+        raise AssertionError("parent identity failure must not start a worker")
+
+    monkeypatch.setattr(observation, "observe_current_process", missing)
+    monkeypatch.setattr(observation, "_observe_survey_worker", forbidden)
+    report = IsolatedLegacyLocalExecutionObserver().observe(worktree_root=tmp_path, boot=BOOT)
+    assert report.blockers == ("PROCESS_SCAN_INCOMPLETE",)
+    assert observations == 1
+
+
 def test_exact_request_digest_binds_all_fields(tmp_path: Path) -> None:
     value = request(tmp_path)
     assert LocalSurveyRequest.decode(value.encode()) == value
