@@ -541,3 +541,52 @@ paths, exempt hidden source as cache, or seal only a patch whose preview/candida
 Required regressions: real Git preview blob, native and Responses progress-to-candidate chains,
 fresh QA checkout, omitted/out-of-policy/link/secret/binary/cache negatives, repeated continuation
 and idle reconciliation, public original-Task legacy rescue fixture including ignored source.
+
+## Consumed pre-Context claim in baseline quiescence (2026-10-29)
+
+### Contract
+
+`ProductionBaselineFactCollector._consumed_pre_context_claim_observations(task, item,
+claims, start)` recognizes one earlier Coder claim only after the original engineering
+`SCHEDULE_RECOVERY_INPUT` decision was consumed by `WAIT_RESOLVED`. The observer runs under the
+Task process lock and idle queue authority fence. It reads the original recovery Plan,
+authorization, Task record, seed, complete three-source schedule, decision and current Task
+through `require_consumed_recovery_input_schedule`. A free-standing decision file is never
+proof of queue consumption.
+
+For the exact original lease, the observer requires the immutable claim and step, a real
+`RELEASED` lease, one ordered `CLAIMED → STARTED → WAITING → WAIT_RESOLVED` chain and the later
+different `CLAIMED` lease that led to the genuine invocation start. The wait must be
+`CONTEXT_CAPACITY` with no Context-capacity receipt; the resolution must carry the exact
+decision SHA, no budget refund, same WorkItem and next dispatch sequence. The original
+claim must have no preflight checkpoint, standalone preflight receipt (including a receipt
+written before its checkpoint), capacity receipt, knowledge invocation, Context,
+route, main invocation, accepted artifact or other execution activity. The negative scan is
+performed against current durable stores, not asserted by the old wait's text.
+
+`ConsumedPreContextClaimObservation` is a content-addressed member of
+`BaselineInvocationProof.consumed_pre_context_claims`. It binds original and later claim
+identities, the later start, exact schedule/decision and event sequence/digests. It is a
+quiescence observation, **not** an outcome, native stop, budget refund or new role verdict.
+The later real Coder invocation retains its actual outcome or `UNKNOWN`. Baseline
+recollection must rederive the observation and reject drift before publication.
+
+### Validation and existing data
+
+| Case | Required outcome |
+| --- | --- |
+| Consumed no-Context wait, released lease, later real claim/start | Attach one observation; preserve later result or UNKNOWN |
+| Missing/changed decision, schedule, Plan or source inventory | Refuse; no fallback to a synthetic preflight stop |
+| Missing, reordered or altered WAITING/WAIT_RESOLVED/CLAIMED event | Refuse the original claim |
+| Old claim has isolated Context, route, model start, standalone preflight receipt/checkpoint or knowledge activity | Refuse; do not infer no-start from a wait label |
+| Expired uninvoked claim | Use the separate `LEASE_EXPIRED` observation contract |
+| Ordinary completed call with no earlier unproved claim | Keep existing baseline proof shape |
+
+Regression: `test_legacy_containment.py` covers the real collector seam and altered event,
+decision and lease facts; `test_repair_schema_generation.py` verifies standalone Schema
+regeneration and byte-equivalent published contracts. Stored old records are not rewritten.
+After publishing the platform fix, prepare a fresh baseline through the public Operation API;
+only a `READY` Plan can be approved and paused under the user's exact local cessation
+declaration. Resume is a separate public decision, followed by normal Coder, QA and Review.
+Rollback reverts the code and additive Schema; immutable historical claims, waits, UNKNOWN
+execution, drafts and any subsequently sealed Plan remain auditable.

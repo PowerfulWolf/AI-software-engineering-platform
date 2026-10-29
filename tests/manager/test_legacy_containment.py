@@ -1,9 +1,11 @@
 """Legacy rescue keeps UNKNOWN honest and requires independently observed OS containment."""
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from subprocess import SubprocessError
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -16,7 +18,8 @@ from ai_software_engineer.agents.models import (
     AgentRunStatus,
 )
 from ai_software_engineer.artifacts import FileArtifactStore
-from ai_software_engineer.domain import AgentRole, Task, WorkItemStatus
+from ai_software_engineer.context import ContextSource, FileContextBuilder, FileContextStore
+from ai_software_engineer.domain import AgentRole, Task, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.continuation import (
     InterruptionContinuationPolicy,
     task_intent_sha256,
@@ -25,6 +28,7 @@ from ai_software_engineer.domain.delivery_disposition import (
     DeliveryFailureFacts,
     decide_delivery_disposition,
 )
+from ai_software_engineer.domain.delivery_resolution import DeliveryResolution
 from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.execution_baseline import BaselinePurpose
 from ai_software_engineer.git.mutation import WorkspaceMutationInventory
@@ -41,6 +45,7 @@ from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightReceipt,
     DeliveryPreflightScope,
 )
+from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord, _record_digest
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.manager.legacy_containment import (
     LegacyExecutionContainment,
@@ -57,13 +62,22 @@ from ai_software_engineer.orchestration.continuation_models import (
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
+from ai_software_engineer.recovery import CapturedChanges, FileRecoveryStore, RecoveryAuthorization
+from ai_software_engineer.recovery.bounded_input import complete_reapply_source_refs
 from ai_software_engineer.recovery.models import digest
+from ai_software_engineer.recovery.records import RecoverySeedRecord
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
 from tests.manager.test_execution_baseline import setup
 from tests.manager.test_execution_baseline_invocations import _allocation, _claim
 from tests.manager.test_execution_baseline_reservation import reservation_fixture
+from tests.manager.test_recovery_input_schedule import _fixture as recovery_schedule_fixture
+from tests.recovery.test_authorization import Human, approval
+from tests.recovery.test_bounded_reapply_input import _plan as bounded_reapply_plan
+from tests.recovery.test_execution_records import allocation as recovery_allocation
+from tests.recovery.test_task_record import record_for
+from tests.work_queue.test_mysql_queue import queued_item
 
 STARTED = datetime(2026, 10, 6, 14, 30, tzinfo=UTC)
 BOOT = LocalBootObservation(
@@ -205,24 +219,23 @@ def test_exact_new_observation_preserves_original_unknown_and_complete_claim(
 
 @pytest.mark.parametrize("receipt_only", [False, True])
 def test_legacy_rescue_covers_earlier_reclaimed_claim_without_model_start(
-    tmp_path: Path, receipt_only: bool, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    receipt_only: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     collector, task, item, original = legacy_fixture(tmp_path)
     later_at = original.original_claim.claimed_at + timedelta(hours=2)
     expired_at = original.original_claim.claimed_at + timedelta(hours=1)
     old = _claim(
-        item.model_copy(update={"status": WorkItemStatus.READY, "wait_reason": None,
-                                "wait_disposition": None}),
+        item.model_copy(
+            update={"status": WorkItemStatus.READY, "wait_reason": None, "wait_disposition": None}
+        ),
         "lease_uninvoked_before_reclaim",
     )
     old = QueueClaim(
         work_item=old.work_item,
-        assignment=old.assignment.model_copy(
-            update={"id": "assignment_uninvoked_before_reclaim"}
-        ),
-        lease=old.lease.model_copy(
-            update={"assignment_id": "assignment_uninvoked_before_reclaim"}
-        ),
+        assignment=old.assignment.model_copy(update={"id": "assignment_uninvoked_before_reclaim"}),
+        lease=old.lease.model_copy(update={"assignment_id": "assignment_uninvoked_before_reclaim"}),
         model_selection=old.model_selection,
         worker_id=old.worker_id,
         claimed_at=old.claimed_at,
@@ -253,7 +266,10 @@ def test_legacy_rescue_covers_earlier_reclaimed_claim_without_model_start(
     step = QueuedRoleStep(
         work_item=current,
         boundary=RoleRunBoundary(
-            task.id, AgentRole.CODER, item.attempt, item.checkpoint_sequence,
+            task.id,
+            AgentRole.CODER,
+            item.attempt,
+            item.checkpoint_sequence,
             original.original_start.request.source_revision,
         ),
         allocation_sha256=collector.allocation.dispatch_sha256,
@@ -284,29 +300,42 @@ def test_legacy_rescue_covers_earlier_reclaimed_claim_without_model_start(
         def execute(self, query: str, parameters: tuple[str, ...]) -> None:
             if "work_queue_claims" in query:
                 assert parameters == (old.lease.id,)
-                self.rows = [{"lease_id": old.lease.id, "work_item_id": item.id,
-                              "task_id": task.id, "state": "EXPIRED",
-                              "expires_at": old.lease.expires_at.isoformat(),
-                              "ended_at": expired_at.isoformat()}]
+                self.rows = [
+                    {
+                        "lease_id": old.lease.id,
+                        "work_item_id": item.id,
+                        "task_id": task.id,
+                        "state": "EXPIRED",
+                        "expires_at": old.lease.expires_at.isoformat(),
+                        "ended_at": expired_at.isoformat(),
+                    }
+                ]
             elif "event_type='CLAIMED'" in query:
                 assert parameters == (next_claim.lease.id,)
                 self.rows = [{"sequence": 101}]
             else:
                 assert parameters == (old.lease.id,)
-                requeued = old.work_item.model_copy(update={
-                    "status": WorkItemStatus.RETRY_SCHEDULED,
-                    "dispatch_sequence": 1,
-                    "wait_reason": f"lease_expired:{old.lease.id}",
-                    "available_at": expired_at + timedelta(minutes=1),
-                    "updated_at": expired_at,
-                })
-                self.rows = [{"sequence": 100, "event_type": "LEASE_EXPIRED",
-                              "work_item_id": item.id, "lease_id": old.lease.id,
-                              "from_status": "RUNNING", "to_status": "RETRY_SCHEDULED",
-                              "occurred_at": expired_at.isoformat(),
-                              "payload_json": json.dumps({
-                                  "work_item": requeued.to_wire(), "detail": {}
-                              })}]
+                requeued = old.work_item.model_copy(
+                    update={
+                        "status": WorkItemStatus.RETRY_SCHEDULED,
+                        "dispatch_sequence": 1,
+                        "wait_reason": f"lease_expired:{old.lease.id}",
+                        "available_at": expired_at + timedelta(minutes=1),
+                        "updated_at": expired_at,
+                    }
+                )
+                self.rows = [
+                    {
+                        "sequence": 100,
+                        "event_type": "LEASE_EXPIRED",
+                        "work_item_id": item.id,
+                        "lease_id": old.lease.id,
+                        "from_status": "RUNNING",
+                        "to_status": "RETRY_SCHEDULED",
+                        "occurred_at": expired_at.isoformat(),
+                        "payload_json": json.dumps({"work_item": requeued.to_wire(), "detail": {}}),
+                    }
+                ]
 
         def fetchall(self) -> list[dict[str, object]]:
             return self.rows
@@ -334,9 +363,13 @@ def test_legacy_rescue_covers_earlier_reclaimed_claim_without_model_start(
             checked_at=old.claimed_at + timedelta(minutes=30),
             receipt_sha256="0" * 64,
         )
-        receipt = receipt.model_copy(update={
-            "receipt_sha256": digest(receipt.model_dump(mode="json", exclude={"receipt_sha256"}))
-        })
+        receipt = receipt.model_copy(
+            update={
+                "receipt_sha256": digest(
+                    receipt.model_dump(mode="json", exclude={"receipt_sha256"})
+                )
+            }
+        )
         KnowledgeRecordStore(collector.state / "delivery-preflight").put(
             "preflight-receipts", receipt.receipt_sha256, receipt
         )
@@ -348,7 +381,8 @@ def test_legacy_rescue_covers_earlier_reclaimed_claim_without_model_start(
     assert len(proof.reclaimed_uninvoked_claims) == 1
     assert proof.reclaimed_uninvoked_claims[0].lease_id == old.lease.id
     monkeypatch.setattr(
-        collector, "_historical_legacy",
+        collector,
+        "_historical_legacy",
         lambda *_: (contained, Mock(binding_sha256="e" * 64)),
     )
     monkeypatch.setattr(
@@ -359,6 +393,522 @@ def test_legacy_rescue_covers_earlier_reclaimed_claim_without_model_start(
     (replayed,) = collector._invocations(task, (current,), (), (), legacy=None)
     assert replayed.reclaimed_uninvoked_claims == proof.reclaimed_uninvoked_claims
     assert replayed.legacy_binding_sha256 == "e" * 64
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        None,
+        "wrong_resolution",
+        "missing_wait",
+        "not_released",
+        "expired_release",
+        "partial_preflight",
+        "isolated_context",
+    ],
+)
+def test_legacy_rescue_covers_consumed_pre_context_claim_before_real_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str | None,
+) -> None:
+    """A real later call must not make the earlier approved no-Context claim unknown."""
+    collector, task, item, original = legacy_fixture(tmp_path)
+    current_start = original.original_start
+    later_at = current_start.started_at - timedelta(minutes=1)
+    first_at = later_at - timedelta(hours=2)
+    first = _claim(
+        item.model_copy(
+            update={"status": WorkItemStatus.READY, "wait_reason": None, "wait_disposition": None}
+        ),
+        "lease_pre_context_wait",
+    )
+    first = QueueClaim(
+        work_item=first.work_item.model_copy(
+            update={"dispatch_sequence": 0, "updated_at": first_at}
+        ),
+        assignment=first.assignment.model_copy(
+            update={"id": "assignment_pre_context_wait", "assigned_at": first_at}
+        ),
+        lease=first.lease.model_copy(
+            update={
+                "assignment_id": "assignment_pre_context_wait",
+                "acquired_at": first_at,
+                "expires_at": first_at + timedelta(hours=1),
+            }
+        ),
+        model_selection=first.model_selection.model_copy(update={"selected_at": first_at}),
+        worker_id=first.worker_id,
+        claimed_at=first_at,
+    )
+    second = QueueClaim(
+        work_item=original.original_claim.work_item.model_copy(
+            update={"dispatch_sequence": 1, "updated_at": later_at}
+        ),
+        assignment=original.original_claim.assignment.model_copy(update={"assigned_at": later_at}),
+        lease=original.original_claim.lease.model_copy(
+            update={"acquired_at": later_at, "expires_at": later_at + timedelta(hours=1)}
+        ),
+        model_selection=original.original_claim.model_selection.model_copy(
+            update={"selected_at": later_at}
+        ),
+        worker_id=original.original_claim.worker_id,
+        claimed_at=later_at,
+    )
+    contained = LegacyExecutionContainment.create(
+        scope=original.scope,
+        requirement_id=original.requirement_id,
+        dispatch_sha256=original.dispatch_sha256,
+        task_intent_sha256=original.task_intent_sha256,
+        original_start=current_start,
+        original_claim=second,
+        boot=original.boot,
+    )
+    current = item.model_copy(update={"dispatch_sequence": 1})
+    step = QueuedRoleStep(
+        work_item=current,
+        boundary=RoleRunBoundary(
+            task.id,
+            AgentRole.CODER,
+            item.attempt,
+            item.checkpoint_sequence,
+            current_start.request.source_revision,
+        ),
+        allocation_sha256=collector.allocation.dispatch_sha256,
+    )
+
+    class Queue(MySqlRoleQueue):
+        def __init__(self) -> None:
+            pass
+
+        def original_claim(self, lease_id: str) -> QueueClaim:
+            return {first.lease.id: first, second.lease.id: second}[lease_id]
+
+        def claims_for_work_item(self, identity: str) -> tuple[QueueClaim, ...]:
+            assert identity == current.id
+            return first, second
+
+        def step_for_claim(self, claim: QueueClaim) -> QueuedRoleStep:
+            return step.model_copy(update={"work_item": claim.work_item})
+
+        def step_for_invocation(self, identity: str, baseline: str | None) -> QueuedRoleStep:
+            assert identity == current.id and baseline is None
+            return step
+
+    collector.queue = Queue()
+    collector.route_root = tmp_path / "model-routes"
+    (tmp_path / "knowledge" / "runs").mkdir(parents=True)
+    collector._scope_held = True
+
+    waited_at = first_at + timedelta(minutes=30)
+    resolved_at = first_at + timedelta(minutes=45)
+    waited_item = first.work_item.model_copy(
+        update={
+            "status": WorkItemStatus.WAITING_DEPENDENCY,
+            "wait_reason": "Context input capacity",
+            "wait_disposition": decide_delivery_disposition(
+                DeliveryFailureFacts(
+                    task_id=task.id,
+                    work_item_id=item.id,
+                    role=AgentRole.CODER,
+                    classification="CONTEXT_CAPACITY",
+                    source_revision=current_start.request.source_revision,
+                    task_intent_sha256=task_intent_sha256(task),
+                    checkpoint_sequence=item.checkpoint_sequence,
+                    budget_available=True,
+                )
+            ),
+            "updated_at": waited_at,
+        }
+    )
+    resolved_item = waited_item.model_copy(
+        update={
+            "status": WorkItemStatus.READY,
+            "wait_reason": None,
+            "wait_disposition": None,
+            "dispatch_sequence": 1,
+            "updated_at": resolved_at,
+        }
+    )
+    _, _, prior_decision = recovery_schedule_fixture()
+    original_input = prior_decision.pre_context_recovery_input
+    assert original_input is not None
+    original_input = original_input.model_copy(
+        update={
+            "original_claim_sha256": digest(first.to_wire()),
+            "original_lease_id": first.lease.id,
+            "worktree_head_revision": current_start.request.source_revision,
+        }
+    )
+    decision = prior_decision.model_copy(
+        update={
+            "task_id": task.id,
+            "work_item_id": item.id,
+            "expected_disposition_sha256": waited_item.wait_disposition.disposition_sha256,
+            "expected_task_intent_sha256": task_intent_sha256(task),
+            "expected_source_revision": current_start.request.source_revision,
+            "expected_checkpoint_sequence": item.checkpoint_sequence,
+            "task_revision": item.checkpoint_sequence,
+            "pre_context_recovery_input": original_input,
+        }
+    )
+    decision = decision.model_copy(update={"resolution_sha256": decision.recompute_sha256()})
+    decision.validate_integrity()
+    schedule = SimpleNamespace(
+        validate_integrity=lambda: None,
+        work_item_id=item.id,
+        original_lease_id=first.lease.id,
+        original_claim_sha256=digest(first.to_wire()),
+        target_base_revision=current_start.request.source_revision,
+        disposition_sha256=waited_item.wait_disposition.disposition_sha256,
+        task_id=task.id,
+        schedule_sha256=decision.recovery_input_schedule_sha256,
+    )
+    monkeypatch.setattr(collector, "_consumed_recovery_schedule", lambda *_: (schedule, decision))
+    if tamper == "partial_preflight":
+        receipt = DeliveryPreflightReceipt(
+            scope=DeliveryPreflightScope(
+                team_id=collector.scope.team_id,
+                project_id=collector.scope.project_id,
+                repository_id=collector.scope.repository_id,
+                requirement_id=collector.requirement_id,
+            ),
+            task_id=task.id,
+            source_revision=current_start.request.source_revision,
+            plan_sha256="d" * 64,
+            frozen_policy_sha256="e" * 64,
+            requirements_sha256="f" * 64,
+            observations=(),
+            status="WAIT_ENGINEERING",
+            checked_at=first_at + timedelta(minutes=10),
+            receipt_sha256="0" * 64,
+        )
+        receipt = receipt.model_copy(
+            update={
+                "receipt_sha256": digest(
+                    receipt.model_dump(mode="json", exclude={"receipt_sha256"})
+                )
+            }
+        )
+        KnowledgeRecordStore(collector.state / "delivery-preflight").put(
+            "preflight-receipts", receipt.receipt_sha256, receipt
+        )
+    if tamper == "isolated_context":
+        context = FileContextBuilder(
+            tmp_path,
+            current_start.request.permissions,
+            sources=(
+                ContextSource(
+                    source_id="execution.claim",
+                    uri=f"claim://{first.lease.id}",
+                    content=json.dumps({"lease_id": first.lease.id}),
+                    roles=(AgentRole.CODER,),
+                    required=True,
+                ),
+            ),
+        ).build(task, AgentRole.CODER, attempt=item.attempt)
+        FileContextStore(collector.state.parent / "contexts").put(context)
+
+    class Cursor:
+        rows: list[dict[str, object]]
+
+        def execute(self, query: str, parameters: tuple[str, ...]) -> None:
+            if "work_queue_claims" in query:
+                assert parameters == (first.lease.id,)
+                self.rows = [
+                    {
+                        "lease_id": first.lease.id,
+                        "work_item_id": current.id,
+                        "task_id": task.id,
+                        "state": "EXPIRED" if tamper == "not_released" else "RELEASED",
+                        "expires_at": (
+                            first_at + timedelta(minutes=20)
+                            if tamper == "expired_release"
+                            else first.lease.expires_at
+                        ).isoformat(),
+                        "ended_at": waited_at.isoformat(),
+                    }
+                ]
+            else:
+                assert parameters == (current.id,)
+                self.rows = [
+                    {
+                        "sequence": 1,
+                        "event_type": "CLAIMED",
+                        "work_item_id": item.id,
+                        "lease_id": first.lease.id,
+                        "from_status": "READY",
+                        "to_status": "LEASED",
+                        "occurred_at": first_at.isoformat(),
+                        "payload_json": json.dumps(
+                            {
+                                "work_item": first.work_item.to_wire(),
+                                "detail": {"queue_claim": first.to_wire()},
+                            }
+                        ),
+                    },
+                    {
+                        "sequence": 2,
+                        "event_type": "STARTED",
+                        "work_item_id": item.id,
+                        "lease_id": first.lease.id,
+                        "from_status": "LEASED",
+                        "to_status": "RUNNING",
+                        "occurred_at": (first_at + timedelta(minutes=1)).isoformat(),
+                        "payload_json": json.dumps(
+                            {
+                                "work_item": first.work_item.model_copy(
+                                    update={
+                                        "status": WorkItemStatus.RUNNING,
+                                        "updated_at": first_at + timedelta(minutes=1),
+                                    }
+                                ).to_wire(),
+                                "detail": {},
+                            }
+                        ),
+                    },
+                    {
+                        "sequence": 3,
+                        "event_type": "WAITING",
+                        "work_item_id": item.id,
+                        "lease_id": first.lease.id,
+                        "from_status": "RUNNING",
+                        "to_status": "WAITING_DEPENDENCY",
+                        "occurred_at": waited_at.isoformat(),
+                        "payload_json": json.dumps(
+                            {"work_item": waited_item.to_wire(), "detail": {}}
+                        ),
+                    },
+                    {
+                        "sequence": 4,
+                        "event_type": "WAIT_RESOLVED",
+                        "work_item_id": item.id,
+                        "lease_id": None,
+                        "from_status": "WAITING_DEPENDENCY",
+                        "to_status": "READY",
+                        "occurred_at": resolved_at.isoformat(),
+                        "payload_json": json.dumps(
+                            {
+                                "work_item": resolved_item.to_wire(),
+                                "detail": {
+                                    "resolution_sha256": decision.resolution_sha256,
+                                    "next_work_item_id": item.id,
+                                    "resolution": decision.to_wire(),
+                                    "budget_refund": False,
+                                },
+                            }
+                        ),
+                    },
+                    {
+                        "sequence": 5,
+                        "event_type": "CLAIMED",
+                        "work_item_id": item.id,
+                        "lease_id": second.lease.id,
+                        "from_status": "READY",
+                        "to_status": "LEASED",
+                        "occurred_at": later_at.isoformat(),
+                        "payload_json": json.dumps(
+                            {
+                                "work_item": second.work_item.to_wire(),
+                                "detail": {"queue_claim": second.to_wire()},
+                            }
+                        ),
+                    },
+                ]
+                if tamper == "missing_wait":
+                    self.rows = [row for row in self.rows if row["event_type"] != "WAITING"]
+                elif tamper == "wrong_resolution":
+                    resolved_event = self.rows[3]
+                    payload = json.loads(str(resolved_event["payload_json"]))
+                    payload["detail"]["resolution_sha256"] = "f" * 64
+                    resolved_event["payload_json"] = json.dumps(payload)
+
+        def fetchall(self) -> list[dict[str, object]]:
+            return self.rows
+
+    collector._idle_cursor = Cursor()  # type: ignore[assignment]
+    if tamper is not None:
+        with pytest.raises(ValueError, match="预 Context"):
+            collector._invocations(task, (current,), (), (), legacy=contained)
+        return
+    (proof,) = collector._invocations(task, (current,), (), (), legacy=contained)
+    assert proof.consumed_pre_context_claims[0].lease_id == first.lease.id
+
+
+def test_consumed_pre_context_schedule_reopens_sealed_recovery_lineage(
+    tmp_path: Path,
+) -> None:
+    """The collector reads real immutable Plan/authorization/Task/seed and SQL decision."""
+    plan = bounded_reapply_plan(tmp_path / "project")
+    authorization = RecoveryAuthorization.create(approval(plan), Human().verify(approval(plan)))
+    native_root = tmp_path / "native"
+    native_root.mkdir()
+    native = recovery_allocation(native_root)
+    sealed = record_for(plan, authorization)
+    sealed_task = sealed.task.model_copy(
+        update={"metadata": {**sealed.task.metadata, "execution_plan_id": native.execution_plan_id}}
+    )
+    sealed = sealed.model_copy(update={"task": sealed_task})
+    sealed = sealed.model_copy(update={"record_sha256": sealed.recompute_sha256()})
+    current = sealed_task.model_copy(update={"status": TaskStatus.IMPLEMENTING, "attempts": 1})
+    phases = tuple(
+        phase.model_copy(
+            update={
+                "assignment": phase.assignment.model_copy(
+                    update={
+                        "task_id": current.id,
+                        "repository_id": plan.source.scope.repository_id,
+                    }
+                ),
+                "lease": phase.lease.model_copy(update={"task_id": current.id}),
+            }
+        )
+        for phase in native.phases
+    )
+    dispatch = RecoveryDispatchRecord(
+        id=f"dispatch_commit_{plan.plan_sha256}",
+        repository_id=plan.source.scope.repository_id,
+        task_id=current.id,
+        project_request_id=sealed.rebound_request.id,
+        execution_plan_id=native.execution_plan_id,
+        execution_plan_sha256=plan.source.execution_plan_sha256,
+        execution_plan_phase_ids=native.execution_plan_phase_ids,
+        recovery_plan_sha256=plan.plan_sha256,
+        recovery_task_record_sha256=sealed.record_sha256,
+        workforce_snapshot_sha256=native.workforce_snapshot_sha256,
+        task=sealed_task,
+        phases=phases,
+        committed_at=native.committed_at,
+        dispatch_sha256="0" * 64,
+    )
+    dispatch = dispatch.model_copy(update={"dispatch_sha256": _record_digest(dispatch)})
+    dispatch.validate_integrity()
+    capture = plan.capture.to_capture()
+    target = replace(
+        capture.worktree,
+        task_id=current.id,
+        head_revision=plan.target_base_revision,
+        path=tmp_path / "target",
+        branch=f"ai/{current.id}/attempt-1",
+    )
+    seed = RecoverySeedRecord.create(
+        plan_sha256=plan.plan_sha256,
+        dispatch_sha256=dispatch.dispatch_sha256,
+        capture=CapturedChanges.from_capture(
+            replace(
+                capture,
+                worktree=target,
+                patch=b"",
+                file_sha256s=(),
+            )
+        ),
+    )
+    state = tmp_path / "sidecar" / "state"
+    state.mkdir(parents=True)
+    store = FileRecoveryStore.initialize(
+        state / f"recovery-{plan.source.scope.delivery_id}", scope=plan.source.scope
+    )
+    store.put_plan(plan)
+    store.put_authorization(authorization)
+    store.put_task_record(sealed)
+    store.put_seed(seed)
+    item = queued_item(checkpoint_sequence=2).model_copy(
+        update={
+            "task_id": current.id,
+            "repository_id": plan.source.scope.repository_id,
+            "attempt": 1,
+        }
+    )
+    original = _claim(item, "lease_sealed_pre_context")
+    source_task, source_schedule, source_decision = recovery_schedule_fixture()
+    del source_task
+    sources = complete_reapply_source_refs(plan)
+    schedule = source_schedule.model_copy(
+        update={
+            "plan_sha256": plan.plan_sha256,
+            "task_id": current.id,
+            "task_intent_sha256": task_intent_sha256(current),
+            "target_base_revision": plan.target_base_revision,
+            "authorization_sha256": authorization.authorization_sha256,
+            "task_record_sha256": sealed.record_sha256,
+            "dispatch_sha256": dispatch.dispatch_sha256,
+            "seed_record_sha256": seed.record_sha256,
+            "work_item_id": item.id,
+            "task_revision": 2,
+            "task_snapshot_sha256": digest(current.to_wire()),
+            "original_claim_sha256": digest(original.to_wire()),
+            "original_lease_id": original.lease.id,
+            "sources": sources,
+        }
+    )
+    schedule = schedule.model_copy(update={"schedule_sha256": schedule.recompute_sha256()})
+    schedule.validate_integrity()
+    original_input = source_decision.pre_context_recovery_input
+    assert original_input is not None
+    original_input = original_input.model_copy(
+        update={
+            "plan_sha256": plan.plan_sha256,
+            "authorization_sha256": authorization.authorization_sha256,
+            "task_record_sha256": sealed.record_sha256,
+            "dispatch_sha256": dispatch.dispatch_sha256,
+            "seed_record_sha256": seed.record_sha256,
+            "source_inventory_sha256": digest(tuple(source.to_wire() for source in sources)),
+            "original_claim_sha256": digest(original.to_wire()),
+            "original_lease_id": original.lease.id,
+            "worktree_head_revision": plan.target_base_revision,
+        }
+    )
+    decision = source_decision.model_copy(
+        update={
+            "task_id": current.id,
+            "work_item_id": item.id,
+            "expected_disposition_sha256": schedule.disposition_sha256,
+            "expected_task_intent_sha256": task_intent_sha256(current),
+            "expected_source_revision": plan.target_base_revision,
+            "expected_checkpoint_sequence": 2,
+            "task_revision": 2,
+            "task_snapshot_sha256": digest(current.to_wire()),
+            "step_sha256": schedule.step_sha256,
+            "recovery_input_schedule_sha256": schedule.schedule_sha256,
+            "pre_context_recovery_input": original_input,
+        }
+    )
+    decision = decision.model_copy(update={"resolution_sha256": decision.recompute_sha256()})
+    decision.validate_integrity()
+    records = KnowledgeRecordStore(state / "delivery-waits")
+    records.put("recovery-input-schedules", plan.plan_sha256, schedule)
+
+    class Queue(MySqlRoleQueue):
+        def __init__(self) -> None:
+            self.consumed: DeliveryResolution | None = decision
+
+        def consumed_recovery_input_resolution(self, task_id: str) -> DeliveryResolution | None:
+            assert task_id == current.id
+            return self.consumed
+
+        def original_claim(self, lease_id: str) -> QueueClaim:
+            assert lease_id == original.lease.id
+            return original
+
+    collector = ProductionBaselineFactCollector.__new__(ProductionBaselineFactCollector)
+    collector.allocation = dispatch
+    collector.state = state
+    collector.scope = EngineeringScope(
+        team_id=plan.source.scope.team_id,
+        project_id="project_sealed",
+        repository_id=plan.source.scope.repository_id,
+        repository_root=plan.source.scope.repository_root,
+    )
+    collector.requirement_id = plan.source.scope.delivery_id
+    collector.queue = Queue()
+    assert collector._consumed_recovery_schedule(current) == (schedule, decision)
+    collector.queue.consumed = None
+    assert collector._consumed_recovery_schedule(current) is None
+    collector.queue.consumed = decision.model_copy(
+        update={"recovery_input_schedule_sha256": "9" * 64}
+    )
+    with pytest.raises(ValueError, match="digest mismatch"):
+        collector._consumed_recovery_schedule(current)
 
 
 def test_legacy_unknown_consumes_next_work_and_cannot_refund_or_infer_already_reserved(

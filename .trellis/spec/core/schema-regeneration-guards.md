@@ -45,6 +45,14 @@ The new knowledge resolution/investigation/evidence guards must coexist with leg
 guards. Optional delivery_requirement_id remains absent from required and has a
 null default for legacy wire compatibility.
 
+`scripts/sync-legacy-rescue-schemas.py::knowledge_isolation_guards` must include
+`required: [purpose]` in the `ExecutionBaselinePlan` and `ExecutionBaselineBinding`
+conditional for `purpose=knowledge_preparation_isolation`. The Pydantic wire omits
+the default `purpose=source_rebind`; JSON Schema `properties` alone matches an absent
+property and would incorrectly require `facts.knowledge_isolation`. When replacing
+the guard in an existing embedded graph, remove the exact old condition without
+`required` before appending the corrected condition. Other purpose gates remain.
+
 ## Validation matrix / tests
 
 `tests/contracts/test_repair_schema_generation.py` runs the real generator twice in
@@ -55,6 +63,10 @@ required new knowledge evidence, role/receipt safety, canonical engineering guar
 equality and the optional parent binding. Temporary generation never writes the
 repository or production schema/data. Existing local rescue and baseline schema
 contract tests additionally validate full real models and payloads.
+The guard test checks both published and freshly generated embedded Schemas: omitted
+default purpose permits a non-isolation Plan/Binding; explicit knowledge isolation
+purpose requires its proof. The public legacy rescue fixture checks a second
+same-Task source rebind after an operator-confirmed local stop.
 
 ## 存量数据处置 / rollback
 

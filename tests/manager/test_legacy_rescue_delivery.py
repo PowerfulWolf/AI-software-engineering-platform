@@ -92,6 +92,9 @@ from ai_software_engineer.manager.legacy_local_execution import (
     LegacyRescuePrerequisiteError,
     TrustedLegacyLocalExecutionObserver,
 )
+from ai_software_engineer.manager.local_survey_observation import (
+    IsolatedLegacyLocalExecutionObserver,
+)
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.runtime import _default_case_id
@@ -567,7 +570,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     native_survey = TrustedLegacyLocalExecutionObserver.observe
 
     def incomplete_survey(
-        _self: TrustedLegacyLocalExecutionObserver,
+        _self: IsolatedLegacyLocalExecutionObserver,
         *,
         worktree_root: Path,
         boot: LocalBootObservation,
@@ -578,7 +581,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             next_action="请修复本机读取能力后重新准备方案。",
         )
 
-    monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", incomplete_survey)
+    monkeypatch.setattr(IsolatedLegacyLocalExecutionObserver, "observe", incomplete_survey)
     with pytest.raises(LegacyRescuePrerequisiteError, match="本机执行核验"):
         host.propose_execution_baseline(command, project_id="project_test")
     if local_stop:
@@ -646,7 +649,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         return result
 
     def idle_survey(
-        _self: TrustedLegacyLocalExecutionObserver,
+        _self: IsolatedLegacyLocalExecutionObserver,
         *,
         worktree_root: Path,
         boot: LocalBootObservation,
@@ -667,7 +670,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             blockers=(),
         )
 
-    monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", idle_survey)
+    monkeypatch.setattr(IsolatedLegacyLocalExecutionObserver, "observe", idle_survey)
     monkeypatch.setattr(TrustedLocalBootObserver, "observe", lambda _: boot)
     if sealed_final:
         # A genuine sealed final is already a recoverable original result. It
@@ -790,14 +793,14 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             )
 
         def active_survey(
-            _self: TrustedLegacyLocalExecutionObserver,
+            _self: IsolatedLegacyLocalExecutionObserver,
             *,
             worktree_root: Path,
             boot: LocalBootObservation,
         ) -> LegacyLocalExecutionSurvey:
             return desktop_survey(worktree_root=worktree_root, boot=boot, retained_reference=True)
 
-        monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", active_survey)
+        monkeypatch.setattr(IsolatedLegacyLocalExecutionObserver, "observe", active_survey)
         with pytest.raises(LegacyRescuePrerequisiteError, match="工作区"):
             host.execute_execution_baseline(execute, project_id="project_test")
         assert len(calls) == 2
@@ -807,7 +810,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             for path in unknown.workspace.rglob("*")
             if path.is_file()
         } == workspace_bytes
-        monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", idle_survey)
+        monkeypatch.setattr(IsolatedLegacyLocalExecutionObserver, "observe", idle_survey)
     expected_binding = None
     # Pause dispatch while publication verifies exact no-mutation preservation.
     from ai_software_engineer.work_queue.dispatcher import (
@@ -845,7 +848,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         )
         monkeypatch.setattr(TrustedLocalBootObserver, "observe", lambda _: new_boot)
         if local_stop:
-            monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", active_survey)
+            monkeypatch.setattr(IsolatedLegacyLocalExecutionObserver, "observe", active_survey)
             with pytest.raises(LegacyRescuePrerequisiteError, match="工作区"):
                 host.propose_execution_baseline(command, project_id="project_test")
             assert not consumptions(host.work_queue, frozen.id)
@@ -855,7 +858,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
                 for path in unknown.workspace.rglob("*")
                 if path.is_file()
             } == workspace_bytes
-            monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", idle_survey)
+            monkeypatch.setattr(IsolatedLegacyLocalExecutionObserver, "observe", idle_survey)
         assert host.propose_execution_baseline(command, project_id="project_test") == plan
     console.submit(
         ExecuteExecutionBaselineIntent.model_validate(
@@ -1141,7 +1144,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     if local_stop:
         # A consumed exact engineering decision cannot become a second attempt
         # or an obsolete new wait merely because current OS queries are unavailable.
-        monkeypatch.setattr(TrustedLegacyLocalExecutionObserver, "observe", incomplete_survey)
+        monkeypatch.setattr(IsolatedLegacyLocalExecutionObserver, "observe", incomplete_survey)
     assert host.execute_execution_baseline(execute, project_id="project_test") == binding
     if continue_command is not None:
         host.continue_execution_baseline(continue_command, project_id="project_test")

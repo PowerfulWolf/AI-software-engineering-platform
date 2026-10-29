@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
+from itertools import islice
 from pathlib import Path
 from typing import Literal, Self
 
@@ -28,6 +29,7 @@ from ai_software_engineer.agents.models import (
 )
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.artifacts.ordering import latest_accepted_artifact
+from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.artifact import (
     CoderProgressArtifact,
@@ -37,6 +39,7 @@ from ai_software_engineer.domain.artifact import (
     validate_current_artifact_version,
 )
 from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.delivery_resolution import DeliveryResolution
 from ai_software_engineer.domain.engineering_authority import EngineeringScope
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.execution_baseline import (
@@ -96,7 +99,7 @@ from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightCheckpoint,
     DeliveryPreflightReceipt,
 )
-from ai_software_engineer.manager.dispatch import DeliveryAllocation
+from ai_software_engineer.manager.dispatch import DeliveryAllocation, RecoveryDispatchRecord
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.manager.knowledge_invocation_proof import (
     KnowledgeNativeStopChecker,
@@ -128,6 +131,10 @@ from ai_software_engineer.manager.local_survey_observation import (
     IsolatedLegacyLocalExecutionObserver,
 )
 from ai_software_engineer.manager.owned_session_boot_bridge import ScopedNativeStopVerifier
+from ai_software_engineer.manager.recovery_input_schedule import (
+    RecoveryInputScheduleDecision,
+    require_consumed_recovery_input_schedule,
+)
 from ai_software_engineer.manager.rejected_candidate_output import RejectedCandidateOutputProof
 from ai_software_engineer.manager.stopped_execution_checkpoint import (
     StoppedCoderExecutionProof,
@@ -155,6 +162,7 @@ from ai_software_engineer.orchestration.continuation_store import FileContinuati
 from ai_software_engineer.orchestration.retry import _active_progress, _latest
 from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.repository_profile import NativeRuleSource, native_rule_kinds
+from ai_software_engineer.safe_files import _reject_symlinks
 from ai_software_engineer.spec_compiler import SpecRule
 from ai_software_engineer.store import TaskRepository
 from ai_software_engineer.work_queue.claim_snapshot import require_claim_snapshot
@@ -381,9 +389,7 @@ class BaselineContinueCommand(DomainModel):
 class ReclaimedUninvokedClaimObservation(DomainModel):
     """A queue reclaim fact, never a native stop or model outcome."""
 
-    kind: Literal["reclaimed_uninvoked_claim_observation"] = (
-        "reclaimed_uninvoked_claim_observation"
-    )
+    kind: Literal["reclaimed_uninvoked_claim_observation"] = "reclaimed_uninvoked_claim_observation"
     lease_id: NonEmptyStr
     task_id: TaskId
     work_item_id: NonEmptyStr
@@ -451,6 +457,45 @@ class ReclaimedUninvokedClaimObservation(DomainModel):
         type(self).model_validate(self.to_wire())
 
 
+class ConsumedPreContextClaimObservation(DomainModel):
+    """Consumed engineering no-Context decision, not an execution stop or result."""
+
+    kind: Literal["consumed_pre_context_claim_observation"] = (
+        "consumed_pre_context_claim_observation"
+    )
+    lease_id: NonEmptyStr
+    task_id: TaskId
+    work_item_id: NonEmptyStr
+    claim_sha256: Sha256
+    next_claim_sha256: Sha256
+    blocking_start_sha256: Sha256
+    schedule_sha256: Sha256
+    resolution_sha256: Sha256
+    wait_event_sequence: int = Field(ge=1)
+    wait_event_sha256: Sha256
+    resolved_event_sequence: int = Field(ge=1)
+    resolved_event_sha256: Sha256
+    observation_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_observation(self) -> Self:
+        if self.wait_event_sequence >= self.resolved_event_sequence:
+            raise ValueError("预 Context 原等待决定的事件顺序不一致")
+        if self.observation_sha256 != digest(
+            self.model_dump(mode="json", exclude={"observation_sha256"})
+        ):
+            raise ValueError("预 Context 原等待观察摘要不一致")
+        return self
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        body = {"kind": "consumed_pre_context_claim_observation", **values}
+        return cls.model_validate({**body, "observation_sha256": digest(body)})
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+
+
 class BaselineInvocationProof(DomainModel):
     work_item_id: NonEmptyStr
     step_sha256: Sha256
@@ -471,6 +516,9 @@ class BaselineInvocationProof(DomainModel):
         default=(), exclude_if=lambda value: not value
     )
     reclaimed_uninvoked_claims: tuple[ReclaimedUninvokedClaimObservation, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+    consumed_pre_context_claims: tuple[ConsumedPreContextClaimObservation, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
     legacy_containment: LegacyExecutionContainment | None = Field(
@@ -520,6 +568,7 @@ class BaselineInvocationProof(DomainModel):
                 or self.knowledge_only_claims
                 or self.replay_guarded_claims
                 or self.reclaimed_uninvoked_claims
+                or self.consumed_pre_context_claims
                 or self.preflight_checkpoint_sha256s
                 or self.context_capacity_receipt_sha256s
             ):
@@ -559,6 +608,18 @@ class BaselineInvocationProof(DomainModel):
                 != claim_identity_sha256(self.legacy_containment.original_claim)
             ):
                 raise ValueError("回收未调用观察未绑定当前原调用及其真实后续 claim")
+        if len({value.lease_id for value in self.consumed_pre_context_claims}) != len(
+            self.consumed_pre_context_claims
+        ):
+            raise ValueError("预 Context 原等待观察含重复历史 claim")
+        for consumed_observation in self.consumed_pre_context_claims:
+            consumed_observation.validate_integrity()
+            if (
+                consumed_observation.work_item_id != self.work_item_id
+                or consumed_observation.blocking_start_sha256 != self.start_sha256
+                or self.start_sha256 is None
+            ):
+                raise ValueError("预 Context 原等待观察未绑定真实后续调用")
         if self.proof_kind == "stopped_execution_without_outcome":
             proof = self.stopped_execution
             if (
@@ -1740,17 +1801,14 @@ class ProductionBaselineFactCollector:
                 or claim.work_item.role is not item.role
                 or claim.work_item.attempt != item.attempt
                 or claim.work_item.checkpoint_sequence != item.checkpoint_sequence
-                or claim.work_item.dispatch_sequence + 1
-                != next_claim.work_item.dispatch_sequence
+                or claim.work_item.dispatch_sequence + 1 != next_claim.work_item.dispatch_sequence
             ):
                 continue  # Other preflight/knowledge facts retain their existing gates.
             preflight_root = self.state / "delivery-preflight"
             preflight_receipts: tuple[DeliveryPreflightReceipt, ...] = ()
             if CapacityInputReader._capacity_ledger_exists(preflight_root):
                 preflight = KnowledgeRecordStore(preflight_root, read_only=True)
-                preflight_receipts = preflight.list(
-                    "preflight-receipts", DeliveryPreflightReceipt
-                )
+                preflight_receipts = preflight.list("preflight-receipts", DeliveryPreflightReceipt)
                 if any(
                     value.lease_id == claim.lease.id
                     for value in preflight.list(
@@ -1758,9 +1816,7 @@ class ProductionBaselineFactCollector:
                     )
                 ) or any(
                     value.lease_id == claim.lease.id
-                    for value in preflight.list(
-                        "context-capacity-receipts", ContextCapacityReceipt
-                    )
+                    for value in preflight.list("context-capacity-receipts", ContextCapacityReceipt)
                 ):
                     continue
             step = self.queue.step_for_claim(claim)
@@ -1778,6 +1834,8 @@ class ProductionBaselineFactCollector:
             row = rows[0]
             ended_at = datetime.fromisoformat(str(row["ended_at"]))
             expires_at = datetime.fromisoformat(str(row["expires_at"]))
+            if row["state"] == "RELEASED":
+                continue  # An independently consumed wait has its own proof path.
             if (
                 row["lease_id"] != claim.lease.id
                 or row["work_item_id"] != item.id
@@ -1786,8 +1844,12 @@ class ProductionBaselineFactCollector:
                 or ended_at.tzinfo is None
                 or expires_at.tzinfo is None
                 or not (
-                    claim.claimed_at < claim.lease.expires_at
-                    <= expires_at <= ended_at < next_claim.claimed_at <= start.started_at
+                    claim.claimed_at
+                    < claim.lease.expires_at
+                    <= expires_at
+                    <= ended_at
+                    < next_claim.claimed_at
+                    <= start.started_at
                 )
             ):
                 raise ValueError("回收 claim 租约结束或后续领取时序不可验证")
@@ -1819,15 +1881,18 @@ class ProductionBaselineFactCollector:
                 raise ValueError("回收 claim 事件载荷不完整")
             requeued = QueuedWorkItem.model_validate(payload["work_item"])
             mutable = {
-                "status", "dispatch_sequence", "wait_reason", "wait_disposition",
-                "available_at", "updated_at",
+                "status",
+                "dispatch_sequence",
+                "wait_reason",
+                "wait_disposition",
+                "available_at",
+                "updated_at",
             }
             if (
                 not isinstance(event["sequence"], int)
                 or event["sequence"] < 1
                 or event["event_type"] != "LEASE_EXPIRED"
-                or (event["work_item_id"], event["lease_id"])
-                != (item.id, claim.lease.id)
+                or (event["work_item_id"], event["lease_id"]) != (item.id, claim.lease.id)
                 or event["from_status"] not in {"LEASED", "RUNNING"}
                 or event["to_status"] != "RETRY_SCHEDULED"
                 or occurred_at != ended_at
@@ -1842,14 +1907,11 @@ class ProductionBaselineFactCollector:
             ):
                 raise ValueError("回收 claim 过期事件与真实队列世代不一致")
             cursor.execute(
-                "SELECT sequence FROM work_queue_events "
-                "WHERE lease_id=%s AND event_type='CLAIMED'",
+                "SELECT sequence FROM work_queue_events WHERE lease_id=%s AND event_type='CLAIMED'",
                 (next_claim.lease.id,),
             )
             next_events = cursor.fetchall()
-            if len(next_events) != 1 or not (
-                event["sequence"] < next_events[0]["sequence"]
-            ):
+            if len(next_events) != 1 or not (event["sequence"] < next_events[0]["sequence"]):
                 raise ValueError("回收 claim 事件未先于后续真实领取")
             require_no_knowledge_claim_activity(
                 state=self.state,
@@ -1895,6 +1957,354 @@ class ProductionBaselineFactCollector:
                 )
             )
         return tuple(sorted(result, key=lambda observation: observation.dispatch_sequence))
+
+    def _consumed_recovery_schedule(
+        self, task: Task
+    ) -> tuple[RecoveryInputScheduleDecision, DeliveryResolution] | None:
+        """Reopen the original approved input decision through its full sealed lineage."""
+        if not isinstance(self.allocation, RecoveryDispatchRecord):
+            return None
+        from ai_software_engineer.recovery.models import RecoveryScope
+        from ai_software_engineer.recovery.store import FileRecoveryStore
+
+        decision = self.queue.consumed_recovery_input_resolution(task.id)
+        if decision is None:
+            return None
+        plan_sha256 = task.metadata.get("recovery_plan_sha256")
+        if not isinstance(plan_sha256, str):
+            raise ValueError("已消费预 Context 决定缺少原恢复计划身份")
+        recovery = FileRecoveryStore(
+            self.state / f"recovery-{self.requirement_id}",
+            scope=RecoveryScope(
+                team_id=self.scope.team_id,
+                repository_id=self.scope.repository_id,
+                delivery_id=self.requirement_id,
+                repository_root=self.scope.repository_root,
+            ),
+        )
+        plan = recovery.get_plan(plan_sha256)
+        authorization = recovery.get_authorization(plan_sha256)
+        sealed = recovery.get_task_record(plan_sha256)
+        seed = recovery.get_seed(plan_sha256)
+        records = KnowledgeRecordStore(self.state / "delivery-waits", read_only=True)
+        schedule = require_consumed_recovery_input_schedule(
+            self.queue, records, plan, self.allocation, task
+        )
+        if schedule is None or (
+            schedule.authorization_sha256 != authorization.authorization_sha256
+            or schedule.task_record_sha256 != sealed.record_sha256
+            or schedule.seed_record_sha256 != seed.record_sha256
+        ):
+            raise ValueError("已消费预 Context 决定缺少精确封存来源")
+        return schedule, decision
+
+    def _consumed_pre_context_claim_observations(
+        self,
+        task: Task,
+        item: QueuedWorkItem,
+        claims: tuple[QueueClaim, ...],
+        start: DeliveryInvocationStart | None,
+    ) -> tuple[ConsumedPreContextClaimObservation, ...]:
+        if not claims or start is None:
+            return ()
+        source = self._consumed_recovery_schedule(task)
+        if source is None:
+            return ()
+        schedule, decision = source
+        schedule.validate_integrity()
+        decision.validate_integrity()
+        if schedule.work_item_id != item.id or decision.work_item_id != item.id:
+            return ()
+        matched = tuple(claim for claim in claims if claim.lease.id == schedule.original_lease_id)
+        if len(matched) != 1:
+            raise ValueError("已消费预 Context 原 claim 缺失或重复")
+        claim = matched[0]
+        next_claim = self.queue.original_claim(start.lease_id)
+        if (
+            not self._scope_held
+            or self._idle_cursor is None
+            or self.queue.original_claim(claim.lease.id) != claim
+            or digest(claim.to_wire()) != schedule.original_claim_sha256
+            or next_claim.work_item.id != item.id
+            or next_claim.work_item.dispatch_sequence != claim.work_item.dispatch_sequence + 1
+            or next_claim.claimed_at >= start.started_at
+            or claim.work_item.task_id != task.id
+            or claim.work_item.role is not item.role
+            or claim.work_item.attempt != item.attempt
+            or claim.work_item.checkpoint_sequence != item.checkpoint_sequence
+            or schedule.target_base_revision != start.request.source_revision
+        ):
+            raise ValueError("已消费预 Context 决定与后续真实 claim 不一致")
+        step = self.queue.step_for_claim(claim)
+        self._require_step(item, step)
+        if step.boundary.source_revision != start.request.source_revision:
+            raise ValueError("预 Context 原 claim 与后续调用源版本不一致")
+        cursor = self._idle_cursor
+        cursor.execute(
+            "SELECT lease_id,work_item_id,task_id,state,expires_at,ended_at FROM work_queue_claims "
+            "WHERE lease_id=%s",
+            (claim.lease.id,),
+        )
+        rows = cursor.fetchall()
+        if len(rows) != 1:
+            raise ValueError("预 Context 原 claim 缺少唯一释放状态")
+        row = rows[0]
+        ended_at = datetime.fromisoformat(str(row["ended_at"]))
+        expires_at = datetime.fromisoformat(str(row["expires_at"]))
+        if (
+            row["lease_id"] != claim.lease.id
+            or row["work_item_id"] != item.id
+            or row["task_id"] != task.id
+            or row["state"] != "RELEASED"
+            or ended_at.tzinfo is None
+            or expires_at.tzinfo is None
+            or not claim.claimed_at < ended_at < expires_at
+            or ended_at >= next_claim.claimed_at
+        ):
+            raise ValueError("预 Context 原 claim 的真实租约未释放")
+        cursor.execute(
+            "SELECT sequence,event_type,work_item_id,lease_id,from_status,to_status,"
+            "occurred_at,payload_json FROM work_queue_events WHERE work_item_id=%s "
+            "ORDER BY sequence LIMIT 4097",
+            (item.id,),
+        )
+        events = cursor.fetchall()
+        if len(events) > 4096:
+            raise ValueError("预 Context 原等待事件超过完整观察上限")
+        first_events = tuple(event for event in events if event["lease_id"] == claim.lease.id)
+        next_events = tuple(event for event in events if event["lease_id"] == next_claim.lease.id)
+        waits = tuple(event for event in first_events if event["event_type"] == "WAITING")
+        starts = tuple(event for event in first_events if event["event_type"] == "STARTED")
+        claimed = tuple(event for event in first_events if event["event_type"] == "CLAIMED")
+        later_claimed = tuple(event for event in next_events if event["event_type"] == "CLAIMED")
+        resolutions = tuple(
+            event
+            for event in events
+            if event["event_type"] == "WAIT_RESOLVED"
+            and isinstance(event["sequence"], int)
+            and claimed
+            and later_claimed
+            and claimed[0]["sequence"] < event["sequence"] < later_claimed[0]["sequence"]
+        )
+        if any(len(group) != 1 for group in (claimed, starts, waits, resolutions, later_claimed)):
+            raise ValueError("预 Context 原 claim 缺少唯一领取、等待或消费事件")
+        begin, started, waited, resolved, resumed = (
+            claimed[0],
+            starts[0],
+            waits[0],
+            resolutions[0],
+            later_claimed[0],
+        )
+        waited_at = datetime.fromisoformat(str(waited["occurred_at"]))
+        resolved_at = datetime.fromisoformat(str(resolved["occurred_at"]))
+        begin_at = datetime.fromisoformat(str(begin["occurred_at"]))
+        started_at = datetime.fromisoformat(str(started["occurred_at"]))
+        resumed_at = datetime.fromisoformat(str(resumed["occurred_at"]))
+        if not (
+            begin["sequence"]
+            < started["sequence"]
+            < waited["sequence"]
+            < resolved["sequence"]
+            < resumed["sequence"]
+            and waited_at == ended_at
+            and begin_at == claim.claimed_at
+            and claim.claimed_at <= started_at <= ended_at
+            and ended_at <= resolved_at < next_claim.claimed_at
+            and resumed_at == next_claim.claimed_at
+            and all(
+                event["work_item_id"] == item.id
+                for event in (begin, started, waited, resolved, resumed)
+            )
+            and begin["from_status"] in {"READY", "RETRY_SCHEDULED"}
+            and begin["to_status"] == "LEASED"
+            and (started["from_status"], started["to_status"]) == ("LEASED", "RUNNING")
+            and (waited["from_status"], waited["to_status"]) == ("RUNNING", "WAITING_DEPENDENCY")
+            and (resolved["from_status"], resolved["to_status"]) == ("WAITING_DEPENDENCY", "READY")
+            and resolved["lease_id"] is None
+            and (resumed["from_status"], resumed["to_status"]) == ("READY", "LEASED")
+        ):
+            raise ValueError("预 Context 原等待与后续调用的事件顺序不一致")
+        begin_payload = TypeAdapter(dict[str, JsonValue]).validate_json(str(begin["payload_json"]))
+        started_payload = TypeAdapter(dict[str, JsonValue]).validate_json(
+            str(started["payload_json"])
+        )
+        waited_payload = TypeAdapter(dict[str, JsonValue]).validate_json(
+            str(waited["payload_json"])
+        )
+        resolved_payload = TypeAdapter(dict[str, JsonValue]).validate_json(
+            str(resolved["payload_json"])
+        )
+        resumed_payload = TypeAdapter(dict[str, JsonValue]).validate_json(
+            str(resumed["payload_json"])
+        )
+        if any(
+            set(payload) != {"work_item", "detail"}
+            for payload in (
+                begin_payload,
+                started_payload,
+                waited_payload,
+                resolved_payload,
+                resumed_payload,
+            )
+        ):
+            raise ValueError("预 Context 原等待事件缺少完整工作项快照")
+        begun_item = QueuedWorkItem.model_validate(begin_payload["work_item"])
+        started_item = QueuedWorkItem.model_validate(started_payload["work_item"])
+        waited_item = QueuedWorkItem.model_validate(waited_payload["work_item"])
+        resolved_item = QueuedWorkItem.model_validate(resolved_payload["work_item"])
+        resumed_item = QueuedWorkItem.model_validate(resumed_payload["work_item"])
+        detail = resolved_payload["detail"]
+        if not isinstance(detail, dict):
+            raise ValueError("预 Context 原决定缺少完整事件正文")
+        beginning = begin_payload["detail"]
+        resuming = resumed_payload["detail"]
+        if not isinstance(beginning, dict) or not isinstance(resuming, dict):
+            raise ValueError("预 Context 领取事件缺少完整原 claim")
+        mutable = {
+            "status",
+            "dispatch_sequence",
+            "wait_reason",
+            "wait_disposition",
+            "available_at",
+            "updated_at",
+        }
+        actual_decision = type(decision).model_validate(detail.get("resolution"))
+        actual_decision.validate_integrity()
+        disposition = waited_item.wait_disposition
+        if (
+            set(beginning) != {"queue_claim"}
+            or QueueClaim.model_validate(beginning["queue_claim"]) != claim
+            or begun_item != claim.work_item
+            or started_payload["detail"] != {}
+            or started_item.status is not WorkItemStatus.RUNNING
+            or started_item.updated_at != started_at
+            or started_item.model_dump(exclude={"status", "updated_at"})
+            != begun_item.model_dump(exclude={"status", "updated_at"})
+            or waited_payload.get("detail") != {}
+            or waited_item.id != item.id
+            or waited_item.status is not WorkItemStatus.WAITING_DEPENDENCY
+            or waited_item.updated_at != waited_at
+            or waited_item.dispatch_sequence != claim.work_item.dispatch_sequence
+            or waited_item.checkpoint_sequence != claim.work_item.checkpoint_sequence
+            or waited_item.model_dump(exclude=mutable)
+            != claim.work_item.model_dump(exclude=mutable)
+            or disposition is None
+            or disposition.facts.classification != "CONTEXT_CAPACITY"
+            or any(
+                value.startswith("context-capacity://") for value in disposition.facts.evidence_ids
+            )
+            or disposition.disposition_sha256 != schedule.disposition_sha256
+            or resolved_item.id != item.id
+            or resolved_item.status is not WorkItemStatus.READY
+            or resolved_item.updated_at != resolved_at
+            or resolved_item.dispatch_sequence != next_claim.work_item.dispatch_sequence
+            or resolved_item.wait_disposition is not None
+            or resolved_item.model_dump(exclude=mutable)
+            != claim.work_item.model_dump(exclude=mutable)
+            or set(resuming) != {"queue_claim"}
+            or QueueClaim.model_validate(resuming["queue_claim"]) != next_claim
+            or resumed_item != next_claim.work_item
+            or resumed_item.model_dump(exclude=mutable)
+            != claim.work_item.model_dump(exclude=mutable)
+            or detail.get("resolution_sha256") != decision.resolution_sha256
+            or detail.get("next_work_item_id") != item.id
+            or detail.get("budget_refund") is not False
+            or actual_decision != decision
+            or schedule.task_id != task.id
+        ):
+            raise ValueError("预 Context 原等待决定或队列世代未绑定完整封存事实")
+        preflight_root = self.state / "delivery-preflight"
+        if CapacityInputReader._capacity_ledger_exists(preflight_root):
+            preflight = KnowledgeRecordStore(preflight_root, read_only=True)
+            if any(
+                value.lease_id == claim.lease.id
+                for value in preflight.list("preflight-checkpoints", DeliveryPreflightCheckpoint)
+            ) or any(
+                value.lease_id == claim.lease.id
+                for value in preflight.list("context-capacity-receipts", ContextCapacityReceipt)
+            ):
+                raise ValueError("预 Context 原 claim 已有执行前或容量收据")
+            for receipt in preflight.list("preflight-receipts", DeliveryPreflightReceipt):
+                receipt.validate_integrity()
+                if (
+                    receipt.task_id == task.id
+                    and receipt.scope.team_id == self.scope.team_id
+                    and receipt.scope.project_id == self.scope.project_id
+                    and receipt.scope.repository_id == self.scope.repository_id
+                    and receipt.scope.requirement_id == self.requirement_id
+                    and receipt.source_revision == start.request.source_revision
+                    and claim.claimed_at <= receipt.checked_at <= ended_at
+                ):
+                    raise ValueError("预 Context 原 claim 已有未完成的执行前检查收据")
+        context_root = self.state.parent / "contexts"
+        if context_root.exists():
+            _reject_symlinks(context_root)
+            if not context_root.is_dir():
+                raise ValueError("预 Context 原 claim 的 Context 目录不可验证")
+            paths = tuple(islice(context_root.glob("*.json"), 4097))
+            if len(paths) > 4096:
+                raise ValueError("预 Context 原 claim 的 Context 清单超过观察上限")
+            contexts = FileContextStore(context_root, read_only=True)
+            for path in paths:
+                _reject_symlinks(path)
+                if not path.is_file() or not path.name.startswith("ctx_"):
+                    raise ValueError("预 Context 原 claim 的 Context 文件不可验证")
+                context = contexts.get(path.stem)
+                if context.task_id != task.id or context.role is not AgentRole.CODER:
+                    continue
+                sections = tuple(
+                    section
+                    for section in context.sections
+                    if section.name == "source:execution.claim"
+                )
+                if len(sections) != 1 or sections[0].truncated:
+                    raise ValueError("预 Context 同任务 Coder 输入缺少真实 claim 身份")
+                section = sections[0]
+                identity = TypeAdapter(dict[str, JsonValue]).validate_json(section.content)
+                if (
+                    section.uri == f"claim://{claim.lease.id}"
+                    or identity.get("lease_id") == claim.lease.id
+                ):
+                    raise ValueError("预 Context 原 claim 已有单独封存的 Coder Context")
+        require_no_knowledge_claim_activity(
+            state=self.state,
+            task=task,
+            item=item,
+            scope=self.scope,
+            requirement_id=getattr(self, "knowledge_requirement_id", self.requirement_id),
+            lease_id=claim.lease.id,
+        )
+        self._capacity_input_reader().require_claim_not_started(
+            UninvokedClaimBoundary(
+                task_id=task.id,
+                work_item_id=item.id,
+                lease_id=claim.lease.id,
+                role=item.role,
+                attempt=item.attempt,
+                checkpoint_sequence=item.checkpoint_sequence,
+                dispatch_sequence=claim.work_item.dispatch_sequence,
+                observed_at=ended_at,
+                run_id=None,
+                context_manifest_id=None,
+            ),
+            allow_later_claims=True,
+        )
+        return (
+            ConsumedPreContextClaimObservation.create(
+                lease_id=claim.lease.id,
+                task_id=task.id,
+                work_item_id=item.id,
+                claim_sha256=digest(claim.to_wire()),
+                next_claim_sha256=claim_identity_sha256(next_claim),
+                blocking_start_sha256=start.start_sha256,
+                schedule_sha256=schedule.schedule_sha256,
+                resolution_sha256=decision.resolution_sha256,
+                wait_event_sequence=waited["sequence"],
+                wait_event_sha256=digest(waited),
+                resolved_event_sequence=resolved["sequence"],
+                resolved_event_sha256=digest(resolved),
+            ),
+        )
 
     def _invocations(
         self,
@@ -2025,16 +2435,25 @@ class ProductionBaselineFactCollector:
                 for claim in preflight_claims
                 if claim.lease.id not in capacity_leases | knowledge_leases | replay_leases
             )
+            consumed = self._consumed_pre_context_claim_observations(
+                task, item, remaining_claims, start
+            )
+            consumed_leases = {value.lease_id for value in consumed}
             reclaimed = self._reclaimed_uninvoked_claims(
-                task, item, remaining_claims, start, legacy
+                task,
+                item,
+                tuple(claim for claim in remaining_claims if claim.lease.id not in consumed_leases),
+                start,
+                legacy,
             )
             reclaimed_leases = {value.lease_id for value in reclaimed}
             markers = self._preflight_markers(
                 task,
                 item,
                 tuple(
-                    claim for claim in remaining_claims
-                    if claim.lease.id not in reclaimed_leases
+                    claim
+                    for claim in remaining_claims
+                    if claim.lease.id not in reclaimed_leases | consumed_leases
                 ),
             )
             step = (
@@ -2154,6 +2573,7 @@ class ProductionBaselineFactCollector:
                         knowledge_only_claims=knowledge_markers,
                         replay_guarded_claims=replay_markers,
                         reclaimed_uninvoked_claims=reclaimed,
+                        consumed_pre_context_claims=consumed,
                         proof_kind=proof_kind,
                         stopped_execution=stopped,
                         legacy_containment=containment

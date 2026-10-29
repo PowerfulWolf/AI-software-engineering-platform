@@ -4887,6 +4887,28 @@
           ],
           "default": null
         },
+        "static_qa_missing_entry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StaticQaMissingEntryEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pre_context_recovery_input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PreContextRecoveryInputEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "knowledge_preparation": {
           "anyOf": [
             {
@@ -4986,6 +5008,11 @@
           "title": "Missing",
           "type": "array"
         },
+        "local_stop_confirmation_available": {
+          "default": false,
+          "title": "Local Stop Confirmation Available",
+          "type": "boolean"
+        },
         "next_action": {
           "minLength": 1,
           "title": "Next Action",
@@ -5000,33 +5027,6 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Proof Sha256",
           "type": "string"
-        },
-        "static_qa_missing_entry": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StaticQaMissingEntryEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "local_stop_confirmation_available": {
-          "default": false,
-          "title": "Local Stop Confirmation Available",
-          "type": "boolean"
-        },
-        "pre_context_recovery_input": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PreContextRecoveryInputEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         }
       },
       "required": [
@@ -7259,6 +7259,9 @@
         },
         {
           "if": {
+            "required": [
+              "purpose"
+            ],
             "properties": {
               "purpose": {
                 "const": "knowledge_preparation_isolation"
@@ -7810,6 +7813,9 @@
         },
         {
           "if": {
+            "required": [
+              "purpose"
+            ],
             "properties": {
               "purpose": {
                 "const": "knowledge_preparation_isolation"

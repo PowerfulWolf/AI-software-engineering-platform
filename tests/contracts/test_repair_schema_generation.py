@@ -38,6 +38,7 @@ def standalone_regenerated(tmp_path_factory: pytest.TempPathFactory) -> dict[str
         "stopped-provider-failure",
         "baseline-invocation-proof",
         "baseline-quiescence-proof",
+        "consumed-pre-context-claim-observation",
         "reclaimed-uninvoked-claim-observation",
     ):
         (schemas / f"{name}.schema.json").unlink()
@@ -54,17 +55,60 @@ def standalone_regenerated(tmp_path_factory: pytest.TempPathFactory) -> dict[str
     [
         ("baseline-invocation-proof", "BaselineInvocationProof"),
         ("baseline-quiescence-proof", "BaselineQuiescenceProof"),
+        ("consumed-pre-context-claim-observation", "ConsumedPreContextClaimObservation"),
         ("reclaimed-uninvoked-claim-observation", "ReclaimedUninvokedClaimObservation"),
     ],
 )
 def test_reclaimed_claim_proof_schemas_regenerate_standalone(
-    standalone_regenerated: dict[str, Any], name: str, title: str,
+    standalone_regenerated: dict[str, Any],
+    name: str,
+    title: str,
 ) -> None:
     fresh = standalone_regenerated[name + ".schema.json"]
     published = json.loads((ROOT / "schemas" / (name + ".schema.json")).read_text())
     assert fresh == published
     assert fresh["title"] == title
     Draft202012Validator.check_schema(fresh)
+
+
+@pytest.mark.parametrize("generated", [False, True])
+def test_knowledge_isolation_guard_does_not_select_omitted_default_purpose(
+    standalone_regenerated: dict[str, Any], generated: bool
+) -> None:
+    for name in (
+        "console-deletion-cleanup",
+        "console-operation",
+        "execution-baseline-plan",
+        "execution-baseline-queue-consumption",
+        "execution-baseline-queue-release",
+        "execution-baseline",
+    ):
+        document = (
+            standalone_regenerated[name + ".schema.json"]
+            if generated
+            else json.loads((ROOT / "schemas" / (name + ".schema.json")).read_text())
+        )
+        nodes = {**document.get("$defs", {}), document.get("title"): document}
+        for title in ("ExecutionBaselinePlan", "ExecutionBaselineBinding"):
+            node = nodes.get(title)
+            if node is None:
+                continue
+            guards = [
+                guard
+                for guard in node.get("allOf", [])
+                if guard.get("if", {}).get("properties", {}).get("purpose", {}).get("const")
+                == "knowledge_preparation_isolation"
+            ]
+            assert len(guards) == 1, (name, title)
+            guard = guards[0]
+            assert guard["if"].get("required") == ["purpose"], (name, title)
+            check = Draft202012Validator(guard)
+            ordinary = {"facts": {}} if title == "ExecutionBaselinePlan" else {}
+            assert check.is_valid(ordinary), (name, title)
+            assert not check.is_valid({**ordinary, "purpose": "knowledge_preparation_isolation"}), (
+                name,
+                title,
+            )
 
 
 @pytest.fixture(scope="module")

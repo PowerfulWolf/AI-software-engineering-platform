@@ -1036,6 +1036,9 @@
         },
         {
           "if": {
+            "required": [
+              "purpose"
+            ],
             "properties": {
               "purpose": {
                 "const": "knowledge_preparation_isolation"

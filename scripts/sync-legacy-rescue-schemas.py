@@ -19,6 +19,7 @@ from ai_software_engineer.manager.baseline_models import (
 from ai_software_engineer.manager.baseline_production import (
     BaselineInvocationProof,
     BaselineQuiescenceProof,
+    ConsumedPreContextClaimObservation,
     ReclaimedUninvokedClaimObservation,
 )
 from ai_software_engineer.manager.completed_output_checkpoint import (
@@ -70,6 +71,7 @@ MODELS = (
     RejectedCandidateExpiredOwnerSettlement,
     BaselineQuiescenceProof,
     BaselineInvocationProof,
+    ConsumedPreContextClaimObservation,
     ReclaimedUninvokedClaimObservation,
 )
 UPDATED = {
@@ -101,6 +103,7 @@ UPDATED = {
     "ExecutionCaptureStop",
     "ExecutionAbortReason",
     "BaselineInvocationProof",
+    "ConsumedPreContextClaimObservation",
     "ReplayGuardedClaimObservation",
     "DeliveryWaitInvestigation",
     "KnowledgePreparationIsolationProof",
@@ -137,6 +140,7 @@ def main() -> None:
         ("rejected-candidate-owner-settlement", RejectedCandidateExpiredOwnerSettlement),
         ("baseline-quiescence-proof", BaselineQuiescenceProof),
         ("baseline-invocation-proof", BaselineInvocationProof),
+        ("consumed-pre-context-claim-observation", ConsumedPreContextClaimObservation),
         ("reclaimed-uninvoked-claim-observation", ReclaimedUninvokedClaimObservation),
     )
     standalone_names = {f"{filename}.schema.json" for filename, _ in standalone}
@@ -1604,7 +1608,10 @@ def knowledge_isolation_guards(node: dict[str, object]) -> None:
             otherwise = {"knowledge_isolation_sha256": {"type": "null"}}
         guards_to_add.append(
             {
-                "if": {"properties": {"purpose": {"const": "knowledge_preparation_isolation"}}},
+                "if": {
+                    "required": ["purpose"],
+                    "properties": {"purpose": {"const": "knowledge_preparation_isolation"}},
+                },
                 "then": {"required": required, "properties": shared},
                 "else": {"properties": otherwise},
             }
@@ -1613,6 +1620,11 @@ def knowledge_isolation_guards(node: dict[str, object]) -> None:
     assert isinstance(existing, list)
     if guards_to_add:
         conditions = [guard["if"] for guard in guards_to_add]
+        if title in {"ExecutionBaselinePlan", "ExecutionBaselineBinding"}:
+            # Old published graphs treated an omitted default purpose as isolation.
+            conditions.append(
+                {"properties": {"purpose": {"const": "knowledge_preparation_isolation"}}}
+            )
         # These generated gates replace prior variants of this new proof family;
         # unrelated policy gates keep their complete existing bytes and order.
         retained = [guard for guard in existing if guard.get("if") not in conditions]

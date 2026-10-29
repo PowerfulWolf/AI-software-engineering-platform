@@ -397,6 +397,14 @@
           "title": "Reclaimed Uninvoked Claims",
           "type": "array"
         },
+        "consumed_pre_context_claims": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ConsumedPreContextClaimObservation"
+          },
+          "title": "Consumed Pre Context Claims",
+          "type": "array"
+        },
         "legacy_containment": {
           "anyOf": [
             {
@@ -579,6 +587,100 @@
         "proxy"
       ],
       "type": "string"
+    },
+    "ConsumedPreContextClaimObservation": {
+      "additionalProperties": false,
+      "description": "Consumed engineering no-Context decision, not an execution stop or result.",
+      "properties": {
+        "kind": {
+          "const": "consumed_pre_context_claim_observation",
+          "default": "consumed_pre_context_claim_observation",
+          "title": "Kind",
+          "type": "string"
+        },
+        "lease_id": {
+          "minLength": 1,
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Claim Sha256",
+          "type": "string"
+        },
+        "next_claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Next Claim Sha256",
+          "type": "string"
+        },
+        "blocking_start_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Blocking Start Sha256",
+          "type": "string"
+        },
+        "schedule_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Schedule Sha256",
+          "type": "string"
+        },
+        "resolution_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Resolution Sha256",
+          "type": "string"
+        },
+        "wait_event_sequence": {
+          "minimum": 1,
+          "title": "Wait Event Sequence",
+          "type": "integer"
+        },
+        "wait_event_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Wait Event Sha256",
+          "type": "string"
+        },
+        "resolved_event_sequence": {
+          "minimum": 1,
+          "title": "Resolved Event Sequence",
+          "type": "integer"
+        },
+        "resolved_event_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Resolved Event Sha256",
+          "type": "string"
+        },
+        "observation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Observation Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lease_id",
+        "task_id",
+        "work_item_id",
+        "claim_sha256",
+        "next_claim_sha256",
+        "blocking_start_sha256",
+        "schedule_sha256",
+        "resolution_sha256",
+        "wait_event_sequence",
+        "wait_event_sha256",
+        "resolved_event_sequence",
+        "resolved_event_sha256",
+        "observation_sha256"
+      ],
+      "title": "ConsumedPreContextClaimObservation",
+      "type": "object"
     },
     "ContinuationScope": {
       "additionalProperties": false,
