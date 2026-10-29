@@ -101,9 +101,9 @@ def complete_reapply_source_refs(plan: RecoveryPlan) -> tuple[RecoveryInputSourc
                 bytes=len(body),
             )
         )
-    if len({ref.source_id for ref in refs}) != len(refs) or len(
-        {ref.uri for ref in refs}
-    ) != len(refs):
+    if len({ref.source_id for ref in refs}) != len(refs) or len({ref.uri for ref in refs}) != len(
+        refs
+    ):
         raise RecoveryRejected("approved recovery sources are not unique")
     return tuple(refs)
 
@@ -182,7 +182,8 @@ def validate_scheduled_reapply_context(
     actual = {
         section.name: section
         for section in context.sections
-        if section.name in expected_names or section.name in patch_names
+        if section.name in expected_names
+        or section.name in patch_names
         or section.name == "source:recovery.input_schedule"
     }
     if context.role is not AgentRole.CODER or actual.keys() != expected_names:
@@ -219,6 +220,7 @@ def accepted_reapply_source_index(
     """
     refs = complete_reapply_source_refs(plan)
     progress_by_id: dict[str, tuple[CoderProgressArtifact, AcceptedRoleArtifact]] = {}
+
     def is_exactly_retired(publication: AcceptedRoleArtifact) -> bool:
         """Exclude only a publication named by a consumed, validated rejection proof."""
         return any(
@@ -265,7 +267,6 @@ def accepted_reapply_source_index(
             or publication.source_revision != artifact.source_revision
             or publication.run_id != artifact.producer.run_id
             or publication.context_manifest_id != artifact.context_manifest_id
-            or publication.checkpoint_sequence != artifact.content.checkpoint_sequence
             or publication.receipt.sha256 != artifact.integrity.sha256
             or not artifact.integrity.validated
             or artifact_digest(artifact) != artifact.integrity.sha256
@@ -287,10 +288,10 @@ def accepted_reapply_source_index(
             raise RecoveryRejected("Coder progress event has no unique accepted publication")
         seen.add(identity)
         artifact, publication = pair
-        if publication.checkpoint_sequence != event.attempt:
-            raise RecoveryRejected(
-                "Coder progress publication checkpoint differs from its Task event"
-            )
+        # publication.checkpoint_sequence is the Task revision frozen before
+        # this role Run; event.attempt and progress.content.checkpoint_sequence
+        # are Coder attempts. The exact Task-revision binding is checked against
+        # the immutable queue step and original claim below.
         if lineage is not None:
             _validate_publication_lineage(
                 lineage,
@@ -349,7 +350,9 @@ def _validate_publication_lineage(
         or item.role is not AgentRole.CODER
         or item.attempt != event.attempt
         or item.checkpoint_sequence != publication.checkpoint_sequence
-        or item.dispatch_sequence != publication.dispatch_sequence
+        # The sealed role step is the initial WorkItem generation. Its claim
+        # may have expired before a later generation published the progress.
+        or item.dispatch_sequence > publication.dispatch_sequence
         or boundary.task_id != plan.new_task_id
         or boundary.role is not AgentRole.CODER
         or boundary.attempt != event.attempt

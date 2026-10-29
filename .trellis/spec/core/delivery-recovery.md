@@ -1,5 +1,86 @@
 # Explicit delivery recovery — T044
 
+## Accepted scheduled Coder progress after a lost continuation claim (2026-10-29)
+
+### Scope and signatures
+
+`NativeRecoveryEntry.pending_progress_continuation(path) -> NativeRecoveryExecution | None`
+is a read-only parent Delivery attachment for an already approved `coder_reapply`
+RecoveryPlan. `DeliveryResumeController._continue_coder_recovery` calls it after a durable
+knowledge wait and before proposing an interruption of the original recovery Run.
+Only a Task with accepted Coder progress can enter this branch. A first Coder Run
+without accepted progress retains its existing interruption approval path.
+
+### Contracts
+
+The approved Plan, authorization, sealed Task, dispatch, seed and first invocation
+must still bind the same Requirement, source and Task. The consumed recovery input
+schedule must match the complete ordered inherited sources. The accepted progress
+must have its sealed Artifact, queue publication, immutable queue step and original
+claim, exact first invocation outcome, Context and `IMPLEMENTING → CONTINUE_REQUIRED`
+StateEvent. The next `QUEUED → IMPLEMENTING` event must be the current Task tail,
+with the same base revision and attempt. The first WorkItem is CLOSED; one current
+Coder WorkItem matches the Task's current revision and attempt, with no candidate.
+
+The first publication's `checkpoint_sequence` is the **pre-Run Task revision** and
+must equal its queue step/boundary/original claim revision. Its
+`dispatch_sequence` must equal the publishing claim generation; the initial role
+step can have a lower generation after lease expiry and re-claim. The progress
+Artifact's `content.checkpoint_sequence` and its accepted StateEvent's `attempt`
+are the **Coder attempt**, which must agree with the Context and WorkItem attempt.
+Do not compare a Task revision to a Coder attempt. Preserve source, Run, lease,
+assignment, receipt digest and full Artifact integrity checks independently.
+
+The current claim set may contain earlier generations. Every claim must be an
+exact original CLAIMED fact for the current WorkItem/attempt/revision, with a
+unique generation. Every old generation must have an ended EXPIRED/RELEASED row;
+an ACTIVE row must be the one current generation, have no `ended_at`, and have a
+current SQL lease expiry at or before now. A `RETRY_SCHEDULED` item has no ACTIVE
+claim and is exactly one generation beyond its latest ended claim. The live SQL
+expiry is parsed as a timezone-aware datetime and authenticated by
+`original_claim()` against `lease_json`; the immutable original claim may have an
+earlier expiry due to heartbeat renewal. A RELEASED/EXPIRED claim with a durable
+`ended_at` has no write authority even if its stored TTL is still in the future;
+only ACTIVE claims require TTL expiry. A merely expired ACTIVE claim can attach
+before the normal reaper, but cannot authorize a new model start by itself.
+
+Before attachment, scan the durable invocation start/outcome store, model route
+ledger, continuation capture/receipt/admission ledger and accepted Artifact store
+by WorkItem and `(Task, Coder, attempt)`. A missing key alone does not establish no
+start. Any route, native capture, output, corrupt/unknown record, future live
+claim, changed source, missing accepted event or ambiguous generation refuses
+attachment. This read changes no old Task, queue or sidecar facts and grants no
+claim, retry budget, candidate or verdict. `adopt_recovery_pending` only moves the
+parent Requirement cursor to the existing `DELIVERING` checkpoint. A subsequent
+normal `CONTINUE_DELIVERY` uses the usual reaper, new owner-fenced claim and
+provider admission. It may need a second Continue after the reaper delay; it
+never asks for another first-Run interruption approval.
+
+| Durable facts | Result |
+| --- | --- |
+| Exact accepted progress, current expired no-start claim | Attach parent to `DELIVERING`; normal Continue reclaims and dispatches |
+| Exact reaper-completed `RETRY_SCHEDULED` item or one later expired generation | Same parent attachment; preserve all prior claims |
+| Active writable claim, unknown ending or generation drift | Refuse attachment; do not start another model |
+| Current invocation, route, native capture or accepted output | Refuse no-start attachment; preserve execution facts |
+| Missing accepted progress event, outcome mismatch, source/Task drift | Refuse attachment; retain old approval and history |
+
+Regression: `tests/recovery/test_bounded_reapply_input.py` binds K1's Task revision 2
+publication and attempt 1 progress, including an initial queue step at generation
+0 and publishing claim at generation 1. `tests/recovery/test_pending_execution.py`
+persists the accepted Artifact, Context and first invocation, then tests parent
+attachment, reaper generations, live/unknown claim, event, invocation, model route
+and native capture negatives. The original K1 production facts were checked
+read-only: Task revision 5, attempt 2, accepted progress and an expired ACTIVE
+second claim. `pending_progress_continuation` returned `NativeRecoveryPending`
+with SQL and all sidecar bytes unchanged before and after.
+
+Existing-data handling: no migration, Task reset or historical rewrite. After an
+idle controlled platform release, continue the same Requirement through the
+public Continue operation. It attaches the parent cursor; repeat Continue after
+the ordinary queue reaper if the new claim is not yet available. Rollback to the
+prior binary does not undo the attachment; keep old artifacts and queue facts,
+pause new Continue operations and restore the fixed binary before resuming.
+
 ## Orchestrator Context at a pre-Coder capacity wait (2026-10-28)
 
 `inspect_pre_context_recovery_input` verifies the complete Context store before it
@@ -63,12 +144,13 @@ auditable.
 patches followed by `recovery.patch`. The Pydantic contract and regenerated
 `schemas/recovery-input-schedule.schema.json` both use `minItems=maxItems=3`; a two-source
 record must fail at persistence rather than reach Context activation. Every accepted progress
-publication is checked against its Task checkpoint (`publication.checkpoint_sequence ==
-event.attempt == artifact.content.checkpoint_sequence`) and, when the queue reader is
-available, against the immutable `QueuedRoleStep` and original `QueueClaim` for its
-`work_item_id`/`lease_id` (task, role, attempt, checkpoint, dispatch generation, source
-revision and lease/assignment identity). Missing queue lineage is a fail-closed admission
-error; it is never inferred from a worktree or artifact digest.
+publication is checked against its original `QueuedRoleStep` and `QueueClaim` for its
+`work_item_id`/`lease_id`: the publication's `checkpoint_sequence` is the Task revision,
+while `event.attempt == artifact.content.checkpoint_sequence` is the Coder attempt.
+The original step can precede the publishing claim's dispatch generation; the claim
+must exactly match the publication generation. Task, role, source revision and
+lease/assignment identity remain exact. Missing queue lineage is a fail-closed
+admission error; it is never inferred from a worktree or artifact digest.
 
 `RecoverySeedService.authorize` receives a fresh read-only Task-event callback for scheduled
 recovery. It derives the selected source with `accepted_reapply_source_index` under the
@@ -76,8 +158,8 @@ current Worker claim. If accepted publications already exist but no durable even
 available, admission is rejected instead of replaying source zero. The callback opens and
 closes a fresh MySQL repository per read so it cannot retain a stale transaction snapshot.
 
-Required regressions: exact-three schedule schema/model rejection; event-attempt/publication
-checkpoint mismatch; queue step/claim lineage mismatch; and first-run seed admission plus
+Required regressions: exact-three schedule schema/model rejection; Task revision versus
+Coder-attempt distinction; queue step/claim lineage mismatch; and first-run seed admission plus
 restart-after-accepted-progress source advancement. These checks do not rewrite prior
 Task, Artifact, event or queue history.
 

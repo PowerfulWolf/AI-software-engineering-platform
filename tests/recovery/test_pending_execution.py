@@ -1,8 +1,9 @@
 """Recovery keeps typed queue waits attached to the original delivery cursor."""
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -30,7 +31,11 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     ProjectDeliveryCheckpoint,
 )
 from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord, _record_digest
-from ai_software_engineer.recovery.entry import NativeRecoveryEntry, NativeRecoveryPending
+from ai_software_engineer.recovery.entry import (
+    NativeRecoveryEntry,
+    NativeRecoveryExecution,
+    NativeRecoveryPending,
+)
 from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected
 from ai_software_engineer.recovery.resume import DeliveryResumeController, DeliveryResumeOutcome
 from ai_software_engineer.recovery.service import RecoveryAuthorizationService
@@ -371,6 +376,526 @@ def test_pending_adoption_is_idempotent_and_rejects_backward_or_foreign_cursor(
     assert f.journal.current(f.current.delivery_id) == result.checkpoint
     assert len(f.journal.list(f.current.delivery_id)) == 3
     f.backend.run_delivery.assert_not_called()
+
+
+def test_accepted_progress_reattaches_before_interruption_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    f = fixture(tmp_path, monkeypatch)
+    store, _ = f.recovery.open_plan(f.path)
+    monkeypatch.setattr(store, "get_invocation", lambda _: Mock())
+    monkeypatch.setattr(
+        "ai_software_engineer.recovery.resume.read_recovery_task",
+        lambda *_: f.snapshot.task,
+    )
+    continuation = NativeRecoveryExecution(
+        f.plan, f.dispatch, NativeRecoveryPending(f.snapshot, None)
+    )
+    progress = Mock(return_value=continuation)
+    monkeypatch.setattr(f.recovery, "pending_progress_continuation", progress, raising=False)
+    monkeypatch.setattr(f.recovery, "pending_execution_wait", lambda _: None)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("accepted progress cannot enter interruption approval")
+
+    monkeypatch.setattr(
+        "ai_software_engineer.recovery.resume.RecoveryInterruptionService", forbidden
+    )
+    result = f.controller._continue_coder_recovery(
+        f.current, ResumeProjectDelivery(delivery_id=f.current.delivery_id)
+    )
+    assert result.outcome is DeliveryResumeOutcome.CONTINUED, result.next_action
+    assert result.checkpoint.stage is DeliveryStage.DELIVERING
+    assert result.checkpoint.task_id == f.snapshot.task.id
+    progress.assert_called_once_with(f.path)
+    f.backend.run_delivery.assert_not_called()
+
+    f.backend.run_delivery.side_effect = DeliveryBackendPending(f.snapshot)
+    again = f.controller.resume(ResumeProjectDelivery(delivery_id=f.current.delivery_id))
+    assert again.checkpoint == result.checkpoint
+    f.backend.run_delivery.assert_called_once()
+
+
+def _durable_progress_attachment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> SimpleNamespace:
+    """Persist the same accepted attempt/revision relation as K1's first Coder Run."""
+    from contextlib import nullcontext
+
+    from ai_software_engineer.agents import AgentResult, AgentRunStatus
+    from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
+    from ai_software_engineer.context import FileContextStore
+    from ai_software_engineer.domain import WorkItemStatus
+    from ai_software_engineer.knowledge.models import digest
+    from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+    from ai_software_engineer.work_queue.invocation import (
+        DeliveryInvocationOutcome,
+        DeliveryInvocationStart,
+    )
+    from tests.agents.test_openai_compatible import _coder_request
+    from tests.domain.factories import make_plan_artifact, make_task
+    from tests.recovery.test_bounded_reapply_input import _accepted_progress, _plan
+    from tests.work_queue.test_mysql_queue import queued_item
+
+    root = tmp_path / "project"
+    sidecar = tmp_path / "sidecar"
+    plan = _plan(root)
+    artifact, progress, publication, context = _accepted_progress(
+        plan, root, source_index=0, number=1, previous=None
+    )
+    publication = publication.model_copy(update={"checkpoint_sequence": 2})
+    (sidecar / "state/delivery-waits").mkdir(parents=True)
+    artifact_store = FileArtifactStore(sidecar / "artifacts")
+    artifact_store.put(
+        seal_artifact(
+            make_plan_artifact().model_copy(update={"task_id": plan.new_task_id}),
+            validated_at=NOW,
+        )
+    )
+    artifact_store.put(artifact)
+    FileContextStore(sidecar / "contexts").put(context)
+    task = make_task().model_copy(
+        update={
+            "id": plan.new_task_id,
+            "repository": str(root),
+            "base_ref": plan.target_base_revision,
+            "status": TaskStatus.IMPLEMENTING,
+            "attempts": 2,
+            "metadata": {"recovery_plan_sha256": plan.plan_sha256},
+        }
+    )
+    events = [
+        progress.model_copy(
+            update={
+                "event_id": "evt_parent_started",
+                "from_status": TaskStatus.NEW,
+                "to_status": TaskStatus.PLANNING,
+                "reason": "planning_started",
+                "artifact_ids": (),
+            }
+        ),
+        progress.model_copy(
+            update={
+                "event_id": "evt_parent_planned",
+                "from_status": TaskStatus.PLANNING,
+                "to_status": TaskStatus.IMPLEMENTING,
+                "reason": "plan_validated",
+                "artifact_ids": (),
+            }
+        ),
+        progress,
+        progress.model_copy(
+            update={
+                "event_id": "evt_parent_queued",
+                "from_status": TaskStatus.CONTINUE_REQUIRED,
+                "to_status": TaskStatus.QUEUED,
+                "reason": "coder_continuation_queued",
+            }
+        ),
+        progress.model_copy(
+            update={
+                "event_id": "evt_parent_resumed",
+                "from_status": TaskStatus.QUEUED,
+                "to_status": TaskStatus.IMPLEMENTING,
+                "attempt": 2,
+                "reason": "coder_continuation_resumed",
+            }
+        ),
+    ]
+    first = queued_item("parent_first", attempt=1, checkpoint_sequence=2).model_copy(
+        update={
+            "id": publication.work_item_id,
+            "task_id": task.id,
+            "repository_id": plan.source.scope.repository_id,
+            "status": WorkItemStatus.CLOSED,
+            "dispatch_sequence": 1,
+        }
+    )
+    current = queued_item("parent_current", attempt=2, checkpoint_sequence=5).model_copy(
+        update={
+            "id": "work_parent_unstarted",
+            "task_id": task.id,
+            "repository_id": plan.source.scope.repository_id,
+            "status": WorkItemStatus.RUNNING,
+            "parent_work_item_id": first.id,
+        }
+    )
+    original_first = first.model_copy(
+        update={"status": WorkItemStatus.READY, "dispatch_sequence": 0}
+    )
+    claimed_first = first.model_copy(update={"status": WorkItemStatus.LEASED})
+    first_claim = SimpleNamespace(
+        work_item=claimed_first,
+        assignment=SimpleNamespace(
+            task_id=task.id,
+            role=AgentRole.CODER,
+            attempt=1,
+            lease_id=publication.lease_id,
+        ),
+        lease=SimpleNamespace(id=publication.lease_id, task_id=task.id),
+    )
+    current_claim = SimpleNamespace(
+        work_item=current.model_copy(update={"status": WorkItemStatus.LEASED}),
+        lease=SimpleNamespace(id="lease_parent_unstarted"),
+    )
+    claims = {publication.lease_id: first_claim, "lease_parent_unstarted": current_claim}
+    step = SimpleNamespace(
+        work_item=original_first,
+        boundary=SimpleNamespace(
+            task_id=task.id,
+            role=AgentRole.CODER,
+            attempt=1,
+            checkpoint_sequence=2,
+            source_revision=task.base_ref,
+        ),
+    )
+    items = [first, current]
+    queue = SimpleNamespace(
+        accepted=lambda _task_id: (publication,),
+        retired_rejected_outputs=lambda _task_id: (),
+        items_for_task=lambda _task_id: tuple(items),
+        original_claim=claims.__getitem__,
+        step=lambda _item_id: step,
+        _parse_time=datetime.fromisoformat,
+    )
+    records = KnowledgeRecordStore(sidecar / "state/invocations")
+    request = _coder_request().model_copy(
+        update={
+            "run_id": artifact.producer.run_id,
+            "task_id": task.id,
+            "attempt": 1,
+            "source_revision": task.base_ref,
+            "context_manifest_id": context.context_id,
+        }
+    )
+    result = AgentResult(
+        run_id=request.run_id,
+        task_id=request.task_id,
+        role=request.role,
+        attempt=request.attempt,
+        source_revision=request.source_revision,
+        context_manifest_id=request.context_manifest_id,
+        status=AgentRunStatus.SUCCEEDED,
+        artifact=artifact,
+    )
+    start = DeliveryInvocationStart(
+        work_item_id=first.id,
+        checkpoint_sequence=2,
+        request=request,
+        lease_id=publication.lease_id,
+        started_at=NOW,
+        start_sha256="0" * 64,
+    )
+    start = start.model_copy(
+        update={"start_sha256": digest(start.model_dump(mode="json", exclude={"start_sha256"}))}
+    )
+    outcome = DeliveryInvocationOutcome(start=start, result=result, outcome_sha256="0" * 64)
+    outcome = outcome.model_copy(
+        update={
+            "outcome_sha256": digest(outcome.model_dump(mode="json", exclude={"outcome_sha256"}))
+        }
+    )
+    records.put("invocation-starts", first.id, start)
+    records.put("invocation-outcomes", first.id, outcome)
+    dispatch = SimpleNamespace(
+        task=task,
+        task_id=task.id,
+        repository_id=plan.source.scope.repository_id,
+        dispatch_sha256="a" * 64,
+    )
+    seed = SimpleNamespace(
+        dispatch_sha256=dispatch.dispatch_sha256,
+        record_sha256="b" * 64,
+        validate_integrity=lambda: None,
+    )
+    invocation = SimpleNamespace(
+        seed_record_sha256=seed.record_sha256,
+        recovery_plan_sha256=plan.plan_sha256,
+        run_id=request.run_id,
+        context_manifest_id=context.context_id,
+        validate_integrity=lambda: None,
+    )
+    store = SimpleNamespace(
+        get_authorization=lambda _sha: SimpleNamespace(decision=SimpleNamespace(approved=True)),
+        get_task_record=lambda _sha: SimpleNamespace(validate_binding=lambda *_: None),
+        get_seed=lambda _sha: seed,
+        get_invocation=lambda _sha: invocation,
+    )
+    backend = SimpleNamespace(
+        _delivery_snapshot=lambda _task_id: DeliveryFailureSnapshot(task=task, task_revision=5)
+    )
+    config = ProductionConfig(
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="offline", kind=ModelProviderKind.CODEX_CLI
+            ),
+        )
+    )
+    entry = NativeRecoveryEntry(config, {config.database.dsn_env: "offline"}, backend)
+    monkeypatch.setattr(entry, "open_plan", lambda _path: (store, plan))
+    monkeypatch.setattr(entry, "_dispatch_for", lambda *_: dispatch)
+    monkeypatch.setattr(
+        "ai_software_engineer.recovery.entry._repository_sidecar", lambda *_: sidecar
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.queue_capacity.production_role_queue", lambda _: queue
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.recovery_input_schedule.require_consumed_recovery_input_schedule",
+        lambda *_: SimpleNamespace(schedule_sha256="f" * 64),
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.work_queue.worker.WorkerExecutionGuard.task_scope",
+        lambda *_: nullcontext(),
+    )
+
+    class TaskRepository:
+        def __init__(self, _dsn: str) -> None:
+            pass
+
+        def __enter__(self) -> "TaskRepository":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def get(self, _task_id: str) -> object:
+            return task
+
+        def current_revision(self, _task_id: str) -> int:
+            return 5
+
+        def list_events(self, _task_id: str) -> tuple[object, ...]:
+            return tuple(events)
+
+    monkeypatch.setattr("ai_software_engineer.store.MySqlTaskRepository", TaskRepository)
+
+    class Cursor:
+        def __enter__(self) -> "Cursor":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def execute(self, *_args: object) -> None:
+            pass
+
+        def fetchall(self) -> tuple[dict[str, object], ...]:
+            return tuple(rows)
+
+    class Connection:
+        def cursor(self, *_args: object) -> Cursor:
+            return Cursor()
+
+        def rollback(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    rows: list[dict[str, object]] = [
+        {
+            "lease_id": "lease_parent_unstarted",
+            "state": "ACTIVE",
+            "expires_at": (datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+            "ended_at": None,
+        }
+    ]
+    monkeypatch.setattr(
+        "ai_software_engineer.recovery.entry.open_mysql_connection", lambda _: Connection()
+    )
+    return SimpleNamespace(
+        entry=entry,
+        path=tmp_path / "plan.json",
+        plan=plan,
+        task=task,
+        current=current,
+        items=items,
+        claims=claims,
+        rows=rows,
+        events=events,
+        sidecar=sidecar,
+        records=records,
+        context=context,
+        artifact=artifact,
+    )
+
+
+def test_durable_accepted_progress_reattaches_after_unstarted_expired_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    facts = _durable_progress_attachment(tmp_path, monkeypatch)
+    result = facts.entry.pending_progress_continuation(facts.path)
+    assert result is not None
+    assert isinstance(result.delivery, NativeRecoveryPending)
+    assert result.delivery.snapshot.task == facts.task
+    assert result.delivery.snapshot.task_revision == 5
+
+
+@pytest.mark.parametrize("reclaimed", [False, True])
+def test_durable_progress_reattaches_across_exact_reaper_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reclaimed: bool
+) -> None:
+    from ai_software_engineer.domain import WorkItemStatus
+
+    facts = _durable_progress_attachment(tmp_path, monkeypatch)
+    facts.rows[0]["state"] = "EXPIRED"
+    facts.rows[0]["ended_at"] = datetime.now(UTC).isoformat()
+    if reclaimed:
+        facts.items[1] = facts.current.model_copy(update={"dispatch_sequence": 1})
+        facts.claims["lease_parent_reclaimed"] = SimpleNamespace(
+            work_item=facts.current.model_copy(
+                update={"status": WorkItemStatus.LEASED, "dispatch_sequence": 1}
+            )
+        )
+        facts.rows.append(
+            {
+                "lease_id": "lease_parent_reclaimed",
+                "state": "ACTIVE",
+                "expires_at": (datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+                "ended_at": None,
+            }
+        )
+    else:
+        facts.items[1] = facts.current.model_copy(
+            update={"status": WorkItemStatus.RETRY_SCHEDULED, "dispatch_sequence": 1}
+        )
+    result = facts.entry.pending_progress_continuation(facts.path)
+    assert result is not None and isinstance(result.delivery, NativeRecoveryPending)
+    assert result.delivery.snapshot.task_revision == 5
+
+
+def test_durable_progress_reattaches_after_released_claim_with_future_ttl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ended owner cannot write even if its original lease TTL is later."""
+    from ai_software_engineer.domain import WorkItemStatus
+
+    facts = _durable_progress_attachment(tmp_path, monkeypatch)
+    facts.rows[0]["state"] = "RELEASED"
+    facts.rows[0]["expires_at"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    facts.rows[0]["ended_at"] = datetime.now(UTC).isoformat()
+    facts.items[1] = facts.current.model_copy(
+        update={"status": WorkItemStatus.RETRY_SCHEDULED, "dispatch_sequence": 1}
+    )
+    result = facts.entry.pending_progress_continuation(facts.path)
+    assert result is not None and isinstance(result.delivery, NativeRecoveryPending)
+
+
+@pytest.mark.parametrize(
+    "invalid", ["accepted_event", "live_claim", "unknown_claim", "start", "route", "capture"]
+)
+def test_durable_progress_rejects_unproved_or_started_second_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: str
+) -> None:
+    from ai_software_engineer.agents import (
+        AgentErrorCode,
+        AgentFailure,
+        AgentResult,
+        AgentRunStatus,
+        FileModelRouteAttemptStore,
+        ModelRouteAttempt,
+    )
+    from ai_software_engineer.agents.fallback import model_route_root
+    from ai_software_engineer.domain.continuation import task_intent_sha256
+    from ai_software_engineer.git.mutation import WorkspaceMutationInventory
+    from ai_software_engineer.knowledge.models import digest
+    from ai_software_engineer.orchestration.continuation_models import (
+        ContinuationScope,
+        ExecutionCaptureStart,
+    )
+    from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
+    from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
+    from tests.agents.test_openai_compatible import _coder_request
+    from tests.orchestration.test_native_continuation import claim
+
+    facts = _durable_progress_attachment(tmp_path, monkeypatch)
+    if invalid == "accepted_event":
+        facts.events[2] = facts.events[2].model_copy(
+            update={"artifact_ids": ("art_foreign_parent",)}
+        )
+    elif invalid == "live_claim":
+        facts.rows[0]["expires_at"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    elif invalid == "unknown_claim":
+        facts.rows[0]["state"] = "EXPIRED"
+        # No ended_at: even a past expiry is not a durable reaper/stop fact.
+    else:
+        request = _coder_request().model_copy(
+            update={
+                "run_id": "run_parent_second",
+                "task_id": facts.task.id,
+                "attempt": 2,
+                "source_revision": facts.task.base_ref,
+                "context_manifest_id": facts.context.context_id,
+            }
+        )
+        if invalid == "start":
+            start = DeliveryInvocationStart(
+                work_item_id=facts.current.id,
+                checkpoint_sequence=5,
+                request=request,
+                lease_id="lease_parent_unstarted",
+                started_at=NOW,
+                start_sha256="0" * 64,
+            )
+            start = start.model_copy(
+                update={
+                    "start_sha256": digest(start.model_dump(mode="json", exclude={"start_sha256"}))
+                }
+            )
+            facts.records.put("invocation-starts", facts.current.id, start)
+        elif invalid == "route":
+            result = AgentResult(
+                run_id=request.run_id,
+                task_id=request.task_id,
+                role=request.role,
+                attempt=request.attempt,
+                source_revision=request.source_revision,
+                context_manifest_id=request.context_manifest_id,
+                status=AgentRunStatus.FAILED,
+                error=AgentFailure(
+                    code=AgentErrorCode.PROVIDER_ERROR,
+                    message="offline second run",
+                    transient=False,
+                ),
+            )
+            route = ModelRouteAttempt.create(
+                request=request,
+                route_index=1,
+                provider="offline",
+                model="offline",
+                started_at=NOW,
+                completed_at=NOW,
+                result=result,
+                fallback=False,
+            )
+            FileModelRouteAttemptStore(model_route_root(facts.sidecar)).append(route)
+        else:
+            parent = facts.sidecar / "state/continuations"
+            parent.mkdir(mode=0o700)
+            store = FileContinuationStore.initialize(parent / facts.task.id, task_id=facts.task.id)
+            original_claim = claim(facts.task, 2)
+            capture = ExecutionCaptureStart.create(
+                scope=ContinuationScope(
+                    team_id="team_parent",
+                    project_id="project_parent",
+                    repository_id=original_claim.work_item.repository_id,
+                    requirement_id="delivery_parent",
+                    dispatch_sha256="c" * 64,
+                ),
+                request=request,
+                claim=original_claim,
+                task_intent_sha256=task_intent_sha256(facts.task),
+                task_revision=5,
+                policy_sha256="d" * 64,
+                worktree_path=str(tmp_path / "retained-worktree"),
+                inventory_before=WorkspaceMutationInventory(files=()),
+                started_at=NOW,
+            )
+            store.put_capture_start(capture)
+    with pytest.raises(RecoveryRejected):
+        facts.entry.pending_progress_continuation(facts.path)
 
 
 def test_interruption_execution_adopts_pending_without_repeating_work(

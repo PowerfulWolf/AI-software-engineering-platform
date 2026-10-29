@@ -25,6 +25,7 @@ from ai_software_engineer.domain import (
     Task,
     TaskStatus,
     TeamRole,
+    WorkItemStatus,
 )
 from ai_software_engineer.domain.branch import BranchName, available_successor_branch
 from ai_software_engineer.domain.continuation import task_intent_sha256
@@ -968,6 +969,243 @@ class NativeRecoveryEntry:
         return NativeRecoveryExecution(
             plan, dispatch, NativeRecoveryPending(waiting.snapshot, waiting.disposition)
         )
+
+    def pending_progress_continuation(self, path: Path) -> NativeRecoveryExecution | None:
+        """Reattach an accepted scheduled Coder checkpoint before ordinary dispatch.
+
+        This is a read-only parent-Delivery attachment. A later Continue still has
+        to pass the normal Worker lock, lease, Context and provider admission gates.
+        The first-run interruption path is only for a Run without accepted output.
+        """
+        from contextlib import closing
+
+        from pymysql.cursors import DictCursor
+
+        from ai_software_engineer.artifacts.store import artifact_digest
+        from ai_software_engineer.domain import CoderProgressArtifact
+        from ai_software_engineer.manager.queue_capacity import production_role_queue
+        from ai_software_engineer.manager.recovery_input_schedule import (
+            require_consumed_recovery_input_schedule,
+        )
+        from ai_software_engineer.recovery.bounded_input import accepted_reapply_source_index
+        from ai_software_engineer.recovery.context_capacity import (
+            LegacyContextCapacitySourceReader,
+        )
+        from ai_software_engineer.store import MySqlTaskRepository
+        from ai_software_engineer.work_queue.invocation import (
+            DeliveryInvocationOutcome,
+            DeliveryInvocationStart,
+        )
+        from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
+
+        store, plan = self.open_plan(path)
+        if plan.input_mode != "coder_reapply":
+            return None
+        authorization = store.get_authorization(plan.plan_sha256)
+        sealed = store.get_task_record(plan.plan_sha256)
+        sealed.validate_binding(plan, authorization)
+        seed = store.get_seed(plan.plan_sha256)
+        invocation = store.get_invocation(plan.plan_sha256)
+        seed.validate_integrity()
+        invocation.validate_integrity()
+        dispatch = self._dispatch_for(store, plan)
+        if (
+            not authorization.decision.approved
+            or seed.dispatch_sha256 != dispatch.dispatch_sha256
+            or invocation.seed_record_sha256 != seed.record_sha256
+            or invocation.recovery_plan_sha256 != plan.plan_sha256
+        ):
+            raise RecoveryRejected("已接纳进度缺少原恢复批准或执行身份。")
+        sidecar = _repository_sidecar(self.config, plan.source.scope.repository_id)
+        dsn = self.config.require_mysql_dsn(self.environment)
+        queue = production_role_queue(dsn)
+        invocations = KnowledgeRecordStore(sidecar / "state/invocations", read_only=True)
+        artifacts = FileArtifactStore(sidecar / "artifacts", read_only=True)
+        contexts = FileContextStore(sidecar / "contexts", read_only=True)
+        # The same Task flock excludes an actual Worker while complete SQL and
+        # immutable file facts are read. It grants no new execution authority.
+        with WorkerExecutionGuard().task_scope(
+            sidecar / "state/queue-worker-locks", plan.new_task_id
+        ):
+            with MySqlTaskRepository(dsn) as repository:
+                task = repository.get(plan.new_task_id)
+                revision = repository.current_revision(task.id)
+                events = repository.list_events(task.id)
+            if task.status is not TaskStatus.IMPLEMENTING or task.attempts < 2:
+                return None
+            if not task_matches_dispatch(task, dispatch.task) or len(events) != revision:
+                raise RecoveryRejected("已接纳进度的 Task 或事件版本与原恢复分派不一致。")
+            schedule = require_consumed_recovery_input_schedule(
+                queue,
+                KnowledgeRecordStore(sidecar / "state/delivery-waits", read_only=True),
+                plan,
+                dispatch,
+                task,
+            )
+            if schedule is None:
+                return None
+            publications = queue.accepted(task.id)
+            source_index = accepted_reapply_source_index(
+                plan,
+                schedule.schedule_sha256,
+                publications,
+                events,
+                artifacts,
+                contexts,
+                retired_rejected_outputs=queue.retired_rejected_outputs(task.id),
+                lineage=queue,
+            )
+            if source_index == 0:
+                return None
+            if (
+                len(events) < 3
+                or events[-1].from_status is not TaskStatus.QUEUED
+                or events[-1].to_status is not TaskStatus.IMPLEMENTING
+                or events[-1].reason != "coder_continuation_resumed"
+                or events[-1].attempt != task.attempts
+                or events[-1].source_revision != task.base_ref
+            ):
+                raise RecoveryRejected("已接纳进度的当前 Coder checkpoint 不完整。")
+            items = queue.items_for_task(task.id)
+            pending = tuple(item for item in items if item.status is not WorkItemStatus.CLOSED)
+            if len(pending) != 1:
+                raise RecoveryRejected("已接纳进度的当前 WorkItem 不唯一。")
+            item = pending[0]
+            if (
+                item.role is not AgentRole.CODER
+                or item.task_id != task.id
+                or item.repository_id != dispatch.repository_id
+                or item.attempt != task.attempts
+                or item.checkpoint_sequence != revision
+                or item.status
+                not in {
+                    WorkItemStatus.LEASED,
+                    WorkItemStatus.RUNNING,
+                    WorkItemStatus.RETRY_SCHEDULED,
+                }
+            ):
+                raise RecoveryRejected("已接纳进度的当前 Coder WorkItem 身份或状态已变化。")
+            if (
+                invocations.find("invocation-starts", item.id, DeliveryInvocationStart) is not None
+                or invocations.find("invocation-outcomes", item.id, DeliveryInvocationOutcome)
+                is not None
+            ):
+                raise RecoveryRejected("下一轮 Coder 已有执行记录, 不能按无启动续跑挂接。")
+            old = tuple(
+                prior for prior in items if prior.role is AgentRole.CODER and prior.attempt == 1
+            )
+            if len(old) != 1 or old[0].status is not WorkItemStatus.CLOSED:
+                raise RecoveryRejected("原恢复 Coder WorkItem 不唯一。")
+            first = old[0]
+            start = invocations.get("invocation-starts", first.id, DeliveryInvocationStart)
+            outcome = invocations.get("invocation-outcomes", first.id, DeliveryInvocationOutcome)
+            start.validate_integrity()
+            outcome.validate_integrity()
+            accepted = tuple(
+                publication
+                for publication in publications
+                if publication.work_item_id == first.id and publication.run_id == invocation.run_id
+            )
+            progress_events = tuple(
+                event
+                for event in events
+                if event.reason in {"coder_requested_continuation", "coder_progress_recovered"}
+                and len(event.artifact_ids) == 1
+                and accepted
+                and event.artifact_ids == (accepted[0].receipt.artifact_id,)
+            )
+            if (
+                outcome.start != start
+                or start.request.run_id != invocation.run_id
+                or start.request.context_manifest_id != invocation.context_manifest_id
+                or len(accepted) != 1
+                or len(progress_events) != 1
+                or progress_events[0].attempt != first.attempt
+                or not isinstance(outcome.result.artifact, CoderProgressArtifact)
+                or outcome.result.artifact.artifact_id != accepted[0].receipt.artifact_id
+                or artifact_digest(outcome.result.artifact) != accepted[0].receipt.sha256
+            ):
+                raise RecoveryRejected("原恢复 Coder 完整结果与已接纳进度不一致。")
+            with (
+                closing(open_mysql_connection(dsn)) as connection,
+                connection.cursor(DictCursor) as cursor,
+            ):
+                cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                cursor.execute(
+                    "SELECT lease_id,state,expires_at,ended_at FROM work_queue_claims "
+                    "WHERE work_item_id=%s",
+                    (item.id,),
+                )
+                claims = cursor.fetchall()
+                connection.rollback()
+            if not claims:
+                raise RecoveryRejected("下一轮 Coder 缺少真实领取记录。")
+            now = datetime.now(UTC)
+            generations: set[int] = set()
+            active = []
+            historical = []
+            for row in claims:
+                claim = queue.original_claim(str(row["lease_id"]))
+                generation = claim.work_item.dispatch_sequence
+                if (
+                    claim.work_item.id != item.id
+                    or claim.work_item.task_id != task.id
+                    or claim.work_item.role is not AgentRole.CODER
+                    or claim.work_item.attempt != task.attempts
+                    or claim.work_item.repository_id != item.repository_id
+                    or claim.work_item.checkpoint_sequence != revision
+                    or generation in generations
+                    or generation > item.dispatch_sequence
+                ):
+                    raise RecoveryRejected("下一轮 Coder claim 的原始领取世代不一致。")
+                generations.add(generation)
+                # original_claim verifies the current SQL lease expiry against
+                # its renewable lease_json, while retaining the first CLAIMED
+                # snapshot. Compare the current row as a typed time, not to the
+                # original snapshot's pre-renewal expiry or its string format.
+                expires_at = queue._parse_time(str(row["expires_at"]))
+                state = row["state"]
+                if state == "ACTIVE":
+                    if row["ended_at"] is not None or expires_at > now:
+                        raise RecoveryRejected("下一轮 Coder claim 的活动状态不一致。")
+                    active.append(claim)
+                elif state in {"EXPIRED", "RELEASED"}:
+                    if row["ended_at"] is None or queue._parse_time(str(row["ended_at"])) > now:
+                        raise RecoveryRejected("下一轮 Coder 历史 claim 缺少结束证明。")
+                    historical.append(claim)
+                else:
+                    raise RecoveryRejected("下一轮 Coder claim 的结束状态不可验证。")
+            if item.status is WorkItemStatus.RETRY_SCHEDULED:
+                if active or max(generations) + 1 != item.dispatch_sequence:
+                    raise RecoveryRejected("下一轮 Coder 回收世代与当前 WorkItem 不一致。")
+            elif (
+                len(active) != 1
+                or active[0].work_item.dispatch_sequence != item.dispatch_sequence
+                or any(
+                    claim.work_item.dispatch_sequence >= item.dispatch_sequence
+                    for claim in historical
+                )
+            ):
+                raise RecoveryRejected("下一轮 Coder 活动领取与当前 WorkItem 不一致。")
+            try:
+                # Scan all durable stores by both WorkItem and Task attempt:
+                # a lost/misfiled key must not hide an invocation, model route,
+                # native capture, continuation receipt or accepted output.
+                LegacyContextCapacitySourceReader._require_no_start(
+                    sidecar, task, active[0] if active else historical[-1]
+                )
+            except Exception as error:
+                raise RecoveryRejected(
+                    "下一轮 Coder 的原生执行、模型路由或产物不能证明尚未启动。"
+                ) from error
+            snapshot = self.backend._delivery_snapshot(task.id)
+            if (
+                snapshot.task != task
+                or snapshot.task_revision != revision
+                or snapshot.candidate_revision is not None
+            ):
+                raise RecoveryRejected("当前无主 Coder checkpoint 已变化。")
+            return NativeRecoveryExecution(plan, dispatch, NativeRecoveryPending(snapshot, None))
 
     def _pending_knowledge_wait(
         self,

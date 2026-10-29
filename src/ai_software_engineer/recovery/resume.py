@@ -950,6 +950,12 @@ class DeliveryResumeController:
                 return self._recovery_human_gate(current, str(error))
         if admitted and interrupted is not None and interrupted.status is TaskStatus.IMPLEMENTING:
             try:
+                # A sealed Coder progress is already an accepted output. Its next
+                # WorkItem is an ordinary continuation even if its no-start claim
+                # expired; the first-run interruption approval cannot apply.
+                progress = self._recovery.pending_progress_continuation(path)
+                if progress is not None:
+                    return self._finish_coder_recovery(progress)
                 proposal = RecoveryInterruptionService(self._recovery, store, plan).propose()
                 if command.approved_plan_sha256 != proposal.plan_sha256:
                     return DeliveryResumeResult(

@@ -78,7 +78,9 @@ def test_one_complete_source_is_required_and_all_others_absent(
     context = builder.build(task, AgentRole.CODER, attempt=selected + 1)
     validate_scheduled_reapply_context(plan, decision_sha, selected, context)
     patches = tuple(
-        section for section in context.sections if section.name.startswith("source:recovery.")
+        section
+        for section in context.sections
+        if section.name.startswith("source:recovery.")
         and (section.name.endswith("patch") or "inherited_patch" in section.name)
     )
     refs = complete_reapply_source_refs(plan)
@@ -100,9 +102,9 @@ def test_missing_or_changed_selected_source_rejects(tmp_path: Path) -> None:
     task = make_task().model_copy(update={"repository": str(tmp_path / "project")})
     decision_sha = "f" * 64
     sources = scheduled_reapply_context_sources(plan, decision_sha, 1)
-    context = FileContextBuilder(
-        tmp_path / "project", plan.permissions, sources=sources
-    ).build(task, AgentRole.CODER, attempt=2)
+    context = FileContextBuilder(tmp_path / "project", plan.permissions, sources=sources).build(
+        task, AgentRole.CODER, attempt=2
+    )
     selected_name = "source:" + complete_reapply_source_refs(plan)[1].source_id
     missing = context.model_copy(
         update={"sections": tuple(s for s in context.sections if s.name != selected_name)}
@@ -203,20 +205,24 @@ def test_only_accepted_progress_with_exact_full_context_advances_source(tmp_path
     contexts = {item[3].context_id: item[3] for item in (first, second)}
     artifact_store = SimpleNamespace(get=artifacts.__getitem__)
     context_store = SimpleNamespace(get=contexts.__getitem__)
-    assert accepted_reapply_source_index(
-        plan, "f" * 64, (), (), artifact_store, context_store
-    ) == 0
-    assert accepted_reapply_source_index(
-        plan, "f" * 64, (first[2],), (first[1],), artifact_store, context_store
-    ) == 1
-    assert accepted_reapply_source_index(
-        plan,
-        "f" * 64,
-        (first[2], second[2]),
-        (first[1], second[1]),
-        artifact_store,
-        context_store,
-    ) == 2
+    assert accepted_reapply_source_index(plan, "f" * 64, (), (), artifact_store, context_store) == 0
+    assert (
+        accepted_reapply_source_index(
+            plan, "f" * 64, (first[2],), (first[1],), artifact_store, context_store
+        )
+        == 1
+    )
+    assert (
+        accepted_reapply_source_index(
+            plan,
+            "f" * 64,
+            (first[2], second[2]),
+            (first[1], second[1]),
+            artifact_store,
+            context_store,
+        )
+        == 2
+    )
     # Merely accepting an Artifact file is not an accepted progress checkpoint.
     with pytest.raises(RecoveryRejected):
         accepted_reapply_source_index(
@@ -246,6 +252,75 @@ def test_only_accepted_progress_with_exact_full_context_advances_source(tmp_path
     with pytest.raises(RecoveryRejected):
         accepted_reapply_source_index(
             plan, "f" * 64, (first[2],), (wrong_event,), artifact_store, context_store
+        )
+
+
+def test_accepted_progress_keeps_queue_revision_distinct_from_coder_attempt(
+    tmp_path: Path,
+) -> None:
+    """K1's Task revision 2 claim publishes attempt 1 Coder progress."""
+    plan = _plan(tmp_path / "project")
+    artifact, event, publication, context = _accepted_progress(
+        plan, tmp_path / "project", source_index=0, number=1, previous=None
+    )
+    # This is the real K1 relation: the WorkItem/claim/publication checkpoint
+    # is the pre-Coder Task revision, while progress content and StateEvent
+    # attempt are role execution attempt 1.
+    publication = publication.model_copy(update={"checkpoint_sequence": 2})
+    item = SimpleNamespace(
+        id=publication.work_item_id,
+        task_id=plan.new_task_id,
+        role=AgentRole.CODER,
+        attempt=1,
+        checkpoint_sequence=2,
+        dispatch_sequence=0,
+    )
+    boundary = SimpleNamespace(
+        task_id=plan.new_task_id,
+        role=AgentRole.CODER,
+        attempt=1,
+        checkpoint_sequence=2,
+        source_revision=plan.target_base_revision,
+    )
+    claim = SimpleNamespace(
+        work_item=SimpleNamespace(
+            **{**vars(item), "dispatch_sequence": publication.dispatch_sequence}
+        ),
+        assignment=SimpleNamespace(
+            task_id=plan.new_task_id,
+            role=AgentRole.CODER,
+            attempt=1,
+            lease_id=publication.lease_id,
+        ),
+        lease=SimpleNamespace(id=publication.lease_id, task_id=plan.new_task_id),
+    )
+    lineage = SimpleNamespace(
+        step=lambda _item_id: SimpleNamespace(work_item=item, boundary=boundary),
+        original_claim=lambda _lease_id: claim,
+    )
+    artifacts = SimpleNamespace(get=lambda _id: artifact)
+    contexts = SimpleNamespace(get=lambda _id: context)
+    assert (
+        accepted_reapply_source_index(
+            plan,
+            "f" * 64,
+            (publication,),
+            (event,),
+            artifacts,
+            contexts,
+            lineage=lineage,
+        )
+        == 1
+    )
+    with pytest.raises(RecoveryRejected, match="queue lineage"):
+        accepted_reapply_source_index(
+            plan,
+            "f" * 64,
+            (publication.model_copy(update={"checkpoint_sequence": 3}),),
+            (event,),
+            artifacts,
+            contexts,
+            lineage=lineage,
         )
 
 
@@ -308,15 +383,18 @@ def test_exactly_retired_rejected_progress_does_not_block_reapply_source(
     )
     artifact_store = SimpleNamespace(get=artifacts.__getitem__)
     context_store = SimpleNamespace(get=contexts.__getitem__)
-    assert accepted_reapply_source_index(
-        plan,
-        "f" * 64,
-        (publication,),
-        (),
-        artifact_store,
-        context_store,
-        retired_rejected_outputs=(evidence,),
-    ) == 0
+    assert (
+        accepted_reapply_source_index(
+            plan,
+            "f" * 64,
+            (publication,),
+            (),
+            artifact_store,
+            context_store,
+            retired_rejected_outputs=(evidence,),
+        )
+        == 0
+    )
 
     # A near miss is not silently discarded: only the complete immutable identity
     # of the consumed rejected-output proof can retire a publication.
