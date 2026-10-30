@@ -63,6 +63,11 @@ composition data, not a new approval or AgentRequest wire field.
   source bytes at the smaller of twice the package limit and 4 MB. Exact-only
   Plans keep their existing per-blob and final package limits. Package/wrapper totals
   must fit the separate byte bound; this is not a tokenizer or permission expansion.
+- Short Git reads must use the trusted `spawn_owned_query` pre-exec ACK gate: capture and
+  observe the actual isolated session before releasing the original token argv, exact
+  restricted environment and cwd. The caller retains its bounded stdout/stderr drain,
+  30-second deadline, real session stop and EOF checks. Capture/ACK refusal never
+  falls back to a direct `Popen`, accepts partial source, or becomes a QA verdict.
 - Production factory always supplies BoundCandidateSource to CLI adapters. Ordinary QA/Reviewer
   append it after receipts and image descriptions. A current claim-bound
   `TrustedStaticQaMissingEntryOutputContract` instead supplies only the sealed absence proof:
@@ -88,6 +93,8 @@ composition data, not a new approval or AgentRequest wire field.
 | Exact consumed static QA proof with missing frozen test path | Proof-only independent QA FAIL input; no generic source-review claim |
 | Tree/blob/tag identity instead of commit | Refuse before tree reading |
 | Source/process/final prompt exceeds bound | Stable refusal; no truncation, retry or fabricated verdict |
+| Git exits before a direct-Popen caller can capture its owner | Pre-exec gate holds the command until owner capture; repeated short reads succeed or refuse before Git execution |
+| Pre-exec capture, command, output or stop proof fails | Fail closed; no partial package or model invocation; retain any uncertain owner fact |
 | Missing unchanged function or independent test evidence | Verifier must report unmet prerequisite |
 
 CLI maps source refusals to durable non-transient POLICY_VIOLATION using its existing failure
@@ -109,6 +116,9 @@ model start; no path pattern can bypass Task deny rules.
   safe Git-tree `/**` expansion, empty/unsafe/over-count refusals, deny rules,
   missing/binary/symlink/non-UTF-8/commit-object checks, output bounds and byte/hash
   roundtrip with quotes, backslashes, Unicode and pseudo frame boundaries.
+- `test_candidate_source_ownership.py`: repeated short Git reads inside a Host owner scope,
+  deterministic eager-exit direct-Popen regression, nonzero exit, timeout and capture refusal;
+  verify complete stop/empty registry where proof exists and no fallback on uncertainty.
 - `test_candidate_source_binding.py`: real production factory/CLI seam, unchanged native read-only
   and no-command argv, mismatched artifact facts, final receipt+prompt budget, zero calls on failure,
   exact preservation of all structured and plain message values.
@@ -132,3 +142,16 @@ normal queue reclaim and independent QA; do not resubmit the decision, reset the
 or edit the frozen Plan. A missing test still requires a proof-bound QA FAIL and Coder
 repair. Roll back only while idle; retain appended records and use a compatible reader
 for any new claim. A rollback cannot turn an expired lease into proof of a result.
+
+### 2026-10-30 short Git owner-capture incident
+
+The production `CONTINUE_DELIVERY` operation `operation_791888210e9af5b085275029639ff021`
+ended with `OwnedProcessesUncertain` after a candidate verification QA admission and a
+sealed Python/MySQL command receipt. The observed platform failure is an owner capture
+race in the candidate source Git reader; the initial OS error cause was not sealed in
+the operation record and must not be invented. The QA invocation has no accepted model
+result or report, and its original approved plan is at-most-once. Preserve these facts.
+After an idle reviewed release, independently verify the public state and run the public
+`verify-propose` path for a new exact plan and authorization. Its QA/Reviewer evidence
+must be accepted through the normal gates; a green unit test alone does not establish
+that the existing K1 delivery recovered.
