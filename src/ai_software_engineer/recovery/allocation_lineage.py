@@ -83,7 +83,6 @@ def resolve_planner_dispatch(
                 if checkpoint.checkpoint_sha256 == source_checkpoint
                 and checkpoint.delivery_id == source_delivery
                 and checkpoint.task_id == source_task
-                and checkpoint.candidate_revision is None
                 and checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
             )
             if len(matches) != 1:

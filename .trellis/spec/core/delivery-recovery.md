@@ -2400,6 +2400,22 @@ dispatch_sha256
   dispatch; `allocation_preparation_sha256` separately validates the preparation used by the current
   successor Task. If that successor Coder also fails before a candidate, the same `resume` flow emits
   another fresh recovery plan and Task instead of assuming only one recovery attempt.
+- A `RecoveryDispatchRecord` may name an exact `BLOCKED`/`FAILED` source checkpoint that retains a
+  historical `candidate_revision`. The recovery ancestry reader must match the sealed source
+  checkpoint SHA-256, Delivery ID and Task ID, then follow its dispatch ID under the unchanged
+  repository, request and approved execution plan; a nullable Candidate cursor is not a condition
+  of ancestry. This lookup only identifies the original Planner dispatch. It does not authorize
+  reusing the historical Candidate or skip the independent Task event/artifact, Run, worktree and
+  candidate-snapshot checks. Missing or mismatched source SHA-256, Task, Delivery, dispatch or a
+  nonterminal source still rejects before candidate verification. Good: an exact terminal recovery
+  source retaining Candidate V1 resolves to its original Planner dispatch. Base: the same source
+  with a null Candidate cursor also resolves. Bad: treat any checkpoint with a Candidate as sufficient
+  proof of the current Candidate or accept a different source identity.
+  Existing K1 checkpoints and dispatches remain immutable; after deploying this reader fix, retry
+  the failed public `CONTINUE_DELIVERY` operation using the current checkpoint and a fresh operation
+  ID. Do not edit the old operation, Task, approval or Delivery journal. Rollback is the previous
+  platform revision; the existing immutable facts remain readable there, though this exact
+  historical-Candidate ancestry will again be rejected until the fix is restored.
 - A terminal Task with a durable candidate first gets independent QA/Reviewer verification, unless
   an exact later Coder failure has been settled through the contained-UNKNOWN budget contract.
   That post-feedback case follows the separately approved Coder recovery source, preserving the

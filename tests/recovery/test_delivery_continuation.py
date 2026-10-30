@@ -67,6 +67,7 @@ def test_terminal_coder_preparation_drift_offers_exact_recovery(tmp_path: Path) 
         task_id="task_terminal_coder",
         task_status=TaskStatus.BLOCKED,
         candidate_revision=None,
+        failure_summary="Coder stopped after preparation drift",
         repository_root=str(tmp_path / "repository"),
         delivery_id="delivery_terminal_coder",
     )
@@ -143,6 +144,7 @@ def test_terminal_candidate_completion_bypasses_stale_native_retry(
         task_id="task_terminal_candidate",
         task_status=TaskStatus.BLOCKED,
         candidate_revision="a" * 40,
+        failure_summary="QA verification stopped",
         repository_root=str(tmp_path / "repository"),
         delivery_id="delivery_terminal_candidate",
     )
@@ -193,6 +195,7 @@ def test_terminal_candidate_without_plan_bypasses_stale_native_retry(
         task_id="task_terminal_candidate",
         task_status=TaskStatus.BLOCKED,
         candidate_revision="a" * 40,
+        failure_summary="QA verification stopped",
         repository_root=str(tmp_path / "repository"),
         delivery_id="delivery_terminal_candidate",
     )
