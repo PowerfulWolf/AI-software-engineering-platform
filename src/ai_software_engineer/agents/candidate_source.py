@@ -15,7 +15,11 @@ from ai_software_engineer.domain import AgentPermissions
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
-from ai_software_engineer.owned_processes import finish_owned_process, observe_owned_process
+from ai_software_engineer.owned_processes import (
+    OwnedProcessesUncertain,
+    finish_owned_process,
+)
+from ai_software_engineer.owned_spawn import spawn_owned_query
 from ai_software_engineer.redaction import redact_text
 
 _MAX_REQUIRED_SOURCE_PATHS = 128
@@ -79,26 +83,34 @@ class _Blob:
 
 def _git(root: Path, *arguments: str, limit: int = 2_000_000) -> bytes:
     """Drain both pipes with hard limits; never buffer an unbounded diff first."""
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_ALLOW_PROTOCOL": "",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+    }
     try:
-        process = subprocess.Popen(
-            ("git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *arguments),
+        spawned = spawn_owned_query(
+            (
+                "git",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "core.fsmonitor=false",
+                *arguments,
+            ),
             cwd=root,
+            environment=environment,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True,
-            env={
-                "PATH": "/usr/bin:/bin",
-                "LANG": "C",
-                "GIT_NO_REPLACE_OBJECTS": "1",
-                "GIT_NO_LAZY_FETCH": "1",
-                "GIT_ALLOW_PROTOCOL": "",
-                "GIT_CONFIG_NOSYSTEM": "1",
-                "GIT_CONFIG_GLOBAL": "/dev/null",
-            },
         )
-    except OSError as error:
+    except (OSError, OwnedProcessesUncertain) as error:
         raise WorkspacePolicyError("candidate source Git could not start") from error
-    observation = observe_owned_process(process, kind="tool")
+    process, observation = spawned.process, spawned.observation
     output_drained = False
     assert process.stdout is not None and process.stderr is not None
     output, errors = bytearray(), bytearray()
