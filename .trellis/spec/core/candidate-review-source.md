@@ -97,8 +97,9 @@ composition data, not a new approval or AgentRequest wire field.
 | Pre-exec capture, command, output or stop proof fails | Fail closed; no partial package or model invocation; retain any uncertain owner fact |
 | Missing unchanged function or independent test evidence | Verifier must report unmet prerequisite |
 
-CLI maps source refusals to durable non-transient POLICY_VIOLATION using its existing failure
-contract. This does not turn a source/environment precondition into a QA code verdict.
+CLI maps source contract refusals to durable non-transient POLICY_VIOLATION using its existing
+failure contract. `OwnedProcessesUncertain` instead preserves execution uncertainty and the
+safe waiting path. Neither case becomes a QA code verdict.
 
 ## 5. Good / Base / Bad Cases
 

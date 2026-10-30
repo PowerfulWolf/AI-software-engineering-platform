@@ -105,9 +105,7 @@ def test_candidate_git_timeout_stops_the_owned_process(
     root = _repository(tmp_path)
     registry = HostOwnedProcessRegistry()
     ticks = iter((0.0, 31.0))
-    monkeypatch.setattr(
-        candidate_source, "time", SimpleNamespace(monotonic=lambda: next(ticks))
-    )
+    monkeypatch.setattr(candidate_source, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
 
     with registry.operation_scope("operation_candidate_source_timeout"):
         with pytest.raises(WorkspacePolicyError, match="timed out"):
