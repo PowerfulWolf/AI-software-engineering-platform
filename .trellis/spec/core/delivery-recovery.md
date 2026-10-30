@@ -119,6 +119,26 @@ keeps the same Task and WorkItem, advances the dispatch generation and does not 
 increment the original work attempt. Missing queue consumption, mismatched decision or
 tampered source bytes blocks the next Run before model admission.
 
+`MySqlRoleQueue.consumed_recovery_input_resolution(task_id)` reads a Task's full
+`WAIT_RESOLVED` history, which can also contain later QA and engineering decisions. It
+must type-check every event, validate each decision's digest, and verify the event's
+decision SHA and Task scope before filtering by `resolution_kind`. Then it selects
+`SCHEDULE_RECOVERY_INPUT` before applying this route's same-WorkItem
+`next_work_item_id`, `READY`, original-claim and source checks. A valid
+`RETRY_REJECTED_STATIC_QA_OUTPUT` closes its original QA WorkItem and creates a
+separate successor; that shape is not a corrupt pre-Context schedule. Only the
+selected schedule may authorize recovery input, and every selected schedule must
+pass its complete digest, event, Task, generation and original-claim checks; two
+selected schedules remain corruption. A malformed selected schedule fails closed,
+while another valid resolution kind cannot grant this capability or block the
+existing schedule merely because its successor shape differs. The MySQL regression
+must include a real schedule followed by a distinct successor decision, a rejected
+QA child with no schedule, a tampered non-target digest and Task scope, and a
+tampered schedule event. Existing K1 Task and
+decision bytes require no rewrite: after controlled release, use the latest
+Requirement checkpoint through public `CONTINUE_DELIVERY` to retry the untouched
+QA Task. Rollback retains the recorded decisions and waits for a corrected reader.
+
 Production Context assembly removes the old all-source recovery sections only after
 the consumed decision is verified. It then builds one required complete source and a
 manifest that names all sources; no source body is truncated or represented only by a

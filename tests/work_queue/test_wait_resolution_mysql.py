@@ -528,6 +528,101 @@ def test_pre_context_schedule_requires_real_claim_and_consumes_without_budget_re
     assert waiting.queue.resolve_wait(resolution) == ready
     assert waiting.resolution_events() == 1
 
+    next_claim = (
+        dispatcher(waiting.queue)
+        .tick(now=waiting.now + timedelta(seconds=8), work_item_id=ready.id)
+        .claim
+    )
+    assert next_claim is not None
+    later = decide_delivery_disposition(
+        DeliveryFailureFacts(
+            task_id=task.id,
+            work_item_id=ready.id,
+            role=AgentRole.CODER,
+            classification="PLATFORM_BUG",
+            source_revision=SOURCE,
+            task_intent_sha256=task_intent_sha256(task),
+            checkpoint_sequence=ready.checkpoint_sequence,
+            budget_available=True,
+            evidence_ids=(),
+        )
+    )
+    waiting.queue.wait(
+        ready.id,
+        lease_id=next_claim.lease.id,
+        owner_token=TOKEN,
+        status=WorkItemStatus.WAITING_HUMAN,
+        reason=later.reason,
+        disposition=later,
+        now=waiting.now + timedelta(seconds=9),
+    )
+    waiting.claim = next_claim
+    waiting.disposition = later
+    waiting.now += timedelta(seconds=9)
+    later_resolution = waiting.resolution()
+    later_item = waiting.queue.resolve_wait(later_resolution)
+    assert later_item.id != ready.id
+    assert waiting.queue.consumed_recovery_input_resolution(task.id) == resolution
+    with (
+        closing(open_mysql_connection(waiting.dsn)) as connection,
+        connection.cursor(DictCursor) as cursor,
+    ):
+        cursor.execute(
+            "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
+            "AND event_type='WAIT_RESOLVED' AND "
+            "JSON_UNQUOTE(JSON_EXTRACT(payload_json, "
+            "'$.detail.resolution.resolution_kind'))=%s",
+            (ready.id, later_resolution.resolution_kind.value),
+        )
+        row = cursor.fetchone()
+        assert row is not None
+        original_payload = str(row["payload_json"])
+        for path, changed in (
+            ("$.detail.resolution_sha256", "f" * 64),
+            ("$.work_item.task_id", task.id[:-1] + ("2" if task.id[-1] != "2" else "3")),
+        ):
+            cursor.execute(
+                "UPDATE work_queue_events SET payload_json=JSON_SET(payload_json, %s, %s) "
+                "WHERE work_item_id=%s AND event_type='WAIT_RESOLVED' AND "
+                "JSON_UNQUOTE(JSON_EXTRACT(payload_json, "
+                "'$.detail.resolution.resolution_kind'))=%s",
+                (path, changed, ready.id, later_resolution.resolution_kind.value),
+            )
+            assert cursor.rowcount == 1
+            connection.commit()
+            with pytest.raises(
+                QueueCorruption, match="recovery input schedule consumption evidence"
+            ):
+                waiting.queue.consumed_recovery_input_resolution(task.id)
+            cursor.execute(
+                "UPDATE work_queue_events SET payload_json=%s WHERE work_item_id=%s "
+                "AND event_type='WAIT_RESOLVED' AND "
+                "JSON_UNQUOTE(JSON_EXTRACT(payload_json, "
+                "'$.detail.resolution.resolution_kind'))=%s",
+                (original_payload, ready.id, later_resolution.resolution_kind.value),
+            )
+            assert cursor.rowcount == 1
+            connection.commit()
+    assert waiting.queue.consumed_recovery_input_resolution(task.id) == resolution
+    with closing(open_mysql_connection(waiting.dsn)) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE work_queue_events SET payload_json=JSON_SET(payload_json, "
+                "'$.detail.next_work_item_id', %s) WHERE work_item_id=%s "
+                "AND event_type='WAIT_RESOLVED' AND "
+                "JSON_UNQUOTE(JSON_EXTRACT(payload_json, "
+                "'$.detail.resolution.resolution_kind'))=%s",
+                (
+                    "work_" + "f" * 64,
+                    ready.id,
+                    DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT.value,
+                ),
+            )
+            assert cursor.rowcount == 1
+        connection.commit()
+    with pytest.raises(QueueCorruption, match="recovery input schedule consumption evidence"):
+        waiting.queue.consumed_recovery_input_resolution(task.id)
+
 
 @pytest.mark.parametrize("waiting", [AgentRole.QA], indirect=True)
 def test_candidate_environment_retry_consumes_work_once_keeps_old_qa_and_candidate(
@@ -875,6 +970,7 @@ def test_rejected_static_qa_output_reclaims_exact_coverage_without_replaying_old
     assert waiting.queue.rejected_static_qa_artifact_ids(current.task_id) == frozenset(
         (report.artifact_id,)
     )
+    assert waiting.queue.consumed_recovery_input_resolution(current.task_id) is None
     with pytest.raises(QueueCorruption, match="accepted receipt"):
         accepted_store.get(report.artifact_id)
     assert waiting.queue.resolve_wait(resolution, invocation_records=records) == next_item

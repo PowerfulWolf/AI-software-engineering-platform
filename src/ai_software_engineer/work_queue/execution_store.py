@@ -276,13 +276,14 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 decision.validate_integrity()
                 if (
                     detail.resolution_sha256 != decision.resolution_sha256
-                    or detail.next_work_item_id != event.work_item.id
                     or event.work_item.task_id != task_id
                     or detail.budget_refund
                 ):
                     raise ValueError("consumed wait event changed its exact decision")
                 if decision.resolution_kind is not DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT:
                     continue
+                if detail.next_work_item_id != event.work_item.id:
+                    raise ValueError("consumed recovery schedule changed its WorkItem")
                 original = decision.pre_context_recovery_input
                 if (
                     original is None
