@@ -18,7 +18,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError, model_validator
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents.models import AgentRunStatus
-from ai_software_engineer.artifacts import ArtifactStore
+from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.artifacts.ports import ArtifactRef
 from ai_software_engineer.domain.artifact import Artifact, QaReportArtifact, Sha256
 from ai_software_engineer.domain.continuation import task_intent_sha256
@@ -637,7 +637,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             or outcome.result.status is not AgentRunStatus.SUCCEEDED
             or not isinstance(report, QaReportArtifact)
             or report.artifact_id != old.receipt.artifact_id
-            or report.integrity.sha256 != old.receipt.sha256
+            or artifact_digest(report) != old.receipt.sha256
             or report.content.status is not QaReportStatus.FAIL
             or tuple(result.criterion_id for result in report.content.criteria_results)
             != evidence.reported_criterion_ids
@@ -1306,7 +1306,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             or outcome.result.status is not AgentRunStatus.SUCCEEDED
             or not isinstance(report, QaReportArtifact)
             or report.artifact_id != evidence.previous_qa_artifact_id
-            or report.integrity.sha256 != evidence.previous_qa_sha256
+            or artifact_digest(report) != evidence.previous_qa_sha256
             or report.content.status is not QaReportStatus.FAIL
             or tuple(result.criterion_id for result in report.content.criteria_results)
             != evidence.reported_criterion_ids

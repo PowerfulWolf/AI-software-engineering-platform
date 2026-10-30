@@ -1521,8 +1521,10 @@ class DeliveryWaitService:
         artifact = self.artifacts.get(record.receipt.artifact_id)
         if (
             not isinstance(artifact, QaReportArtifact)
+            or not artifact.integrity.validated
             or artifact.integrity.sha256 != record.receipt.sha256
-            or artifact != outcome.result.artifact
+            or artifact_digest(artifact) != record.receipt.sha256
+            or artifact_digest(outcome.result.artifact) != record.receipt.sha256
             or artifact.producer.run_id != start.request.run_id
             or artifact.parent_artifact_ids
             != (consumed_static.static_qa_missing_entry.implementation_artifact_id,)
@@ -1588,7 +1590,7 @@ class DeliveryWaitService:
                 and record.context_manifest_id == start.request.context_manifest_id
                 and record.source_revision == step.boundary.source_revision
                 and record.receipt.artifact_id == outcome.result.artifact.artifact_id
-                and record.receipt.sha256 == outcome.result.artifact.integrity.sha256
+                and record.receipt.sha256 == artifact_digest(outcome.result.artifact)
             )
             if len(accepted) == 1:
                 consumed = self.queue.static_qa_resolution_for_wait(

@@ -21,6 +21,10 @@ Before adding another recovery exception, read
   a candidate, an independent verdict or permission to reapply protected rule edits.
 - Locate all consumers of the invariant before editing: Task/role compiler, adapter/tool,
   candidate/progress gate, recovery proposal/current facts, Context, Schema, Console projection.
+- Invocation outcomes retain the agent's pre-seal artifact. Its `integrity` can contain a
+  placeholder SHA; compare `artifact_digest(outcome.result.artifact)` with the accepted receipt,
+  then validate the sealed ArtifactStore copy and its exact lineage. A recovery regression must
+  exercise the raw outcome, the sealed publication, decision consumption and the next claim.
 - Regress through the public Continue path and verify same Requirement, unchanged source
   history and complete UI record. Local classes alone do not establish production recovery.
 

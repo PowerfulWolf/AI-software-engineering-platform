@@ -189,6 +189,19 @@ closed. ArtifactStore excludes the old QA publication only after this decision
 has been consumed. The next independent QA report must cover every frozen
 criterion, marking unverified rows `NOT_TESTED` and retaining real findings.
 
+The durable invocation outcome contains the QA model's original, possibly
+unsealed `qa-report` (`integrity.validated=false`, placeholder SHA); the
+ArtifactStore copy is sealed during owner-fenced acceptance. Inspection,
+`RETRY_REJECTED_STATIC_QA_OUTPUT` consumption and the replacement QA claim
+must compare `artifact_digest(original_report)` to the accepted receipt's
+SHA-256. The digest excludes the store-owned `integrity` field. Inspection
+also verifies that the store copy is validated and its integrity SHA and
+recomputed digest equal that receipt. Direct object equality or comparison of
+the original placeholder SHA to the receipt rejects a valid accepted output.
+All existing Run, claim, context, candidate, parent, coverage and Task-event
+checks still apply; mismatched report content fails closed. No historical
+outcome, accepted artifact or verdict is rewritten.
+
 #### Current candidate read after a consumed rejection
 
 The Console submits `POST /api/v1/operations` with
