@@ -396,6 +396,11 @@ class AcceptedArtifactStore:
             *(record.receipt for record in self.queue.accepted(self.task_id)),
         )
         rejected = self.queue.rejected_output_artifact_ids(self.task_id)
+        rejected = rejected | (
+            self.queue.rejected_static_qa_artifact_ids(self.task_id)
+            if hasattr(self.queue, "rejected_static_qa_artifact_ids")
+            else frozenset()
+        )
         # A publication receipt may precede the final semantic checkpoint gate.
         # Only the exact consumed rejection decision excludes that publication;
         # its legal supersedes ancestors and immutable bytes remain available.

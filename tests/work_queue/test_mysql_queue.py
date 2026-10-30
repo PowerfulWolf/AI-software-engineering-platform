@@ -144,6 +144,11 @@ def test_queue_lifecycle_closes_current_and_atomically_publishes_next(
     assert mysql_queue.enqueue(coder) == coder
     assert mysql_queue.enqueue(coder) == coder
 
+    with pytest.raises(QueueConflict, match="Run identity"):
+        mysql_queue.enqueue(queued_item("duplicate"))
+    with pytest.raises(QueueConflict, match="Run identity"):
+        mysql_queue.enqueue(queued_item("unapproved-child", parent=coder.id))
+
     tick = dispatcher(mysql_queue, "worker_host_one").tick(now=NOW)
     assert tick.status is DispatcherTickStatus.DISPATCHED
     assert tick.claim is not None

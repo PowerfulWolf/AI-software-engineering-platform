@@ -130,3 +130,77 @@ def test_deletion_schema_regeneration_preserves_static_qa_guards(tmp_path: Path)
     assert rejected["carry_history_sha256s"]["uniqueItems"] is True
     assert generated == published
     assert regenerated_bytes == published_bytes
+
+
+def _rejected_static_decision() -> dict[str, Any]:
+    wire = _wire("RESUME_UNINVOKED")
+    wire["resolution_kind"] = "RETRY_REJECTED_STATIC_QA_OUTPUT"
+    wire["rejected_static_qa_output"] = {
+        "task_id": "task_schema",
+        "work_item_id": "work_schema",
+        "candidate_revision": "c" * 40,
+        "static_resolution_sha256": "a" * 64,
+        "previous_qa_artifact_id": "art_qa_schema",
+        "previous_qa_sha256": "b" * 64,
+        "previous_run_id": "run_schema",
+        "previous_context_manifest_id": "ctx_" + "c" * 64,
+        "previous_lease_id": "lease_schema",
+        "previous_claim_sha256": "d" * 64,
+        "previous_dispatch_sequence": 1,
+        "invocation_start_sha256": "e" * 64,
+        "invocation_outcome_sha256": "f" * 64,
+        "all_criterion_ids": ["ac_1", "ac_2", "ac_3"],
+        "reported_criterion_ids": ["ac_1", "ac_3"],
+        "missing_criterion_ids": ["ac_2"],
+    }
+    return dict(DeliveryResolution.model_validate(wire).to_wire())
+
+
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "engineering-wait-resolution.schema.json",
+        "console-operation.schema.json",
+        "console-deletion-cleanup.schema.json",
+    ),
+)
+def test_rejected_static_qa_resolution_has_exact_published_schema(filename: str) -> None:
+    schema = json.loads((SCHEMAS / filename).read_text(encoding="utf-8"))
+    validator = Draft202012Validator(
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": schema["$defs"],
+            "$ref": "#/$defs/DeliveryResolution",
+        }
+    )
+    wire = _rejected_static_decision()
+    validator.validate(wire)
+    for mutation in ("missing", "other_kind", "policy"):
+        changed = deepcopy(wire)
+        if mutation == "missing":
+            changed.pop("rejected_static_qa_output")
+        elif mutation == "other_kind":
+            changed["resolution_kind"] = "RESUME_UNINVOKED"
+        else:
+            changed["authorization_source"] = "organization_engineering_policy"
+        with pytest.raises((ValidationError, ValueError)):
+            DeliveryResolution.model_validate(changed)
+        with pytest.raises(SchemaValidationError):
+            validator.validate(changed)
+
+
+@pytest.mark.parametrize("mutation", ("overlap", "wrong_gap", "duplicate", "extra"))
+def test_rejected_static_qa_coverage_cannot_be_forged(mutation: str) -> None:
+    wire = _rejected_static_decision()
+    changed = deepcopy(wire)
+    evidence = changed["rejected_static_qa_output"]
+    if mutation == "overlap":
+        evidence["missing_criterion_ids"] = ["ac_1", "ac_2"]
+    elif mutation == "wrong_gap":
+        evidence["missing_criterion_ids"] = ["ac_3"]
+    elif mutation == "duplicate":
+        evidence["reported_criterion_ids"] = ["ac_1", "ac_1"]
+    else:
+        evidence["reported_criterion_ids"] = ["ac_1", "ac_3", "ac_extra"]
+    with pytest.raises(ValidationError):
+        DeliveryResolution.model_validate(changed)

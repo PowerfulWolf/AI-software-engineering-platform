@@ -214,6 +214,27 @@ resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
     {
         "if": {
             "required": ["resolution_kind"],
+            "properties": {"resolution_kind": {"const": "RETRY_REJECTED_STATIC_QA_OUTPUT"}},
+        },
+        "then": {
+            "required": ["rejected_static_qa_output", "operator_principal"],
+            "properties": {
+                "rejected_static_qa_output": {"type": "object"},
+                "authorization_source": {"const": "engineering_operator_decision"},
+                "engineering_admission": {"type": "null"},
+                "retry_failure": {"type": "null"},
+                "retry_cause": {"type": "null"},
+                "verifier_preparation": {"type": "null"},
+                "static_qa_missing_entry": {"type": "null"},
+            },
+        },
+        "else": {"properties": {"rejected_static_qa_output": {"type": "null"}}},
+    }
+)
+resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
+    {
+        "if": {
+            "required": ["resolution_kind"],
             "properties": {"resolution_kind": {"const": "RETRY_REJECTED_KNOWLEDGE_PREPARATION"}},
         },
         "then": {
@@ -357,6 +378,37 @@ resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] = [
             },
         },
     },
+]
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] += [
+    {
+        "if": {
+            "required": ["permitted_resolutions"],
+            "properties": {
+                "permitted_resolutions": {"contains": {"const": "RETRY_REJECTED_STATIC_QA_OUTPUT"}}
+            },
+        },
+        "then": {
+            "required": ["rejected_static_qa_output", "original_run_id"],
+            "properties": {
+                "rejected_static_qa_output": {"type": "object"},
+                "permitted_resolutions": {
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": {"const": "RETRY_REJECTED_STATIC_QA_OUTPUT"},
+                },
+                "disposition": {
+                    "properties": {
+                        "facts": {
+                            "properties": {
+                                "role": {"const": "qa"},
+                                "classification": {"const": "PLATFORM_BUG"},
+                            }
+                        }
+                    }
+                },
+            },
+        },
+    }
 ]
 resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] += [
     {
@@ -989,11 +1041,7 @@ recovery_input_resolution_guard = {
 }
 recovery_input_investigation_guard = {
     "if": {
-        "properties": {
-            "permitted_resolutions": {
-                "contains": {"const": "SCHEDULE_RECOVERY_INPUT"}
-            }
-        }
+        "properties": {"permitted_resolutions": {"contains": {"const": "SCHEDULE_RECOVERY_INPUT"}}}
     },
     "then": {
         "required": ["pre_context_recovery_input"],
@@ -1014,9 +1062,7 @@ recovery_input_investigation_guard = {
     },
     "else": {"properties": {"pre_context_recovery_input": {"type": "null"}}},
 }
-resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(
-    recovery_input_resolution_guard
-)
+resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(recovery_input_resolution_guard)
 resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"].append(
     recovery_input_investigation_guard
 )
@@ -1039,6 +1085,17 @@ if wait_only:
         for guard in canonical["DeliveryResolution"]["allOf"]
         if guard.get("if", {}).get("properties", {}).get("resolution_kind", {}).get("const")
         == "STATIC_QA_MISSING_ENTRY"
+    )
+    rejected_static_guard = next(
+        guard
+        for guard in canonical["DeliveryResolution"]["allOf"]
+        if guard.get("if", {}).get("properties", {}).get("resolution_kind", {}).get("const")
+        == "RETRY_REJECTED_STATIC_QA_OUTPUT"
+    )
+    rejected_static_investigation_guard = next(
+        guard
+        for guard in canonical["DeliveryWaitInvestigation"]["allOf"]
+        if "RETRY_REJECTED_STATIC_QA_OUTPUT" in json.dumps(guard, sort_keys=True)
     )
     verifier_guard = next(
         guard
@@ -1070,17 +1127,24 @@ if wait_only:
         expected_previous = [
             value
             for value in canonical["DeliveryResolutionKind"]["enum"]
-            if value not in {"STATIC_QA_MISSING_ENTRY", "SCHEDULE_RECOVERY_INPUT"}
+            if value
+            not in {
+                "RETRY_REJECTED_STATIC_QA_OUTPUT",
+                "STATIC_QA_MISSING_ENTRY",
+                "SCHEDULE_RECOVERY_INPUT",
+            }
         ]
         allowed_enums = (
             expected_previous,
             [*expected_previous, "STATIC_QA_MISSING_ENTRY"],
+            [*expected_previous, "STATIC_QA_MISSING_ENTRY", "SCHEDULE_RECOVERY_INPUT"],
             canonical["DeliveryResolutionKind"]["enum"],
         )
         if kind["enum"] not in allowed_enums:
             raise RuntimeError(f"{filename} has an unexpected resolution enum")
         kind["enum"] = canonical["DeliveryResolutionKind"]["enum"]
         definitions["StaticQaMissingEntryEvidence"] = canonical["StaticQaMissingEntryEvidence"]
+        definitions["RejectedStaticQaOutputEvidence"] = canonical["RejectedStaticQaOutputEvidence"]
         definitions["PreContextRecoveryInputEvidence"] = canonical[
             "PreContextRecoveryInputEvidence"
         ]
@@ -1091,9 +1155,12 @@ if wait_only:
             model["properties"]["static_qa_missing_entry"] = canonical[model_name]["properties"][
                 "static_qa_missing_entry"
             ]
-            model["properties"]["pre_context_recovery_input"] = canonical[model_name][
-                "properties"
-            ]["pre_context_recovery_input"]
+            model["properties"]["rejected_static_qa_output"] = canonical[model_name]["properties"][
+                "rejected_static_qa_output"
+            ]
+            model["properties"]["pre_context_recovery_input"] = canonical[model_name]["properties"][
+                "pre_context_recovery_input"
+            ]
             guards = model.setdefault("allOf", [])
             if model_name == "DeliveryResolution":
                 for name in ("authorization_reference", "recovery_input_schedule_sha256"):
@@ -1112,12 +1179,16 @@ if wait_only:
                     raise RuntimeError(f"{filename} lost the verifier preparation guard")
                 if static_guard not in guards:
                     guards.append(static_guard)
+                if rejected_static_guard not in guards:
+                    guards.append(rejected_static_guard)
                 if recovery_input_resolution_guard not in guards:
                     guards.append(recovery_input_resolution_guard)
             else:
                 for guard in investigation_guards:
                     if guard not in guards:
                         guards.append(guard)
+                if rejected_static_investigation_guard not in guards:
+                    guards.append(rejected_static_investigation_guard)
                 if recovery_input_investigation_guard not in guards:
                     guards.append(recovery_input_investigation_guard)
                 if filename not in (

@@ -52,6 +52,7 @@ _ITEM_COLUMNS = frozenset(
         "role",
         "attempt",
         "checkpoint_sequence",
+        "recovery_parent_id",
         "status",
         "priority",
         "risk_rank",
@@ -62,7 +63,8 @@ _ITEM_COLUMNS = frozenset(
         "updated_at",
     }
 )
-_LEGACY_ITEM_COLUMNS = (_ITEM_COLUMNS - {"repository_id"}) | {"project_id"}
+_PRE_RECOVERY_ITEM_COLUMNS = _ITEM_COLUMNS - {"recovery_parent_id"}
+_LEGACY_ITEM_COLUMNS = (_PRE_RECOVERY_ITEM_COLUMNS - {"repository_id"}) | {"project_id"}
 _CLAIM_COLUMNS = frozenset(
     {
         "lease_id",
@@ -138,6 +140,11 @@ def _ensure_current_queue_tables(cursor: object) -> None:
 
     current_missing = not items and not claims and not events
     current_ready = items == _ITEM_COLUMNS and claims == _CLAIM_COLUMNS and events == _EVENT_COLUMNS
+    pre_recovery_ready = (
+        items == _PRE_RECOVERY_ITEM_COLUMNS
+        and claims == _CLAIM_COLUMNS
+        and events == _EVENT_COLUMNS
+    )
     legacy_ready = (
         items == _LEGACY_ITEM_COLUMNS and claims == _CLAIM_COLUMNS and events == _EVENT_COLUMNS
     )
@@ -150,7 +157,7 @@ def _ensure_current_queue_tables(cursor: object) -> None:
             "work_queue_claims TO work_queue_claims_legacy_project_v01, "
             "work_queue_events TO work_queue_events_legacy_project_v01"
         )
-    elif not current_ready and not current_missing:
+    elif not current_ready and not current_missing and not pre_recovery_ready:
         raise QueueCorruption("MySQL WorkQueue tables have an ambiguous schema")
 
     typed.execute(
@@ -167,16 +174,28 @@ def _ensure_current_queue_tables(cursor: object) -> None:
             risk_rank TINYINT UNSIGNED NOT NULL,
             available_at VARCHAR(40) NULL,
             payload_json JSON NOT NULL,
+            recovery_parent_id VARCHAR(128) GENERATED ALWAYS AS
+                (COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.parent_work_item_id')), ''))
+                STORED,
             version INT UNSIGNED NOT NULL DEFAULT 0,
             created_at VARCHAR(40) NOT NULL,
             updated_at VARCHAR(40) NOT NULL,
             UNIQUE KEY uq_work_queue_run
-                (task_id,role,attempt,checkpoint_sequence),
+                (task_id,role,attempt,checkpoint_sequence,recovery_parent_id),
             KEY ix_work_queue_schedulable
                 (status,available_at,priority,risk_rank,created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
         """
     )
+    if pre_recovery_ready:
+        typed.execute(
+            "ALTER TABLE work_queue_items "
+            "ADD COLUMN recovery_parent_id VARCHAR(128) GENERATED ALWAYS AS "
+            "(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.parent_work_item_id')), '')) "
+            "STORED, DROP INDEX uq_work_queue_run, "
+            "ADD UNIQUE KEY uq_work_queue_run "
+            "(task_id,role,attempt,checkpoint_sequence,recovery_parent_id)"
+        )
     typed.execute(
         """
         CREATE TABLE IF NOT EXISTS work_queue_claims (
@@ -860,7 +879,13 @@ class MySqlPersistentWorkQueue:
             except pymysql.MySQLError as error:
                 raise QueueError("cannot initialize PersistentWorkQueue") from error
 
-    def _enqueue_locked(self, cursor: object, item: QueuedWorkItem) -> QueuedWorkItem:
+    def _enqueue_locked(
+        self,
+        cursor: object,
+        item: QueuedWorkItem,
+        *,
+        allow_rejected_static_qa_successor: bool = False,
+    ) -> QueuedWorkItem:
         typed = cast("pymysql.cursors.DictCursor", cursor)
         typed.execute(
             "SELECT id,payload_json FROM work_queue_items WHERE id=%s FOR UPDATE", (item.id,)
@@ -871,6 +896,16 @@ class MySqlPersistentWorkQueue:
             if existing != item:
                 raise QueueConflict(f"WorkItem {item.id} already has different content")
             return existing
+        typed.execute(
+            "SELECT id FROM work_queue_items WHERE task_id=%s AND role=%s "
+            "AND attempt=%s AND checkpoint_sequence=%s LIMIT 3 FOR UPDATE",
+            (item.task_id, item.role.value, item.attempt, item.checkpoint_sequence),
+        )
+        same_run = tuple(str(row["id"]) for row in typed.fetchall())
+        if same_run and (
+            not allow_rejected_static_qa_successor or same_run != (item.parent_work_item_id,)
+        ):
+            raise QueueConflict("WorkItem Run identity is already registered")
         try:
             typed.execute(
                 """

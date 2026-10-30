@@ -997,6 +997,11 @@ test("rejected static QA output exposes a proof-bound recovery decision", async 
   const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
   const decide = control(box, "修复被拒 QA 产出并重新验收");
   assert.ok(decide);
+  const facts = JSON.parse(h.run("JSON.stringify(engineeringWaitCurrentFacts(data.request, data.step, proof, null, null, null))"));
+  assert.match(facts.happened, /仅覆盖 16\/25 项验收准则/);
+  assert.match(facts.preservation, /不会重放或改写旧报告/);
+  assert.match(facts.platform, /重新报告全部准则/);
+  assert.doesNotMatch(facts.user, /让平台处理产出校验/);
   assert.match(text(box), /验收准则覆盖不完整/);
   assert.match(text(box), /新的独立 QA 工作项/);
   assert.match(text(box), /不会重放或改写旧报告/);

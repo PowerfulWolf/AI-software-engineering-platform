@@ -41,6 +41,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     PreContextRecoveryInputEvidence,
     RejectedCoderOutputEvidence,
     RejectedKnowledgePreparationEvidence,
+    RejectedStaticQaOutputEvidence,
     RejectedWorkspaceAdmissionEvidence,
     ResolveDeliveryWait,
     StaticQaMissingEntryEvidence,
@@ -191,6 +192,7 @@ class DeliveryWaitQueue(Protocol):
     def original_claim(self, lease_id: str) -> QueueClaim: ...
     def claims_for_work_item(self, work_item_id: str) -> tuple[QueueClaim, ...]: ...
     def accepted(self, task_id: str) -> tuple[AcceptedRoleArtifact, ...]: ...
+    def rejected_static_qa_artifact_ids(self, task_id: str) -> frozenset[str]: ...
     def static_qa_resolution_for_claim(
         self,
         claim: QueueClaim,
@@ -202,7 +204,11 @@ class DeliveryWaitQueue(Protocol):
         | None = None,
     ) -> DeliveryResolution | None: ...
     def static_qa_resolution_for_wait(
-        self, item: QueuedWorkItem, *, knowledge_records: KnowledgeRecordStore | None = None
+        self,
+        item: QueuedWorkItem,
+        *,
+        knowledge_records: KnowledgeRecordStore | None = None,
+        accepted_output: AcceptedRoleArtifact | None = None,
     ) -> DeliveryResolution | None: ...
     def step_for_invocation(
         self, work_item_id: str, baseline_sha256: str | None
@@ -257,12 +263,16 @@ def _reobserve_sealed_static_qa_absence(
     artifacts: ArtifactStore,
 ) -> CandidateTestEntryAbsenceObservation:
     """Recheck the sealed proof using its original missing-file/node semantics."""
+    accepted = queue.accepted(task.id)
+    retired = queue.rejected_static_qa_artifact_ids(task.id)
+    if not retired <= {record.receipt.artifact_id for record in accepted}:
+        raise DeliveryWaitRejected("静态 QA 旧产出排除决定缺少原接纳收据")
     return observe_accepted_candidate_test_entry_absence(
         repository_root=Path(task.repository),
         task=task,
         repository=repository,
         source_revision=source_revision,
-        accepted=queue.accepted(task.id),
+        accepted=tuple(record for record in accepted if record.receipt.artifact_id not in retired),
         artifacts=artifacts,
         include_named_nodes=any(entry.node_id is not None for entry in original.missing),
     )
@@ -1123,6 +1133,7 @@ class DeliveryWaitService:
             raise DeliveryWaitRejected(proof.next_action)
         if automatic and command.resolution_kind in {
             DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,
+            DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT,
             DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT,
         }:
             raise DeliveryWaitRejected("此恢复必须由工程责任人作精确决定")
@@ -1349,6 +1360,12 @@ class DeliveryWaitService:
                         is DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT
                         else None
                     ),
+                    rejected_static_qa_output=(
+                        proof.rejected_static_qa_output
+                        if command.resolution_kind
+                        is DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT
+                        else None
+                    ),
                 )
                 resolution = resolution.model_copy(
                     update={"resolution_sha256": resolution.recompute_sha256()}
@@ -1465,6 +1482,80 @@ class DeliveryWaitService:
                 return None
         return None
 
+    def _rejected_static_qa_output(
+        self,
+        item: QueuedWorkItem,
+        step: QueuedRoleStep,
+        task: Task,
+        start: DeliveryInvocationStart | None,
+        outcome: DeliveryInvocationOutcome | None,
+        consumed_static: DeliveryResolution | None,
+    ) -> RejectedStaticQaOutputEvidence | None:
+        """Derive a one-time replacement proof for an accepted but unusable QA report."""
+        if (
+            consumed_static is None
+            or start is None
+            or outcome is None
+            or self.artifacts is None
+            or item.role is not AgentRole.QA
+            or task.status is not TaskStatus.QA
+            or item.wait_disposition is None
+            or item.wait_disposition.facts.classification != "PLATFORM_BUG"
+            or outcome.result.status is not AgentRunStatus.SUCCEEDED
+            or not isinstance(outcome.result.artifact, QaReportArtifact)
+            or outcome.result.artifact.content.status is not QaReportStatus.FAIL
+            or consumed_static.static_qa_missing_entry is None
+        ):
+            return None
+        accepted = tuple(
+            record
+            for record in self.queue.accepted(task.id)
+            if record.work_item_id == item.id
+            and record.run_id == start.request.run_id
+            and record.context_manifest_id == start.request.context_manifest_id
+            and record.source_revision == step.boundary.source_revision
+        )
+        if len(accepted) != 1:
+            return None
+        record = accepted[0]
+        artifact = self.artifacts.get(record.receipt.artifact_id)
+        if (
+            not isinstance(artifact, QaReportArtifact)
+            or artifact.integrity.sha256 != record.receipt.sha256
+            or artifact != outcome.result.artifact
+            or artifact.producer.run_id != start.request.run_id
+            or artifact.parent_artifact_ids
+            != (consumed_static.static_qa_missing_entry.implementation_artifact_id,)
+            or any(
+                artifact.artifact_id in event.artifact_ids
+                for event in self.repository.list_events(task.id)
+            )
+        ):
+            return None
+        all_ids = tuple(criterion.id for criterion in task.acceptance_criteria)
+        reported = tuple(result.criterion_id for result in artifact.content.criteria_results)
+        missing = tuple(value for value in all_ids if value not in reported)
+        if not missing:
+            return None
+        return RejectedStaticQaOutputEvidence(
+            task_id=task.id,
+            work_item_id=item.id,
+            candidate_revision=step.boundary.source_revision,
+            static_resolution_sha256=consumed_static.resolution_sha256,
+            previous_qa_artifact_id=record.receipt.artifact_id,
+            previous_qa_sha256=record.receipt.sha256,
+            previous_run_id=start.request.run_id,
+            previous_context_manifest_id=start.request.context_manifest_id,
+            previous_lease_id=record.lease_id,
+            previous_claim_sha256=digest(self.queue.original_claim(record.lease_id).to_wire()),
+            previous_dispatch_sequence=record.dispatch_sequence,
+            invocation_start_sha256=start.start_sha256,
+            invocation_outcome_sha256=outcome.outcome_sha256,
+            all_criterion_ids=all_ids,
+            reported_criterion_ids=reported,
+            missing_criterion_ids=missing,
+        )
+
     def _collect(
         self,
         item: QueuedWorkItem,
@@ -1478,6 +1569,79 @@ class DeliveryWaitService:
         permitted: tuple[DeliveryResolutionKind, ...] = ()
         start, outcome = self._invocation(item, step)
         receipt = self._receipt(task, start)
+        if (
+            item.role is AgentRole.QA
+            and task.status is TaskStatus.QA
+            and item.wait_disposition.facts.classification == "PLATFORM_BUG"
+            and start is not None
+            and outcome is not None
+            and receipt is None
+            and outcome.result.status is AgentRunStatus.SUCCEEDED
+            and isinstance(outcome.result.artifact, QaReportArtifact)
+            and hasattr(self.queue, "static_qa_resolution_for_wait")
+        ):
+            accepted = tuple(
+                record
+                for record in self.queue.accepted(task.id)
+                if record.work_item_id == item.id
+                and record.run_id == start.request.run_id
+                and record.context_manifest_id == start.request.context_manifest_id
+                and record.source_revision == step.boundary.source_revision
+                and record.receipt.artifact_id == outcome.result.artifact.artifact_id
+                and record.receipt.sha256 == outcome.result.artifact.integrity.sha256
+            )
+            if len(accepted) == 1:
+                consumed = self.queue.static_qa_resolution_for_wait(
+                    item,
+                    knowledge_records=KnowledgeRecordStore(
+                        self.sidecar_state.parent / "knowledge" / "runs", read_only=True
+                    ),
+                    accepted_output=accepted[0],
+                )
+                if consumed is not None and consumed.static_qa_missing_entry is not None:
+                    recovery_static = consumed.static_qa_missing_entry
+                    if self.artifacts is None:
+                        raise DeliveryWaitRejected("原静态 QA 决定缺少可信候选或产物读取")
+                    original_observation = self.records.get(
+                        "static-qa-observations",
+                        recovery_static.observation_sha256,
+                        CandidateTestEntryAbsenceObservation,
+                    )
+                    original_observation.validate_integrity()
+                    if (
+                        _reobserve_sealed_static_qa_absence(
+                            original=original_observation,
+                            task=task,
+                            repository=self.repository,
+                            source_revision=step.boundary.source_revision,
+                            queue=self.queue,
+                            artifacts=self.artifacts,
+                        )
+                        != original_observation
+                    ):
+                        raise DeliveryWaitRejected("静态 QA 候选缺项或冻结计划已改变")
+                    rejected_static = self._rejected_static_qa_output(
+                        item, step, task, start, outcome, consumed
+                    )
+                    if rejected_static is not None:
+                        return self._proof(
+                            item,
+                            step,
+                            task,
+                            missing=(),
+                            permitted=(DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT,),
+                            start=start,
+                            outcome=outcome,
+                            rejected_static_qa_output=rejected_static,
+                        )
+                    return self._proof(
+                        item,
+                        step,
+                        task,
+                        missing=(DeliveryProofMissing.OUTCOME_REJECTED,),
+                        start=start,
+                        outcome=outcome,
+                    )
         if (
             outcome is not None
             and outcome.service_pause is not None
@@ -1700,16 +1864,14 @@ class DeliveryWaitService:
                 missing.append(DeliveryProofMissing.VERIFIER_PREPARATION_UNAVAILABLE)
         static_qa_missing_entry = None
         static_qa_observation: CandidateTestEntryAbsenceObservation | None = None
-        consumed_static_qa = (
-            self.queue.static_qa_resolution_for_wait(
-                item,
-                knowledge_records=KnowledgeRecordStore(
-                    self.sidecar_state.parent / "knowledge" / "runs", read_only=True
-                ),
+        consumed_static_qa = None
+        if item.role is AgentRole.QA and hasattr(self.queue, "static_qa_resolution_for_wait"):
+            knowledge_records = KnowledgeRecordStore(
+                self.sidecar_state.parent / "knowledge" / "runs", read_only=True
             )
-            if item.role is AgentRole.QA and hasattr(self.queue, "static_qa_resolution_for_wait")
-            else None
-        )
+            consumed_static_qa = self.queue.static_qa_resolution_for_wait(
+                item, knowledge_records=knowledge_records
+            )
         if consumed_static_qa is not None:
             static = consumed_static_qa.static_qa_missing_entry
             if static is None or self.artifacts is None:
@@ -2667,6 +2829,7 @@ class DeliveryWaitService:
         rejected_knowledge: RejectedKnowledgePreparationEvidence | None = None,
         rejected_workspace_admission: RejectedWorkspaceAdmissionEvidence | None = None,
         rejected_output: RejectedCoderOutputEvidence | None = None,
+        rejected_static_qa_output: RejectedStaticQaOutputEvidence | None = None,
         observed_stop: ExecutionCaptureStop | None = None,
         local_stop_confirmation_available: bool = False,
     ) -> DeliveryWaitInvestigation:
@@ -2757,6 +2920,7 @@ class DeliveryWaitService:
             rejected_knowledge=rejected_knowledge,
             rejected_workspace_admission=rejected_workspace_admission,
             rejected_output=rejected_output,
+            rejected_static_qa_output=rejected_static_qa_output,
             verifier_pause=outcome.service_pause
             if outcome and item.role in {AgentRole.QA, AgentRole.REVIEWER}
             else None,

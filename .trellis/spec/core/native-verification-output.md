@@ -147,6 +147,7 @@ investigation after reviewed deployment; original browser/live acceptance remain
 # Static QA missing-entry output
 
 `TrustedStaticQaMissingEntryOutputContract` is distinct from a command receipt.
+
 It binds the fresh current QA `AgentRequest`, current claim and consumed
 `STATIC_QA_MISSING_ENTRY` decision to the sealed candidate-tree observation.
 The prompt may describe the missing frozen test paths, but the output gate must
@@ -166,6 +167,80 @@ parents rejects a valid QA output and must not be used as the static gate.
 `tests_run=()` and the original controlled verifier's `NOT_STARTED` observation
 do not prove that the QA model made zero read-only source-inspection tool calls;
 the role's existing read-only tool policy continues to govern those calls.
+
+### Rejected static QA coverage recovery
+
+An accepted static QA `FAIL` publication is not a Task QA checkpoint until the
+Orchestrator accepts its complete criterion mapping. A report that lists only a
+subset of the frozen Task criteria remains immutable and rejected. The exact
+`RETRY_REJECTED_STATIC_QA_OUTPUT` engineering decision binds the prior static
+resolution, accepted QA artifact and SHA, original claim, invocation start and
+outcome, current candidate, and the ordered full/reported/missing criterion IDs.
+It is available only for a `PLATFORM_BUG` QA wait with no StateEvent that has
+adopted the old report. The decision cannot refund budget, increment attempt,
+change Task revision, or replay the old result.
+
+The queue closes that parent and creates one new QA WorkItem with the same
+attempt and checkpoint, `parent_work_item_id` and candidate. The parent scoped
+MySQL unique key and an explicit enqueue gate permit this duplicate run tuple
+only inside the exact consumed recovery transaction. The new claim must recheck
+the parent decision and frozen candidate; missing or changed lineage fails
+closed. ArtifactStore excludes the old QA publication only after this decision
+has been consumed. The next independent QA report must cover every frozen
+criterion, marking unverified rows `NOT_TESTED` and retaining real findings.
+
+#### Current candidate read after a consumed rejection
+
+The Console submits `POST /api/v1/operations` with
+`action=RESOLVE_DELIVERY_WAIT`, the exact wait identity/proof digest and
+`resolution_kind=RETRY_REJECTED_STATIC_QA_OUTPUT`. The resulting MySQL
+`WAIT_RESOLVED` event is the only source for
+`MySqlRoleQueue.rejected_static_qa_artifact_ids(task_id) -> frozenset[str]`;
+an unconsumed proposal does not retire a publication. The child WorkItem has
+`id=work_<resolution_sha256>`, `parent_work_item_id=<old QA item>`, unchanged
+`task_id`, `role=QA`, `attempt`, `checkpoint_sequence` and candidate revision.
+`work_queue_items.uq_work_queue_run` is exactly
+`(task_id, role, attempt, checkpoint_sequence, recovery_parent_id)`, where the
+generated `recovery_parent_id` is the payload's `parent_work_item_id` or `''`.
+Only the exact consumed resolution permits the duplicate QA run tuple.
+
+The queue retains complete publications for audit;
+`AcceptedArtifactStore._accepted()` omits the exact old QA artifact ID after
+that decision. The same
+visibility boundary applies to
+`delivery_wait._reobserve_sealed_static_qa_absence(original, task, repository,
+source_revision, queue, artifacts)`: read `queue.accepted(task.id)`, verify
+every retired ID still has a durable accepted receipt, then pass only the
+remaining receipts to
+`observe_accepted_candidate_test_entry_absence(...)`. That observer still
+requires one accepted implementation at the exact candidate SHA, its frozen
+Plan and every legal accepted parent, the durable
+`PLANNING → IMPLEMENTING` Plan StateEvent, and the current candidate Git tree.
+The raw rejected QA receipt, artifact bytes and original Run stay available
+through historical readers; they cannot become a current verdict or candidate.
+
+| Current read input | Required result |
+| --- | --- |
+| Valid consumed rejection, old QA receipt and new child claim | Skip only the retired QA receipt; revalidate Plan, implementation, parents and sealed absence |
+| No consumed rejection | Read all accepted receipts under the existing observer contract |
+| Retired ID lacks its accepted receipt | Reject with a fixed engineering wait error; do not infer deletion or replay |
+| Candidate or Plan receipt/hash, parent acceptance, StateEvent or Git tree drifts | Reject current static QA authority; no model call or new verdict |
+| Old QA artifact requested through the current `AcceptedArtifactStore` | `QueueCorruption`; historical raw store still returns its immutable bytes |
+
+Good: a new claimed QA child rechecks the same candidate after the old
+incomplete report was retired by the exact decision. Base: before consumption,
+ordinary static QA reobservation still sees the original accepted set. Bad:
+enumerating unfiltered `queue.accepted(task.id)` and calling the filtered
+`AcceptedArtifactStore.get(old_qa_id)` raises `QueueCorruption` before the
+candidate can be checked; broadly bypassing the store would instead revive a
+rejected verdict. `test_wait_resolution_mysql.py` drives the real SQL
+decision, child claim and filtered store: it first reproduced that exact
+error, then asserts the child parent link, retained queue receipt, excluded
+current QA artifact and successful candidate/Plan receipt read. Git blob
+semantics remain covered by `test_candidate_test_entry_absence.py`. The startup DDL migrates the queue unique key and generated parent column; it
+does not rewrite old WorkItems or artifact bytes. Rollback preserves consumed
+decisions and old history, and an older binary must fail closed rather than
+replay QA.
 
 Before this static QA role request is built, knowledge consultation may receive
 the exact proof-only scope described in `active-knowledge.md`. That scope does

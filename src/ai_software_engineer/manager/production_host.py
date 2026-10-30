@@ -975,7 +975,12 @@ class TeamHost:
             native = native.model_copy(update={"checkpoint_sha256": native.recompute_sha256()})
 
         def consume(resolution: DeliveryResolution) -> None:
-            self._work_queue.resolve_wait(resolution)
+            self._work_queue.resolve_wait(
+                resolution,
+                invocation_records=KnowledgeRecordStore(
+                    workspace.directory("state") / "invocations", read_only=True
+                ),
+            )
 
         scope = EngineeringScope(
             team_id=self._config.team_id,

@@ -55,6 +55,7 @@ class DeliveryResolutionKind(StrEnum):
     RETRY_REJECTED_CODER_OUTPUT = "RETRY_REJECTED_CODER_OUTPUT"
     RETRY_REJECTED_KNOWLEDGE_PREPARATION = "RETRY_REJECTED_KNOWLEDGE_PREPARATION"
     RETRY_REJECTED_WORKSPACE_ADMISSION = "RETRY_REJECTED_WORKSPACE_ADMISSION"
+    RETRY_REJECTED_STATIC_QA_OUTPUT = "RETRY_REJECTED_STATIC_QA_OUTPUT"
     STATIC_QA_MISSING_ENTRY = "STATIC_QA_MISSING_ENTRY"
     SCHEDULE_RECOVERY_INPUT = "SCHEDULE_RECOVERY_INPUT"
 
@@ -206,6 +207,38 @@ class StaticQaMissingEntryEvidence(DomainModel):
     previous_run_id: RunId
     previous_context_manifest_id: ContextId
     prerequisite_facts_sha256: DispositionSha256
+
+
+class RejectedStaticQaOutputEvidence(DomainModel):
+    """One published static QA report rejected before any Task QA checkpoint."""
+
+    task_id: TaskId
+    work_item_id: NonEmptyStr
+    candidate_revision: FullGitRevision
+    static_resolution_sha256: DispositionSha256
+    previous_qa_artifact_id: ArtifactId
+    previous_qa_sha256: DispositionSha256
+    previous_run_id: RunId
+    previous_context_manifest_id: ContextId
+    previous_lease_id: NonEmptyStr
+    previous_claim_sha256: DispositionSha256
+    previous_dispatch_sequence: Annotated[StrictInt, Field(ge=0)]
+    invocation_start_sha256: DispositionSha256
+    invocation_outcome_sha256: DispositionSha256
+    all_criterion_ids: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    reported_criterion_ids: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    missing_criterion_ids: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def validate_coverage_gap(self) -> Self:
+        ensure_unique(self.all_criterion_ids, "frozen QA criterion IDs")
+        ensure_unique(self.reported_criterion_ids, "rejected QA criterion IDs")
+        ensure_unique(self.missing_criterion_ids, "missing QA criterion IDs")
+        if not set(self.reported_criterion_ids).issubset(self.all_criterion_ids) or set(
+            self.missing_criterion_ids
+        ) != set(self.all_criterion_ids) - set(self.reported_criterion_ids):
+            raise ValueError("rejected static QA report must have one exact coverage gap")
+        return self
 
 
 class OriginalInvocationAuthority(DomainModel):
@@ -507,6 +540,9 @@ class DeliveryWaitInvestigation(DomainModel):
     verification_retry: VerificationRetryEvidence | None = None
     verifier_preparation: VerifierPreparationEvidence | None = None
     static_qa_missing_entry: StaticQaMissingEntryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    rejected_static_qa_output: RejectedStaticQaOutputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     pre_context_recovery_input: PreContextRecoveryInputEvidence | None = Field(
@@ -860,6 +896,30 @@ class DeliveryWaitInvestigation(DomainModel):
             not in ((), (DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,))
         ):
             raise ValueError("rejected Coder proof changed its exact stopped execution")
+        rejected_static = self.rejected_static_qa_output
+        if (
+            DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT in self.permitted_resolutions
+        ) != (rejected_static is not None):
+            raise ValueError("rejected static QA proposal needs exact published output")
+        if rejected_static is not None and (
+            facts.role is not AgentRole.QA
+            or facts.classification != "PLATFORM_BUG"
+            or self.permitted_resolutions
+            != (DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT,)
+            or rejected_static.task_id != self.task_id
+            or rejected_static.work_item_id != self.work_item_id
+            or rejected_static.candidate_revision != self.source_revision
+            or rejected_static.previous_run_id != self.original_run_id
+            or rejected_static.invocation_start_sha256 != self.invocation_start_sha256
+            or rejected_static.invocation_outcome_sha256 != self.invocation_outcome_sha256
+            or self.static_qa_missing_entry is not None
+            or self.verifier_preparation is not None
+            or self.verification_retry is not None
+            or self.original_authority is not None
+            or self.retry_cause is not None
+            or self.rejected_output is not None
+        ):
+            raise ValueError("rejected static QA proof changed its exact failed admission")
         return self
 
     def recompute_sha256(self) -> str:
@@ -928,6 +988,9 @@ class DeliveryResolution(DomainModel):
         exclude_if=lambda value: value is None,
     )
     static_qa_missing_entry: StaticQaMissingEntryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    rejected_static_qa_output: RejectedStaticQaOutputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     knowledge_preparation: KnowledgePreparationRetryEvidence | None = Field(
@@ -1134,6 +1197,22 @@ class DeliveryResolution(DomainModel):
             or self.rejected_output.checkpoint_sequence != self.expected_checkpoint_sequence
         ):
             raise ValueError("rejected Coder decision changed its exact task or source")
+        rejected_static = self.rejected_static_qa_output
+        if (self.resolution_kind is DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT) != (
+            rejected_static is not None
+        ):
+            raise ValueError("only rejected static QA retry uses its failed admission proof")
+        if rejected_static is not None and (
+            self.authorization_source != "engineering_operator_decision"
+            or rejected_static.task_id != self.task_id
+            or rejected_static.work_item_id != self.work_item_id
+            or rejected_static.candidate_revision != self.expected_source_revision
+            or self.retry_failure is not None
+            or self.retry_cause is not None
+            or self.verifier_preparation is not None
+            or self.static_qa_missing_entry is not None
+        ):
+            raise ValueError("rejected static QA retry changed authority or budget")
         return self
 
     def recompute_sha256(self) -> str:

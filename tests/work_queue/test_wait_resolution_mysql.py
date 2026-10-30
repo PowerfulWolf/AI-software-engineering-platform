@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
 from contextlib import closing
@@ -15,9 +16,11 @@ import pytest
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents import AgentRequest
+from ai_software_engineer.agents.models import AgentResult, AgentRunStatus
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.artifacts.store import seal_artifact
 from ai_software_engineer.domain import (
+    AcceptanceCriterion,
     AgentPermissions,
     AgentRole,
     NetworkAccess,
@@ -37,6 +40,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolutionKind,
     OriginalInvocationAuthority,
     PreContextRecoveryInputEvidence,
+    RejectedStaticQaOutputEvidence,
     StaticQaMissingEntryEvidence,
     VerificationRetryEvidence,
     VerifierPreparationEvidence,
@@ -49,9 +53,19 @@ from ai_software_engineer.domain.engineering_authority import (
     EngineeringScope,
     LocalOperatorPrincipal,
 )
-from ai_software_engineer.domain.enums import WorkItemStatus
-from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
+from ai_software_engineer.domain.enums import (
+    QaCriterionStatus,
+    QaReportStatus,
+    QaTestStatus,
+    WorkItemStatus,
+)
+from ai_software_engineer.domain.execution_window import PlannedVerificationRequirement
+from ai_software_engineer.domain.native_verification import (
+    NativeVerificationWaitReason,
+    role_verification_digest,
+)
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure, DeliveryRetryPolicy
+from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.knowledge.gaps import (
     KnowledgeGapService,
     KnowledgeResolution,
@@ -60,6 +74,15 @@ from ai_software_engineer.knowledge.gaps import (
 from ai_software_engineer.knowledge.models import digest, text_digest
 from ai_software_engineer.knowledge.queue import QueueKnowledgeWaitPort
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.manager import candidate_test_entry_absence
+from ai_software_engineer.manager.candidate_test_entry_absence import (
+    CandidateTestEntryAbsenceObservation,
+    MissingPlannedTestEntry,
+)
+from ai_software_engineer.manager.delivery_wait import (
+    DeliveryWaitService,
+    _reobserve_sealed_static_qa_absence,
+)
 from ai_software_engineer.manager.preflight_gate import PreflightInvocationControl
 from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationCheckpoint,
@@ -71,28 +94,33 @@ from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.store.mysql_repository import open_mysql_connection
 from ai_software_engineer.work_queue.execution_store import (
+    AcceptedRoleArtifact,
     MySqlRoleQueue,
     QueuedRoleStep,
     RoleQueueAdmission,
+    _put,
     record_digest,
 )
 from ai_software_engineer.work_queue.invocation import (
+    DeliveryInvocationOutcome,
     DeliveryInvocationStart,
     DurableInvocationControl,
 )
-from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
+from ai_software_engineer.work_queue.models import QueueArtifactReceipt, QueueClaim, QueuedWorkItem
 from ai_software_engineer.work_queue.ports import QueueConflict, QueueCorruption, QueueLeaseLost
 from ai_software_engineer.work_queue.preparation_resume import static_qa_preparation_reclaimed
 from ai_software_engineer.work_queue.worker import (
+    AcceptedArtifactStore,
     WorkerDeliveryFailureControl,
     WorkerExecutionGuard,
 )
-from tests.agents.test_openai_compatible import _coder_request
+from tests.agents.test_openai_compatible import _coder_request, _request
 from tests.domain.factories import (
     make_coder_progress_artifact,
     make_implementation_artifact,
     make_plan_artifact,
     make_qa_artifact,
+    make_state_event,
     make_task,
 )
 from tests.knowledge.test_queue import bound, route
@@ -233,6 +261,17 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
         {
             **original.to_wire(),
             "repository": "/fixture/repository",
+            "acceptance_criteria": (
+                *original.acceptance_criteria,
+                AcceptanceCriterion(
+                    id="ac_models_02",
+                    description="Second frozen criterion must be independently covered.",
+                    required=True,
+                    verification="Check the separate acceptance path.",
+                ),
+            )
+            if static_qa
+            else original.acceptance_criteria,
             "engineering_policy": EngineeringPolicy.bounded_local(
                 scope=EngineeringScope(
                     team_id="team_test",
@@ -641,6 +680,471 @@ def test_static_qa_decision_creates_fresh_claim_without_spending_frozen_work(
     stale_claim = claimed.model_copy(update={"worker_id": "worker_changed"})
     with pytest.raises(QueueConflict, match="current claim"):
         waiting.queue.static_qa_resolution_for_claim(stale_claim)
+
+
+@pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
+def _rejected_static_qa_fixture(
+    waiting: WaitingFixture, tmp_path: Path
+) -> tuple[
+    DeliveryResolution,
+    DeliveryResolution,
+    KnowledgeRecordStore,
+    QueuedWorkItem,
+    QaReportArtifact,
+    AcceptedRoleArtifact,
+]:
+    original_static = _static_qa_resolution(waiting)
+    ready = waiting.queue.resolve_wait(original_static)
+    claim = (
+        dispatcher(waiting.queue)
+        .tick(now=waiting.now + timedelta(seconds=8), work_item_id=ready.id)
+        .claim
+    )
+    assert claim is not None
+    task_before = waiting.repository.get(ready.task_id)
+    request = _request(
+        AgentRole.QA,
+        run_id="run_rejected_static_qa",
+        source_revision=SOURCE,
+        context_manifest_id="ctx_" + "c" * 64,
+    )
+    qa = make_qa_artifact()
+    report = cast(
+        QaReportArtifact,
+        seal_artifact(
+            qa.model_copy(
+                update={
+                    "task_id": task_before.id,
+                    "source_revision": SOURCE,
+                    "context_manifest_id": request.context_manifest_id,
+                    "producer": qa.producer.model_copy(
+                        update={
+                            "agent_id": claim.assignment.agent_id,
+                            "run_id": request.run_id,
+                        }
+                    ),
+                    "content": qa.content.model_copy(
+                        update={
+                            "status": QaReportStatus.FAIL,
+                            "criteria_results": tuple(
+                                result.model_copy(update={"status": QaCriterionStatus.NOT_TESTED})
+                                for result in qa.content.criteria_results
+                            ),
+                            "tests_run": tuple(
+                                result.model_copy(update={"status": QaTestStatus.ERROR})
+                                for result in qa.content.tests_run
+                            ),
+                        }
+                    ),
+                }
+            ),
+            validated_at=waiting.now,
+        ),
+    )
+    artifacts = FileArtifactStore(tmp_path / "rejected-static-artifacts")
+    artifacts.put(
+        seal_artifact(
+            make_plan_artifact().model_copy(update={"task_id": task_before.id}),
+            validated_at=waiting.now,
+        )
+    )
+    artifacts.put(
+        seal_artifact(
+            make_implementation_artifact().model_copy(update={"task_id": task_before.id}),
+            validated_at=waiting.now,
+        )
+    )
+    waiting.queue.accept_artifact(claim, TOKEN, artifacts, report)
+    accepted = waiting.queue.accepted(ready.task_id)[0]
+    records = KnowledgeRecordStore(tmp_path / "rejected-static-invocations")
+    start = DeliveryInvocationStart(
+        work_item_id=ready.id,
+        checkpoint_sequence=ready.checkpoint_sequence,
+        request=request,
+        lease_id=claim.lease.id,
+        started_at=waiting.now,
+        start_sha256="0" * 64,
+    )
+    start = start.model_copy(
+        update={"start_sha256": digest(start.model_dump(mode="json", exclude={"start_sha256"}))}
+    )
+    result = AgentResult(
+        run_id=request.run_id,
+        task_id=request.task_id,
+        role=request.role,
+        attempt=request.attempt,
+        source_revision=request.source_revision,
+        context_manifest_id=request.context_manifest_id,
+        status=AgentRunStatus.SUCCEEDED,
+        artifact=report,
+    )
+    outcome = DeliveryInvocationOutcome(start=start, result=result, outcome_sha256="0" * 64)
+    outcome = outcome.model_copy(
+        update={
+            "outcome_sha256": digest(outcome.model_dump(mode="json", exclude={"outcome_sha256"}))
+        }
+    )
+    records.put("invocation-starts", ready.id, start)
+    records.put("invocation-outcomes", ready.id, outcome)
+    disposition = decide_delivery_disposition(
+        DeliveryFailureFacts(
+            task_id=ready.task_id,
+            work_item_id=ready.id,
+            role=AgentRole.QA,
+            classification="PLATFORM_BUG",
+            source_revision=SOURCE,
+            task_intent_sha256=task_intent_sha256(task_before),
+            checkpoint_sequence=ready.checkpoint_sequence,
+            budget_available=False,
+            evidence_ids=(),
+        )
+    )
+    waiting.queue.wait(
+        ready.id,
+        lease_id=claim.lease.id,
+        owner_token=TOKEN,
+        status=WorkItemStatus.WAITING_DEPENDENCY,
+        reason=disposition.reason,
+        disposition=disposition,
+        now=waiting.now + timedelta(seconds=9),
+    )
+    evidence = RejectedStaticQaOutputEvidence(
+        task_id=task_before.id,
+        work_item_id=ready.id,
+        candidate_revision=SOURCE,
+        static_resolution_sha256=original_static.resolution_sha256,
+        previous_qa_artifact_id=report.artifact_id,
+        previous_qa_sha256=report.integrity.sha256,
+        previous_run_id=request.run_id,
+        previous_context_manifest_id=request.context_manifest_id,
+        previous_lease_id=claim.lease.id,
+        previous_claim_sha256=digest(claim.to_wire()),
+        previous_dispatch_sequence=claim.work_item.dispatch_sequence,
+        invocation_start_sha256=start.start_sha256,
+        invocation_outcome_sha256=outcome.outcome_sha256,
+        all_criterion_ids=tuple(value.id for value in task_before.acceptance_criteria),
+        reported_criterion_ids=("ac_models_01",),
+        missing_criterion_ids=("ac_models_02",),
+    )
+    resolution = reseal(
+        waiting.resolution(DeliveryResolutionKind.RESUME_UNINVOKED),
+        expected_disposition_sha256=disposition.disposition_sha256,
+        resolution_kind=DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT,
+        rejected_static_qa_output=evidence.to_wire(),
+    )
+    current = waiting.queue.get(ready.id)
+    assert (
+        waiting.queue.static_qa_resolution_for_wait(current, accepted_output=accepted)
+        == original_static
+    )
+    with pytest.raises(QueueCorruption, match="accepted output"):
+        waiting.queue.static_qa_resolution_for_wait(current)
+    return original_static, resolution, records, current, report, accepted
+
+
+@pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
+def test_rejected_static_qa_output_reclaims_exact_coverage_without_replaying_old_report(
+    waiting: WaitingFixture, tmp_path: Path
+) -> None:
+    original_static, resolution, records, current, report, accepted = _rejected_static_qa_fixture(
+        waiting, tmp_path
+    )
+    task_before = waiting.repository.get(current.task_id)
+    revision_before = waiting.repository.current_revision(current.task_id)
+    accepted_store = AcceptedArtifactStore(
+        FileArtifactStore(tmp_path / "rejected-static-artifacts", read_only=True),
+        waiting.queue,
+        current.task_id,
+        WorkerExecutionGuard(),
+    )
+    assert accepted_store.get(report.artifact_id) == report
+    next_item = waiting.queue.resolve_wait(resolution, invocation_records=records)
+    assert next_item.id == "work_" + resolution.resolution_sha256
+    assert next_item.parent_work_item_id == current.id
+    assert next_item.attempt == task_before.attempts
+    assert waiting.queue.get(current.id).status is WorkItemStatus.CLOSED
+    assert waiting.repository.get(current.task_id) == task_before
+    assert waiting.repository.current_revision(current.task_id) == revision_before
+    assert waiting.queue.accepted(current.task_id) == (accepted,)
+    assert waiting.queue.rejected_static_qa_artifact_ids(current.task_id) == frozenset(
+        (report.artifact_id,)
+    )
+    with pytest.raises(QueueCorruption, match="accepted receipt"):
+        accepted_store.get(report.artifact_id)
+    assert waiting.queue.resolve_wait(resolution, invocation_records=records) == next_item
+    claimed = (
+        dispatcher(waiting.queue)
+        .tick(now=waiting.now + timedelta(seconds=10), work_item_id=next_item.id)
+        .claim
+    )
+    assert claimed is not None
+    assert (
+        waiting.queue.static_qa_resolution_for_claim(claimed, invocation_records=records)
+        == original_static
+    )
+    with closing(open_mysql_connection(waiting.dsn)) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM work_queue_events WHERE work_item_id=%s AND "
+                "event_type='WAIT_RESOLVED' AND "
+                "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.detail.resolution.resolution_kind'))=%s",
+                (current.id, DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT.value),
+            )
+            assert cursor.rowcount == 1
+        connection.commit()
+    with pytest.raises(QueueCorruption, match="lacks exact recovery decision"):
+        waiting.queue.static_qa_resolution_for_claim(claimed, invocation_records=records)
+
+
+@pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
+def test_rejected_static_qa_child_reobserves_candidate_without_reading_retired_qa(
+    waiting: WaitingFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, resolution, records, current, report, _ = _rejected_static_qa_fixture(waiting, tmp_path)
+    task = waiting.repository.get(current.task_id)
+    artifacts = FileArtifactStore(tmp_path / "rejected-static-artifacts")
+    original_plan = artifacts.get("art_plan_001")
+    plan = seal_artifact(
+        original_plan.model_copy(
+            update={
+                "artifact_id": "art_plan_current_static_qa",
+                "context_manifest_id": "ctx_" + "a" * 64,
+                "source_revision": task.base_ref,
+            }
+        ),
+        validated_at=waiting.now,
+    )
+    artifacts.put(plan)
+    original_implementation = make_implementation_artifact()
+    implementation = seal_artifact(
+        original_implementation.model_copy(
+            update={
+                "artifact_id": "art_impl_current_static_qa",
+                "task_id": task.id,
+                "source_revision": SOURCE,
+                "context_manifest_id": "ctx_" + "b" * 64,
+                "parent_artifact_ids": (plan.artifact_id,),
+                "content": original_implementation.content.model_copy(
+                    update={"commit_sha": SOURCE}
+                ),
+            }
+        ),
+        validated_at=waiting.now,
+    )
+    artifacts.put(implementation)
+    # The old Coder publication and Plan are already durable when QA is waiting.
+    # Seed their exact immutable receipts; the QA publication uses the real claim.
+    for artifact in (plan, implementation):
+        record = AcceptedRoleArtifact(
+            task_id=task.id,
+            work_item_id="work_prior_" + artifact.artifact_id,
+            lease_id="lease_prior_" + artifact.artifact_id,
+            dispatch_sequence=0,
+            checkpoint_sequence=current.checkpoint_sequence,
+            run_id=artifact.producer.run_id,
+            context_manifest_id=artifact.context_manifest_id,
+            source_revision=artifact.source_revision,
+            receipt=QueueArtifactReceipt(
+                artifact_id=artifact.artifact_id, sha256=artifact.integrity.sha256
+            ),
+        )
+        with closing(open_mysql_connection(waiting.dsn)) as connection:
+            with connection.cursor(DictCursor) as cursor:
+                _put(cursor, "work_queue_accepted_artifacts", artifact.artifact_id, task.id, record)
+            connection.commit()
+    child = waiting.queue.resolve_wait(resolution, invocation_records=records)
+    claimed = (
+        dispatcher(waiting.queue)
+        .tick(now=waiting.now + timedelta(seconds=10), work_item_id=child.id)
+        .claim
+    )
+    assert claimed is not None and claimed.work_item.parent_work_item_id == current.id
+    assert report.artifact_id in waiting.queue.rejected_static_qa_artifact_ids(task.id)
+    assert any(
+        record.receipt.artifact_id == report.artifact_id
+        for record in waiting.queue.accepted(task.id)
+    )
+    assert artifacts.get(report.artifact_id) == report
+    accepted = AcceptedArtifactStore(
+        FileArtifactStore(tmp_path / "rejected-static-artifacts", read_only=True),
+        waiting.queue,
+        task.id,
+        WorkerExecutionGuard(),
+    )
+    with pytest.raises(QueueCorruption, match="accepted receipt"):
+        accepted.get(report.artifact_id)
+    row = PlannedVerificationRequirement(
+        id="verify_missing_browser",
+        role=AgentRole.QA,
+        criterion_ids=(task.acceptance_criteria[0].id,),
+        argv=("node", "--test", "tests/browser.test.cjs"),
+        verification_levels=("e2e",),
+        planned_new_files=("tests/browser.test.cjs",),
+    )
+    observation = CandidateTestEntryAbsenceObservation.create(
+        task_id=task.id,
+        task_intent_sha256=task_intent_sha256(task),
+        candidate_revision=SOURCE,
+        plan_artifact_id=plan.artifact_id,
+        plan_artifact_sha256=plan.integrity.sha256,
+        plan_requirements_sha256=role_verification_digest([row.to_wire()]),
+        implementation_artifact_id=implementation.artifact_id,
+        implementation_artifact_sha256=implementation.integrity.sha256,
+        missing=(
+            MissingPlannedTestEntry(
+                requirement=row,
+                requirement_sha256=role_verification_digest(row.to_wire()),
+                path="tests/browser.test.cjs",
+            ),
+        ),
+    )
+    plan_event = make_state_event(
+        task_id=task.id,
+        from_status=TaskStatus.PLANNING,
+        to_status=TaskStatus.IMPLEMENTING,
+    ).model_copy(
+        update={
+            "reason": "plan_validated",
+            "artifact_ids": (plan.artifact_id,),
+            "source_revision": plan.source_revision,
+        }
+    )
+    monkeypatch.setattr(waiting.repository, "list_events", lambda _task_id: (plan_event,))
+    monkeypatch.setattr(
+        candidate_test_entry_absence,
+        "observe_candidate_test_entry_absence",
+        lambda **_kwargs: observation,
+    )
+    assert (
+        _reobserve_sealed_static_qa_absence(
+            original=observation,
+            task=task,
+            repository=waiting.repository,
+            source_revision=SOURCE,
+            queue=waiting.queue,
+            artifacts=accepted,
+        )
+        == observation
+    )
+
+
+@pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
+def test_rejected_static_qa_wait_inspection_survives_generic_missing_stop_gates(
+    waiting: WaitingFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _, records, current, _, _ = _rejected_static_qa_fixture(waiting, tmp_path)
+    start = records.get("invocation-starts", current.id, DeliveryInvocationStart)
+    outcome = records.get("invocation-outcomes", current.id, DeliveryInvocationOutcome)
+    task = waiting.repository.get(current.task_id)
+    assert task.engineering_policy is not None
+    (tmp_path / "knowledge" / "runs").mkdir(parents=True)
+    entry = DeliveryWaitService(
+        repository=waiting.repository,
+        queue=waiting.queue,
+        scope=task.engineering_policy.scope,
+        sidecar_state=tmp_path / "state",
+        git=cast(GitWorktreeManager, object()),
+        principal=LocalOperatorPrincipal.trusted_local(),
+        consume=lambda decision: None,
+        artifacts=FileArtifactStore(tmp_path / "rejected-static-artifacts", read_only=True),
+    )
+    monkeypatch.setattr(entry, "_invocation", lambda item, step: (start, outcome))
+    observation = SimpleNamespace(validate_integrity=lambda: None)
+    monkeypatch.setattr(entry.records, "get", lambda *args: observation)
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.delivery_wait._reobserve_sealed_static_qa_absence",
+        lambda **kwargs: observation,
+    )
+    proof = entry._collect(current, waiting.queue.step(current.id), task)
+    assert proof.permitted_resolutions == (DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT,)
+    assert not proof.missing
+    assert proof.rejected_static_qa_output is not None
+
+
+@pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "coverage",
+        "claim",
+        "static_decision",
+        "task_event",
+        "parent_event",
+        "extra_output",
+        "missing_invocation",
+    ),
+)
+def test_rejected_static_qa_retry_rejects_changed_facts_before_consumption(
+    waiting: WaitingFixture, tmp_path: Path, tamper: str
+) -> None:
+    _, resolution, records, current, report, accepted = _rejected_static_qa_fixture(
+        waiting, tmp_path
+    )
+    if tamper in {"coverage", "claim"}:
+        assert resolution.rejected_static_qa_output is not None
+        evidence = resolution.rejected_static_qa_output
+        if tamper == "coverage":
+            changed = evidence.model_copy(
+                update={
+                    "all_criterion_ids": ("ac_models_01", "ac_models_03"),
+                    "missing_criterion_ids": ("ac_models_03",),
+                }
+            )
+        else:
+            changed = evidence.model_copy(update={"previous_claim_sha256": "0" * 64})
+        resolution = reseal(resolution, rejected_static_qa_output=changed.to_wire())
+    elif tamper == "static_decision":
+        with closing(open_mysql_connection(waiting.dsn)) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM work_queue_events WHERE work_item_id=%s "
+                    "AND event_type='WAIT_RESOLVED'",
+                    (current.id,),
+                )
+            connection.commit()
+    elif tamper == "task_event":
+        with closing(open_mysql_connection(waiting.dsn)) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE state_events SET payload_json=JSON_ARRAY_APPEND(payload_json, "
+                    "'$.artifact_ids', %s) WHERE task_id=%s ORDER BY revision DESC LIMIT 1",
+                    (report.artifact_id, current.task_id),
+                )
+            connection.commit()
+    elif tamper == "parent_event":
+        with closing(open_mysql_connection(waiting.dsn)) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE work_queue_events SET payload_json=JSON_SET(payload_json, "
+                    "'$.detail.next_work_item_id', %s) WHERE work_item_id=%s "
+                    "AND event_type='WAIT_RESOLVED'",
+                    ("work_wrong_static_child", current.id),
+                )
+            connection.commit()
+    elif tamper == "extra_output":
+        duplicate = accepted.model_copy(
+            update={
+                "receipt": QueueArtifactReceipt(artifact_id="art_extra_static", sha256="f" * 64)
+            }
+        )
+        with closing(open_mysql_connection(waiting.dsn)) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO work_queue_accepted_artifacts"
+                    "(id,task_id,payload_json,sha256) VALUES (%s,%s,%s,%s)",
+                    (
+                        duplicate.receipt.artifact_id,
+                        duplicate.task_id,
+                        json.dumps(duplicate.to_wire(), sort_keys=True),
+                        record_digest(duplicate),
+                    ),
+                )
+            connection.commit()
+    invocation_records = None if tamper == "missing_invocation" else records
+    with pytest.raises((QueueConflict, QueueCorruption, ValueError)):
+        waiting.queue.resolve_wait(resolution, invocation_records=invocation_records)
+    assert waiting.queue.get(current.id).status is WorkItemStatus.WAITING_DEPENDENCY
+    assert waiting.queue.rejected_static_qa_artifact_ids(current.task_id) == frozenset()
 
 
 @pytest.mark.parametrize("waiting", [(AgentRole.QA, "STATIC_QA")], indirect=True)
@@ -1140,13 +1644,14 @@ def test_static_qa_reclaimed_ready_no_start_preparation_uses_consumed_decision(
         knowledge = KnowledgeRecordStore(tmp_path / "knowledge")
         knowledge_binding = bound(second)
         knowledge_route = route(knowledge, knowledge_binding)
+        second_claimed_at = second.claimed_at
         QueueKnowledgeWaitPort(
             waiting.queue,
             claim=second,
             owner_token=TOKEN,
             binding=knowledge_binding,
             records=knowledge,
-            clock=lambda: second.claimed_at + timedelta(seconds=1),
+            clock=lambda: second_claimed_at + timedelta(seconds=1),
         ).wait(knowledge_binding, knowledge_route)
         source = KnowledgeResolutionSource(
             uri="test://verified-static-qa-scope",

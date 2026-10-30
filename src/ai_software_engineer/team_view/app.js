@@ -2383,6 +2383,7 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
   const rejectedKnowledge = matchingRejectedKnowledgePreparationEvidence(request, step, proof);
   const rejected = matchingRejectedCoderOutputEvidence(request, step, proof);
   const staticQa = matchingStaticQaMissingEntryEvidence(request, step, proof);
+  const rejectedStaticQa = matchingRejectedStaticQaOutputEvidence(request, step, proof);
   if (rejected) {
     facts.happened = "本轮开发报告的进度序号不符合执行约定，报告未被接纳。";
     facts.preservation = "原执行已结束，完整开发文件已封存；原任务、分支和工作区保留。";
@@ -2408,6 +2409,12 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
     facts.platform = "可交由新领取的独立 QA 核验缺项并报告 FAIL，随后由 Coder 补齐测试；新候选仍需独立 QA 和 Review。";
     facts.user = "查看下方缺项证明；工程授权者确认后，平台才能重新领取 QA。";
   }
+  if (rejectedStaticQa) {
+    facts.happened = `原 QA 报告仅覆盖 ${rejectedStaticQa.reported_criterion_ids.length}/${rejectedStaticQa.all_criterion_ids.length} 项验收准则，产出已被平台拒绝。`;
+    facts.preservation = "原报告、候选、QA 领取记录和失败历史保留；不会重放或改写旧报告。";
+    facts.platform = "可按精确工程决定创建新的独立 QA 工作项，重新报告全部准则；后续验收与评审仍需独立完成。";
+    facts.user = "查看下方产出恢复方案；确认工程决定后，平台才能重新领取 QA。";
+  }
   if (!completedPlan && /^[a-f0-9]{64}$/.test(proof?.process_stop_sha256 || "") &&
       !missing.includes("STOP_UNRECORDED") && missing.includes("CHECKPOINT_UNAVAILABLE")) {
     facts.happened = proof.retry_cause === "local_execution_limit"
@@ -2431,7 +2438,7 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
       facts.user += " 平台问题修复后，点击“平台修复后重新处理”，由平台重新核验并尝试继续原需求。";
   } else if (proof?.missing?.length) {
     facts.user = "你无需判断内部执行记录。可以让平台尝试处理；若平台仍无法继续，会说明处理方和具体事项。";
-  } else if (engineeringWaitCanResolve(request, step, proof)) {
+  } else if (!rejectedStaticQa && engineeringWaitCanResolve(request, step, proof)) {
     facts.platform = "已检查原执行和保留进度，现有规则要求工程授权者确认所列方案后继续。";
     facts.user = "需要工程授权者确认按页面所列方案继续；不需要手工核验内部记录。";
   }

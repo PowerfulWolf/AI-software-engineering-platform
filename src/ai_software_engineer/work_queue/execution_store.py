@@ -17,9 +17,10 @@ from typing import TYPE_CHECKING, Literal, Protocol, Self, cast, runtime_checkab
 from pydantic import JsonValue, TypeAdapter, ValidationError, model_validator
 from pymysql.cursors import DictCursor
 
+from ai_software_engineer.agents.models import AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.artifacts.ports import ArtifactRef
-from ai_software_engineer.domain.artifact import Artifact, Sha256
+from ai_software_engineer.domain.artifact import Artifact, QaReportArtifact, Sha256
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.delivery_disposition import DeliveryDisposition
 from ai_software_engineer.domain.delivery_resolution import (
@@ -31,7 +32,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     rejected_knowledge_wait_matches,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringCapability
-from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
+from ai_software_engineer.domain.enums import AgentRole, QaReportStatus, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
@@ -270,9 +271,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
         decisions: list[DeliveryResolution] = []
         try:
             for row in rows:
-                event = _RejectedOutputResolutionEvent.model_validate_json(
-                    str(row["payload_json"])
-                )
+                event = _RejectedOutputResolutionEvent.model_validate_json(str(row["payload_json"]))
                 detail, decision = event.detail, event.detail.resolution
                 decision.validate_integrity()
                 if (
@@ -297,10 +296,8 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 if (
                     digest(claim.to_wire()) != original.original_claim_sha256
                     or claim.work_item.id != decision.work_item_id
-                    or claim.work_item.dispatch_sequence + 1
-                    != event.work_item.dispatch_sequence
-                    or claim.work_item.checkpoint_sequence
-                    != event.work_item.checkpoint_sequence
+                    or claim.work_item.dispatch_sequence + 1 != event.work_item.dispatch_sequence
+                    or claim.work_item.checkpoint_sequence != event.work_item.checkpoint_sequence
                 ):
                     raise ValueError("consumed recovery schedule changed its original claim")
                 decisions.append(decision)
@@ -313,7 +310,11 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
         return decisions[0] if decisions else None
 
     def static_qa_resolution_for_wait(
-        self, item: QueuedWorkItem, *, knowledge_records: KnowledgeRecordStore | None = None
+        self,
+        item: QueuedWorkItem,
+        *,
+        knowledge_records: KnowledgeRecordStore | None = None,
+        accepted_output: AcceptedRoleArtifact | None = None,
     ) -> DeliveryResolution | None:
         """Read a prior consumed static decision while the same QA item is waiting."""
         with (
@@ -462,13 +463,209 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 ):
                     raise QueueCorruption("static QA knowledge wait approval changed")
             cursor.execute(
-                "SELECT id FROM work_queue_accepted_artifacts WHERE task_id=%s "
-                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.work_item_id'))=%s LIMIT 1",
+                "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+                "WHERE task_id=%s AND "
+                "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.work_item_id'))=%s LIMIT 2",
                 (item.task_id, item.id),
             )
-            if cursor.fetchone() is not None:
-                raise QueueCorruption("static QA wait already has accepted output")
+            published = tuple(_decode(row, AcceptedRoleArtifact) for row in cursor.fetchall())
+            if accepted_output is None:
+                if published:
+                    raise QueueCorruption("static QA wait already has accepted output")
+            elif len(published) != 1 or published[0] != accepted_output:
+                raise QueueCorruption("static QA accepted output differs from exact investigation")
             return decision
+
+    def _rejected_static_qa_parent_decision(
+        self,
+        cursor: DictCursor,
+        current: QueuedWorkItem,
+        generations: dict[int, str],
+        invocation_records: KnowledgeRecordStore | None,
+    ) -> DeliveryResolution | None:
+        """Inherit only a consumed, exact static decision through one rejected QA child."""
+        parent_id = current.parent_work_item_id
+        if parent_id is None:
+            return None
+        cursor.execute(
+            "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
+            "AND event_type='WAIT_RESOLVED' ORDER BY sequence LIMIT 4",
+            (parent_id,),
+        )
+        rows = cursor.fetchall()
+        if len(rows) > 3:
+            raise QueueCorruption("rejected static QA parent has excessive decisions")
+        events = tuple(
+            _RejectedOutputResolutionEvent.model_validate_json(str(row["payload_json"]))
+            for row in rows
+        )
+        retries = tuple(
+            event
+            for event in events
+            if event.detail.resolution.resolution_kind
+            is DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT
+        )
+        if not retries:
+            parent = self._get_locked(cursor, parent_id, lock=False)
+            if (
+                parent.role is AgentRole.QA
+                and current.role is AgentRole.QA
+                and parent.attempt == current.attempt
+                and parent.checkpoint_sequence == current.checkpoint_sequence
+            ):
+                raise QueueCorruption("same-attempt QA child lacks exact recovery decision")
+            return None
+        if len(retries) != 1 or invocation_records is None:
+            raise QueueCorruption("rejected static QA child lacks one sealed parent decision")
+        retry_event = retries[0]
+        retry = retry_event.detail.resolution
+        retry.validate_integrity()
+        evidence = retry.rejected_static_qa_output
+        parent = self._get_locked(cursor, parent_id, lock=False)
+        parent_step = self.step(parent_id)
+        step = self.step(current.id)
+        original_static = tuple(
+            event
+            for event in events
+            if event.detail.resolution.resolution_kind
+            is DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY
+        )
+        if len(original_static) != 1 or evidence is None:
+            raise QueueCorruption("rejected static QA child lost original static authority")
+        static_event = original_static[0]
+        static_decision = static_event.detail.resolution
+        static_decision.validate_integrity()
+        if (
+            any(
+                origin != "LEASE_EXPIRED"
+                for sequence, origin in generations.items()
+                if sequence > 0
+            )
+            or current.id != "work_" + retry.resolution_sha256
+            or retry_event.detail.next_work_item_id != current.id
+            or retry_event.detail.resolution_sha256 != retry.resolution_sha256
+            or retry_event.detail.budget_refund
+            or retry_event.work_item.status is not WorkItemStatus.CLOSED
+            or retry_event.work_item.id != parent.id
+            or parent.status is not WorkItemStatus.CLOSED
+            or parent.task_id != current.task_id
+            or parent.repository_id != current.repository_id
+            or parent.repository_scopes != current.repository_scopes
+            or parent.role is not AgentRole.QA
+            or current.role is not AgentRole.QA
+            or parent.attempt != current.attempt
+            or parent.checkpoint_sequence != current.checkpoint_sequence
+            or current.parent_work_item_id != parent.id
+            or step.allocation_sha256 != parent_step.allocation_sha256
+            or step.boundary.source_revision != parent_step.boundary.source_revision
+            or retry.task_id != current.task_id
+            or retry.work_item_id != parent.id
+            or retry.expected_source_revision != step.boundary.source_revision
+            or evidence.task_id != current.task_id
+            or evidence.work_item_id != parent.id
+            or evidence.candidate_revision != step.boundary.source_revision
+            or evidence.static_resolution_sha256 != static_decision.resolution_sha256
+            or static_event.detail.next_work_item_id != parent.id
+            or static_event.detail.resolution_sha256 != static_decision.resolution_sha256
+            or static_event.detail.budget_refund
+            or static_decision.work_item_id != parent.id
+            or static_decision.task_id != current.task_id
+            or static_decision.expected_source_revision != step.boundary.source_revision
+            or static_decision.task_snapshot_sha256 != retry.task_snapshot_sha256
+            or static_decision.task_revision != retry.task_revision
+        ):
+            raise QueueCorruption("rejected static QA child changed parent, Task or candidate")
+        cursor.execute("SELECT payload_json,revision FROM tasks WHERE id=%s", (current.task_id,))
+        task_row = cursor.fetchone()
+        if task_row is None:
+            raise QueueCorruption("rejected static QA Task is missing")
+        task = _decode_task(current.task_id, str(task_row["payload_json"]))
+        if (
+            task.status is not TaskStatus.QA
+            or task.attempts != current.attempt
+            or task.repository != current.repository_scopes[0]
+            or task_row["revision"] != retry.task_revision
+            or digest(task.to_wire()) != retry.task_snapshot_sha256
+            or task_intent_sha256(task) != retry.expected_task_intent_sha256
+            or tuple(criterion.id for criterion in task.acceptance_criteria)
+            != evidence.all_criterion_ids
+        ):
+            raise QueueConflict("rejected static QA child changed frozen Task or coverage")
+        cursor.execute(
+            "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+            "WHERE task_id=%s AND "
+            "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.work_item_id'))=%s LIMIT 2",
+            (current.task_id, parent.id),
+        )
+        published = tuple(_decode(row, AcceptedRoleArtifact) for row in cursor.fetchall())
+        if len(published) != 1:
+            raise QueueCorruption("rejected static QA parent has no unique old output")
+        old = published[0]
+        if (
+            old.receipt.artifact_id != evidence.previous_qa_artifact_id
+            or old.receipt.sha256 != evidence.previous_qa_sha256
+            or old.lease_id != evidence.previous_lease_id
+            or old.dispatch_sequence != evidence.previous_dispatch_sequence
+            or old.run_id != evidence.previous_run_id
+            or old.context_manifest_id != evidence.previous_context_manifest_id
+            or old.source_revision != evidence.candidate_revision
+        ):
+            raise QueueCorruption("rejected static QA parent output changed its claim")
+        from ai_software_engineer.work_queue.invocation import (
+            DeliveryInvocationOutcome,
+            DeliveryInvocationStart,
+        )
+
+        start = invocation_records.find("invocation-starts", parent.id, DeliveryInvocationStart)
+        outcome = invocation_records.find(
+            "invocation-outcomes", parent.id, DeliveryInvocationOutcome
+        )
+        if start is None or outcome is None:
+            raise QueueCorruption("rejected static QA parent invocation is missing")
+        start.validate_integrity()
+        outcome.validate_integrity()
+        report = outcome.result.artifact
+        if (
+            start.start_sha256 != evidence.invocation_start_sha256
+            or outcome.outcome_sha256 != evidence.invocation_outcome_sha256
+            or outcome.start != start
+            or start.work_item_id != parent.id
+            or start.lease_id != old.lease_id
+            or start.request.run_id != old.run_id
+            or start.request.context_manifest_id != old.context_manifest_id
+            or start.request.source_revision != old.source_revision
+            or outcome.result.status is not AgentRunStatus.SUCCEEDED
+            or not isinstance(report, QaReportArtifact)
+            or report.artifact_id != old.receipt.artifact_id
+            or report.integrity.sha256 != old.receipt.sha256
+            or report.content.status is not QaReportStatus.FAIL
+            or tuple(result.criterion_id for result in report.content.criteria_results)
+            != evidence.reported_criterion_ids
+        ):
+            raise QueueCorruption("rejected static QA invocation or report changed")
+        cursor.execute(
+            "SELECT event_id FROM state_events WHERE task_id=%s AND "
+            "JSON_CONTAINS(JSON_EXTRACT(payload_json,'$.artifact_ids'),"
+            "JSON_QUOTE(%s)) LIMIT 1",
+            (current.task_id, old.receipt.artifact_id),
+        )
+        if cursor.fetchone() is not None:
+            raise QueueCorruption("rejected static QA report already entered Task history")
+        cursor.execute(
+            "SELECT id FROM work_queue_accepted_artifacts WHERE task_id=%s AND "
+            "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.work_item_id'))=%s LIMIT 1",
+            (current.task_id, current.id),
+        )
+        if cursor.fetchone() is not None:
+            raise QueueCorruption("rejected static QA child already has accepted output")
+        cursor.execute(
+            "SELECT sequence FROM work_queue_events WHERE work_item_id=%s "
+            "AND event_type='COMPLETED' LIMIT 1",
+            (current.id,),
+        )
+        if cursor.fetchone() is not None:
+            raise QueueCorruption("rejected static QA child already completed")
+        return static_decision
 
     def static_qa_resolution_for_claim(
         self,
@@ -598,7 +795,9 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     "active QA dispatch generation has no durable transition event"
                 )
             if not static_events:
-                return None
+                return self._rejected_static_qa_parent_decision(
+                    cursor, current, generations, invocation_records
+                )
             if len(static_events) != 1:
                 raise QueueCorruption("static QA claim lacks one consumed decision")
             event = static_events[0]
@@ -971,6 +1170,197 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
         )
         return next_item, next_item
 
+    def _rejected_static_qa_successor(
+        self,
+        cursor: DictCursor,
+        resolution: DeliveryResolution,
+        current: QueuedWorkItem,
+        disposition: DeliveryDisposition,
+        task: Task,
+        step: QueuedRoleStep,
+        now: datetime,
+        invocation_records: KnowledgeRecordStore | None,
+    ) -> tuple[QueuedWorkItem, QueuedWorkItem]:
+        evidence = resolution.rejected_static_qa_output
+        if (
+            evidence is None
+            or current.role is not AgentRole.QA
+            or task.status is not TaskStatus.QA
+            or current.attempt != task.attempts
+            or evidence.task_id != task.id
+            or evidence.work_item_id != current.id
+            or evidence.candidate_revision != step.boundary.source_revision
+            or disposition.facts.classification != "PLATFORM_BUG"
+            or resolution.authorization_source != "engineering_operator_decision"
+            or invocation_records is None
+            or tuple(criterion.id for criterion in task.acceptance_criteria)
+            != evidence.all_criterion_ids
+            or not evidence.missing_criterion_ids
+        ):
+            raise QueueConflict("被拒静态 QA 恢复缺少当前精确报告与工程等待")
+        cursor.execute(
+            "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
+            "AND event_type='WAIT_RESOLVED' ORDER BY sequence LIMIT 4 FOR UPDATE",
+            (current.id,),
+        )
+        rows = cursor.fetchall()
+        if len(rows) > 3:
+            raise QueueConflict("被拒静态 QA 原决议历史超过有界上限")
+        prior_decisions = tuple(
+            _RejectedOutputResolutionEvent.model_validate_json(str(row["payload_json"]))
+            for row in rows
+        )
+        original_static = tuple(
+            event
+            for event in prior_decisions
+            if event.detail.resolution.resolution_kind
+            is DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY
+        )
+        if len(original_static) != 1:
+            raise QueueConflict("被拒静态 QA 恢复缺少唯一原静态决定")
+        original_event = original_static[0]
+        original_decision = original_event.detail.resolution
+        original_decision.validate_integrity()
+        if (
+            original_event.detail.resolution_sha256 != original_decision.resolution_sha256
+            or original_event.detail.next_work_item_id != current.id
+            or original_event.detail.budget_refund
+            or original_event.work_item.status is not WorkItemStatus.READY
+            or original_event.work_item.id != current.id
+            or original_decision.resolution_sha256 != evidence.static_resolution_sha256
+            or original_decision.task_id != task.id
+            or original_decision.work_item_id != current.id
+            or original_decision.expected_source_revision != evidence.candidate_revision
+            or original_decision.task_snapshot_sha256 != resolution.task_snapshot_sha256
+            or original_decision.task_revision != resolution.task_revision
+            or any(
+                event.detail.resolution.resolution_kind
+                not in {
+                    DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,
+                    DeliveryResolutionKind.RESUME_UNINVOKED,
+                }
+                for event in prior_decisions
+            )
+        ):
+            raise QueueConflict("被拒静态 QA 恢复改变了原静态决定")
+        prior_claim = self.original_claim(evidence.previous_lease_id)
+        if (
+            digest(prior_claim.to_wire()) != evidence.previous_claim_sha256
+            or prior_claim.work_item.id != current.id
+            or prior_claim.work_item.dispatch_sequence != evidence.previous_dispatch_sequence
+            or prior_claim.work_item.attempt != current.attempt
+            or prior_claim.work_item.checkpoint_sequence != current.checkpoint_sequence
+        ):
+            raise QueueConflict("被拒静态 QA 恢复改变了原真实 claim")
+        cursor.execute(
+            "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+            "WHERE task_id=%s FOR UPDATE",
+            (task.id,),
+        )
+        accepted = tuple(_decode(row, AcceptedRoleArtifact) for row in cursor.fetchall())
+        matching = tuple(
+            value
+            for value in accepted
+            if value.work_item_id == current.id
+            and value.receipt.artifact_id == evidence.previous_qa_artifact_id
+            and value.receipt.sha256 == evidence.previous_qa_sha256
+            and value.run_id == evidence.previous_run_id
+            and value.context_manifest_id == evidence.previous_context_manifest_id
+            and value.source_revision == evidence.candidate_revision
+        )
+        if len(matching) != 1:
+            raise QueueConflict("被拒静态 QA 恢复没有唯一旧报告接纳记录")
+        if sum(value.work_item_id == current.id for value in accepted) != 1:
+            raise QueueConflict("被拒静态 QA 原工作项有多份接纳产物")
+        if (
+            matching[0].lease_id != evidence.previous_lease_id
+            or matching[0].dispatch_sequence != evidence.previous_dispatch_sequence
+        ):
+            raise QueueConflict("被拒静态 QA 恢复的旧报告不属于原真实领取")
+        from ai_software_engineer.work_queue.invocation import (
+            DeliveryInvocationOutcome,
+            DeliveryInvocationStart,
+        )
+
+        assert invocation_records is not None
+        start = invocation_records.find("invocation-starts", current.id, DeliveryInvocationStart)
+        outcome = invocation_records.find(
+            "invocation-outcomes", current.id, DeliveryInvocationOutcome
+        )
+        if start is None or outcome is None:
+            raise QueueConflict("被拒静态 QA 恢复缺少已封存的原调用和结果")
+        start.validate_integrity()
+        outcome.validate_integrity()
+        report = outcome.result.artifact
+        if (
+            start.start_sha256 != evidence.invocation_start_sha256
+            or outcome.outcome_sha256 != evidence.invocation_outcome_sha256
+            or outcome.start != start
+            or start.work_item_id != current.id
+            or start.lease_id != evidence.previous_lease_id
+            or start.checkpoint_sequence != current.checkpoint_sequence
+            or start.request.run_id != evidence.previous_run_id
+            or start.request.context_manifest_id != evidence.previous_context_manifest_id
+            or start.request.source_revision != evidence.candidate_revision
+            or start.request.attempt != current.attempt
+            or outcome.result.status is not AgentRunStatus.SUCCEEDED
+            or not isinstance(report, QaReportArtifact)
+            or report.artifact_id != evidence.previous_qa_artifact_id
+            or report.integrity.sha256 != evidence.previous_qa_sha256
+            or report.content.status is not QaReportStatus.FAIL
+            or tuple(result.criterion_id for result in report.content.criteria_results)
+            != evidence.reported_criterion_ids
+        ):
+            raise QueueConflict("被拒静态 QA 恢复的原调用或报告已变化")
+        cursor.execute(
+            "SELECT event_id FROM state_events WHERE task_id=%s AND "
+            "JSON_CONTAINS(JSON_EXTRACT(payload_json,'$.artifact_ids'),"
+            "JSON_QUOTE(%s)) LIMIT 1 FOR UPDATE",
+            (task.id, evidence.previous_qa_artifact_id),
+        )
+        if cursor.fetchone() is not None:
+            raise QueueConflict("被拒静态 QA 原报告已经进入 Task 状态历史")
+        cursor.execute(
+            "SELECT sequence FROM work_queue_events WHERE work_item_id=%s "
+            "AND event_type='COMPLETED' LIMIT 1 FOR UPDATE",
+            (current.id,),
+        )
+        if cursor.fetchone() is not None:
+            raise QueueConflict("被拒静态 QA 原工作项已经完成推进")
+        next_item = current.model_copy(
+            update={
+                "id": "work_" + resolution.resolution_sha256,
+                "status": WorkItemStatus.READY,
+                "updated_at": now,
+                "wait_reason": None,
+                "wait_disposition": None,
+                "available_at": None,
+                "parent_work_item_id": current.id,
+                "dispatch_sequence": 0,
+            }
+        )
+        next_step = QueuedRoleStep(
+            work_item=next_item,
+            boundary=RoleRunBoundary(
+                task.id,
+                AgentRole.QA,
+                task.attempts,
+                resolution.task_revision,
+                resolution.expected_source_revision,
+            ),
+            allocation_sha256=step.allocation_sha256,
+        )
+        _put(cursor, "work_queue_steps", next_item.id, task.id, next_step)
+        next_item = self._enqueue_locked(cursor, next_item, allow_rejected_static_qa_successor=True)
+        return next_item, current.model_copy(
+            update={
+                "status": WorkItemStatus.CLOSED,
+                "updated_at": now,
+                "wait_reason": None,
+                "wait_disposition": None,
+            }
+        )
+
     def _rejected_output_decisions(
         self, task_id: str, *, cursor: DictCursor | None = None
     ) -> tuple[DeliveryResolution, ...]:
@@ -1101,6 +1491,15 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             decision.rejected_output.rejected_artifact_id
             for decision in self._rejected_output_decisions(task_id)
             if decision.rejected_output is not None
+        )
+
+    def rejected_static_qa_artifact_ids(self, task_id: str) -> frozenset[str]:
+        return frozenset(
+            decision.rejected_static_qa_output.previous_qa_artifact_id
+            for decision in self._rejected_wait_decisions(
+                task_id, DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT
+            )
+            if decision.rejected_static_qa_output is not None
         )
 
     def retired_rejected_outputs(
@@ -1608,7 +2007,12 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             raise QueueConflict("知识准备窗口请求改变了冻结工程范围")
         return evidence.next_timeout_seconds if evidence is not None else None
 
-    def resolve_wait(self, resolution: DeliveryResolution) -> QueuedWorkItem:
+    def resolve_wait(
+        self,
+        resolution: DeliveryResolution,
+        *,
+        invocation_records: KnowledgeRecordStore | None = None,
+    ) -> QueuedWorkItem:
         """Consume sealed engineering proof with Task, queue and budget in one fence."""
         resolution.validate_integrity()
         now = self._clock()
@@ -2125,7 +2529,21 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             else:
                 if resolution.retry_failure is not None:
                     raise QueueConflict("noninvoking resolution cannot add a retry failure")
-                if resolution.resolution_kind is DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY:
+                if (
+                    resolution.resolution_kind
+                    is DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT
+                ):
+                    next_item, settled = self._rejected_static_qa_successor(
+                        cursor,
+                        resolution,
+                        current,
+                        disposition,
+                        task,
+                        step,
+                        now,
+                        invocation_records,
+                    )
+                elif resolution.resolution_kind is DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY:
                     next_item, settled = self._static_qa_successor(
                         cursor, resolution, current, disposition, task, step, now
                     )
@@ -2326,7 +2744,10 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                         or current.preferred_agent_id != original.assignment.agent_id
                     ):
                         raise QueueConflict("result replay changed the original frozen producer")
-                if resolution.resolution_kind is not DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY:
+                if resolution.resolution_kind not in {
+                    DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,
+                    DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT,
+                }:
                     next_item = current.model_copy(
                         update={
                             "status": WorkItemStatus.READY,

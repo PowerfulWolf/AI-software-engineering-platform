@@ -31,6 +31,7 @@ _ITEMS = {
     "role",
     "attempt",
     "checkpoint_sequence",
+    "recovery_parent_id",
     "status",
     "priority",
     "risk_rank",
@@ -40,7 +41,8 @@ _ITEMS = {
     "created_at",
     "updated_at",
 }
-_LEGACY_ITEMS = (_ITEMS - {"repository_id"}) | {"project_id"}
+_PRE_RECOVERY_ITEMS = _ITEMS - {"recovery_parent_id"}
+_LEGACY_ITEMS = (_PRE_RECOVERY_ITEMS - {"repository_id"}) | {"project_id"}
 _CLAIMS = {
     "lease_id",
     "work_item_id",
@@ -91,6 +93,20 @@ def test_current_work_queue_schema_is_idempotent() -> None:
     _ensure_current_queue_tables(cursor)
 
     assert not any(statement.startswith("RENAME TABLE") for statement in cursor.statements)
+    assert not any(statement.startswith("ALTER TABLE") for statement in cursor.statements)
+
+
+def test_pre_recovery_queue_adds_parent_scoped_unique_key() -> None:
+    cursor = _SchemaCursor({**_CURRENT, "work_queue_items": _PRE_RECOVERY_ITEMS})
+
+    _ensure_current_queue_tables(cursor)
+
+    migration = next(
+        statement for statement in cursor.statements if statement.startswith("ALTER TABLE")
+    )
+    assert "ADD COLUMN recovery_parent_id" in migration
+    assert "DROP INDEX uq_work_queue_run" in migration
+    assert "checkpoint_sequence,recovery_parent_id" in migration
 
 
 def test_legacy_project_queue_is_archived_before_current_tables_are_created() -> None:

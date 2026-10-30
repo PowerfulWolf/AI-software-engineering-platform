@@ -27,7 +27,10 @@ from ai_software_engineer.manager.candidate_test_entry_absence import (
     observe_accepted_candidate_test_entry_absence,
     observe_candidate_test_entry_absence,
 )
-from ai_software_engineer.manager.delivery_wait import _reobserve_sealed_static_qa_absence
+from ai_software_engineer.manager.delivery_wait import (
+    DeliveryWaitRejected,
+    _reobserve_sealed_static_qa_absence,
+)
 from ai_software_engineer.store.ports import TaskRepository
 from ai_software_engineer.work_queue.execution_store import AcceptedRoleArtifact
 from ai_software_engineer.work_queue.models import QueueArtifactReceipt
@@ -231,6 +234,7 @@ def test_old_missing_file_observation_wire_and_hash_remain_stable(repository: Pa
     )
     assert proof.missing[0].node_id is None
     assert "node_id" not in proof.model_dump(mode="json", exclude_none=True)["missing"][0]
+    assert plan.content.verification_requirements is not None
     row = plan.content.verification_requirements[0]
     legacy = CandidateTestEntryAbsenceObservation.create(
         task_id="task_1",
@@ -370,6 +374,7 @@ def test_accepted_legacy_mixed_plan_uses_files_only_recheck(
     durable.list_events.return_value = (plan_event,)
     queue = MagicMock()
     queue.accepted.return_value = (accepted,)
+    queue.rejected_static_qa_artifact_ids.return_value = frozenset()
     historical = observe_candidate_test_entry_absence(
         repository_root=repository,
         task=task,
@@ -400,6 +405,16 @@ def test_accepted_legacy_mixed_plan_uses_files_only_recheck(
     )
     assert rechecked == historical
     queue.accepted.assert_called_once_with(task.id)
+    queue.rejected_static_qa_artifact_ids.return_value = frozenset(("art_missing_qa",))
+    with pytest.raises(DeliveryWaitRejected, match="缺少原接纳收据"):
+        _reobserve_sealed_static_qa_absence(
+            original=historical,
+            task=task,
+            repository=durable,
+            source_revision=candidate,
+            queue=queue,
+            artifacts=store,
+        )
 
 
 def test_accepted_candidate_absence_requires_candidate_receipt_and_durable_plan_event(
