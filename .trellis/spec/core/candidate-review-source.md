@@ -147,10 +147,11 @@ for any new claim. A rollback cannot turn an expired lease into proof of a resul
 
 The production `CONTINUE_DELIVERY` operation `operation_791888210e9af5b085275029639ff021`
 ended with `OwnedProcessesUncertain` after a candidate verification QA admission and a
-sealed Python/MySQL command receipt. The observed platform failure is an owner capture
-race in the candidate source Git reader; the initial OS error cause was not sealed in
-the operation record and must not be invented. The QA invocation has no accepted model
-result or report, and its original approved plan is at-most-once. Preserve these facts.
+sealed Python/MySQL command receipt. A direct `Popen` candidate-source reader has a
+reproduced owner-capture race for short-lived Git commands, but the operation record
+contains only the outer `OwnedProcessesUncertain`; its inner OS cause was not sealed and
+must not be attributed to that run. The QA invocation has no accepted model result or
+report, and its original approved plan is at-most-once. Preserve these facts.
 After an idle reviewed release, independently verify the public state and run the public
 `verify-propose` path for a new exact plan and authorization. Its QA/Reviewer evidence
 must be accepted through the normal gates; a green unit test alone does not establish

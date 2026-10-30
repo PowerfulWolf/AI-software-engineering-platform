@@ -15,10 +15,7 @@ from ai_software_engineer.domain import AgentPermissions
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
-from ai_software_engineer.owned_processes import (
-    OwnedProcessesUncertain,
-    finish_owned_process,
-)
+from ai_software_engineer.owned_processes import finish_owned_process
 from ai_software_engineer.owned_spawn import spawn_owned_query
 from ai_software_engineer.redaction import redact_text
 
@@ -108,7 +105,7 @@ def _git(root: Path, *arguments: str, limit: int = 2_000_000) -> bytes:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-    except (OSError, OwnedProcessesUncertain) as error:
+    except OSError as error:
         raise WorkspacePolicyError("candidate source Git could not start") from error
     process, observation = spawned.process, spawned.observation
     output_drained = False

@@ -1,6 +1,7 @@
 """Candidate Git reads use the trusted owned-process launch gate."""
 
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,7 +9,11 @@ import pytest
 
 from ai_software_engineer.agents import candidate_source
 from ai_software_engineer.git import WorkspacePolicyError
-from ai_software_engineer.owned_processes import HostOwnedProcessRegistry, OwnedProcessesUncertain
+from ai_software_engineer.owned_processes import (
+    HostOwnedProcessRegistry,
+    OwnedProcessesUncertain,
+    observe_owned_process,
+)
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -117,12 +122,30 @@ def test_candidate_git_rejects_a_failed_owned_spawn_without_fallback(
 ) -> None:
     root = _repository(tmp_path)
     registry = HostOwnedProcessRegistry()
+    owned_process: subprocess.Popen[bytes] | None = None
 
     def refused(*_args: object, **_kwargs: object) -> object:
+        nonlocal owned_process
+        owned_process = subprocess.Popen(
+            (sys.executable, "-c", "import time; time.sleep(30)"),
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        observation = observe_owned_process(owned_process, kind="tool")
+        observation.uncertain()
         raise OwnedProcessesUncertain("fixture ownership refused")
 
     monkeypatch.setattr(candidate_source, "spawn_owned_query", refused)
-    with registry.operation_scope("operation_candidate_source_spawn_refused"):
-        with pytest.raises(WorkspacePolicyError, match="could not start"):
-            candidate_source._git(root, "rev-parse", "--verify", "HEAD")
-        assert registry.snapshot() == ()
+    try:
+        with registry.operation_scope("operation_candidate_source_spawn_refused"):
+            with pytest.raises(OwnedProcessesUncertain, match="fixture ownership refused"):
+                candidate_source._git(root, "rev-parse", "--verify", "HEAD")
+            assert len(registry.snapshot()) == 1
+            assert registry.snapshot()[0].state == "uncertain"
+    finally:
+        if owned_process is not None:
+            owned_process.kill()
+            owned_process.communicate(timeout=3)
