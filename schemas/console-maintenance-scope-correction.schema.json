@@ -1,0 +1,96 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "title": "Recorded At",
+      "type": "string"
+    },
+    "record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Record Sha256",
+      "type": "string"
+    },
+    "kind": {
+      "const": "maintenance_scope_correction",
+      "default": "maintenance_scope_correction",
+      "title": "Kind",
+      "type": "string"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "retirement_plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Retirement Plan Sha256",
+      "type": "string"
+    },
+    "marker_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Marker Sha256",
+      "type": "string"
+    },
+    "principal_uid": {
+      "minimum": 0,
+      "title": "Principal Uid",
+      "type": "integer"
+    },
+    "authority_reference": {
+      "maxLength": 300,
+      "minLength": 8,
+      "title": "Authority Reference",
+      "type": "string"
+    },
+    "target_platform_root": {
+      "minLength": 1,
+      "title": "Target Platform Root",
+      "type": "string"
+    },
+    "target_team_id": {
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+      "title": "Target Team Id",
+      "type": "string"
+    },
+    "target_config_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Target Config Sha256",
+      "type": "string"
+    },
+    "historical_execution_outcome": {
+      "const": "UNKNOWN",
+      "default": "UNKNOWN",
+      "title": "Historical Execution Outcome",
+      "type": "string"
+    },
+    "requirement_action": {
+      "const": "NONE",
+      "default": "NONE",
+      "title": "Requirement Action",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recorded_at",
+    "record_sha256",
+    "plan_sha256",
+    "retirement_plan_sha256",
+    "marker_sha256",
+    "principal_uid",
+    "authority_reference",
+    "target_platform_root",
+    "target_team_id",
+    "target_config_sha256"
+  ],
+  "title": "MaintenanceScopeCorrection",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/console-maintenance-scope-correction.schema.json"
+}

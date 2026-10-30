@@ -21,6 +21,10 @@ from ai_software_engineer.web_console.maintenance_completion import (
     MaintenanceNormalAdmission,
 )
 from ai_software_engineer.web_console.maintenance_epoch import MaintenanceEpochTransition
+from ai_software_engineer.web_console.maintenance_scope_correction import (
+    MaintenanceScopeCorrection,
+    MaintenanceScopeCorrectionPlan,
+)
 
 root = Path(__file__).resolve().parents[1] / "schemas"
 for name, model in (
@@ -35,6 +39,8 @@ for name, model in (
     ("console-maintenance-completion-receipt", MaintenanceCompletionReceipt),
     ("console-maintenance-admission", MaintenanceNormalAdmission),
     ("console-maintenance-epoch-transition", MaintenanceEpochTransition),
+    ("console-maintenance-scope-correction-plan", MaintenanceScopeCorrectionPlan),
+    ("console-maintenance-scope-correction", MaintenanceScopeCorrection),
 ):
     schema = model.model_json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"

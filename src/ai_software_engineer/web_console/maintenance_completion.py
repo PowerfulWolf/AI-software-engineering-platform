@@ -55,6 +55,9 @@ class MaintenanceCompletionPlan(_Record):
     retirement_plan_sha256: Sha256
     retirement_receipt_sha256: Sha256
     config_sha256: Sha256
+    scope_correction_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     principal_uid: Annotated[StrictInt, Field(ge=0)]
     instance: ServiceInstance
     request: ServiceShutdownRequest
@@ -157,9 +160,27 @@ def _observe(environment: Mapping[str, str]) -> MaintenanceCompletionPlan:
     source = ProductionConfig.path_from_environment(environment)
     body = _read(source.parent, source.name, bound=1_000_000, private=False)
     config = ProductionConfig.model_validate_json(body)
-    # Completing maintenance is for the exact configured platform that was retired.
-    if config.platform_root != predecessor.scope.platform_root:
-        raise MaintenanceCompletionError(_ERROR)
+    # A correction is a separate, explicit engineering decision. The original
+    # retirement's diagnostic scope remains byte-identical and UNKNOWN.
+    from .maintenance_scope_correction import (
+        revalidate_scope_correction,
+        verified_scope_correction,
+    )
+
+    correction = verified_scope_correction(root, predecessor.record_sha256)
+    if correction is None:
+        if config.platform_root != predecessor.scope.platform_root:
+            raise MaintenanceCompletionError(_ERROR)
+        correction_sha256 = None
+    else:
+        correction_plan, decision = correction
+        if (
+            config.platform_root != decision.target_platform_root
+            or _sha(body) != decision.target_config_sha256
+        ):
+            raise MaintenanceCompletionError(_ERROR)
+        revalidate_scope_correction(environment, correction_plan)
+        correction_sha256 = decision.record_sha256
     try:
         inventory = observe_maintenance_queue(config, environment)
     except (OSError, ValueError, RuntimeError, MySQLError) as error:
@@ -179,6 +200,7 @@ def _observe(environment: Mapping[str, str]) -> MaintenanceCompletionPlan:
         retirement_receipt_sha256=receipt.record_sha256,
         principal_uid=os.getuid(),
         config_sha256=_sha(body),
+        scope_correction_sha256=correction_sha256,
         instance=instance,
         request=request,
         result=result,
@@ -195,6 +217,9 @@ def _same_facts(left: MaintenanceCompletionPlan, right: MaintenanceCompletionPla
 def _receipt_plan(root: Path, receipt: MaintenanceCompletionReceipt) -> MaintenanceCompletionPlan:
     plan = _load(_plan_root(root, receipt.plan_sha256), "plan.json", MaintenanceCompletionPlan)
     marker = _load(root, MARKER_NAME, InspectionMarker)
+    from .maintenance_scope_correction import verified_scope_correction
+
+    correction = verified_scope_correction(root, marker.plan_sha256)
     if (
         plan.record_sha256 != receipt.plan_sha256
         or plan.marker_sha256 != marker.record_sha256
@@ -204,6 +229,8 @@ def _receipt_plan(root: Path, receipt: MaintenanceCompletionReceipt) -> Maintena
         or receipt.principal_uid != plan.principal_uid
         or plan.principal_uid != os.getuid()
         or receipt.recorded_at < plan.recorded_at
+        or plan.scope_correction_sha256
+        != (correction[1].record_sha256 if correction is not None else None)
     ):
         raise MaintenanceCompletionError(_ERROR)
     return plan
@@ -370,9 +397,23 @@ def admit_completed_maintenance(environment: Mapping[str, str]) -> None:
         existing = verified_completion(root)
         if existing is None:
             raise MaintenanceCompletionError(_ERROR)
-        if _exists(root, ADMISSION_NAME):
-            return
         plan, receipt = existing
+        if _exists(root, ADMISSION_NAME):
+            if plan.scope_correction_sha256 is not None:
+                from .maintenance_scope_correction import verified_scope_correction
+
+                correction = verified_scope_correction(root, plan.retirement_plan_sha256)
+                if correction is None:
+                    raise MaintenanceCompletionError(_ERROR)
+                selected = ProductionConfig.from_file(
+                    ProductionConfig.path_from_environment(environment)
+                )
+                if (
+                    selected.platform_root != correction[0].target_platform_root
+                    or selected.team_id != correction[0].target_team_id
+                ):
+                    raise MaintenanceCompletionError(_ERROR)
+            return
         current = _observe(environment)
         if not _same_facts(plan, current):
             raise MaintenanceCompletionError(_DRIFT)

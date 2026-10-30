@@ -22,6 +22,10 @@ from ai_software_engineer.web_console.maintenance_completion import (
     complete_maintenance,
     prepare_maintenance_completion,
 )
+from ai_software_engineer.web_console.maintenance_scope_correction import (
+    execute_scope_correction,
+    prepare_scope_correction,
+)
 from ai_software_engineer.web_console.service_lifecycle import ServiceLifecycleError
 
 
@@ -38,6 +42,12 @@ def main() -> int:
     purge = commands.add_parser("purge-archived-log")
     purge.add_argument("--confirm-delete-archived-log", action="store_true")
     commands.add_parser("prepare-completion")
+    correction = commands.add_parser("prepare-scope-correction")
+    correction.add_argument("--operation", required=True)
+    correction.add_argument("--authority-reference", required=True)
+    correct = commands.add_parser("correct-scope")
+    correct.add_argument("--plan", required=True)
+    correct.add_argument("--confirm-scope-correction", action="store_true")
     complete = commands.add_parser("complete")
     complete.add_argument("--plan", required=True)
     complete.add_argument("--confirm-restore-normal", action="store_true")
@@ -62,6 +72,23 @@ def main() -> int:
                     confirm_delete_archived_log=args.confirm_delete_archived_log,
                 ).model_dump_json()
             )
+        elif args.command in {"prepare-scope-correction", "correct-scope"}:
+            if args.command == "prepare-scope-correction":
+                print(
+                    prepare_scope_correction(
+                        os.environ,
+                        operation_id=args.operation,
+                        authority_reference=args.authority_reference,
+                    ).model_dump_json()
+                )
+            else:
+                print(
+                    execute_scope_correction(
+                        os.environ,
+                        plan_sha256=args.plan,
+                        confirm_scope_correction=args.confirm_scope_correction,
+                    ).model_dump_json()
+                )
         else:
             environment = dict(os.environ)
             source = ProductionConfig.path_from_environment(environment)

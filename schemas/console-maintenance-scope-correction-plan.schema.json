@@ -1,0 +1,162 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "title": "Recorded At",
+      "type": "string"
+    },
+    "record_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Record Sha256",
+      "type": "string"
+    },
+    "kind": {
+      "const": "maintenance_scope_correction_plan",
+      "default": "maintenance_scope_correction_plan",
+      "title": "Kind",
+      "type": "string"
+    },
+    "retirement_plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Retirement Plan Sha256",
+      "type": "string"
+    },
+    "retirement_receipt_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Retirement Receipt Sha256",
+      "type": "string"
+    },
+    "marker_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Marker Sha256",
+      "type": "string"
+    },
+    "principal_uid": {
+      "minimum": 0,
+      "title": "Principal Uid",
+      "type": "integer"
+    },
+    "observed_catalog_root": {
+      "minLength": 1,
+      "title": "Observed Catalog Root",
+      "type": "string"
+    },
+    "observed_config_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Observed Config Sha256",
+      "type": "string"
+    },
+    "previous_admitted_marker_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Previous Admitted Marker Sha256",
+      "type": "string"
+    },
+    "previous_admitted_platform_root": {
+      "minLength": 1,
+      "title": "Previous Admitted Platform Root",
+      "type": "string"
+    },
+    "target_platform_root": {
+      "minLength": 1,
+      "title": "Target Platform Root",
+      "type": "string"
+    },
+    "target_team_id": {
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+      "title": "Target Team Id",
+      "type": "string"
+    },
+    "target_config_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Target Config Sha256",
+      "type": "string"
+    },
+    "target_team_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Target Team Manifest Sha256",
+      "type": "string"
+    },
+    "target_operation_id": {
+      "minLength": 1,
+      "title": "Target Operation Id",
+      "type": "string"
+    },
+    "target_operation_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Target Operation Sha256",
+      "type": "string"
+    },
+    "target_project_id": {
+      "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Target Project Id",
+      "type": "string"
+    },
+    "target_delivery_id": {
+      "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+      "title": "Target Delivery Id",
+      "type": "string"
+    },
+    "archived_log_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Archived Log Sha256",
+      "type": "string"
+    },
+    "authority_reference": {
+      "maxLength": 300,
+      "minLength": 8,
+      "title": "Authority Reference",
+      "type": "string"
+    },
+    "assessment": {
+      "const": "EVIDENCE_BASED_RUNTIME_SCOPE",
+      "default": "EVIDENCE_BASED_RUNTIME_SCOPE",
+      "title": "Assessment",
+      "type": "string"
+    },
+    "historical_execution_outcome": {
+      "const": "UNKNOWN",
+      "default": "UNKNOWN",
+      "title": "Historical Execution Outcome",
+      "type": "string"
+    },
+    "requirement_action": {
+      "const": "NONE",
+      "default": "NONE",
+      "title": "Requirement Action",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recorded_at",
+    "record_sha256",
+    "retirement_plan_sha256",
+    "retirement_receipt_sha256",
+    "marker_sha256",
+    "principal_uid",
+    "observed_catalog_root",
+    "observed_config_sha256",
+    "previous_admitted_marker_sha256",
+    "previous_admitted_platform_root",
+    "target_platform_root",
+    "target_team_id",
+    "target_config_sha256",
+    "target_team_manifest_sha256",
+    "target_operation_id",
+    "target_operation_sha256",
+    "target_project_id",
+    "target_delivery_id",
+    "archived_log_sha256",
+    "authority_reference"
+  ],
+  "title": "MaintenanceScopeCorrectionPlan",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/console-maintenance-scope-correction-plan.schema.json"
+}

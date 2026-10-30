@@ -52,6 +52,13 @@ Tests: `test_second_maintenance_epoch_preserves_history_and_retries_every_phase`
 `test_next_epoch_depth_is_refused_before_prepare_or_any_signal`.
 
 ## Scope and signatures
+New production `ServiceInstance` records bind their launch config path, root
+and raw digest. Retirement prepare and execute refuse a different caller
+config before any signal. Legacy records without these fields still require
+the original strict process/REFUSED gates; an incorrectly selected legacy
+catalog can only be addressed by the separate
+[scope correction](maintenance-scope-correction.md) decision in inspection.
+
 
 This is an independent local engineering action, never ordinary READY, delivery approval, old Run
 completion, all-tool stop proof or datastore consistency. The fault-retirement successor is **inspection** until separately confirmed maintenance completion:

@@ -25,6 +25,7 @@ from pydantic import (
     model_validator,
 )
 
+from ai_software_engineer.domain.artifact import Sha256
 from ai_software_engineer.domain.model import DomainModel
 
 from .shutdown import ServiceWriteGate, ShutdownRefusal, ShutdownResult, ShutdownState
@@ -78,23 +79,43 @@ class ServiceInstance(DomainModel):
     started_at: datetime
     updated_at: datetime
     safe_summary: str
+    config_path: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    platform_root: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    config_sha256: Sha256 | None = Field(default=None, exclude_if=lambda value: value is None)
 
     _timestamps = field_validator("started_at", "updated_at")(_aware)
 
     @model_validator(mode="after")
     def valid_state(self) -> ServiceInstance:
-        if self.updated_at < self.started_at or self.safe_summary != _SUMMARIES[self.state]:
+        bound = (self.config_path, self.platform_root, self.config_sha256)
+        if (
+            self.updated_at < self.started_at
+            or self.safe_summary != _SUMMARIES[self.state]
+            or (any(value is None for value in bound) and any(value is not None for value in bound))
+            or any(value is not None and not Path(value).is_absolute() for value in bound[:2])
+        ):
             raise ValueError("invalid service instance state")
         return self
 
     @classmethod
-    def new(cls, *, pid: int, at: datetime) -> ServiceInstance:
+    def new(
+        cls,
+        *,
+        pid: int,
+        at: datetime,
+        config_path: str | None = None,
+        platform_root: str | None = None,
+        config_sha256: str | None = None,
+    ) -> ServiceInstance:
         return cls(
             instance_id="console_instance_" + secrets.token_hex(16),
             pid=pid,
             started_at=at,
             updated_at=at,
             safe_summary=_SUMMARIES[ServiceState.RUNNING],
+            config_path=config_path,
+            platform_root=platform_root,
+            config_sha256=config_sha256,
         )
 
     def with_state(self, state: ServiceState, *, at: datetime) -> ServiceInstance:

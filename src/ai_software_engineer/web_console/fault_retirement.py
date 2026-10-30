@@ -162,6 +162,13 @@ class FaultRetirementPlan(_Record):
             or self.recorded_at < self.result.recorded_at
             or self.process.process_id != self.instance.pid
             or tuple(f.name for f in self.originals) != _ORIGINALS
+            or (
+                self.instance.config_path is not None
+                and (
+                    self.instance.platform_root != self.scope.platform_root
+                    or self.instance.config_sha256 != self.scope.config_sha256
+                )
+            )
         ):
             raise ValueError(_ERROR)
         return self
@@ -649,6 +656,21 @@ def _catalog(environment: Mapping[str, str]) -> CatalogScope:
     )
 
 
+def _require_bound_config(
+    environment: Mapping[str, str], instance: ServiceInstance, scope: CatalogScope
+) -> None:
+    """New Hosts bind their launch config; legacy instances stay explicit UNKNOWN."""
+    if instance.config_path is None:
+        return
+    selected = ProductionConfig.path_from_environment(environment).expanduser().absolute()
+    if (
+        str(selected) != instance.config_path
+        or scope.platform_root != instance.platform_root
+        or scope.config_sha256 != instance.config_sha256
+    ):
+        raise FaultRetirementError(_ERROR)
+
+
 def prepare_fault_retirement(environment: Mapping[str, str]) -> FaultRetirementPlan:
     """Collect exact current facts itself; no caller-provided Plan or idle declarations."""
     root = ServiceLifecycleStore.from_environment(environment).root
@@ -681,6 +703,8 @@ def prepare_fault_retirement(environment: Mapping[str, str]) -> FaultRetirementP
         if process is None:
             raise FaultRetirementError(_ERROR)
         log = _log(root)
+        scope = _catalog(environment)
+        _require_bound_config(environment, instance, scope)
         plan = FaultRetirementPlan.create(
             instance=instance,
             request=request,
@@ -692,7 +716,7 @@ def prepare_fault_retirement(environment: Mapping[str, str]) -> FaultRetirementP
             log_device=log.st_dev,
             log_inode=log.st_ino,
             log_byte_count=log.st_size,
-            scope=_catalog(environment),
+            scope=scope,
             supervisor=_collect_supervisor(root),
             previous_maintenance=previous,
             recorded_at=datetime.now(UTC),
@@ -874,7 +898,9 @@ def execute_fault_retirement(
         if plan.record_sha256 != plan_sha256 or plan.principal_uid != os.getuid():
             raise FaultRetirementError(_ERROR)
         _require_originals(root, archive, plan)
-        if _catalog(environment).config_sha256 != plan.scope.config_sha256:
+        current_scope = _catalog(environment)
+        _require_bound_config(environment, plan.instance, current_scope)
+        if current_scope.config_sha256 != plan.scope.config_sha256:
             raise FaultRetirementError(_ERROR)
         if plan.previous_maintenance is not None:
             from .maintenance_epoch import begin_epoch

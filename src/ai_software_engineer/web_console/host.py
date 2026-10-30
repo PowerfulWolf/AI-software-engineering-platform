@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import socket
@@ -278,11 +279,14 @@ def _production_console_app(
 
 def main() -> None:
     try:
-        config, _ = _load_console_config(os.environ)
+        config, config_path = _load_console_config(os.environ)
+        config_bytes = config_path.read_bytes() if config_path.exists() else None
         raw_port = os.environ.get("ASE_CONSOLE_PORT")
         port = int(raw_port) if raw_port is not None else config.console_port
         _validate_port(port)
         app = production_console_app(port=port)
+        if config_bytes is not None and config_path.read_bytes() != config_bytes:
+            raise ProductionConfigError("Console config changed during startup")
         lifecycle = ServiceLifecycleStore.from_environment(os.environ)
         from .maintenance_lock import release_inherited_startup_lock
 
@@ -302,7 +306,15 @@ def main() -> None:
             server_header=False,
         ),
         lifecycle=lifecycle,
-        instance=ServiceInstance.new(pid=os.getpid(), at=datetime.now(UTC)),
+        instance=ServiceInstance.new(
+            pid=os.getpid(),
+            at=datetime.now(UTC),
+            config_path=str(config_path) if config_bytes is not None else None,
+            platform_root=config.platform_root if config_bytes is not None else None,
+            config_sha256=(
+                hashlib.sha256(config_bytes).hexdigest() if config_bytes is not None else None
+            ),
+        ),
         coordinator=cast(ConsoleShutdownCoordinator, app.state.console_shutdown),
     )
     try:

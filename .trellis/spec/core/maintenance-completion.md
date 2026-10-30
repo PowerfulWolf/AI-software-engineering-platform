@@ -25,6 +25,13 @@ Local trusted engineering channel, independent of Requirement/Run recovery and v
 `admit_completed_maintenance(environment) -> None` runs before first normal TeamHost composition.
 
 ## Contracts
+When the retired catalog scope was selected from the wrong caller config, the
+separate [scope correction](maintenance-scope-correction.md) decision is the
+only path to a different target root. A pending correction blocks completion.
+The completion plan references the decision digest; full evidence is rechecked
+at completion and first admission. Later normal startups keep the corrected
+root and Team identity bound without freezing every other config field.
+
 Current successor must have an exact READY instance/SHUTDOWN request/READY result, aware ordered
 publication times and actual current kernel PID absence. It must differ from the faulted predecessor.
 Keep console-inspection.json and the original control-record archive. Diagnostic log retention is independent and never a startup/completion precondition. Append immutable private plan,

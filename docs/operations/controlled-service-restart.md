@@ -109,3 +109,19 @@ completion 文件清单。执行期间的 pending marker 阻止启动；上一�
 详细契约见[故障服务维护规范](../../.trellis/spec/core/faulted-service-maintenance.md)。
 
 检查模式的 `status` 会明确显示“仅可查看记录，需求交付和写入暂停”；生命周期仍保留真实 RUNNING/REFUSED 状态，不改写历史收尾事实。
+
+若旧 Host 没有配置绑定，且退休时误用另一份 `ASE_CONFIG`，请保持检查模式。
+只有前一维护 epoch 已独立完成并接纳、其平台根与原日志中失败 Operation 所在的
+Team/Project/Requirement 完全吻合时，才可经可信本机工程通道准备作用域纠错：
+
+```bash
+ASE_CONFIG=/target/config.json .venv/bin/python scripts/ase-console-maintenance.py \
+  prepare-scope-correction --operation operation_ID --authority-reference HUMAN_ACTION_ID
+ASE_CONFIG=/target/config.json .venv/bin/python scripts/ase-console-maintenance.py \
+  correct-scope --plan <新计划的record_sha256> --confirm-scope-correction
+```
+
+使用与退休时相同的 `ASE_SERVICE_STATE_DIR`。审阅准备计划的旧/目标根、前一已接纳
+epoch、日志与 Operation 证据、UID 和授权引用，再确认。纠错不改写退休记录，不证明旧
+Host 环境被直接观察，也不恢复 UNKNOWN Run。随后仍需按上文准备并完成独立维护
+完成计划，核验新服务和需求状态；待决纠错计划会阻止普通模式。

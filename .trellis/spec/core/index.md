@@ -38,6 +38,10 @@
 
 ## Files
 
+- [Retired Console catalog scope correction](maintenance-scope-correction.md):
+  exact previous admitted root, immutable local decision, original log and
+  Operation witnesses, and persistent corrected-root normal startup gate.
+
 - [Frozen named pytest source gap](static-qa-node-gap.md): exact Git/AST proof,
   unchanged missing-file hashes, public no-start decision and independent QA FAIL.
 
