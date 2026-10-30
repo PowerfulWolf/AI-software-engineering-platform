@@ -37,6 +37,7 @@ from ai_software_engineer.domain.engineering_authority import (
     OperatorDuty,
 )
 from ai_software_engineer.domain.enums import QaFailureDisposition, QaReportStatus
+from ai_software_engineer.domain.native_verification import NativeVerificationWaiting
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.knowledge.administration import list_gap_views
 from ai_software_engineer.knowledge.gaps import KnowledgeResolution
@@ -59,6 +60,10 @@ from ai_software_engineer.manager.native_ui import (
     NativeUiSessionPrerequisite,
     native_ui_capability,
     probe_native_ui_session,
+)
+from ai_software_engineer.manager.native_verification_partition import (
+    PYTHON_MYSQL_CAPABILITY_KIND,
+    exact_python_selections,
 )
 from ai_software_engineer.manager.production_backend import (
     PRODUCTION_DELIVERY_CONTEXT_BUDGET,
@@ -676,6 +681,37 @@ _PYTEST_NODE_IN_TEXT = re.compile(
 )
 
 
+def _typed_python_mysql_tests(
+    plan: PlanArtifact, expected: set[str]
+) -> tuple[PytestSelection, ...] | None:
+    """Select exact QA nodes; reject unsafe typed intent before plan issuance."""
+    requirements = plan.content.verification_requirements
+    if requirements is None:
+        return None
+    relevant = []
+    for requirement in requirements:
+        if requirement.role is not AgentRole.QA or requirement.argv is None:
+            continue
+        executable = Path(requirement.argv[0]).name
+        if (
+            executable in {"python", "python3", "uv", "pytest"}
+            or requirement.controlled_capability_kind == PYTHON_MYSQL_CAPABILITY_KIND
+        ):
+            relevant.append(requirement)
+    if not relevant:
+        return None  # A non-Python typed Plan remains eligible for its native route.
+    try:
+        selections = exact_python_selections(tuple(relevant))
+    except NativeVerificationWaiting:
+        raise RecoveryRejected(
+            "typed Python verification command is not an exact pytest node"
+        ) from None
+    covered = {criterion for item in selections for criterion in item.criterion_ids}
+    if covered != expected or not selections:
+        raise RecoveryRejected("typed Python verification does not cover the exact Task criteria")
+    return tuple(sorted(selections, key=lambda item: item.node_id))
+
+
 def _automatic_python_mysql_tests(
     source: NativeCandidateSource,
 ) -> tuple[PytestSelection, ...] | None:
@@ -715,7 +751,16 @@ def _automatic_python_mysql_tests(
     ):
         return None
     expected = {criterion.id for criterion in source.runtime.task.acceptance_criteria}
-    if {item.criterion_id for item in plan.content.acceptance_mapping} != expected:
+    mapped = {item.criterion_id for item in plan.content.acceptance_mapping}
+
+    if plan.content.verification_requirements is not None:
+        # Typed Plan commands are the approved execution contract. Do not fill a
+        # missing/unsafe typed selector from free-form prose or Coder statements.
+        selected = _typed_python_mysql_tests(plan, expected)
+        if selected is not None and mapped != expected:
+            raise RecoveryRejected("typed Python verification has changed its acceptance mapping")
+        return selected
+    if mapped != expected:
         return None
 
     criteria_by_node: dict[str, set[str]] = {}

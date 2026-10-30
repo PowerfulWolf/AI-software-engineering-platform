@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from urllib.parse import urlparse
 
 from pydantic import TypeAdapter
@@ -113,6 +113,60 @@ class ResponsesAgentConfigurationError(AgentConfigurationError, ResponsesAgentEr
 
 class _LocalExecutionLimit(RuntimeError):
     """The single monotonic execution window or bounded loop is exhausted."""
+
+
+_SAFE_TOOL_REJECTION_CODES = frozenset(
+    {
+        "PATH_DENIED",
+        "FILE_NOT_FOUND",
+        "NOT_A_FILE",
+        "FILE_READ_FAILED",
+        "NON_UTF8_FILE",
+        "PARENT_NOT_FOUND",
+        "WRITE_DENIED",
+        "FILE_WRITE_FAILED",
+        "COMMAND_DENIED",
+    }
+)
+
+
+class _ToolRequestRejected(WorkspacePolicyError):
+    """Only stable tool kind and refusal code cross the AgentResult boundary."""
+
+    def __init__(
+        self,
+        tool: Literal["read_file", "write_file", "run_command"],
+        reason: str,
+    ) -> None:
+        self.tool = tool
+        self.reason = reason if reason in _SAFE_TOOL_REJECTION_CODES else "UNCLASSIFIED"
+        super().__init__("Responses tool request rejected")
+
+
+class _FinalWorkspaceValidationRejected(WorkspacePolicyError):
+    """A final artifact cannot bypass the role worktree's Git safety check."""
+
+
+def _policy_failure_message(
+    error: CandidateCommitError
+    | ResponsesAgentError
+    | WorkspacePolicyError
+    | MutationInventoryRejected,
+) -> str:
+    """Classify a safe cause without exposing paths, argv, or provider content."""
+    if isinstance(error, _ToolRequestRejected):
+        return f"Responses tool request rejected: {error.tool}/{error.reason}"
+    if isinstance(error, _FinalWorkspaceValidationRejected):
+        return "Responses final workspace validation rejected"
+    if isinstance(error, ResponsesAgentConfigurationError):
+        return "Responses request or worktree binding rejected"
+    if isinstance(error, MutationInventoryRejected):
+        return "Responses workspace mutation inventory rejected"
+    if isinstance(error, CandidateCommitError):
+        return "Responses candidate commit validation rejected"
+    if isinstance(error, ResponsesAgentError):
+        return "Responses Git workspace inspection rejected"
+    return "Responses workspace policy validation rejected"
 
 
 @dataclass
@@ -397,13 +451,13 @@ class ResponsesAgentAdapter:
             ResponsesAgentError,
             WorkspacePolicyError,
             MutationInventoryRejected,
-        ):
+        ) as error:
             result = _safe_failure(
                 request,
                 self._workspace_root,
                 initial_head,
                 AgentErrorCode.POLICY_VIOLATION,
-                "Responses execution violated its machine boundary",
+                _policy_failure_message(error),
                 transient=False,
                 duration_ms=_elapsed_ms(started),
                 initial_inventory=initial_inventory,
@@ -536,13 +590,13 @@ class ResponsesAgentAdapter:
                     "工程执行现场无法安全核验。草稿已保留。需要工程处理。",
                     duration_ms=_elapsed_ms(started),
                 )
-            except WorkspacePolicyError:
+            except WorkspacePolicyError as error:
                 return _safe_failure(
                     request,
                     self._workspace_root,
                     initial_head,
                     AgentErrorCode.POLICY_VIOLATION,
-                    "Responses execution violated its machine boundary",
+                    _policy_failure_message(error),
                     transient=False,
                     duration_ms=_elapsed_ms(started),
                     initial_inventory=initial_inventory,
@@ -717,7 +771,7 @@ class ResponsesAgentAdapter:
                         "COMMAND_FAILED_TO_START",
                     }:
                         window.policy_refused = True
-                        raise WorkspacePolicyError("Responses tool request was rejected")
+                        raise _ToolRequestRejected(tool_result.tool, tool_result.error_code)
                     window.remaining()
                     outputs.append(
                         {
@@ -761,22 +815,25 @@ class ResponsesAgentAdapter:
                 duration_ms=_elapsed_ms(started),
             )
             result.validate_current_output()
-            with execution_scope(self._execution_guard):
-                artifact = _finalize_coder_candidate(
-                    request,
-                    initial_head,
-                    artifact,
-                    self._candidate_commit,
-                    self._candidate_precommit_validator,
-                )
-                _validate_git_result(
-                    self._workspace_root,
-                    request,
-                    initial_head,
-                    artifact,
-                    self._candidate_commit,
-                    self._initial_admission,
-                )
+            try:
+                with execution_scope(self._execution_guard):
+                    artifact = _finalize_coder_candidate(
+                        request,
+                        initial_head,
+                        artifact,
+                        self._candidate_commit,
+                        self._candidate_precommit_validator,
+                    )
+                    _validate_git_result(
+                        self._workspace_root,
+                        request,
+                        initial_head,
+                        artifact,
+                        self._candidate_commit,
+                        self._initial_admission,
+                    )
+            except (ResponsesAgentError, WorkspacePolicyError) as error:
+                raise _FinalWorkspaceValidationRejected from error
             window.remaining()
             result = result.model_copy(
                 update={"artifact": artifact, "duration_ms": _elapsed_ms(started)}

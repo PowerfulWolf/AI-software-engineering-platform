@@ -1,5 +1,53 @@
 # Manager-owned verification prerequisites and controlled execution
 
+## Candidate Python selectors from typed approved Plan rows (2026-10-30)
+
+### Scope and signatures
+
+`_automatic_python_mysql_tests(source: NativeCandidateSource) -> tuple[PytestSelection, ...] | None`
+derives an optional controlled Python/MySQL candidate capability before issuing a **new**
+verification plan. If `PlanArtifact.content.verification_requirements` is present, its QA rows
+are the sole source of automatic selectors. The historical free-text acceptance mapping and Coder
+implementation tests are consulted only when that typed field is absent. No selector is inferred
+from a test filename, symbolic label, model output or prior failed invocation.
+
+### Contracts and validation matrix
+
+| Typed approved row | Automatic selection |
+| --- | --- |
+| QA `python -m pytest`, `python3 -m pytest`, `pytest`, or `uv run pytest` with exact `tests/**/test_*.py::node` and optional `-q`/`--disable-warnings` | Merge duplicate node criterion IDs and select it |
+| Non-Python command or document/source inspection, with no Python capability declaration | Ignore it for Python execution; independent role still assesses its own evidence |
+| Reviewer-only node | Do not turn it into QA coverage |
+| Python command or declared Python capability with unsupported wrapper/flag, suite/file-only path, foreign capability kind, or no exact node | Raise `RecoveryRejected` before plan issuance; do not fall back to prose or a model-only verifier |
+| Mapped criteria differ from the full Task criteria, or unique nodes exceed 64 | Raise `RecoveryRejected` before plan issuance; require an explicit safe verification path |
+| Typed Plan has no QA Python command or declared Python capability | Return `None`; retain non-Python candidate verification behavior |
+
+The extractor reuses `native_verification_partition.exact_python_selections` for the same command
+grammar and `PytestSelection` validation. A malformed extra QA row remains an error even if other
+rows cover its criterion. An explicitly supplied `python_mysql_tests` selection remains a separate
+public proposal path and is checked against the candidate and Task scope. Candidate file regularity, Task denied
+paths, host sandbox and MySQL prerequisites remain checked by
+`discover_python_mysql_capability` when the new plan is proposed, then rechecked before execution.
+This selection is an execution input, not evidence that tests pass or that browser/live A→B and
+document checks were performed. QA and Reviewer independently assess actual receipts and mark
+unproven criteria `NOT_TESTED`.
+
+### Good, base, bad and tests
+
+Good: two approved typed QA rows name the same exact test node; the selector is deduplicated and
+carries the union of criterion IDs. Base: a legacy Plan without typed verification rows retains
+the existing exact text extraction behavior; a typed non-Python Plan retains its native path.
+Bad: typed `python -m pytest --maxfail=1 tests` or a hidden controlled-Python row naming `node`
+cannot be rescued by a Coder report or another valid row. The focused
+`tests/recovery/test_python_verification_plan.py` regression covers these cases, incomplete
+coverage, over-bound nodes, and rejection before a model-only plan can be issued. The real K1
+Plan has 33 exact Python nodes covering 25 Task criteria.
+
+Existing failed candidate-verification plans and QA invocations remain immutable. The correction
+applies only to a fresh plan issued from the current checkpoint and current policy; no Task,
+ProductSpec, Design, Plan Artifact, approval or SQL fact is rewritten. Rollback disables new
+automatic typed selection while preserving previously issued plans and execution receipts.
+
 ## Exact incremental Python/MySQL candidate verification (2026-10-02)
 
 ### 1. Scope / Trigger

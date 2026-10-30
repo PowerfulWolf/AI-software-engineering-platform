@@ -26,6 +26,14 @@ No domain Artifact Schema or persisted Task/verdict contract changes.
   readable; no verdict, evidence, producer or candidate repair is allowed.
 - HTTP diagnostics read only a JSON `error.message`, redact the configured key and generic secrets
   before truncating to 240 characters, and never expose raw HTML/body/prompt or credential URLs.
+- `ResponsesAgentAdapter.run` keeps `POLICY_VIOLATION` nontransient and fail closed, but its
+  `AgentFailure.message` identifies the fixed local boundary that refused execution. A typed
+  `ToolRejectedResult` contributes only its tool kind and a code from the adapter's fixed
+  refusal-code allowlist (`COMMAND_DENIED`, `PATH_DENIED`, etc.); unknown codes become
+  `UNCLASSIFIED`. Request/worktree binding, mutation inventory, candidate commit and final Git
+  validation use separate constant messages. Raw exception text, argv, path, provider output and
+  credentials never cross into the message. This diagnostic does not turn a denied tool into a
+  recoverable command, grant fallback, or authorize replay of the consumed Run.
 - `ManagerConsoleAdapter.execute` maps `AgentRunFailed` to `MODEL_<typed code>` with bounded,
   sanitized role/cause. Unknown exceptions still use safe MANAGER_FAILURE handling.
 - Responses Coder routes receive the same trusted `CoderInterruptionControl` as Codex routes;
@@ -74,6 +82,9 @@ No domain Artifact Schema or persisted Task/verdict contract changes.
 | QA PASS with NOT_TESTED criterion | Existing domain validation rejects |
 | HTTP 400 with structured message | MODEL_PROVIDER_ERROR and safe detail; no blind fallback |
 | Raw/non-JSON response body | Generic bounded message, never raw body |
+| QA tool request denied by machine policy | Nontransient POLICY_VIOLATION with `tool kind/allowlisted refusal code`; no command or file operation starts, no QA artifact |
+| Request/worktree binding or final Git check rejects | Distinct constant POLICY_VIOLATION cause; no raw exception/path, no QA artifact |
+| Unknown tool refusal code | `UNCLASSIFIED` in the diagnostic, never the untrusted code |
 | CLI semantic report error | Fixed rule code plus existing type/root/hash; no private values |
 | Unknown CLI validation message | UNCLASSIFIED; no arbitrary message or value leakage |
 | Provider route fails after legal tool writes under v2 authority | WORK_INTERRUPTED; exact synchronous stop and full draft; fresh claimed continuation, no same-Run fallback |
@@ -93,6 +104,10 @@ drop untested criteria, or replace API failures with fabricated PASS evidence.
 
 `tests/agents/test_responses.py` checks all roles' actual outbound tool/schema shapes, wrapper
 round-trip, metadata preservation and invalid verdict/environment/envelope rejection.
+`tests/agents/test_responses_boundary_diagnostics.py` uses a real Git worktree and tool registry
+with scripted HTTP output to distinguish a denied focused QA command, pre-provider binding and
+post-output dirty-worktree validation. It asserts no raw argv, path or credential reaches the
+failure result and no denied command or QA artifact is accepted.
 `tests/web_console/test_manager.py` checks typed role failures and secret redaction.
 Shared structured-model/diagnostic tests must continue to pass after extracting HTTP detail logic.
 `tests/agents/test_responses_continuation.py` uses actual PolicyBoundToolRegistry, Git, SQLite,
