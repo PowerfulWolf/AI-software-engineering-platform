@@ -1,5 +1,6 @@
 """Engineering projections retain every exact record without changing durable facts."""
 
+import json
 from datetime import timedelta
 from importlib import import_module
 from pathlib import Path
@@ -55,7 +56,8 @@ from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationIntent,
     VerifierPreparationObservation,
 )
-from ai_software_engineer.recovery.models import RecoveryRejected
+from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope
+from ai_software_engineer.recovery.store import FileRecoveryStore
 from ai_software_engineer.team_view.engineering_history import engineering_history
 from ai_software_engineer.team_view.models import RoleQueueView, ScopeView, TaskView
 from ai_software_engineer.team_view.reader import _with_execution_state
@@ -1017,7 +1019,10 @@ def test_native_execution_phases_do_not_become_qa_verdicts(
         engineering_history(sidecar, fixture.task, scope, "delivery_foreign")
 
 
-def test_terminal_engineering_reason_is_visible_without_reopening_task(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stored_envelope", [False, True])
+def test_terminal_engineering_reason_is_visible_without_reopening_task(
+    tmp_path: Path, stored_envelope: bool
+) -> None:
     task = make_task().model_copy(update={"status": TaskStatus.BLOCKED})
     disposition = decide_delivery_disposition(
         DeliveryFailureFacts(
@@ -1046,9 +1051,23 @@ def test_terminal_engineering_reason_is_visible_without_reopening_task(tmp_path:
     record = record.model_copy(update={"record_sha256": record.recompute_sha256()})
     sidecar = tmp_path / "sidecar"
     root = sidecar / "state" / "recovery"
-    root.mkdir(parents=True)
     path = root / ("engineering-disposition-" + record.record_sha256 + ".json")
-    path.write_text(record.model_dump_json(), encoding="utf-8")
+    if stored_envelope:
+        root.parent.mkdir(parents=True)
+        scope = _scope(task)
+        store = FileRecoveryStore.initialize(
+            root,
+            scope=RecoveryScope(
+                team_id=scope.team_id,
+                repository_id=scope.repository_id,
+                delivery_id="delivery_history",
+                repository_root=scope.repository_root,
+            ),
+        )
+        store.put_engineering_disposition(record)
+    else:
+        root.mkdir(parents=True)
+        path.write_text(record.model_dump_json(), encoding="utf-8")
     before = _bytes(sidecar)
     history = engineering_history(sidecar, task, _scope(task), "delivery_history")
     view = _with_execution_state(
@@ -1075,6 +1094,12 @@ def test_terminal_engineering_reason_is_visible_without_reopening_task(tmp_path:
     assert before == _bytes(sidecar)
     with pytest.raises(ValueError, match="source Task facts"):
         engineering_history(sidecar, task, _scope(task), "delivery_foreign")
+    if stored_envelope:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["sha256"] = "0" * 64
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(ValueError, match="envelope digest mismatch"):
+            engineering_history(sidecar, task, _scope(task), "delivery_history")
 
 
 def test_missing_engineering_history_creates_no_directory(tmp_path: Path) -> None:

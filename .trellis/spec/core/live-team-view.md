@@ -1,5 +1,32 @@
 # T036 Live team read side
 
+## Terminal engineering disposition wire compatibility (2026-11-02)
+
+`FileRecoveryStore.put_engineering_disposition` persists
+`engineering-disposition-<record_sha256>.json` as the canonical envelope
+`{"record": EngineeringDispositionRecord.to_wire(), "sha256": digest(record)}`.
+`EngineeringHistorySnapshot.dispositions(sidecar)` reads these immutable records
+for Team summary/detail. It also accepts older bare `EngineeringDispositionRecord`
+files produced before the envelope writer. The reader must reject duplicate JSON
+keys, extra envelope keys, a wrong envelope digest, an invalid typed record, a
+wrong filename digest or a changed record integrity hash. It may not skip a bad
+record and return a partial successful Team snapshot.
+
+| Input | Result |
+| --- | --- |
+| Store-written envelope and valid terminal record | Summary/detail include the engineering history without changing bytes |
+| Legacy bare terminal record | Same projection and source/Task checks |
+| Bad outer digest, duplicate key or invalid inner record | Team GET fails closed; original files and Task remain unchanged |
+
+Good/Base/Bad regression: `tests/team_view/test_engineering_history.py::test_terminal_engineering_reason_is_visible_without_reopening_task`
+uses both a real `FileRecoveryStore` write and a bare fixture, checks the
+projected reason and unchanged bytes, then tampers the envelope digest and
+requires rejection. The production K1 sidecar already contains two valid
+store-written dispositions; no data migration or SQL change is needed. Publish
+the reader fix at a controlled idle restart and recheck the original Project's
+`GET /api/v1/team-summary` and `GET /api/v1/team`. Rollback requires keeping a
+reader that understands both wire shapes; an older reader will show 503 again.
+
 Long-lived read lifetime and native validation-error retention follow
 [`read-memory-lifecycle.md`](read-memory-lifecycle.md). Team GET admission stays with the actual
 worker through serialization; cancellation does not prove that read stopped. Complete verified

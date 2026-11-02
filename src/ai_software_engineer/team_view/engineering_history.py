@@ -1,12 +1,15 @@
 """Read-only, complete engineering journals for the current native Task."""
 
 import hashlib
+import json
 import os
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import Self, cast
+
+from pydantic import model_validator
 
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.delivery_resolution import (
@@ -54,6 +57,33 @@ type _EngineeringRecord = (
     | VerifierPreparationIntent
     | VerifierPreparationCheckpoint
 )
+
+
+class _StoredEngineeringDisposition(DomainModel):
+    record: EngineeringDispositionRecord
+    sha256: str
+
+    @model_validator(mode="after")
+    def validate_envelope(self) -> Self:
+        if self.sha256 != digest(self.record.to_wire()):
+            raise ValueError("terminal engineering envelope digest mismatch")
+        return self
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("terminal engineering record contains duplicate JSON keys")
+        result[key] = value
+    return result
+
+
+def _decode_engineering_disposition(path: Path) -> EngineeringDispositionRecord:
+    payload = json.loads(_read(path), object_pairs_hook=_unique_json_object)
+    if isinstance(payload, dict) and set(payload) == {"record", "sha256"}:
+        return _StoredEngineeringDisposition.model_validate(payload).record
+    return EngineeringDispositionRecord.model_validate(payload)
 
 
 @dataclass(slots=True, weakref_slot=True)
@@ -132,7 +162,7 @@ class EngineeringHistorySnapshot:
                 if not root.is_dir():
                     continue
                 for path in root.glob("engineering-disposition-*.json"):
-                    record = EngineeringDispositionRecord.model_validate_json(_read(path))
+                    record = _decode_engineering_disposition(path)
                     record.validate_integrity()
                     if path.name != "engineering-disposition-" + record.record_sha256 + ".json":
                         raise ValueError(
