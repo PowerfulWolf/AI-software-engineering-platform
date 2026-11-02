@@ -1,13 +1,25 @@
 """A retained queue claim cannot silently acquire newly configured fallback models."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
-from ai_software_engineer.domain import AgentRole, BrainTier, ModelRouteReason, ModelSelection
+from ai_software_engineer.domain import (
+    AgentRole,
+    BrainTier,
+    ModelPolicy,
+    ModelRouteReason,
+    ModelSelection,
+)
 from ai_software_engineer.domain.model import ReasoningEffort
-from ai_software_engineer.manager.queued_delivery import validate_frozen_routes
+from ai_software_engineer.manager.dispatch import DeliveryAllocation
+from ai_software_engineer.manager.queued_delivery import (
+    require_compatible_baseline_routes,
+    validate_frozen_routes,
+)
 from ai_software_engineer.manager.team_roster import production_team_roster
 from ai_software_engineer.work_queue.ports import QueueConflict
 
@@ -164,3 +176,39 @@ def test_frozen_routes_bind_codex_connection_and_reject_legacy_ambiguity() -> No
             routes,
             proxy_base_url=config.codex_cli_proxy_base_url,
         )
+
+
+def test_baseline_resume_refuses_cli_to_responses_route_transition() -> None:
+    cli = ProviderRouteConfig(provider="codex", model="gpt-6-sol", kind=ModelProviderKind.CODEX_CLI)
+    responses = ProviderRouteConfig(
+        provider="codex",
+        model="codex/gpt-6-sol",
+        kind=ModelProviderKind.RESPONSES,
+        endpoint="https://example.invalid/responses",
+        api_key_env="CODEX_RESPONSES_API_KEY",
+    )
+    original = ProductionConfig(model_routes=(cli,))
+    _, frozen_policy = production_team_roster(original)
+    selection = ModelSelection(
+        policy_id=frozen_policy.id,
+        policy_version=frozen_policy.version,
+        provider=cli.provider,
+        model=cli.model,
+        reasoning_effort=cli.reasoning_effort,
+        route_kind=cli.kind.value,
+        tier=BrainTier.CRITICAL,
+        reasons=(ModelRouteReason.DEFAULT,),
+        selected_at=datetime.now(UTC),
+    )
+    allocation = cast(
+        DeliveryAllocation,
+        SimpleNamespace(phases=(SimpleNamespace(role=AgentRole.CODER, model_selection=selection),)),
+    )
+
+    def get_policy(_id: str, _version: str) -> ModelPolicy:
+        return frozen_policy
+
+    require_compatible_baseline_routes(original, allocation, get_policy)
+    changed = ProductionConfig(model_routes=(responses,))
+    with pytest.raises(QueueConflict, match="new recovery Task"):
+        require_compatible_baseline_routes(changed, allocation, get_policy)

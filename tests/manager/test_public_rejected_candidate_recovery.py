@@ -629,6 +629,28 @@ def test_public_requirement_recovers_rejected_candidate_with_pause_and_resume(
         expected_disposition_sha256=waiting.wait_disposition.disposition_sha256,
         reference="explicit exact rejected candidate resume",
     )
+    changed_config = config.model_copy(
+        update={
+            "model_routes": (
+                ProviderRouteConfig(
+                    provider="codex",
+                    model="codex/gpt-6-sol",
+                    kind=ModelProviderKind.RESPONSES,
+                    endpoint="https://example.invalid/responses",
+                    api_key_env="CODEX_RESPONSES_API_KEY",
+                ),
+            )
+        }
+    )
+    monkeypatch.setattr(host, "_config", changed_config)
+    with pytest.raises(ValueError, match="原任务冻结的模型路由"):
+        host.continue_execution_baseline(continue_command, project_id="project_test")
+    assert host.work_queue.get(waiting.id) == waiting
+    assert not tuple(
+        (sidecar / "state/execution-baselines" / frozen.id).glob("baseline-continuations-*.json")
+    )
+    assert len(calls) == 1
+    monkeypatch.setattr(host, "_config", config)
     resumed = host.continue_execution_baseline(continue_command, project_id="project_test")
     assert resumed is not None
     current = service.status(product.delivery_id).checkpoint

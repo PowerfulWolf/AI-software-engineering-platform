@@ -1,5 +1,19 @@
 # Same-Task execution baseline contract
 
+## Frozen model route at baseline continuation (2026-11-02)
+
+A paused same-Task baseline may update the execution source and preserve a full draft, but it does not reauthorize the `DispatchPhaseCommit` model selection. Before `EXECUTE_EXECUTION_BASELINE` with immediate `RESUME` or `RESUME_EXECUTION_BASELINE` writes a continuation authorization or releases the WorkItem, `TeamHost` loads every phase's exact stored ModelPolicy version and compares the current configured role routes with its frozen selection using `require_compatible_baseline_routes`. A CLI-to-Responses change, changed model, reordered fallback or ambiguous legacy reference refuses the same-Task continuation. The Task, immutable dispatch, baseline binding, draft and queue remain as they were. A new route requires a separately approved new Recovery Task under the same Requirement.
+
+`manager/queued_delivery.py` exposes `require_compatible_baseline_routes(config: ProductionConfig, allocation: DeliveryAllocation, policy_lookup: Callable[[str, str], ModelPolicy]) -> None`. `TeamHost._require_baseline_routes(facts)` calls it at both public resume boundaries and converts only a frozen-route `QueueConflict` into a fixed safe `ValueError` for the Console's `COMMAND_REJECTED` result. It never writes the route policy, authorization or queue.
+
+| Frozen/current routes | Result before continuation write |
+| --- | --- |
+| Exact selection and ordered allowed fallbacks | Admit ordinary existing continuation checks |
+| CLI selection replaced by Responses or another model | Reject; old pause and Task remain unchanged |
+| Reordered fallback, ambiguous legacy selection or missing policy | Reject, without guessing an alternate provider |
+
+Good: an unchanged frozen route continues once. Base: an already paused baseline remains inspectable after settings change. Bad: releasing the paused old CLI WorkItem and discovering the mismatch only in the Worker, or silently rewriting the old selection to Responses. `tests/work_queue/test_route_binding.py` checks the route comparison; `tests/manager/test_public_rejected_candidate_recovery.py` proves the public pause/continue call rejects before a continuation record or queue release and that the original route still resumes.
+
 ## Approved bounded `coder_reapply` input schedule (2026-10-28)
 
 When a recovery Coder's complete inherited patches plus current retained patch exceed the

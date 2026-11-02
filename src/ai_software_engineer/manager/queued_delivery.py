@@ -1,12 +1,19 @@
 """Bind approved native delivery inputs to the existing T046 dispatcher."""
 
 import hashlib
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from ai_software_engineer.config import ProviderRouteConfig
-from ai_software_engineer.domain import AgentRole, ModelPolicy, ModelSelection, WorkItemStatus
+from ai_software_engineer.config import ProductionConfig, ProviderRouteConfig
+from ai_software_engineer.domain import (
+    AgentRole,
+    ModelPolicy,
+    ModelSelection,
+    TeamRole,
+    WorkItemStatus,
+)
 from ai_software_engineer.domain.project_delivery import ExecutionPlan
 from ai_software_engineer.manager.dispatch import DeliveryAllocation
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
@@ -121,6 +128,29 @@ class ApprovedRoleDispatch:
         selection = self.phases[role].model_selection
         policy = self.workforce.get_policy(selection.policy_id, version=selection.policy_version)
         validate_frozen_routes(role, selection, policy, routes, proxy_base_url=self.proxy_base_url)
+
+
+def require_compatible_baseline_routes(
+    config: ProductionConfig,
+    allocation: DeliveryAllocation,
+    policy_lookup: Callable[[str, str], ModelPolicy],
+) -> None:
+    """Refuse a paused same-Task resume before its queue release on route drift."""
+    for phase in allocation.phases:
+        selection = phase.model_selection
+        policy = policy_lookup(selection.policy_id, selection.policy_version)
+        try:
+            validate_frozen_routes(
+                phase.role,
+                selection,
+                policy,
+                config.routes_for(TeamRole(phase.role.value)),
+                proxy_base_url=config.codex_cli_proxy_base_url,
+            )
+        except QueueConflict as error:
+            raise QueueConflict(
+                "frozen dispatch route changed; create a new recovery Task"
+            ) from error
 
 
 def validate_frozen_routes(

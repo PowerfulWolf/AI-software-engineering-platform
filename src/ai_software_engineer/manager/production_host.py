@@ -86,6 +86,7 @@ from ai_software_engineer.manager.production_rules import (
     production_rules,
 )
 from ai_software_engineer.manager.queue_capacity import production_role_queue
+from ai_software_engineer.manager.queued_delivery import require_compatible_baseline_routes
 from ai_software_engineer.manager.recovery_input_schedule import RecoveryInputPlanFacts
 from ai_software_engineer.manager.spec_rules import ProductionProjectRuleProvider
 from ai_software_engineer.manager.stage_coordination import ProductionStageCoordinator
@@ -117,6 +118,7 @@ from ai_software_engineer.work_queue import DispatcherLoop
 from ai_software_engineer.work_queue.dispatcher import OwnerTokenFactory, RunDemandBuilder
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
 from ai_software_engineer.work_queue.models import LeaseWorkerId
+from ai_software_engineer.work_queue.ports import QueueConflict
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
 # Compatibility seam retained for tests and injected local hosts.
@@ -657,6 +659,8 @@ class TeamHost:
                 != command.approved_native_rule_change_sha256
             ):
                 raise ValueError("该执行基线已有不同主体或引用的工程决定")
+            if command.continuation_mode is BaselineContinuationMode.RESUME:
+                self._require_baseline_routes(service.facts)
             binding = service.execute(plan.plan_sha256, authority=authority)
         if command.continuation_mode is BaselineContinuationMode.RESUME:
             self.resume_delivery(
@@ -692,6 +696,7 @@ class TeamHost:
             ):
                 raise ValueError("当前保留进度的执行基线已变化, 请刷新后再继续")
             binding = bindings[-1]
+            self._require_baseline_routes(service.facts)
             authority = service.store.records.find(
                 "baseline-continuations", binding.binding_sha256, BaselineContinueAuthorization
             )
@@ -733,6 +738,22 @@ class TeamHost:
             if command.delivery_id.startswith("delivery_multi_")
             else self._runtime(project_id).entry.status(command.delivery_id)
         )
+
+    def _require_baseline_routes(self, facts: object) -> None:
+        if not isinstance(facts, ProductionBaselineFactCollector):
+            raise ValueError("执行基线缺少受控生产路由事实, 原需求保持暂停")
+        workforce = FileTeamWorkforceStore(self._workforce_workspace)
+        try:
+            require_compatible_baseline_routes(
+                self._config,
+                facts.allocation,
+                lambda policy_id, version: workforce.get_policy(policy_id, version=version),
+            )
+        except QueueConflict as error:
+            raise ValueError(
+                "原任务冻结的模型路由与当前配置不同, 不能继续原任务; "
+                "请为同一需求批准使用当前模型的新恢复任务。"
+            ) from error
 
     def _baseline_knowledge_context(
         self, project_id: str, delivery_id: str, native: ProjectDeliveryCheckpoint
