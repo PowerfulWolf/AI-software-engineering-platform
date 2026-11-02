@@ -1486,10 +1486,16 @@ The test-only trusted `route_factory(seed)` injects offline adapters; production
 `ConfiguredDeliveryRouteAdapterFactory(initial_workspace_admission=seed)`. Codex's default clean
 guard remains unchanged when this dependency is absent. Public errors never include raw provider
 text/secrets; CLI returns 2 for admission failures, 3 for a non-DONE runtime result, 0 for DONE.
-Recovery requires `live_model_execution=true` and validates exactly one explicit
-`config.routes_for(TeamRole.CODER)` CODEX_CLI route. Routes enabled for Manager, Product, Designer,
-Planner, QA or Reviewer do not participate in this gate. This keeps the seed admission boundary
-single-provider while allowing the production configuration to contain distinct per-Agent routes.
+Recovery requires `live_model_execution=true` and selects the first explicit
+`config.routes_for(TeamRole.CODER)` route in the configured Coder policy. Both
+Responses and Codex CLI adapters implement the same request-scoped seed admission.
+The recovery allocation freezes that single route; a later Settings edit or service
+restart cannot switch an already allocated Task from Codex CLI to Responses. A
+terminal failed Task needs a new exact same-Requirement RecoveryPlan and approval
+to select the new primary route while preserving its prior Task, Run and draft
+history. Routes enabled only for Manager, Product, Designer, Planner, QA or Reviewer
+do not participate in this gate. A recovery execution has no automatic fallback
+to a different route after admission.
 
 For a joint Requirement, `ProductionJointBackend.delivery_runtime(checkpoint, unit_id)` must first
 read the native child's latest committed checkpoint. When a recovery checkpoint names a newer
@@ -1512,8 +1518,10 @@ Native get_commit/_decode_commit stay strict; global reservation reads use the a
 | Failure / replay | Required behavior |
 |---|---|
 | Missing exact human confirmation / config disabled / unsupported route | No provider |
-| Several global routes, one explicit Coder CODEX_CLI route | Admit the approved recovery; unrelated Agent routes do not block it |
-| Zero, several, or non-Codex Coder routes | Reject before seed/provider invocation |
+| Coder primary is Responses, with Codex CLI fallback | Freeze only Responses in the new allocation; no CLI invocation |
+| Coder primary is Codex CLI | Keep the existing native route and seed admission behavior |
+| No explicit Coder route | Reject before seed/provider invocation |
+| Settings changes after a CLI recovery Task was allocated | Frozen claim/policy refuses a route switch; require a new exact approved successor after terminal failure |
 | Stale source, target, sealed Task or policy | Reject before fresh execution |
 | Exact existing allocation | Verify current Task binding; reuse first record/leases |
 | Concurrent recovery execution | Nonblocking lock refusal, no second Coder |
@@ -1528,6 +1536,15 @@ Native get_commit/_decode_commit stay strict; global reservation reads use the a
 CaseStartedEvent for a Task carrying recovery_of_task_id is excluded from aggregate ADR; its Agent
 events still persist and original failed case remains included. Never count a recovery as another
 fresh demand success. Metadata/approval/dispatch/seed/invocation retain original lineage.
+
+Good: `tests/recovery/test_execution.py::test_seed_recovery_route_uses_responses_coder_primary_before_cli_fallback`
+asserts a Responses-first Coder policy selects Responses even when CLI remains enabled. Base:
+the existing CLI-first selector test remains green. Bad: selecting the CLI fallback merely
+because it is native would spend a new recovery attempt on the wrong provider. Run both
+selector tests and `tests/agents/test_first_real_coder_admission.py` before release; an
+already allocated CLI Task must use the existing terminal-to-successor path, not a route
+rewrite. Roll back only before a new Responses recovery allocation is admitted; afterwards
+retain readers for its frozen route and preserve every prior Task/Run/decision record.
 
 Good: `tests/recovery/test_execution.py` real Git/MySQL + offline Codex process yields four artifacts,
 independent Coder/QA/Reviewer, candidate alignment, global capacity visibility, preserved old failure

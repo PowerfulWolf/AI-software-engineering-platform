@@ -1298,7 +1298,9 @@ verdict or transient refund is inferred from a completed native process or exist
 The new optional `RecoverySource.stopped_unknown_settlement_sha256` selects a dedicated source
 reader. It rechecks the pre-terminal stop proof against its original Task snapshot and verifies
 the current Task is exactly the reducer result of the sealed terminal event. Ordinary failed-route
-recovery still requires a real terminal Coder route. Exact same-Requirement RecoveryPlan approval
+recovery still requires a real terminal Coder route. A new recovery allocation selects the
+configured Coder primary route, including Responses when it is first; an already allocated
+Task keeps its frozen route across Settings edits and restarts. Exact same-Requirement RecoveryPlan approval
 grants a new successor budget, clean approved target base and complete Coder reapply input; old
 Task facts and ProductSpec are unchanged. See `.trellis/spec/core/stopped-unknown-budget-recovery.md`
 and `.trellis/tasks/10-26-stopped-unknown-budget-recovery/` for refusals, tests, storage and rollback.

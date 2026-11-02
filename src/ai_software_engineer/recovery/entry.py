@@ -13,7 +13,6 @@ from ai_software_engineer.agents.codex_cli import InitialWorkspaceAdmission
 from ai_software_engineer.agents.workspace_admission import FirstCoderRunWorkspaceAdmission
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import (
-    ModelProviderKind,
     ProductionConfig,
     ProviderRouteConfig,
 )
@@ -154,14 +153,10 @@ class NativeRecoveryExecution:
 
 
 def _require_seed_recovery_route(config: ProductionConfig) -> ProviderRouteConfig:
-    """Select one policy-ordered Codex route for the approved recovery execution."""
-    routes = tuple(
-        route
-        for route in config.routes_for(TeamRole.CODER)
-        if route.kind is ModelProviderKind.CODEX_CLI
-    )
+    """Freeze the configured Coder primary for one approved recovery allocation."""
+    routes = config.routes_for(TeamRole.CODER)
     if not routes:
-        raise RecoveryRejected("seed recovery requires an explicit Coder Codex route")
+        raise RecoveryRejected("seed recovery requires an explicit Coder route")
     return routes[0]
 
 

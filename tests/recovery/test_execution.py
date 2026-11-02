@@ -188,6 +188,54 @@ def test_seed_recovery_route_guard_uses_the_coder_policy_not_all_enabled_routes(
     assert _require_seed_recovery_route(config) == coder
 
 
+def test_seed_recovery_route_uses_responses_coder_primary_before_cli_fallback(
+    tmp_path: Path,
+) -> None:
+    responses = ProviderRouteConfig(
+        provider="codex",
+        model="codex/gpt-6-sol",
+        kind=ModelProviderKind.RESPONSES,
+        endpoint="https://example.test/v1/responses",
+        api_key_env="SOL_API_KEY",
+    )
+    cli = ProviderRouteConfig(
+        provider="codex",
+        model="gpt-6-sol",
+        kind=ModelProviderKind.CODEX_CLI,
+    )
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        live_model_execution=True,
+        model_routes=(responses, cli),
+        agent_model_routes=tuple(
+            AgentModelRoutePolicy(
+                role=role,
+                routes=(
+                    ProviderRouteReference(
+                        provider=(responses if role is TeamRole.CODER else cli).provider,
+                        model=(responses if role is TeamRole.CODER else cli).model,
+                        route_kind=(responses if role is TeamRole.CODER else cli).kind,
+                    ),
+                    *(
+                        (
+                            ProviderRouteReference(
+                                provider=cli.provider,
+                                model=cli.model,
+                                route_kind=cli.kind,
+                            ),
+                        )
+                        if role is TeamRole.CODER
+                        else ()
+                    ),
+                ),
+            )
+            for role in TeamRole
+        ),
+    )
+
+    assert _require_seed_recovery_route(config) == responses
+
+
 class OfflineAdapter:
     def __init__(
         self, adapter: CodexCliAgentAdapter, runner: OfflineRunner, seed: RecoverySeedService
