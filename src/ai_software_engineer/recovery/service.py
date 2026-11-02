@@ -145,6 +145,7 @@ class RecoveryAuthorizationService:
         if (
             plan.source.stopped_unknown_settlement_sha256 is not None
             or plan.source.contained_unknown_settlement_sha256 is not None
+            or plan.source.route_transition_settlement_sha256 is not None
         ):
             from ai_software_engineer.recovery.current import _uses_standard_native_capture_window
 
@@ -213,6 +214,7 @@ class RecoveryAuthorizationService:
         if (
             plan.source.stopped_unknown_settlement_sha256 is not None
             or plan.source.contained_unknown_settlement_sha256 is not None
+            or plan.source.route_transition_settlement_sha256 is not None
         ):
             from ai_software_engineer.recovery.current import _uses_standard_native_capture_window
 

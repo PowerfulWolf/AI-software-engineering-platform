@@ -228,3 +228,44 @@ def test_legacy_none_recursively_preserves_old_complete_reapply_input(
         )
         assert result[0].patch == old_body
         assert result[0].patch_bytes == len(old_body.encode())
+
+
+def test_uninvoked_route_source_uses_accepted_first_input_without_failed_run(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    records = TrustedRecords(project)
+    original = make_task().model_copy(
+        update={
+            "id": "task_original",
+            "repository": str(project),
+            "base_ref": "a" * 40,
+            "status": TaskStatus.BLOCKED,
+            "attempts": 1,
+        }
+    )
+    first_plan, first = records.generation(
+        original,
+        mode="coder_reapply",
+        body="diff --git a/src/first.py b/src/first.py\n+OLD = True\n",
+    )
+    accepted = records.starts[first.id].request
+    wire = records.source(first).to_wire()
+    wire["historical_progress_run_id"] = wire.pop("failed_run_id")
+    wire["historical_progress_context_id"] = wire.pop("failed_context_id")
+    wire["route_transition_settlement_sha256"] = "d" * 64
+    wire["execution_baseline_sha256"] = "e" * 64
+    wire["execution_base_revision"] = first.base_ref
+    source = RecoverySource.model_validate(wire)
+    assert source.historical_progress_run_id == accepted.run_id
+    inherited = reconstruct_inherited_reapply_inputs(
+        cast(InheritedInputRecords, records), source, first
+    )
+    assert inherited is not None
+    assert len(inherited) == 1
+    assert inherited[0].origin_plan_sha256 == first_plan.plan_sha256
+    assert inherited[0].patch == first_plan.capture.patch
+    broken = source.model_copy(update={"historical_progress_run_id": "run_wrong"})
+    with pytest.raises(RecoveryRejected, match="progress differs"):
+        reconstruct_inherited_reapply_inputs(cast(InheritedInputRecords, records), broken, first)

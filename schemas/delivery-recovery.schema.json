@@ -887,6 +887,47 @@
               "input_mode"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "properties": {
+                  "route_transition_settlement_sha256": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "route_transition_settlement_sha256"
+                ]
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "coder_reapply"
+              },
+              "context_capacity_input": {
+                "type": "null"
+              },
+              "workspace_snapshot": {
+                "type": "null"
+              },
+              "scope_supplement": {
+                "type": "null"
+              },
+              "quarantined_paths": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "input_mode"
+            ]
+          }
         }
       ]
     },
@@ -1000,9 +1041,17 @@
           "title": "Failed Run Id"
         },
         "failed_context_id": {
-          "pattern": "^ctx_[a-f0-9]{64}$",
-          "title": "Failed Context Id",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^ctx_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failed Context Id"
         },
         "base_revision": {
           "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
@@ -1099,6 +1148,45 @@
           ],
           "default": null,
           "title": "Contained Unknown Settlement Sha256"
+        },
+        "historical_progress_context_id": {
+          "anyOf": [
+            {
+              "pattern": "^ctx_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Historical Progress Context Id"
+        },
+        "route_transition_settlement_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route Transition Settlement Sha256"
+        },
+        "historical_progress_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Historical Progress Run Id"
         }
       },
       "required": [
@@ -1113,7 +1201,6 @@
         "approval_sha256",
         "technical_design_sha256",
         "execution_plan_sha256",
-        "failed_context_id",
         "base_revision"
       ],
       "title": "RecoverySource",
@@ -1146,45 +1233,6 @@
               }
             }
           ]
-        },
-        {
-          "if": {
-            "required": [
-              "context_capacity_receipt_sha256"
-            ],
-            "properties": {
-              "context_capacity_receipt_sha256": {
-                "type": "string"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "execution_baseline_sha256",
-              "execution_base_revision"
-            ],
-            "properties": {
-              "failed_run_id": {
-                "type": "null"
-              },
-              "execution_baseline_sha256": {
-                "type": "string"
-              },
-              "execution_base_revision": {
-                "type": "string"
-              }
-            }
-          },
-          "else": {
-            "required": [
-              "failed_run_id"
-            ],
-            "properties": {
-              "failed_run_id": {
-                "type": "string"
-              }
-            }
-          }
         },
         {
           "if": {
@@ -1264,6 +1312,186 @@
             },
             "required": [
               "failed_run_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "context_capacity_receipt_sha256"
+            ],
+            "properties": {
+              "context_capacity_receipt_sha256": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "failed_context_id",
+              "execution_baseline_sha256",
+              "execution_base_revision"
+            ],
+            "properties": {
+              "failed_run_id": {
+                "type": "null"
+              },
+              "failed_context_id": {
+                "type": "string"
+              },
+              "historical_progress_context_id": {
+                "type": "null"
+              },
+              "historical_progress_run_id": {
+                "type": "null"
+              },
+              "execution_baseline_sha256": {
+                "type": "string"
+              },
+              "execution_base_revision": {
+                "type": "string"
+              }
+            }
+          },
+          "else": {
+            "if": {
+              "required": [
+                "route_transition_settlement_sha256"
+              ],
+              "properties": {
+                "route_transition_settlement_sha256": {
+                  "type": "string"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "historical_progress_run_id",
+                "historical_progress_context_id",
+                "execution_baseline_sha256",
+                "execution_base_revision"
+              ],
+              "properties": {
+                "failed_run_id": {
+                  "type": "null"
+                },
+                "failed_context_id": {
+                  "type": "null"
+                },
+                "historical_progress_context_id": {
+                  "type": "string"
+                },
+                "historical_progress_run_id": {
+                  "type": "string"
+                },
+                "context_capacity_receipt_sha256": {
+                  "type": "null"
+                },
+                "stopped_unknown_settlement_sha256": {
+                  "type": "null"
+                },
+                "contained_unknown_settlement_sha256": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "required": [
+                "failed_run_id",
+                "failed_context_id"
+              ],
+              "properties": {
+                "failed_run_id": {
+                  "type": "string"
+                },
+                "failed_context_id": {
+                  "type": "string"
+                },
+                "historical_progress_context_id": {
+                  "type": "null"
+                },
+                "historical_progress_run_id": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "route_transition_settlement_sha256": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "route_transition_settlement_sha256"
+            ]
+          },
+          "then": {
+            "properties": {
+              "failed_run_id": {
+                "type": "null"
+              },
+              "failed_context_id": {
+                "type": "null"
+              },
+              "historical_progress_context_id": {
+                "type": "string"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "stopped_unknown_settlement_sha256": {
+                "type": "null"
+              },
+              "contained_unknown_settlement_sha256": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "historical_progress_context_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "route_transition_settlement_sha256": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "route_transition_settlement_sha256"
+            ]
+          },
+          "then": {
+            "properties": {
+              "failed_run_id": {
+                "type": "null"
+              },
+              "failed_context_id": {
+                "type": "null"
+              },
+              "historical_progress_run_id": {
+                "type": "string"
+              },
+              "historical_progress_context_id": {
+                "type": "string"
+              },
+              "context_capacity_receipt_sha256": {
+                "type": "null"
+              },
+              "stopped_unknown_settlement_sha256": {
+                "type": "null"
+              },
+              "contained_unknown_settlement_sha256": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "historical_progress_run_id",
+              "historical_progress_context_id"
             ]
           }
         }

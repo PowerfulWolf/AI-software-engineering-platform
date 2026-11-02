@@ -254,6 +254,27 @@ class RecoverySource(DomainModel):
                         },
                     },
                 },
+                {
+                    "if": {
+                        "required": ["route_transition_settlement_sha256"],
+                        "properties": {"route_transition_settlement_sha256": {"type": "string"}},
+                    },
+                    "then": {
+                        "required": [
+                            "historical_progress_run_id",
+                            "historical_progress_context_id",
+                        ],
+                        "properties": {
+                            "failed_run_id": {"type": "null"},
+                            "failed_context_id": {"type": "null"},
+                            "historical_progress_run_id": {"type": "string"},
+                            "historical_progress_context_id": {"type": "string"},
+                            "context_capacity_receipt_sha256": {"type": "null"},
+                            "stopped_unknown_settlement_sha256": {"type": "null"},
+                            "contained_unknown_settlement_sha256": {"type": "null"},
+                        },
+                    },
+                },
             ]
         }
     )
@@ -271,7 +292,17 @@ class RecoverySource(DomainModel):
     technical_design_sha256: StageSha256
     execution_plan_sha256: StageSha256
     failed_run_id: RunId | None = Field(default=None, exclude_if=lambda value: value is None)
-    failed_context_id: ContextId
+    failed_context_id: ContextId | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    # The last route-transition claim never invoked a model. This is only the
+    # Context of an earlier accepted Coder progress artifact, never a failed Run.
+    historical_progress_context_id: ContextId | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    historical_progress_run_id: RunId | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     base_revision: FullCommit
     # The approved Task base is immutable.  A same-Task engineering baseline may
     # rebind the execution source; keep both identities so recovery never treats
@@ -295,6 +326,9 @@ class RecoverySource(DomainModel):
     contained_unknown_settlement_sha256: Sha256 | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    route_transition_settlement_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     parent_delivery_id: DeliveryId | None = None
     parent_checkpoint_sha256: StageSha256 | None = None
 
@@ -304,8 +338,30 @@ class RecoverySource(DomainModel):
             raise ValueError("parent identity and digest must appear together")
         if (self.execution_baseline_sha256 is None) != (self.execution_base_revision is None):
             raise ValueError("execution baseline digest and base must appear together")
-        if self.failed_run_id is None and self.context_capacity_receipt_sha256 is None:
+        if (
+            self.failed_run_id is None
+            and self.context_capacity_receipt_sha256 is None
+            and self.route_transition_settlement_sha256 is None
+        ):
             raise ValueError("ordinary failed-Coder recovery requires its original Run")
+        if self.route_transition_settlement_sha256 is not None:
+            if (
+                self.failed_run_id is not None
+                or self.failed_context_id is not None
+                or self.historical_progress_context_id is None
+                or self.historical_progress_run_id is None
+                or self.context_capacity_receipt_sha256 is not None
+                or self.stopped_unknown_settlement_sha256 is not None
+                or self.contained_unknown_settlement_sha256 is not None
+                or self.execution_baseline_sha256 is None
+            ):
+                raise ValueError("route-transition source requires only its historical progress")
+        elif (
+            self.failed_context_id is None
+            or self.historical_progress_context_id is not None
+            or self.historical_progress_run_id is not None
+        ):
+            raise ValueError("ordinary recovery requires its failed or capacity Context")
         if self.context_capacity_receipt_sha256 is not None and self.failed_run_id is not None:
             raise ValueError("legacy capacity observation must not invent an original Run")
         if (
@@ -615,6 +671,29 @@ class RecoveryPlan(DomainModel):
                         },
                     },
                 },
+                {
+                    "if": {
+                        "required": ["source"],
+                        "properties": {
+                            "source": {
+                                "required": ["route_transition_settlement_sha256"],
+                                "properties": {
+                                    "route_transition_settlement_sha256": {"type": "string"}
+                                },
+                            }
+                        },
+                    },
+                    "then": {
+                        "required": ["input_mode"],
+                        "properties": {
+                            "input_mode": {"const": "coder_reapply"},
+                            "context_capacity_input": {"type": "null"},
+                            "workspace_snapshot": {"type": "null"},
+                            "scope_supplement": {"type": "null"},
+                            "quarantined_paths": {"type": "null"},
+                        },
+                    },
+                },
             ]
         }
     )
@@ -704,6 +783,7 @@ class RecoveryPlan(DomainModel):
         if (
             self.source.stopped_unknown_settlement_sha256 is not None
             or self.source.contained_unknown_settlement_sha256 is not None
+            or self.source.route_transition_settlement_sha256 is not None
         ) and (
             self.input_mode != "coder_reapply"
             or self.context_capacity_input is not None

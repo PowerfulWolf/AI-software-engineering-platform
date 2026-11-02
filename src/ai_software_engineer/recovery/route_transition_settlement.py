@@ -11,7 +11,8 @@ from pathlib import Path
 
 from pymysql.cursors import DictCursor
 
-from ai_software_engineer.config import ProductionConfig
+from ai_software_engineer.config import ModelProviderKind, ProductionConfig
+from ai_software_engineer.domain import ModelSelection
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.execution_baseline import BaselineInputMode
 from ai_software_engineer.domain.workforce import ModelPolicy
@@ -67,7 +68,7 @@ class RouteTransitionSettlementService:
         scope: RecoveryScope,
         *,
         queue: MySqlRoleQueue,
-        policy_lookup: Callable[[str, str], ModelPolicy],
+        policy_lookup: Callable[[str, str], ModelPolicy] | None = None,
     ) -> None:
         if scope.team_id != config.team_id:
             raise ValueError("route-transition Team differs from production config")
@@ -261,19 +262,60 @@ class RouteTransitionSettlementService:
         return _parent(self.team, checkpoint, approval)
 
     def _require_route_changed(self, observed: UninvokedRouteClaimObservation) -> None:
-        selection = observed.original_claim.model_selection
+        self._require_changed_selection(
+            observed.original_claim.model_selection,
+            unchanged="frozen Coder route is still configured; use ordinary continuation",
+        )
+
+    def _require_changed_selection(self, selection: ModelSelection, *, unchanged: str) -> None:
+        if self.policy_lookup is None:
+            raise QueueConflict("route-transition policy reader is required for settlement")
         policy = self.policy_lookup(selection.policy_id, selection.policy_version)
+        if (selection.policy_id, selection.policy_version) != (policy.id, policy.version):
+            raise QueueConflict("route-transition frozen policy differs")
+        routes = self.config.routes_for(TeamRole.CODER)
+        if selection.route_kind != ModelProviderKind.CODEX_CLI.value or not routes:
+            raise QueueConflict("route-transition requires frozen CLI and current Responses routes")
+        if any(route.kind is not ModelProviderKind.RESPONSES for route in routes):
+            try:
+                validate_frozen_routes(
+                    AgentRole.CODER,
+                    selection,
+                    policy,
+                    routes,
+                    proxy_base_url=self.config.codex_cli_proxy_base_url,
+                )
+            except QueueConflict as error:
+                raise QueueConflict(
+                    "route-transition current routes are not exclusively Responses"
+                ) from error
+            raise QueueConflict(unchanged)
         try:
             validate_frozen_routes(
                 AgentRole.CODER,
                 selection,
                 policy,
-                self.config.routes_for(TeamRole.CODER),
+                routes,
                 proxy_base_url=self.config.codex_cli_proxy_base_url,
             )
-        except QueueConflict:
+        except QueueConflict as error:
+            if str(error) != "Worker primary route does not match its claim":
+                raise
             return
-        raise QueueConflict("frozen Coder route is still configured; use ordinary continuation")
+        raise QueueConflict(unchanged)
+
+    def require_changed_route(self, settlement: RouteTransitionSettlement) -> None:
+        """A sealed terminal source remains valid only for a different configured route."""
+        expired_reason = settlement.work_item.wait_reason
+        if expired_reason is None or not expired_reason.startswith("lease_expired:"):
+            raise QueueConflict("route-transition original claim identity is missing")
+        claim = self.queue.original_claim(expired_reason.removeprefix("lease_expired:"))
+        if record_digest(claim) != settlement.original_claim_sha256:
+            raise QueueConflict("route-transition original model selection changed")
+        self._require_changed_selection(
+            claim.model_selection,
+            unchanged="frozen Coder route is again configured; successor is unsafe",
+        )
 
     def _require_retained(
         self, settlement: RouteTransitionSettlement, retained: RouteTransitionRetained
@@ -408,6 +450,28 @@ class RouteTransitionSettlementService:
             )
             if cursor.fetchone() is not None:
                 raise QueueConflict("route-transition replay has a new active owner")
+            cursor.execute(
+                "SELECT id,status FROM work_queue_items WHERE task_id=%s ORDER BY id",
+                (settlement.task_id,),
+            )
+            items = tuple(cursor.fetchall())
+            if not items or any(row["status"] != WorkItemStatus.CLOSED.value for row in items):
+                raise QueueConflict("route-transition replay has additional open work")
+            cursor.execute(
+                "SELECT lease_id,state,ended_at FROM work_queue_claims WHERE work_item_id=%s",
+                (settlement.work_item_id,),
+            )
+            claims = tuple(cursor.fetchall())
+            expired_lease = settlement.work_item.wait_reason
+            if (
+                len(claims) != 1
+                or not isinstance(expired_lease, str)
+                or not expired_lease.startswith("lease_expired:")
+                or claims[0]["lease_id"] != expired_lease.removeprefix("lease_expired:")
+                or claims[0]["state"] != "EXPIRED"
+                or _time(claims[0]["ended_at"]) > settlement.event.occurred_at
+            ):
+                raise QueueConflict("route-transition original claim ending changed")
             connection.rollback()
         guard.check_task_scope(settlement.task_id)
         return True

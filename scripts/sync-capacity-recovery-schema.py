@@ -5,7 +5,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import cast
 
-from ai_software_engineer.recovery.models import RecoveryPlan
+from ai_software_engineer.recovery.models import RecoveryPlan, RecoverySource
 
 type Schema = dict[str, object]
 
@@ -28,34 +28,93 @@ def synchronize(schema: Schema, generated: Schema) -> Schema:
     source = _object(definitions["RecoverySource"])
     generated_definitions = _object(generated["$defs"])
     expected = _object(generated_definitions["RecoverySource"])
-    for field in ("failed_run_id", "context_capacity_receipt_sha256"):
+    for field in (
+        "failed_run_id",
+        "failed_context_id",
+        "historical_progress_run_id",
+        "historical_progress_context_id",
+        "context_capacity_receipt_sha256",
+        "route_transition_settlement_sha256",
+    ):
         _object(source["properties"])[field] = _object(expected["properties"])[field]
-    source["required"] = [field for field in _array(source["required"]) if field != "failed_run_id"]
+    source["required"] = [
+        field
+        for field in _array(source["required"])
+        if field not in {"failed_run_id", "failed_context_id"}
+    ]
     source_rule = {
         "if": {
             "required": ["context_capacity_receipt_sha256"],
             "properties": {"context_capacity_receipt_sha256": {"type": "string"}},
         },
         "then": {
-            "required": ["execution_baseline_sha256", "execution_base_revision"],
+            "required": [
+                "failed_context_id",
+                "execution_baseline_sha256",
+                "execution_base_revision",
+            ],
             "properties": {
                 "failed_run_id": {"type": "null"},
+                "failed_context_id": {"type": "string"},
+                "historical_progress_context_id": {"type": "null"},
+                "historical_progress_run_id": {"type": "null"},
                 "execution_baseline_sha256": {"type": "string"},
                 "execution_base_revision": {"type": "string"},
             },
         },
         "else": {
-            "required": ["failed_run_id"],
-            "properties": {"failed_run_id": {"type": "string"}},
+            "if": {
+                "required": ["route_transition_settlement_sha256"],
+                "properties": {"route_transition_settlement_sha256": {"type": "string"}},
+            },
+            "then": {
+                "required": [
+                    "historical_progress_run_id",
+                    "historical_progress_context_id",
+                    "execution_baseline_sha256",
+                    "execution_base_revision",
+                ],
+                "properties": {
+                    "failed_run_id": {"type": "null"},
+                    "failed_context_id": {"type": "null"},
+                    "historical_progress_context_id": {"type": "string"},
+                    "historical_progress_run_id": {"type": "string"},
+                    "context_capacity_receipt_sha256": {"type": "null"},
+                    "stopped_unknown_settlement_sha256": {"type": "null"},
+                    "contained_unknown_settlement_sha256": {"type": "null"},
+                },
+            },
+            "else": {
+                "required": ["failed_run_id", "failed_context_id"],
+                "properties": {
+                    "failed_run_id": {"type": "string"},
+                    "failed_context_id": {"type": "string"},
+                    "historical_progress_context_id": {"type": "null"},
+                    "historical_progress_run_id": {"type": "null"},
+                },
+            },
         },
     }
     rules = _array(source.setdefault("allOf", []))
-    legacy_source_rule = deepcopy(source_rule)
-    _object(legacy_source_rule["then"])["properties"] = {"failed_run_id": {"type": "null"}}
-    if legacy_source_rule in rules:
-        rules.remove(legacy_source_rule)
-    if source_rule not in rules:
+    # This generator owns the exclusive source-kind guard; replacing its older
+    # variants keeps regeneration idempotent without weakening unrelated rules.
+    owned = [
+        index
+        for index, rule in enumerate(rules)
+        if isinstance(rule, dict)
+        and isinstance(rule.get("if"), dict)
+        and "context_capacity_receipt_sha256" in rule["if"].get("required", [])
+        and isinstance(rule.get("else"), dict)
+    ]
+    if owned:
+        rules[owned[0]] = source_rule
+        for index in reversed(owned[1:]):
+            del rules[index]
+    else:
         rules.append(source_rule)
+    for rule in _array(RecoverySource.model_json_schema().get("allOf", [])):
+        if rule not in rules:
+            rules.append(deepcopy(rule))
     plan = _object(definitions["RecoveryPlan"])
     _object(plan["properties"])["context_capacity_input"] = _object(generated["properties"])[
         "context_capacity_input"
@@ -97,6 +156,9 @@ def synchronize(schema: Schema, generated: Schema) -> Schema:
     for rule in (receipt_rule, input_rule):
         if rule not in rules:
             rules.append(rule)
+    for rule in _array(generated.get("allOf", [])):
+        if rule not in rules:
+            rules.append(deepcopy(rule))
     return result
 
 

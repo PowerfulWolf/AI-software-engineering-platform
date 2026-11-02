@@ -43,7 +43,11 @@ from ai_software_engineer.knowledge.gaps import (
 )
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery import DeliveryFailureSnapshot
-from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
+from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryFailureCode,
+    DeliveryStage,
+    ProjectDeliveryCheckpoint,
+)
 from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
 from ai_software_engineer.manager.mysql_dispatch_authority import (
     MySqlDispatchAuthority,
@@ -106,6 +110,17 @@ from ai_software_engineer.recovery.preparation_progress import (
     record_dispatch_committed,
     record_seed_verified,
     record_task_sealed,
+)
+from ai_software_engineer.recovery.route_transition_claim import (
+    RouteTransitionSettlement,
+    UninvokedRouteClaimReader,
+)
+from ai_software_engineer.recovery.route_transition_settlement import (
+    RouteTransitionSettlementService,
+)
+from ai_software_engineer.recovery.route_transition_source import (
+    RouteTransitionRecoverySourceReader,
+    require_route_transition_capture,
 )
 from ai_software_engineer.recovery.scope import (
     expanded_recovery_permissions,
@@ -288,6 +303,74 @@ class NativeRecoveryEntry:
         self.operator_principal = operator_principal
         self._facts = NativeRecoveryFactsVerifier(config, self.environment)
 
+    def _route_transition_settlement(self, checkpoint: ProjectDeliveryCheckpoint) -> str | None:
+        if (
+            checkpoint.stage is not DeliveryStage.BLOCKED
+            or checkpoint.task_status is not TaskStatus.IMPLEMENTING
+            or checkpoint.task_id is None
+            or checkpoint.candidate_revision is not None
+        ):
+            return None
+        root = _repository_sidecar(self.config, checkpoint.repository_id)
+        records_root = root / "state/route-transition-settlements"
+        if not records_root.exists():
+            return None
+        _reject_symlinks(records_root)
+        record = KnowledgeRecordStore(records_root, read_only=True).find(
+            "route-transition-settlements", checkpoint.task_id, RouteTransitionSettlement
+        )
+        if record is None:
+            return None
+        record.validate_integrity()
+        if (
+            record.checkpoint_sha256 != checkpoint.checkpoint_sha256
+            or record.task_id != checkpoint.task_id
+            or record.scope.delivery_id != checkpoint.delivery_id
+            or record.scope.repository_id != checkpoint.repository_id
+        ):
+            raise RecoveryRejected("路由切换收尾记录与当前需求不一致")
+        return record.settlement_sha256
+
+    def settle_route_transition_if_needed(self, checkpoint: ProjectDeliveryCheckpoint) -> None:
+        """Public Continue's exact legacy branch; never resumes the frozen route."""
+        if (
+            checkpoint.stage is not DeliveryStage.BLOCKED
+            or checkpoint.task_status is not TaskStatus.IMPLEMENTING
+            or checkpoint.task_id is None
+            or checkpoint.candidate_revision is not None
+            or checkpoint.failure_code is not DeliveryFailureCode.PERMISSION_DENIED
+        ):
+            return
+        root = _repository_sidecar(self.config, checkpoint.repository_id)
+        dsn = self.config.require_mysql_dsn(self.environment)
+        if not UninvokedRouteClaimReader(dsn, root).has_expired_retry_shape(checkpoint.task_id):
+            return
+        if self.operator_principal is None:
+            raise RecoveryRejected("路由切换收尾要求可信工程操作者")
+        self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
+        from ai_software_engineer.manager.queue_capacity import production_role_queue
+
+        scope = RecoveryScope(
+            team_id=self.config.team_id,
+            repository_id=checkpoint.repository_id,
+            repository_root=checkpoint.repository_root,
+            delivery_id=checkpoint.delivery_id,
+        )
+        workforce = FileTeamWorkforceStore(self.backend._organization)
+        service = RouteTransitionSettlementService(
+            self.config,
+            self.environment,
+            scope,
+            queue=production_role_queue(dsn),
+            policy_lookup=lambda policy_id, version: workforce.get_policy(
+                policy_id, version=version
+            ),
+        )
+        try:
+            service.settle(checkpoint.task_id)
+        except Exception as error:
+            raise RecoveryRejected("路由切换的原执行、队列或草稿尚不能安全收尾") from error
+
     def _target_authorization(
         self,
         original: NativeRecoverySource,
@@ -318,10 +401,13 @@ class NativeRecoveryEntry:
         repository_root: str,
         delivery_id: str,
         failed_run_id: str | None,
-        failed_context_id: str,
+        failed_context_id: str | None,
         capacity_receipt_sha256: str | None = None,
         stopped_unknown_settlement_sha256: str | None = None,
         contained_unknown_settlement_sha256: str | None = None,
+        route_transition_settlement_sha256: str | None = None,
+        historical_progress_run_id: str | None = None,
+        historical_progress_context_id: str | None = None,
         input_mode: RecoveryInputMode | None = None,
         target_branch_name: BranchName | None = None,
         approved_scope_sha256: str | None = None,
@@ -338,7 +424,33 @@ class NativeRecoveryEntry:
             repository_root=prepared.repository_root,
             delivery_id=delivery_id,
         )
-        if contained_unknown_settlement_sha256 is not None:
+        if route_transition_settlement_sha256 is not None:
+            if any(
+                value is not None
+                for value in (
+                    failed_run_id,
+                    failed_context_id,
+                    capacity_receipt_sha256,
+                    stopped_unknown_settlement_sha256,
+                    contained_unknown_settlement_sha256,
+                )
+            ):
+                raise RecoveryRejected("路由切换恢复不能伪造末次 Coder 调用")
+            original = RouteTransitionRecoverySourceReader(self.config, self.environment).inspect(
+                scope, route_transition_settlement_sha256
+            )
+            if (
+                historical_progress_run_id,
+                historical_progress_context_id,
+            ) != (
+                original.source.historical_progress_run_id,
+                original.source.historical_progress_context_id,
+            ):
+                raise RecoveryRejected("恢复入口与已接纳的历史 Coder 进度不一致")
+            if approved_scope_sha256 or scope_approval_reference or coder_scope_request:
+                raise RecoveryRejected("路由切换恢复不能扩展原需求的开发范围")
+            input_mode = "coder_reapply"
+        elif contained_unknown_settlement_sha256 is not None:
             if capacity_receipt_sha256 is not None or stopped_unknown_settlement_sha256 is not None:
                 raise RecoveryRejected("恢复来源必须绑定唯一的精确执行事实")
             original = ContainedUnknownRecoverySourceReader(self.config, self.environment).inspect(
@@ -376,6 +488,8 @@ class NativeRecoveryEntry:
                 raise RecoveryRejected("上下文容量恢复不能扩展原需求的开发范围")
             input_mode = "coder_reapply"
         else:
+            if failed_context_id is None:
+                raise RecoveryRejected("普通恢复缺少原 Coder Context")
             original = NativeRecoverySourceReader(self.config, self.environment).inspect(
                 scope,
                 failed_run_id=failed_run_id,
@@ -401,6 +515,7 @@ class NativeRecoveryEntry:
             if (
                 original.source.stopped_unknown_settlement_sha256 is not None
                 or original.source.contained_unknown_settlement_sha256 is not None
+                or original.source.route_transition_settlement_sha256 is not None
             )
             else inspect_recovery_scope_supplement(
                 manager, old, original, request=coder_scope_request
@@ -433,13 +548,23 @@ class NativeRecoveryEntry:
         if (
             original.source.stopped_unknown_settlement_sha256 is not None
             or original.source.contained_unknown_settlement_sha256 is not None
+            or original.source.route_transition_settlement_sha256 is not None
         ):
             current_capture = CapturedChanges.from_capture(
                 manager.capture_legacy_changes(
-                    old, source_permissions, denied_paths=original.denied_paths
+                    old,
+                    source_permissions,
+                    denied_paths=original.denied_paths,
+                    base_revision=(
+                        original.source.effective_base_revision
+                        if original.source.route_transition_settlement_sha256 is not None
+                        else None
+                    ),
                 )
             )
-            if original.source.contained_unknown_settlement_sha256 is not None:
+            if original.source.route_transition_settlement_sha256 is not None:
+                require_route_transition_capture(original, captured, current_capture)
+            elif original.source.contained_unknown_settlement_sha256 is not None:
                 require_contained_unknown_capture(original, captured, current_capture)
             else:
                 require_stopped_unknown_capture(original, captured, current_capture)
@@ -539,6 +664,10 @@ class NativeRecoveryEntry:
             repository_root=checkpoint.repository_root,
             delivery_id=checkpoint.delivery_id,
         )
+        if self._route_transition_settlement(checkpoint) is not None:
+            if request is not None:
+                raise RecoveryRejected("路由切换恢复不能扩展原需求的开发范围")
+            return None
         if checkpoint.failure_summary == CONTAINED_UNKNOWN_BUDGET_SUMMARY:
             if request is not None:
                 raise RecoveryRejected("未知结果额度恢复不能扩展原需求的开发范围")
@@ -595,7 +724,12 @@ class NativeRecoveryEntry:
             repository_root=checkpoint.repository_root,
             delivery_id=checkpoint.delivery_id,
         )
-        if checkpoint.failure_summary == CONTAINED_UNKNOWN_BUDGET_SUMMARY:
+        route_transition_sha = self._route_transition_settlement(checkpoint)
+        if route_transition_sha is not None:
+            source = RouteTransitionRecoverySourceReader(self.config, self.environment).inspect(
+                scope, route_transition_sha
+            )
+        elif checkpoint.failure_summary == CONTAINED_UNKNOWN_BUDGET_SUMMARY:
             source = ContainedUnknownRecoverySourceReader(self.config, self.environment).discover(
                 scope
             )
@@ -623,6 +757,9 @@ class NativeRecoveryEntry:
             delivery_id=checkpoint.delivery_id,
             failed_run_id=source.source.failed_run_id,
             failed_context_id=source.source.failed_context_id,
+            historical_progress_run_id=source.source.historical_progress_run_id,
+            historical_progress_context_id=source.source.historical_progress_context_id,
+            route_transition_settlement_sha256=source.source.route_transition_settlement_sha256,
             capacity_receipt_sha256=source.source.context_capacity_receipt_sha256,
             stopped_unknown_settlement_sha256=source.source.stopped_unknown_settlement_sha256,
             contained_unknown_settlement_sha256=source.source.contained_unknown_settlement_sha256,

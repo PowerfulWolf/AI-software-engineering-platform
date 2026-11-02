@@ -754,7 +754,16 @@ def _existing_task_scope(root: Path, task_id: str, guard: WorkerExecutionGuard) 
         except BlockingIOError as error:
             raise RecoveryRejected("原任务仍有本机执行占用, 暂不能核验终态开发现场") from error
         guard.inherited_fds = (descriptor,)
+        guard._task_scope_binding = (
+            task_id,
+            descriptor,
+            root / name,
+            metadata.st_dev,
+            metadata.st_ino,
+        )
+        guard.check_task_scope(task_id)
         yield
+        guard.check_task_scope(task_id)
         current = os.stat(name, dir_fd=directory, follow_symlinks=False)
         _require((metadata.st_dev, metadata.st_ino) == (current.st_dev, current.st_ino))
         current_root = _open_directory(root)
@@ -768,6 +777,7 @@ def _existing_task_scope(root: Path, task_id: str, guard: WorkerExecutionGuard) 
             os.close(current_root)
     finally:
         guard.inherited_fds = ()
+        guard._task_scope_binding = None
         if descriptor >= 0:
             os.close(descriptor)
         os.close(directory)
@@ -952,6 +962,8 @@ def read_terminal_workspace_snapshot(
 
     try:
         source = original.source
+        if source.failed_run_id is None or source.failed_context_id is None:
+            raise RecoveryRejected("terminal failed-Coder source has no original Run or Context")
         team = TeamWorkspace.initialize(
             config.platform_root,
             team_id=source.scope.team_id,

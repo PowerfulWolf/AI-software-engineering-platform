@@ -1,5 +1,77 @@
 # Explicit delivery recovery — T044
 
+## Settled route-transition successor source (2026-11-02)
+
+`RouteTransitionRecoverySourceReader.discover(scope)` and
+`inspect(scope, route_transition_settlement_sha256)` are the dedicated read-only
+source for a child Requirement whose last Coder claim never invoked a model.
+`NativeRecoveryEntry.settle_route_transition_if_needed(checkpoint)` is called by
+the public Continue path only for a `BLOCKED` pre-candidate child checkpoint
+whose recorded Task status is still `IMPLEMENTING`. It may consume the sealed
+settlement through `RouteTransitionSettlementService.settle`; it must never
+dispatch or resume the frozen Task. The existing Task lock, queue authority
+fence, full no-start scan and complete retained inventory are mandatory before
+the Task/WorkItem terminal transaction. A failure leaves old Task, queue and
+draft intact; a sealed pre-SQL record is replayed only against identical facts.
+The public branch additionally requires `PERMISSION_DENIED` and first classifies
+the exact expired Coder retry using a read-only queue/Task observation. An
+ordinary failed Coder Run with the same child stage must fall through to its
+existing recovery path; this preliminary classification never grants authority
+and settlement repeats the complete no-start proof under the Task lock.
+Both settlement and settled-source reading require an exact frozen CLI selection
+and a nonempty, exclusively Responses current Coder route set. The old policy
+ID/version must match the claim. Only the specific primary-route mismatch from
+the frozen-route validator establishes the transition; ambiguous legacy matches,
+policy drift, mixed current CLI/Responses routes and any other validation error
+reject before consuming the old Task or admitting a new Plan.
+
+The source reader acquires the **existing** Task lock without creating a lock
+file. It requires the old child checkpoint digest and parent joint checkpoint,
+the committed settlement's exact terminal Task event and closed WorkItem, no
+active or extra open work, complete no-start scan for the expired claim, and
+the latest consumed `preserve_draft` binding and full capture. It checks two
+fresh observations around the source read. The child checkpoint remains an
+unaltered revision-5 historical projection while SQL Task revision 6 is
+`BLOCKED`; the reader binds the exact appended event instead of inventing a
+new checkpoint or using the ordinary failed-Run reader. Each observation also
+revalidates that the sealed claim's CLI selection remains incompatible with
+the currently configured Coder route; reverting to the old route cannot be
+used to approve a nominal Responses successor.
+
+`RecoverySource.route_transition_settlement_sha256` is exclusive with the
+capacity and UNKNOWN source kinds. Its `failed_run_id` and `failed_context_id`
+are absent. `historical_progress_run_id` and
+`historical_progress_context_id` refer only to the earlier accepted Coder
+progress; `execution_baseline_sha256` and `execution_base_revision` bind the
+preserved current draft. `RecoveryPlan.input_mode` must be `coder_reapply`;
+`workspace_snapshot`, `context_capacity_input`, scope expansion and
+quarantined paths are forbidden. The complete inherited approved reapply
+inputs remain required. The new Task gets a fresh configured route and separate
+exact engineering approval, then ordinary Coder → QA → Review gates.
+
+| Input | Result |
+| --- | --- |
+| Exact sealed/committed old Task, no sixth Run, unchanged draft, historical accepted progress | Return source with no failed Run and allow exact Plan proposal |
+| Ordinary failed Coder Run | Use ordinary recovery source; route-transition fields absent |
+| Missing/changed settlement, active claim, extra work, sixth invocation, drifted draft or parent | Reject before Plan or new Task |
+| Ambiguous legacy route, policy drift or mixed current routes | Reject both initial settlement and later source admission |
+| Approved new Plan with changed source, route or target base | Reject current-facts or authorization gate |
+
+Good: K1's sixth claim stays without a Run, while an independently approved
+successor re-applies all 13 retained files under Responses and passes native
+QA/Review. Base: normal stopped-UNKNOWN and capacity sources retain their prior
+wire shape. Bad: set `failed_run_id` to attempt 1's successful progress Run,
+infer the sixth Context from it, or send a new model request on the old CLI
+Task. `tests/recovery/test_route_transition_source_schema.py` and
+`test_inherited_lineage.py` protect the source-kind and historical lineage.
+`test_route_transition_public.py` exercises the public Continue, exact Plan,
+independent approval and new Responses-selected Coder/QA/Reviewer on disposable
+Git and real isolated MySQL with offline role adapters. Public settlement must
+use the full `production_role_queue(dsn)` because the atomic Task/queue write
+requires its external lock; the terminal source reader uses the read-only queue.
+The fixture establishes composition, not live provider availability. Live K1
+still requires controlled release and fresh exact production observations.
+
 ## Read-only uninvoked route-transition claim observation (2026-11-02)
 
 `UninvokedRouteClaimReader(dsn, sidecar).inspect(task_id, guard) ->

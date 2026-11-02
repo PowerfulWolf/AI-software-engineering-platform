@@ -78,6 +78,7 @@ from ai_software_engineer.recovery.baseline_source import (
     validate_pre_candidate_sources,
 )
 from ai_software_engineer.recovery.models import (
+    CapturedChanges,
     ContextCapacityRecoveryInput,
     RecoveryRejected,
     RecoveryScope,
@@ -130,6 +131,7 @@ class NativeRecoverySource:
     # captures describe the real old worktree, never an Agent result.
     stopped_unknown_capture: CapturedMutations | None = None
     contained_unknown_capture: CapturedMutations | None = None
+    route_transition_capture: CapturedChanges | None = None
 
 
 def _is_recoverable_terminal_coder_route(

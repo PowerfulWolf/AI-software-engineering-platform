@@ -39,6 +39,10 @@ from ai_software_engineer.recovery.native import (
     NativeRecoverySourceReader,
     _preparation,
 )
+from ai_software_engineer.recovery.route_transition_source import (
+    RouteTransitionRecoverySourceReader,
+    require_route_transition_capture,
+)
 from ai_software_engineer.recovery.scope import (
     expanded_recovery_permissions,
     inspect_recovery_scope_supplement,
@@ -136,6 +140,7 @@ class NativeRecoveryFactsVerifier:
             if (
                 plan.source.stopped_unknown_settlement_sha256 is None
                 and plan.source.contained_unknown_settlement_sha256 is None
+                and plan.source.route_transition_settlement_sha256 is None
             ) or not _uses_standard_native_inspection(self):
                 raise ValueError("capture window requires standard settled UNKNOWN inspection")
             first = self._inspect(plan)
@@ -163,19 +168,30 @@ class NativeRecoveryFactsVerifier:
         contained_unknown_settlement_sha256 = getattr(
             plan.source, "contained_unknown_settlement_sha256", None
         )
+        route_transition_settlement_sha256 = getattr(
+            plan.source, "route_transition_settlement_sha256", None
+        )
         if (
             plan.source.stopped_unknown_settlement_sha256 is not None
             or contained_unknown_settlement_sha256 is not None
+            or route_transition_settlement_sha256 is not None
         ):
             current_capture = CapturedChanges.from_capture(
                 target.manager.capture_legacy_changes(
                     plan.capture.to_capture().worktree,
                     plan.permissions,
                     denied_paths=original.denied_paths,
+                    base_revision=(
+                        original.source.effective_base_revision
+                        if route_transition_settlement_sha256 is not None
+                        else None
+                    ),
                 )
             )
             if contained_unknown_settlement_sha256 is not None:
                 require_contained_unknown_capture(original, plan.capture, current_capture)
+            elif route_transition_settlement_sha256 is not None:
+                require_route_transition_capture(original, plan.capture, current_capture)
             else:
                 require_stopped_unknown_capture(original, plan.capture, current_capture)
             facts = self._target_facts(plan, target)
@@ -240,7 +256,11 @@ class NativeRecoveryFactsVerifier:
     def _read_source(self, plan: RecoveryPlan) -> NativeRecoverySource:
         plan.require_execution_supported()
         source = plan.source
-        if source.contained_unknown_settlement_sha256 is not None:
+        if source.route_transition_settlement_sha256 is not None:
+            original = RouteTransitionRecoverySourceReader(self._config, self._environment).inspect(
+                source.scope, source.route_transition_settlement_sha256
+            )
+        elif source.contained_unknown_settlement_sha256 is not None:
             original = ContainedUnknownRecoverySourceReader(
                 self._config, self._environment
             ).inspect(source.scope, source.contained_unknown_settlement_sha256)
@@ -253,6 +273,8 @@ class NativeRecoveryFactsVerifier:
                 source.scope, source.context_capacity_receipt_sha256
             )
         else:
+            if source.failed_context_id is None:
+                raise ValueError("ordinary recovery source lost its failed Context")
             original = self._source.inspect(
                 source.scope,
                 failed_run_id=source.failed_run_id,

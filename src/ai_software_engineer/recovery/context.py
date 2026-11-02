@@ -97,13 +97,20 @@ def prerequisite_repair_context(
     )
 
 
+def _source_context_id(plan: RecoveryPlan) -> str:
+    context_id = plan.source.failed_context_id or plan.source.historical_progress_context_id
+    if context_id is None:
+        raise RecoveryRejected("recovery has no authenticated Coder source Context")
+    return context_id
+
+
 def preserved_prerequisite_context(
     plan: RecoveryPlan,
     contexts: FileContextStore,
     repairs: FileRecoveryStore,
 ) -> tuple[ContextSource, ...]:
     """Carry an approved repair objective across failed-Coder recovery generations."""
-    context = contexts.get(plan.source.failed_context_id)
+    context = contexts.get(_source_context_id(plan))
     if context.task_id != plan.source.task_id or context.role is not AgentRole.CODER:
         raise RecoveryRejected("recovery prerequisite context belongs to another Task or role")
     sections = tuple(s for s in context.sections if s.name == "source:manager.prerequisite_repair")
@@ -144,7 +151,7 @@ def preserved_verification_context(
     verifications: FileRecoveryStore | None,
 ) -> tuple[ContextSource, ...]:
     """Recover exact sealed QA/Review feedback, never just the interrupted edits."""
-    context = contexts.get(plan.source.failed_context_id)
+    context = contexts.get(_source_context_id(plan))
     if context.task_id != plan.source.task_id or context.role is not AgentRole.CODER:
         raise RecoveryRejected("recovery verification context belongs to another Task or role")
     sections = tuple(s for s in context.sections if s.name == "source:remediation.verification")
@@ -185,7 +192,7 @@ def preserved_native_verdict_context(
     plan: RecoveryPlan, contexts: FileContextStore, artifacts: FileArtifactStore
 ) -> tuple[ContextSource, ...]:
     """Retain native verdicts from the failed run, including already recovered feedback."""
-    context = contexts.get(plan.source.failed_context_id)
+    context = contexts.get(_source_context_id(plan))
     if context.task_id != plan.source.task_id or context.role is not AgentRole.CODER:
         raise RecoveryRejected("recovery verdict context belongs to another Task or role")
     sources: list[ContextSource] = []

@@ -881,6 +881,7 @@ class DeliveryResumeController:
         command: ResumeProjectDelivery,
     ) -> DeliveryResumeResult:
         try:
+            self._recovery.settle_route_transition_if_needed(current)
             latest = self._recovery.latest_delivery(current)
             if (
                 latest is not None

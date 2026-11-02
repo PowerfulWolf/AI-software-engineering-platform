@@ -1077,6 +1077,16 @@ from the new same-Requirement RecoveryPlan approval and independent QA/Review.
 The public successor path must be complete before a production settlement is
 consumed. See `.trellis/spec/core/delivery-recovery.md` for the exact matrix.
 
+The successor source uses `RecoverySource.route_transition_settlement_sha256`
+and requires `historical_progress_run_id` plus
+`historical_progress_context_id` from the earlier accepted Coder progress.
+It omits `failed_run_id` and `failed_context_id` because the final claim never
+started a model. The current Task revision/terminal event is verified against
+the sealed settlement while the original child Requirement checkpoint retains
+its older `IMPLEMENTING` Task reference. A new `RecoveryPlan` must choose
+`coder_reapply`, bind the full retained capture and inherited inputs, and pass
+separate engineering approval before a new configured route is dispatched.
+
 ### Requested recovery scope (D5.1)
 
 Console Continue may carry `coder_scope_request` with an exact accepted Coder progress ID/SHA,

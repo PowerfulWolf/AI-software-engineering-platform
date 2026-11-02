@@ -107,26 +107,40 @@ def reconstruct_inherited_reapply_inputs(
         ):
             raise RecoveryRejected("inherited recovery invocation differs from its approved seed")
         validate_reapply_context(plan, initial)
-        if origin.failed_run_id is None:
-            raise RecoveryRejected("inherited recovery requires its actual failed main invocation")
-        failed = records.invocation(origin.failed_run_id, dispatch=dispatch, task=current)
-        failed_context = records.context(origin.failed_context_id)
-        _require_context(failed, failed_context, current)
-        if (
-            failed.request.context_manifest_id != origin.failed_context_id
-            or failed.request.execution_baseline_sha256 != origin.execution_baseline_sha256
-            or (
-                origin.execution_baseline_sha256 is None
-                and failed.request.source_revision != origin.base_revision
-            )
-            or (
-                origin.execution_baseline_sha256 is not None
-                and failed.request.execution_base_ref != origin.effective_base_revision
-            )
-            or failed.request.permissions != plan.effective_target_permissions
-        ):
-            raise RecoveryRejected("inherited recovery failed request or source epoch changed")
-        validate_reapply_context(plan, failed_context)
+        if origin.route_transition_settlement_sha256 is not None:
+            # The final Coder claim never ran. Only the first, already accepted
+            # progress Context is historical input; it is not a failed Run.
+            if (
+                origin.failed_run_id is not None
+                or origin.failed_context_id is not None
+                or origin.historical_progress_run_id != first.request.run_id
+                or origin.historical_progress_context_id != initial.context_id
+                or first.request.source_revision != origin.base_revision
+            ):
+                raise RecoveryRejected("inherited route transition progress differs")
+        else:
+            if origin.failed_run_id is None or origin.failed_context_id is None:
+                raise RecoveryRejected(
+                    "inherited recovery requires its actual failed main invocation"
+                )
+            failed = records.invocation(origin.failed_run_id, dispatch=dispatch, task=current)
+            failed_context = records.context(origin.failed_context_id)
+            _require_context(failed, failed_context, current)
+            if (
+                failed.request.context_manifest_id != origin.failed_context_id
+                or failed.request.execution_baseline_sha256 != origin.execution_baseline_sha256
+                or (
+                    origin.execution_baseline_sha256 is None
+                    and failed.request.source_revision != origin.base_revision
+                )
+                or (
+                    origin.execution_baseline_sha256 is not None
+                    and failed.request.execution_base_ref != origin.effective_base_revision
+                )
+                or failed.request.permissions != plan.effective_target_permissions
+            ):
+                raise RecoveryRejected("inherited recovery failed request or source epoch changed")
+            validate_reapply_context(plan, failed_context)
         previous, revision = records.task(plan.source.task_id)
         if revision != plan.source.task_revision:
             raise RecoveryRejected("inherited recovery predecessor revision changed")

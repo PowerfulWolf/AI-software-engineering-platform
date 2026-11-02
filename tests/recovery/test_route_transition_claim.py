@@ -23,6 +23,7 @@ from ai_software_engineer.recovery.route_transition_settlement import (
     RouteTransitionRetained,
     RouteTransitionSettlementService,
 )
+from ai_software_engineer.recovery.workspace_snapshot import _existing_task_scope
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.work_queue.dispatcher import DispatcherLoop, DispatcherTickStatus
@@ -125,6 +126,7 @@ def test_expired_uninvoked_claim_is_observed_then_current_queue_drift_refuses(
         sidecar = tmp_path / "sidecar"
         (sidecar / "artifacts").mkdir(parents=True)
         reader = UninvokedRouteClaimReader(dsn, sidecar)
+        assert reader.has_expired_retry_shape(task.id)
         guard = WorkerExecutionGuard()
         with pytest.raises(QueueConflict, match="exact held Task process lock"):
             reader.inspect(task.id, guard)
@@ -293,3 +295,8 @@ def test_expired_uninvoked_route_settlement_closes_task_and_work_atomically(
         assert repository.get(task.id).status is TaskStatus.BLOCKED
         assert repository.current_revision(task.id) == revision + 1
         assert queue.get(step.work_item.id).status is WorkItemStatus.CLOSED
+        assert not reader.has_expired_retry_shape(task.id)
+        readonly_guard = WorkerExecutionGuard()
+        with _existing_task_scope(sidecar / "state/queue-worker-locks", task.id, readonly_guard):
+            readonly_guard.check_task_scope(task.id)
+            assert service._committed(first, readonly_guard)

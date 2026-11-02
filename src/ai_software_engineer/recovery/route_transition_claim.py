@@ -210,6 +210,37 @@ class UninvokedRouteClaimReader:
         self.dsn, self.sidecar = dsn, sidecar
         self.queue = _ReadOnlyRoleQueue(dsn)
 
+    def has_expired_retry_shape(self, task_id: str) -> bool:
+        """Classify a public Continue without treating an ordinary failed Run as this case.
+
+        Only the coarse Task/queue shape is used here. Malformed candidate
+        facts must proceed to ``inspect`` and fail there, not be mistaken for
+        an ordinary failed Run. This observation grants no settlement authority.
+        """
+        with (
+            closing(open_mysql_connection(self.dsn)) as connection,
+            connection.cursor(DictCursor) as cursor,
+        ):
+            cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+            cursor.execute("SELECT status FROM tasks WHERE id=%s", (task_id,))
+            task_row = cursor.fetchone()
+            if task_row is None:
+                raise ValueError("route-transition candidate Task is missing")
+            if task_row["status"] != TaskStatus.IMPLEMENTING.value:
+                connection.rollback()
+                return False
+            cursor.execute(
+                "SELECT role,status FROM work_queue_items WHERE task_id=%s AND status<>%s",
+                (task_id, WorkItemStatus.CLOSED.value),
+            )
+            items = tuple(cursor.fetchall())
+            connection.rollback()
+        return any(
+            item["role"] == AgentRole.CODER.value
+            and item["status"] == WorkItemStatus.RETRY_SCHEDULED.value
+            for item in items
+        )
+
     def inspect(self, task_id: str, guard: WorkerExecutionGuard) -> UninvokedRouteClaimObservation:
         guard.check_task_scope(task_id)
         first = self._snapshot(task_id)
