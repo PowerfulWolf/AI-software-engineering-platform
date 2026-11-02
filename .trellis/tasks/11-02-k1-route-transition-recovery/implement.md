@@ -27,3 +27,47 @@ to resume the old Task. A production settlement must repeat them under the
 Task/SQL fence and bind the complete retained baseline and Git inventory.
 
 Allowed paths for this engineering task are the exact manager, queue, recovery, web-console, Schema, tests and `.trellis/spec/core/` files identified by each milestone. No K1 ProductSpec, Design, Plan, old Task record, old dispatch or captured draft body is edited by this platform patch.
+
+## 2026-11-02 settlement milestone, not a release
+
+The read-only claim observer is published on the working branch at `beab94cd`.
+The **unwired** typed route-transition settlement and MySQL Task/queue atomic
+fence are published at `6c4ee494`; exact child/parent checkpoint binding is at
+`ef966628`. A `route-transition-settlement` v1 record is sealed before SQL
+consumption. It binds Task revision/history, unique expired claim and queue
+history, latest `preserve_draft` baseline, full current inventory and capture,
+original child `BLOCKED` checkpoint and parent joint checkpoint. It cannot
+resume the old frozen CLI selection or invent a sixth Run, Context or result.
+The low-level queue method closes only the sole orphan retry and appends one
+`IMPLEMENTING → BLOCKED` Task event under the queue and Task fences. Its replay
+requires the exact sealed record and historical rows.
+
+The actual K1 child checkpoint is `BLOCKED` while its recorded `task_status`
+is **IMPLEMENTING** at Task revision 5. Its digest is
+`83db2f2c4dfd87a84a61e4e2f09ea83e9f4094bc7e48969a32769acc75de7673`;
+the parent joint checkpoint digest is
+`d00be9d883a6db1bb20bc71e5d8648d36149288460a165da0aaccf2ca6cde7e3`.
+Production read-only probes rechecked both, the ended claim, latest baseline
+`2fc6da9af728233e71ac67f1b841a70bc08ba969fc4474a4d5c03557b8acb793`,
+current inventory `7a8aa99f42f7ceca5c2788c3d1296b15dbc4b92d39c77b50a0421ce6bb8c2385`
+and 13 captured file paths. An explicit capture base of `e09c41e5` yields
+capture SHA `d646bf2b2b944f694c76768fdf23759f98b6687917369039c77a12df201f22c8`;
+the earlier Plan capture is based on `20ee8ac6` and must not be compared by
+SHA to this current capture.
+
+The Task has five StateEvents; its only accepted Coder progress is attempt 1,
+Run `run_28fc1e87daaa4068972af1f237d3908e`, Context
+`ctx_90379bb8d0e9247096f47c1817b010609f1683c45dbe757b53059dcc24a66d02`
+at source `20ee8ac6`. There is no sixth Run or Context. A future source
+variant may cite this **historical** Context only with explicit lineage; it
+must never call it a failed sixth invocation.
+
+Isolated MySQL tests for atomic rollback/commit/replay, route config tests,
+Schema equality/validation, Ruff and Mypy pass. No production Task, WorkItem,
+checkpoint or draft was changed. Do **not** call the settlement service on K1
+yet: the special terminal source reader, same-Requirement RecoveryPlan,
+independent approval and public Continue/QA/Review path are still missing.
+The ordinary terminal reader cannot consume the stale child checkpoint or
+invent a final Coder route. Finish those gates and a full public fixture first;
+then publish under controlled restart, recheck current facts and perform the
+one-time production settlement through the public interface.
