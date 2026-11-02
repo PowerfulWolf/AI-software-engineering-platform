@@ -2,16 +2,18 @@
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import ValidationError
 
-from ai_software_engineer.git.mutation import WorkspaceMutationInventory
+from ai_software_engineer.git.mutation import MutationFile, WorkspaceMutationInventory
 from ai_software_engineer.recovery import RecoveryPlan
-from ai_software_engineer.recovery.models import InheritedReapplyInput
+from ai_software_engineer.recovery.models import CapturedChanges, InheritedReapplyInput
 from ai_software_engineer.recovery.workspace_records import (
+    RecoveryExcludedPath,
     RecoveryWorkspaceScope,
     RecoveryWorkspaceSnapshot,
 )
@@ -70,6 +72,18 @@ def test_terminal_snapshot_binds_exact_plan_and_schema(tmp_path: Path) -> None:
     )
     Draft202012Validator(schema, format_checker=FormatChecker()).validate(plan.to_wire())
     assert RecoveryPlan.model_validate(plan.to_wire()) == plan
+
+
+def test_terminal_snapshot_static_schema_matches_generated_contract() -> None:
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/delivery-recovery.schema.json").read_text()
+    )
+    generated = RecoveryPlan.model_json_schema()
+    assert (
+        schema["$defs"]["RecoveryWorkspaceSnapshot"]
+        == generated["$defs"]["RecoveryWorkspaceSnapshot"]
+    )
+    assert schema["$defs"]["RecoveryPlan"]["allOf"][-2:] == generated["allOf"][-2:]
 
 
 def test_synchronous_refusal_snapshot_requires_its_own_exact_completion_proof(
@@ -138,16 +152,78 @@ def test_synchronous_refusal_with_inherited_patch_requires_coder_reapply(
         "workspace_snapshot": snapshot,
         "inherited_reapply_inputs": (inherited,),
     }
-    with pytest.raises(ValidationError, match="inherited inputs"):
+    with pytest.raises(ValidationError, match="coder_reapply"):
         RecoveryPlan.create(**values)
     plan = RecoveryPlan.create(**{**values, "input_mode": "coder_reapply"})
     assert plan.inherited_reapply_inputs == (inherited,)
     assert plan.input_mode == "coder_reapply"
+
+
+def test_responses_workspace_failure_requires_reapply_even_without_inheritance(
+    tmp_path: Path,
+) -> None:
+    old = make_plan(tmp_path / "project")
+    capture = CapturedChanges.from_capture(
+        replace(
+            old.capture.to_capture(),
+            patch=b"diff --git a/src/example.py b/src/example.py\n",
+            file_sha256s=(("src/example.py", "b" * 64),),
+        )
+    )
+    native = snapshot_for(old)
+    inventory = WorkspaceMutationInventory(files=())
+    excluded = RecoveryExcludedPath(
+        path=".venv/pyvenv.cfg", kind="file", sha256="a" * 64, mode=0o644, size=8
+    )
+    with pytest.raises(ValidationError):
+        RecoveryWorkspaceSnapshot.create(
+            **{
+                **native.to_wire(),
+                "schema_version": "v3",
+                "completion_kind": "responses_workspace_policy_failure",
+                "capture_stop_sha256": None,
+                "synchronous_completion_sha256": "8" * 64,
+                "inventory_after": inventory,
+                "excluded_paths": (excluded,),
+            }
+        )
+    file = MutationFile(
+        path=excluded.path,
+        kind="file",
+        sha256=excluded.sha256,
+        mode=excluded.mode,
+        size=excluded.size,
+    )
+    inventory = WorkspaceMutationInventory(files=(file,))
+    snapshot = RecoveryWorkspaceSnapshot.create(
+        **{
+            **native.to_wire(),
+            "schema_version": "v3",
+            "completion_kind": "responses_workspace_policy_failure",
+            "capture_stop_sha256": None,
+            "synchronous_completion_sha256": "8" * 64,
+            "capture_sha256": capture.capture_sha256,
+            "inventory_after": inventory,
+            "inventory_after_sha256": inventory.sha256,
+            "excluded_paths": (excluded,),
+        }
+    )
+    with pytest.raises(ValidationError, match="reapply"):
+        RecoveryPlan.create(**{**old.to_wire(), "capture": capture, "workspace_snapshot": snapshot})
+    plan = RecoveryPlan.create(
+        **{
+            **old.to_wire(),
+            "capture": capture,
+            "workspace_snapshot": snapshot,
+            "input_mode": "coder_reapply",
+        }
+    )
     schema = json.loads(
         (Path(__file__).parents[2] / "schemas/delivery-recovery.schema.json").read_text()
     )
     validator = Draft202012Validator(schema, format_checker=FormatChecker())
     validator.validate(plan.to_wire())
+    assert RecoveryPlan.model_validate(plan.to_wire()) == plan
     missing_mode = plan.to_wire()
     missing_mode.pop("input_mode")
     assert list(validator.iter_errors(missing_mode))

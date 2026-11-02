@@ -616,13 +616,13 @@ class NativeRecoveryEntry:
                     "then approve the new plan"
                 )
         inherited_inputs = self._inherited_inputs(original)
-        if (
-            workspace_snapshot is not None
-            and workspace_snapshot.completion_kind == "responses_tool_refusal"
-            and inherited_inputs
+        if workspace_snapshot is not None and (
+            workspace_snapshot.completion_kind == "responses_workspace_policy_failure"
+            or (workspace_snapshot.completion_kind == "responses_tool_refusal" and inherited_inputs)
         ):
-            # The refused Responses write left no new edits. The complete older
-            # approved patch is input for a fresh Coder, never a seeded draft.
+            # Synchronous Responses failure has no native stop. Keep its exact
+            # lawful current patch and any inherited patch as reapply inputs;
+            # never seed the old worktree's ignored environment.
             input_mode = "coder_reapply"
         plan = RecoveryPlan.create(
             input_mode=input_mode,

@@ -310,6 +310,109 @@ def _completed_responses_refusal(native: Fixture) -> AuditFixture:
     )
 
 
+def _completed_responses_workspace_failure(native: Fixture) -> AuditFixture:
+    audit = _audit(native)
+    result = audit.facts.invocation_outcome.result.model_copy(
+        update={
+            "error": AgentFailure(
+                code=AgentErrorCode.POLICY_VIOLATION,
+                message=(
+                    "failed provider route left repository changes; "
+                    "provider_diagnostic=Responses workspace policy validation rejected"
+                ),
+                transient=False,
+            )
+        }
+    )
+    outcome = audit.facts.invocation_outcome.model_copy(update={"result": result})
+    outcome = outcome.model_copy(
+        update={
+            "outcome_sha256": digest(outcome.model_dump(mode="json", exclude={"outcome_sha256"}))
+        }
+    )
+    route = ModelRouteAttempt.create(
+        request=native.request,
+        route_index=1,
+        provider="codex",
+        model="gpt-6-sol",
+        route_kind="responses",
+        started_at=NOW,
+        completed_at=NOW + timedelta(seconds=1),
+        result=result,
+        fallback=False,
+    )
+    return replace(
+        audit, facts=replace(audit.facts, stop=None, invocation_outcome=outcome, routes=(route,))
+    )
+
+
+def test_completed_responses_workspace_failure_retains_only_lawful_patch(native: Fixture) -> None:
+    audit = _completed_responses_workspace_failure(native)
+    snapshot = audit.validate()
+    assert snapshot.schema_version == "v3"
+    assert snapshot.completion_kind == "responses_workspace_policy_failure"
+    assert snapshot.capture_stop_sha256 is None
+    assert snapshot.synchronous_completion_sha256 == audit.facts.routes[-1].attempt_sha256
+    assert "VALUE = 2" in audit.capture.patch
+    assert ".venv" not in audit.capture.patch
+    assert len(snapshot.excluded_paths) == 2
+
+
+@pytest.mark.parametrize(
+    "problem",
+    ["wrong_error", "wrong_route", "no_environment", "tracked_environment", "unauthorized_code"],
+)
+def test_completed_responses_workspace_failure_rejects_nonmatching_scene(
+    native: Fixture, problem: str
+) -> None:
+    audit = _completed_responses_workspace_failure(native)
+    if problem == "wrong_error":
+        result = audit.facts.invocation_outcome.result
+        assert result.error is not None
+        changed = result.model_copy(
+            update={"error": result.error.model_copy(update={"message": "unknown"})}
+        )
+        audit = replace(
+            audit,
+            facts=replace(
+                audit.facts,
+                invocation_outcome=audit.facts.invocation_outcome.model_copy(
+                    update={"result": changed}
+                ),
+            ),
+        )
+    elif problem == "wrong_route":
+        route = audit.facts.routes[0].model_copy(update={"route_kind": "codex_cli"})
+        audit = replace(audit, facts=replace(audit.facts, routes=(route,)))
+    elif problem == "no_environment":
+        for path in (native.worktree.path / ".venv").rglob("*"):
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+        audit = replace(
+            audit,
+            observation=replace(
+                audit.observation,
+                inventory_after=capture_mutation_inventory(native.worktree.path),
+                ignored_paths=(),
+            ),
+        )
+    elif problem == "tracked_environment":
+        audit = replace(
+            audit,
+            observation=replace(audit.observation, tracked_environment_paths=(".venv/pyvenv.cfg",)),
+        )
+    else:
+        (native.worktree.path / "unapproved.py").write_text("x = 1\n", encoding="utf-8")
+        audit = replace(
+            audit,
+            observation=replace(
+                audit.observation, inventory_after=capture_mutation_inventory(native.worktree.path)
+            ),
+        )
+    with pytest.raises((RecoveryRejected, ValueError)):
+        audit.validate()
+
+
 def test_completed_responses_parent_refusal_can_bind_unchanged_terminal_scene(
     native: Fixture,
 ) -> None:

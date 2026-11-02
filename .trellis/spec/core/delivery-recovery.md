@@ -4143,3 +4143,52 @@ only its new exact Plan; execute the fresh Responses Task and retain QA/Review.
 Rollback restores the previous proposal code and leaves all historical and
 newly published immutable records intact; a v2 Plan must not be executed by
 the old reader.
+
+## Completed Responses workspace-policy failure with an excluded environment (2026-11-03)
+
+`validate_terminal_workspace_snapshot(...)` accepts a separate v3 completion
+proof only for one sealed, completed `responses` Coder route whose final
+invocation outcome is the same failed `POLICY_VIOLATION` result with the exact
+message `failed provider route left repository changes;
+provider_diagnostic=Responses workspace policy validation rejected`. The
+route's completion timestamp and SHA are a synchronous result, not a native
+process stop. A missing capture-stop and interruption receipt remain absent;
+the old Task, Run, queue, route and failure are immutable.
+
+Under the existing Task lock, each of two full source/target/SQL/Git/inventory
+reads must agree. The Task is BLOCKED, queue closed, claim ended, and no accepted
+artifact exists for the failed Run. The full current Git capture must contain
+only paths allowed by that Coder's exact permissions; the mutation inventory
+may additionally contain only newly introduced `.venv/` regular files or
+symlinks. Every such entry must be Git ignored and untracked, match the sealed
+snapshot metadata, and remain in the old worktree. No environment byte is a
+capture input, seed, candidate, cache authorization or QA evidence. Any prior,
+tracked, changed-between-read, unbounded or non-environment unauthorized path
+rejects the proposal. An active tool/process, missing exact route/outcome or
+different error rejects it as well.
+
+| Observed facts | Recovery decision |
+| --- | --- |
+| Exact sealed Responses failure, legal nonempty patch, first-created ignored environment, closed Task/queue | Produce a new v3 snapshot and exact proposal |
+| Existing v1 native stop or v2 clean refusal | Preserve its original version and digest |
+| Unknown/missing route or outcome, active claim, changed lock or inventory | Reject without a new Plan |
+| Tracked/prior environment, unauthorized code, missing current patch or stale target | Reject without deleting or seeding old files |
+
+The new immutable Plan binds `schema_version=v3`,
+`completion_kind=responses_workspace_policy_failure`, the completed route SHA,
+complete lawful current patch and any inherited approved patch. It must use
+`input_mode=coder_reapply` even if no inherited input exists. A fresh Coder
+reapplies the two complete inputs on a clean target after separate public
+approval; independent QA and Reviewer still decide the candidate. v1 native
+stop and v2 clean refusal retain their original wire shape and SHA. The static
+Schema must match `RecoveryPlan.model_json_schema()` for these guards.
+
+Good: three lawful test files and wholly ignored new `.venv/` entries propose
+a v3 Plan without touching the original workspace. Base: v1/v2 fixtures keep
+their existing proof and digests. Bad: an unknown error, tracked `.venv`,
+unauthorized code path or absent current patch cannot yield a v3 Plan.
+`tests/recovery/test_workspace_snapshot.py`, `test_workspace_plan.py` and the
+isolated MySQL public Continue/approval/Coder/QA/Review fixture enforce this.
+No production data migration is required; production use still requires
+release, controlled restart and a new complete read before the public Continue.
+Rollback restores the old binary and must not execute an already issued v3 Plan.

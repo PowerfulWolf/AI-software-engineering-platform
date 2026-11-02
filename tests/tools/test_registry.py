@@ -151,6 +151,65 @@ def test_coder_can_read_write_and_run_allowlisted_command(tmp_path: Path) -> Non
     assert fake.calls == [("pytest", "tests/unit", "-q")]
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("uv", "sync"),
+        ("uv", "run", "pytest", "tests/unit", "-q"),
+        ("uv", "venv", ".venv"),
+        ("uv", "pip", "install", "pytest"),
+    ],
+)
+@pytest.mark.parametrize("role", [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER])
+def test_role_tool_rejects_uv_environment_mutation_before_executor(
+    tmp_path: Path, arguments: tuple[str, ...], role: AgentRole
+) -> None:
+    agent = _agent(role)
+    agent = agent.model_copy(
+        update={
+            "permissions": agent.permissions.model_copy(
+                update={"commands": (*agent.permissions.commands, "uv")}
+            )
+        }
+    )
+    fake = FakeCommandExecutor()
+    registry = PolicyBoundToolRegistry(tmp_path, agent, command_executor=fake)
+    result = registry.execute(
+        RunCommandRequest(
+            run_id="run_tool_registry_001",
+            role=role,
+            operation_id="tool.uv-environment",
+            argv=arguments,
+        )
+    )
+    assert isinstance(result, ToolRejectedResult)
+    assert result.error_code == "COMMAND_DENIED"
+    assert fake.calls == []
+    assert not (tmp_path / ".venv").exists()
+
+
+def test_role_tool_keeps_uv_version_inspection(tmp_path: Path) -> None:
+    agent = _agent(AgentRole.CODER)
+    agent = agent.model_copy(
+        update={
+            "permissions": agent.permissions.model_copy(
+                update={"commands": (*agent.permissions.commands, "uv")}
+            )
+        }
+    )
+    fake = FakeCommandExecutor()
+    result = PolicyBoundToolRegistry(tmp_path, agent, command_executor=fake).execute(
+        RunCommandRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.CODER,
+            operation_id="tool.uv-version",
+            argv=("uv", "--version"),
+        )
+    )
+    assert isinstance(result, RunCommandResult)
+    assert fake.calls == [("uv", "--version")]
+
+
 def test_coder_write_creates_only_authorized_nested_parent(tmp_path: Path) -> None:
     registry = PolicyBoundToolRegistry(tmp_path, _agent(AgentRole.CODER))
     target = tmp_path / "src/ai_software_engineer/learning_collection/models.py"

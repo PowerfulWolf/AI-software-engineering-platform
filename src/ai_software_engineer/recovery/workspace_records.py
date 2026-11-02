@@ -114,6 +114,30 @@ class RecoveryWorkspaceSnapshot(DomainModel):
                             "capture_stop_sha256": {"type": "null"},
                         },
                     },
+                },
+                {
+                    "if": {
+                        "required": ["schema_version"],
+                        "properties": {"schema_version": {"const": "v3"}},
+                    },
+                    "then": {
+                        "required": [
+                            "schema_version",
+                            "completion_kind",
+                            "synchronous_completion_sha256",
+                        ],
+                        "properties": {
+                            "completion_kind": {"const": "responses_workspace_policy_failure"},
+                            "capture_stop_sha256": {"type": "null"},
+                            "excluded_paths": {"type": "array", "minItems": 1},
+                        },
+                    },
+                },
+                {
+                    "if": {
+                        "required": ["schema_version"],
+                        "properties": {"schema_version": {"enum": ["v2", "v3"]}},
+                    },
                     "else": {
                         "required": ["capture_stop_sha256"],
                         "properties": {
@@ -121,14 +145,16 @@ class RecoveryWorkspaceSnapshot(DomainModel):
                             "synchronous_completion_sha256": {"type": "null"},
                         },
                     },
-                }
+                },
             ]
         }
     )
 
     kind: Literal["recovery_workspace_snapshot"] = "recovery_workspace_snapshot"
-    schema_version: Literal["v1", "v2"] = "v1"
-    completion_kind: Literal["native_capture_stop", "responses_tool_refusal"] = Field(
+    schema_version: Literal["v1", "v2", "v3"] = "v1"
+    completion_kind: Literal[
+        "native_capture_stop", "responses_tool_refusal", "responses_workspace_policy_failure"
+    ] = Field(
         default="native_capture_stop", exclude_if=lambda value: value == "native_capture_stop"
     )
     scope: RecoveryWorkspaceScope
@@ -189,18 +215,31 @@ class RecoveryWorkspaceSnapshot(DomainModel):
     @model_validator(mode="after")
     def complete_sorted_inventory(self) -> Self:
         if (
-            self.schema_version == "v1"
-            and (
-                self.completion_kind != "native_capture_stop"
-                or self.capture_stop_sha256 is None
-                or self.synchronous_completion_sha256 is not None
+            (
+                self.schema_version == "v1"
+                and (
+                    self.completion_kind != "native_capture_stop"
+                    or self.capture_stop_sha256 is None
+                    or self.synchronous_completion_sha256 is not None
+                )
             )
-        ) or (
-            self.schema_version == "v2"
-            and (
-                self.completion_kind != "responses_tool_refusal"
-                or self.capture_stop_sha256 is not None
-                or self.synchronous_completion_sha256 is None
+            or (
+                self.schema_version == "v2"
+                and (
+                    self.completion_kind != "responses_tool_refusal"
+                    or self.capture_stop_sha256 is not None
+                    or self.synchronous_completion_sha256 is None
+                )
+            )
+            or (
+                self.schema_version == "v3"
+                and (
+                    self.completion_kind != "responses_workspace_policy_failure"
+                    or self.capture_stop_sha256 is not None
+                    or self.synchronous_completion_sha256 is None
+                    or not self.excluded_paths
+                    or self.inventory_before_sha256 == self.inventory_after_sha256
+                )
             )
         ):
             raise ValueError("workspace completion proof does not match snapshot version")

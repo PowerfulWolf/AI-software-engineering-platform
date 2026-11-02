@@ -68,9 +68,7 @@ class PromptPayload(DomainModel):
     images: tuple[PromptImage, ...] = Field(default=(), max_length=12)
     verification_output_contract: (
         TrustedVerificationOutputContract | TrustedStaticQaMissingEntryOutputContract | None
-    ) = Field(
-        default=None, exclude=True
-    )
+    ) = Field(default=None, exclude=True)
 
     def to_messages(self, *, include_images: bool = True) -> list[WirePayload]:
         messages = [message.to_wire() for message in self.messages]
@@ -417,6 +415,10 @@ def _coder_verification_guidance(request: AgentRequest) -> str:
         "QA/Reviewer. If only an independent verifier's execution prerequisites are missing, "
         "continue other authorized implementation and test-code work within the current slice. "
         "Record unexecuted checks as NOT_RUN with their actual cause and known risks, never PASS. "
+        "Use only existing approved test tooling. Do not create, install, copy, or synchronize "
+        "a virtual environment in the role worktree; uv sync, uv run, uv venv and uv pip are "
+        "not role-tool verification commands. If required tooling is unavailable, record the "
+        "check as NOT_RUN and the exact prerequisite instead of repairing the environment. "
         "Preserve explicit Coder obligations and genuine implementation dependencies; do not mark "
         "incomplete steps complete or treat test source as successful execution. Only complete "
         "implementation within the approved slice can reach the original candidate, independent "

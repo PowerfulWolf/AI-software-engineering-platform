@@ -712,6 +712,33 @@ class RecoveryPlan(DomainModel):
                         "properties": {"input_mode": {"const": "coder_reapply"}},
                     },
                 },
+                {
+                    "if": {
+                        "required": ["workspace_snapshot"],
+                        "properties": {
+                            "workspace_snapshot": {
+                                "required": ["completion_kind"],
+                                "properties": {
+                                    "completion_kind": {
+                                        "const": "responses_workspace_policy_failure"
+                                    }
+                                },
+                            },
+                        },
+                    },
+                    "then": {
+                        "required": ["input_mode"],
+                        "properties": {
+                            "input_mode": {"const": "coder_reapply"},
+                            "capture": {
+                                "properties": {
+                                    "patch": {"type": "string", "minLength": 1},
+                                    "files": {"type": "array", "minItems": 1},
+                                }
+                            },
+                        },
+                    },
+                },
             ]
         }
     )
@@ -827,12 +854,18 @@ class RecoveryPlan(DomainModel):
         if snapshot is None:
             return self
         snapshot.validate_integrity()
-        if (
-            snapshot.completion_kind == "responses_tool_refusal"
-            and self.inherited_reapply_inputs
-            and self.input_mode != "coder_reapply"
+        if snapshot.completion_kind == "responses_workspace_policy_failure" and (
+            not self.capture.patch or not self.capture.files
         ):
-            raise ValueError("completed Responses refusal must reapply its inherited inputs")
+            raise ValueError("completed Responses workspace failure requires its lawful patch")
+        if (
+            snapshot.completion_kind == "responses_workspace_policy_failure"
+            or (
+                snapshot.completion_kind == "responses_tool_refusal"
+                and self.inherited_reapply_inputs
+            )
+        ) and self.input_mode != "coder_reapply":
+            raise ValueError("completed Responses recovery requires coder_reapply input mode")
         source, capture = self.source, self.capture
         if (
             snapshot.scope.team_id != source.scope.team_id

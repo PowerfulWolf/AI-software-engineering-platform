@@ -962,6 +962,47 @@
               "input_mode"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "workspace_snapshot": {
+                "properties": {
+                  "completion_kind": {
+                    "const": "responses_workspace_policy_failure"
+                  }
+                },
+                "required": [
+                  "completion_kind"
+                ]
+              }
+            },
+            "required": [
+              "workspace_snapshot"
+            ]
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "coder_reapply"
+              },
+              "capture": {
+                "properties": {
+                  "patch": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "files": {
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                }
+              }
+            },
+            "required": [
+              "input_mode"
+            ]
+          }
         }
       ]
     },
@@ -1779,19 +1820,6 @@
       "additionalProperties": false,
       "allOf": [
         {
-          "else": {
-            "properties": {
-              "completion_kind": {
-                "const": "native_capture_stop"
-              },
-              "synchronous_completion_sha256": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "capture_stop_sha256"
-            ]
-          },
           "if": {
             "properties": {
               "schema_version": {
@@ -1817,6 +1845,65 @@
               "synchronous_completion_sha256"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "v3"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "completion_kind": {
+                "const": "responses_workspace_policy_failure"
+              },
+              "capture_stop_sha256": {
+                "type": "null"
+              },
+              "excluded_paths": {
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "schema_version",
+              "completion_kind",
+              "synchronous_completion_sha256"
+            ]
+          }
+        },
+        {
+          "else": {
+            "properties": {
+              "completion_kind": {
+                "const": "native_capture_stop"
+              },
+              "synchronous_completion_sha256": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "capture_stop_sha256"
+            ]
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "enum": [
+                  "v2",
+                  "v3"
+                ]
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
         }
       ],
       "description": "A stopped terminal workspace audit, not progress, a verdict, or retry authority.",
@@ -1831,7 +1918,8 @@
           "default": "v1",
           "enum": [
             "v1",
-            "v2"
+            "v2",
+            "v3"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -1840,7 +1928,8 @@
           "default": "native_capture_stop",
           "enum": [
             "native_capture_stop",
-            "responses_tool_refusal"
+            "responses_tool_refusal",
+            "responses_workspace_policy_failure"
           ],
           "title": "Completion Kind",
           "type": "string"

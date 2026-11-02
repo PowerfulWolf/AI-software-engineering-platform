@@ -13,6 +13,7 @@ from ai_software_engineer.agents import AgentErrorCode, HttpResponse, ResponsesA
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.domain import AgentRole, TaskStatus
+from ai_software_engineer.git import WorkspacePolicyError
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -28,6 +29,7 @@ from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.tools import PolicyBoundToolRegistry, ToolRequest
 from ai_software_engineer.tools.models import ToolRejectedResult
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationOutcome
+from tests.git.test_worktree import _git
 from tests.recovery import facts_window_fixture
 from tests.recovery.facts_window_fixture import modern_failed_native_fixture
 from tests.recovery.test_inherited_reapply_entry import (
@@ -69,6 +71,52 @@ class _RefuseFirstWrite:
         )
 
 
+class _WriteThenHistoricalUv:
+    def post(
+        self, url: str, headers: Mapping[str, str], body: bytes, timeout_seconds: float
+    ) -> HttpResponse:
+        del url, headers, body, timeout_seconds
+        return HttpResponse(
+            status_code=200,
+            body=json.dumps(
+                {
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_write",
+                            "name": "write_file",
+                            "arguments": json.dumps(
+                                {"path": "hello.txt", "content": "new greeting\n"}
+                            ),
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call_uv",
+                            "name": "run_command",
+                            "arguments": json.dumps({"argv": ["uv", "sync"]}),
+                        },
+                    ]
+                }
+            ).encode(),
+        )
+
+
+_real_tool_execute = PolicyBoundToolRegistry.execute
+
+
+def _historical_uv_wrote_environment(
+    registry: PolicyBoundToolRegistry, request: ToolRequest
+) -> object:
+    if request.tool != "run_command":
+        return _real_tool_execute(registry, request)
+    root = registry._workspace_root
+    git_root = Path(_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    (git_root / "info/exclude").write_text(".venv/\n", encoding="utf-8")
+    (root / ".venv").mkdir()
+    (root / ".venv/pyvenv.cfg").write_text("uv = 0.11.28\n", encoding="utf-8")
+    raise WorkspacePolicyError("historical role tool created an unapproved environment")
+
+
 def _refused_write(registry: PolicyBoundToolRegistry, request: ToolRequest) -> ToolRejectedResult:
     del registry
     assert request.tool == "write_file"
@@ -82,8 +130,9 @@ def _refused_write(registry: PolicyBoundToolRegistry, request: ToolRequest) -> T
     )
 
 
-def test_public_continue_reapplies_inherited_patch_after_completed_responses_refusal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("failure_mode", ["refusal", "workspace"])
+def test_public_continue_reapplies_inherited_patch_after_completed_responses_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_mode: str
 ) -> None:
     monkeypatch.setattr(facts_window_fixture, "OfflineRecoveryClients", _TwoFileClients)
     monkeypatch.setattr(facts_window_fixture, "offline_failed_codex", _two_file_failed_codex)
@@ -122,11 +171,20 @@ def test_public_continue_reapplies_inherited_patch_after_completed_responses_ref
         real_adapter = production_delivery.ResponsesAgentAdapter
 
         def refused_adapter(**kwargs: object) -> ResponsesAgentAdapter:
-            return real_adapter(**kwargs, transport=_RefuseFirstWrite())
+            return real_adapter(
+                **kwargs,
+                transport=_RefuseFirstWrite()
+                if failure_mode == "refusal"
+                else _WriteThenHistoricalUv(),
+            )
 
         with monkeypatch.context() as refusal:
             refusal.setattr(production_delivery, "ResponsesAgentAdapter", refused_adapter)
-            refusal.setattr(PolicyBoundToolRegistry, "execute", _refused_write)
+            refusal.setattr(
+                PolicyBoundToolRegistry,
+                "execute",
+                _refused_write if failure_mode == "refusal" else _historical_uv_wrote_environment,
+            )
             first_result = first_host.resume_delivery(
                 ResumeProjectDelivery(
                     delivery_id=old.source.scope.delivery_id,
@@ -175,7 +233,17 @@ def test_public_continue_reapplies_inherited_patch_after_completed_responses_ref
         second_entry = second_host.recovery_entry()
         _, second_plan = second_entry.open_plan(Path(proposed.recovery_plan_file))
         assert second_plan.workspace_snapshot is not None
-        assert second_plan.workspace_snapshot.completion_kind == "responses_tool_refusal"
+        assert second_plan.workspace_snapshot.completion_kind == (
+            "responses_tool_refusal"
+            if failure_mode == "refusal"
+            else "responses_workspace_policy_failure"
+        )
+        if failure_mode == "workspace":
+            assert second_plan.workspace_snapshot.schema_version == "v3"
+            assert {item.path for item in second_plan.capture.files} == {"hello.txt"}
+            assert {item.path for item in second_plan.workspace_snapshot.excluded_paths} == {
+                ".venv/pyvenv.cfg"
+            }
         assert second_plan.input_mode == "coder_reapply"
         assert len(second_plan.inherited_reapply_inputs or ()) == 1
         assert second_plan.inherited_reapply_inputs[0].patch == first_plan.capture.patch

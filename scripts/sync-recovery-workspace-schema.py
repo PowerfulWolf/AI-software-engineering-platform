@@ -17,9 +17,23 @@ def main() -> None:
     static_plan = cast(dict[str, object], definitions["RecoveryPlan"])
     static_rules = cast(list[object], static_plan["allOf"])
     generated_rules = cast(list[object], generated_root["allOf"])
-    rule = generated_rules[-1]
-    if rule not in static_rules:
-        static_rules.append(rule)
+    if static_rules[-1] == generated_rules[-1]:
+        static_rules[-2] = generated_rules[-2]
+    else:
+        previous = cast(dict[str, object], static_rules[-1])
+        previous_if = cast(dict[str, object], previous["if"])
+        previous_properties = cast(dict[str, object], previous_if["properties"])
+        snapshot = cast(dict[str, object], previous_properties["workspace_snapshot"])
+        completion = cast(
+            dict[str, object], cast(dict[str, object], snapshot["properties"])["completion_kind"]
+        )
+        if completion == {"const": "responses_workspace_policy_failure"}:
+            static_rules[-2:] = generated_rules[-2:]
+        elif completion == {"const": "responses_tool_refusal"}:
+            static_rules[-1] = generated_rules[-2]
+            static_rules.append(generated_rules[-1])
+        else:
+            raise ValueError("unexpected recovery workspace Plan guard; refuse schema replacement")
     path.write_text(json.dumps(schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 

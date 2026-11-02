@@ -236,11 +236,22 @@ class PolicyBoundToolRegistry:
             raise
 
     def _run_command(self, request: RunCommandRequest) -> ToolResult:
-        if Path(request.argv[0]).name.lower() in _SHELL_EXECUTABLES:
+        executable = Path(request.argv[0]).name.lower()
+        if executable in _SHELL_EXECUTABLES:
             return self._rejected(
                 request,
                 "COMMAND_DENIED",
                 "shell interpreters are not exposed through the tool protocol",
+            )
+        # Project-level uv commands can create or refresh .venv even when the
+        # executable itself is allowlisted. Only its exact version query is a
+        # read-only role-tool operation; environment preparation belongs to a
+        # separately approved executor outside the role worktree.
+        if executable == "uv" and request.argv != (request.argv[0], "--version"):
+            return self._rejected(
+                request,
+                "COMMAND_DENIED",
+                "uv environment operations are not exposed through the role tool protocol",
             )
         try:
             result = self._executor.run(

@@ -212,9 +212,21 @@ def validate_terminal_workspace_snapshot(
     step = QueuedRoleStep.model_validate(facts.step.to_wire())
     item = QueuedWorkItem.model_validate(facts.current_item.to_wire())
     request, policy = start.request, task.interruption_continuation_policy
-    synchronous_refusal = stop is None
+    synchronous_completion = stop is None
     final_route = facts.routes[-1] if facts.routes else None
-    if synchronous_refusal:
+    completion_kind = "native_capture_stop"
+    if synchronous_completion:
+        error = final_route.result.error if final_route is not None else None
+        if (
+            error is not None
+            and error.message == "Responses tool request rejected: write_file/PARENT_NOT_FOUND"
+        ):
+            completion_kind = "responses_tool_refusal"
+        elif error is not None and error.message == (
+            "failed provider route left repository changes; "
+            "provider_diagnostic=Responses workspace policy validation rejected"
+        ):
+            completion_kind = "responses_workspace_policy_failure"
         _require(
             len(facts.routes) == 1
             and final_route is not None
@@ -223,15 +235,25 @@ def validate_terminal_workspace_snapshot(
             and final_route.result.status is AgentRunStatus.FAILED
             and final_route.result.error is not None
             and final_route.result.error.code.value == "POLICY_VIOLATION"
-            and final_route.result.error.message
-            == "Responses tool request rejected: write_file/PARENT_NOT_FOUND"
+            and completion_kind != "native_capture_stop"
             and not final_route.result.error.transient
             and final_route.result == outcome.result
-            and start.inventory_before == observation.inventory_after
-            and not capture.patch
-            and not capture.files
+            and (
+                (
+                    completion_kind == "responses_tool_refusal"
+                    and start.inventory_before == observation.inventory_after
+                    and not capture.patch
+                    and not capture.files
+                )
+                or (
+                    completion_kind == "responses_workspace_policy_failure"
+                    and start.inventory_before != observation.inventory_after
+                    and bool(capture.patch)
+                    and bool(capture.files)
+                )
+            )
         )
-    if synchronous_refusal:
+    if synchronous_completion:
         assert final_route is not None
         stopped_at = final_route.completed_at
     else:
@@ -273,7 +295,7 @@ def validate_terminal_workspace_snapshot(
         and scope.dispatch_sha256 == source.dispatch_sha256
         and start.scope.to_wire() == scope.to_wire()
         and (
-            synchronous_refusal
+            synchronous_completion
             or (
                 stop is not None
                 and stop.task_id == task.id
@@ -410,6 +432,8 @@ def validate_terminal_workspace_snapshot(
             and not path.startswith(".venv/")
         )
     environment = tuple(file for file in after.files if file.path.startswith(".venv/"))
+    if completion_kind == "responses_workspace_policy_failure":
+        _require(bool(environment))
     if environment:
         _require(
             not any(file.path == ".venv" or file.path.startswith(".venv/") for file in before.files)
@@ -443,10 +467,16 @@ def validate_terminal_workspace_snapshot(
         capture_start_sha256=start.start_sha256,
         capture_stop_sha256=stop.observation_sha256 if stop is not None else None,
         synchronous_completion_sha256=final_route.attempt_sha256
-        if synchronous_refusal and final_route
+        if synchronous_completion and final_route
         else None,
-        schema_version="v2" if synchronous_refusal else "v1",
-        completion_kind="responses_tool_refusal" if synchronous_refusal else "native_capture_stop",
+        schema_version=(
+            "v3"
+            if completion_kind == "responses_workspace_policy_failure"
+            else "v2"
+            if synchronous_completion
+            else "v1"
+        ),
+        completion_kind=completion_kind,
         invocation_start_sha256=invocation.start_sha256,
         invocation_outcome_sha256=outcome.outcome_sha256,
         claim_sha256=digest(claim.to_wire())

@@ -152,3 +152,28 @@ Base: an existing regular file preserves mode after atomic replacement. Bad: a p
 denied `tests/**` alias is followed, or a historical failed Run is replayed after deployment.
 
 Conversation reference: https://developers.openai.com/api/docs/guides/conversation-state
+
+## Role-tool environment mutation fence (2026-11-03)
+
+`PolicyBoundToolRegistry._run_command` rejects every `uv` role-tool argv except
+the exact `uv --version` query before the command executor starts, even when
+the Task's executable allowlist includes `uv`. This applies to Coder, QA and
+Reviewer. `uv sync`, `uv run`, `uv venv` and `uv pip` may create or synchronize
+`.venv/` without a `write_file` request; such files are outside the Task's
+approved write paths. The refusal is a typed `COMMAND_DENIED` and grants no
+broader command, path or installation authority. Native controlled verification
+and separately approved environment preparation remain separate services.
+
+| Role-tool request | Registry result |
+| --- | --- |
+| Exact `uv --version` | Delegate to the ordinary command executor and Task allowlist |
+| `uv sync`, `uv run`, `uv venv`, `uv pip` or any other `uv` argv | `COMMAND_DENIED` before executor invocation |
+| Non-`uv` argv | Unchanged shell and command-policy checks |
+
+Responses Coder guidance names existing approved test tooling and marks
+missing checks `NOT_RUN`; the machine guard enforces the boundary regardless
+of prompt text. Good: the four environment commands are refused with zero
+executor calls. Base: `uv --version` still reaches the executor. Bad: an
+allowlisted `uv sync` writes a Git-ignored environment before final workspace
+validation. `tests/tools/test_registry.py` locks the pre-execution behavior;
+the terminal v3 recovery contract is in `delivery-recovery.md`.
