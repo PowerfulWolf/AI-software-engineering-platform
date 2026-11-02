@@ -241,7 +241,9 @@ source data; it is not the serialized model prompt. Never discard mandatory rule
 
 `ProductionJointBackend.prepare(DirectoryUnit) -> PreparedUnit` uses
 `MAX_FROZEN_PREPARATION_BYTES = 4_000_000` for summed UTF-8 inline source bodies. Each native file
-still has a 256,000 byte limit. `RequirementPreparationContextExceeded(actual_bytes, limit_bytes)`
+uses the shared `MAX_NATIVE_RULE_SOURCE_BYTES = 1_000_000` raw-byte limit. The old 256,000-byte
+intake cap is obsolete; it would reject a valid current native-rule epoch and a fresh K1 intake.
+`RequirementPreparationContextExceeded(actual_bytes, limit_bytes)`
 is an internal typed ValueError with safe Chinese guidance, not a new wire enum.
 
 ### Contracts and validation matrix
@@ -249,7 +251,8 @@ is an internal typed ValueError with safe Chinese guidance, not a new wire enum.
 | Facts | Required behavior |
 |---|---|
 | About 1.3 MB across individually bounded native files | Freeze complete URI/hash/body facts; no truncation |
-| Aggregate above 4 MB or single file above 256 KB | Reject with typed storage limit; no provider invocation |
+| Aggregate above 4 MB or single file above 1 MB | Reject with typed storage limit; no provider invocation |
+| Single 265,301-byte Trellis rule, aggregate below 4 MB | Freeze full body; role prompt uses compact reference |
 | Typed refusal in PREPARING | Append BLOCKED with Chinese next_action; do not leave an apparently active preparation |
 | Symlink, source hash or Git revision drift | Existing fail-closed rejection remains |
 | Model preparation | Full frozen snapshot remains retrievable; native references retain AGENTS text; existing token gates remain |
@@ -263,8 +266,9 @@ new input identity, never replacement of sealed source bytes.
 ### Good / Base / Bad and tests
 
 Good: complete 1.3 MB frozen corpus with a small reference prompt and verified knowledge reads.
-Base: small native corpus unchanged. Bad: send the full corpus as a prompt, silently truncate,
-or treat a refused intake as still executing. `test_joint_context_limits.py` uses real temporary
+Base: small native corpus unchanged. Good: a 265,301-byte frozen rule is accepted, while a
+1,000,001-byte rule is rejected with its exact bound. Bad: send the full corpus as a prompt,
+silently truncate, or treat a refused intake as still executing. `test_joint_context_limits.py` uses real temporary
 Git corpora for aggregate success/refusal and full body/reference assertions;
 `test_requirement_retirement.py` asserts durable BLOCKED, zero Product facts and CLOSED history.
 

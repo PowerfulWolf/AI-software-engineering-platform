@@ -137,3 +137,36 @@ controlled restart. Re-observe the exact production Task revision, child and
 parent checkpoint digests, expired claim/no-start evidence, consumed baseline
 and 13-file inventory before using the public Continue path. If any identity
 or capture differs, do not settle; keep the old draft and audit history.
+
+## 2026-11-02 successor native-rule size failure
+
+The first public approval Operation `operation_58a2240bd90d5627b57398fdf2ec255b`
+failed with `COMMAND_REJECTED: native rule exceeds context limit` after the
+recovery approval and new Task had been sealed. The new Task
+`task_recovery_ff372ab98593aace1397f1b18f5a013b` is `NEW`, revision 0,
+attempt 0, with no WorkItem or model invocation; the old Task remains `BLOCKED`
+revision 6. The parent Requirement remains in `DELIVERING`. Do not submit the
+same exact approval again or invent an execution outcome.
+
+The K1 registered repository at approved base `88c12800` contains
+`.trellis/spec/core/delivery-recovery.md` at 265,301 raw bytes. The legacy
+successor `rebind_native_rule_sources` helper rejected any rule above 256,000
+bytes before its Git-object verification, while the current sealed
+execution-native-rule contract permits 1,000,000 bytes per source and
+8,000,000 bytes in the selected corpus. The fresh joint intake path had the
+same obsolete single-file cap; it is aligned to the shared source bound while
+its independent 4,000,000-byte aggregate storage limit remains. K1 has 120 native sources totaling
+2,463,367 bytes. An isolated regression reproduced the exact error before the
+fix. The patch uses the shared bounded constants, retains exact Git size/SHA
+checks and compact non-AGENTS prompt projection, and records the size contract
+in `continuation-knowledge-wait.md` and `multi-directory-delivery.md`. It changes no ProductSpec, Design, Plan,
+candidate or historical Task record.
+
+Maintenance scope: `src/ai_software_engineer/context/native.py`,
+`src/ai_software_engineer/multi_directory/production.py`,
+`tests/context/test_native_sources.py`, `tests/manager/test_joint_context_limits.py`,
+this implementation record, `.trellis/spec/core/continuation-knowledge-wait.md`
+and `.trellis/spec/core/multi-directory-delivery.md`. The rollback point is
+platform main `88c12800`; after a controlled service restart, only public
+Continue may retry the pristine new Task, subject to current checkpoint and
+source validation. No database migration or direct production write is needed.

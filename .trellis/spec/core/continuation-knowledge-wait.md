@@ -31,9 +31,14 @@ or permission to rerun Coder. Applies to first execution and fresh-process conti
   continuation-context digest or an old plan to add it.
 - The successor preparation can differ from the original parent preparation. At native dispatch
   composition, Continuation/Recovery allocations bind native bodies to their own frozen profile:
-  read exact Git objects with replacement refs disabled, verify size (at most 256000 bytes) and
-  raw SHA, then redact. Never combine old parent native bodies with a newer approved baseline,
-  read mutable HEAD, or relax the legacy snapshot guard. No new permissions or environment keys.
+  read exact Git objects with replacement refs disabled, verify each source against the sealed
+  profile and the shared execution-native-rule bounds (at most 1,000,000 raw bytes per source
+  and 8,000,000 raw bytes in the selected set), then redact. The old 256,000-byte rebind cap
+  must not reject an otherwise valid, approved Trellis document: the full body is retained for
+  the frozen knowledge snapshot, while non-AGENTS rules are compact references in the initial
+  role prompt. The final Context token budget remains a separate fail-closed gate. Never combine
+  old parent native bodies with a newer approved baseline, read mutable HEAD, or relax the legacy
+  snapshot guard. No new permissions or environment keys.
   Missing historical bodies remain explicit; unknown URIs, missing objects or SHA mismatch reject.
 - After successor admission raises a knowledge wait, Manager reconstructs the child runtime from
   its newly durable preparation before reading status. The pre-admission child backend can be stale.
@@ -78,6 +83,8 @@ or permission to rerun Coder. Applies to first execution and fresh-process conti
 | Previously attested but omitted native bodies become readable | Preserve exact old retrieval snapshot; full current role context, no history rewrite |
 | Approved successor preparation differs from parent | Exact successor Git/profile bodies; re-open child runtime on knowledge wait |
 | Mutable checkout drift or missing/mismatching sealed native object | Ignore current checkout; reject unavailable/mismatching sealed bytes |
+| Sealed non-AGENTS rule is 265,301 bytes and selected native set fits 8,000,000 bytes | Retain full Git body in frozen knowledge; initial role prompt uses its verified reference |
+| Native source exceeds 1,000,000 bytes or selected set exceeds 8,000,000 bytes | Reject before materializing an unbounded Context; retain approval and source facts |
 | Unplanned child or gap/child mismatch | Reject typed handoff before parent update |
 | Resolution with wrong run/gap or unowned child | `STAGE_RESOLUTION_BINDING` / committed-resolution rejection |
 | Approved exact gap, fresh Host | Resume QA/Reviewer; Coder count unchanged |
@@ -91,6 +98,10 @@ or permission to rerun Coder. Applies to first execution and fresh-process conti
 - Good: repair Coder produces candidate; QA asks about UI authority; Manager records wait, exact
   answer is approved, fresh Host resumes QA then independent Reviewer and completes parent.
 - Base: no knowledge gap; ordinary serial delivery and existing prerequisite approval stay unchanged.
+- Good: a 265,301-byte approved Trellis rule remains complete in frozen knowledge and becomes a
+  compact non-AGENTS prompt reference, with its original URI and SHA preserved.
+- Bad: a source above 1,000,000 bytes or selected corpus above 8,000,000 bytes is truncated or
+  read from mutable checkout to fit the obsolete 256,000-byte rebind limit.
 - Bad: catch every exception as WAITING_HUMAN, rename old gap requirement_id, return synthetic QA
   PASS, replay repair approval, or restart the repair Coder to avoid recovering the QA checkpoint.
 
@@ -112,7 +123,8 @@ or permission to rerun Coder. Applies to first execution and fresh-process conti
 - Commit changed native rules between parent intake and repair approval; assert first Coder uses
   the approved new rules, legacy gap recovery keeps the original snapshot, and restart reaches
   DONE without duplicate Coder. `tests/context/test_native_sources.py` covers mutable checkout
-  isolation, source role preservation, foreign URI and mismatching frozen profile rejection.
+  isolation, source role preservation, foreign URI and mismatching frozen profile rejection. Its
+  large-rule cases assert exact sealed bytes, compact prompt projection and both size ceilings.
 - `tests/manager/test_team_host.py`: child knowledge wait reaches coordinator, consumed approval
   omitted; `tests/knowledge/test_stages.py` retains exact proof and resolution validation.
 - Run MySQL fixtures serially using only the isolated `ASE_TEST_MYSQL_DSN`, never production DSN.

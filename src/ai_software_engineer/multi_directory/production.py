@@ -18,6 +18,7 @@ from ai_software_engineer.domain import (
     ProductApprovalDecision,
     TeamRole,
 )
+from ai_software_engineer.domain.execution_native_rules import MAX_NATIVE_RULE_SOURCE_BYTES
 from ai_software_engineer.domain.project_delivery import DesignComplexityFacts
 from ai_software_engineer.execution import (
     CommandExecutionError,
@@ -205,9 +206,9 @@ class ProductionJointBackend:
             path = Path(unit.root) / source.relative_path
             if not path.resolve().is_relative_to(Path(unit.root)) or path.is_symlink():
                 raise ValueError("native rule escapes the selected repository")
-            if source.byte_length > 256_000:
+            if source.byte_length > MAX_NATIVE_RULE_SOURCE_BYTES:
                 raise RequirementPreparationContextExceeded(
-                    actual_bytes=source.byte_length, limit_bytes=256_000
+                    actual_bytes=source.byte_length, limit_bytes=MAX_NATIVE_RULE_SOURCE_BYTES
                 )
             data = path.read_bytes()
             if hashlib.sha256(data).hexdigest() != source.sha256:

@@ -10,7 +10,11 @@ from urllib.parse import urlparse
 
 from ai_software_engineer.context.models import ContextBundle, ContextSource
 from ai_software_engineer.context.ports import ContextSourceError
-from ai_software_engineer.domain.execution_native_rules import NativeRuleEpoch
+from ai_software_engineer.domain.execution_native_rules import (
+    MAX_NATIVE_RULE_RAW_TOTAL_BYTES,
+    MAX_NATIVE_RULE_SOURCE_BYTES,
+    NativeRuleEpoch,
+)
 from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.repository_profile import RepositoryProfile
 
@@ -207,6 +211,7 @@ def rebind_native_rule_sources(
         raise ValueError("native rule revision differs from the sealed profile")
     references = {item.uri: item for item in profile.native_rules}
     result = []
+    total_bytes = 0
     for source in sources:
         if not source.source_id.startswith("native.rule."):
             result.append(source)
@@ -214,8 +219,11 @@ def rebind_native_rule_sources(
         reference = references.get(source.uri)
         if reference is None:
             raise ValueError("native rule is not in the sealed profile")
-        if reference.byte_length > 256_000:
+        if reference.byte_length > MAX_NATIVE_RULE_SOURCE_BYTES:
             raise ValueError("native rule exceeds context limit")
+        total_bytes += reference.byte_length
+        if total_bytes > MAX_NATIVE_RULE_RAW_TOTAL_BYTES:
+            raise ValueError("native rules exceed context limit")
         object_name = f"{revision}:{reference.relative_path}"
         size = _git_object(repository_root, "-s", object_name)
         if size.strip() != str(reference.byte_length).encode("ascii"):

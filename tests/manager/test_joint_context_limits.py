@@ -21,6 +21,7 @@ from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline import ProjectSpecBaseline, _baseline_digest
 from ai_software_engineer.manager.production_agents import ProductDraft
 from ai_software_engineer.manager.production_backend import PRODUCTION_DELIVERY_CONTEXT_BUDGET
+from ai_software_engineer.multi_directory.errors import RequirementPreparationContextExceeded
 from ai_software_engineer.multi_directory.models import (
     JointCheckpoint,
     JointExecutionPlan,
@@ -83,6 +84,41 @@ def test_preparation_freezes_large_rule_corpus_without_expanding_model_input(
     assert next(s.content for s in projected if s.uri.endswith("AGENTS.md")) == (
         "Read applicable frozen project rules.\n"
     )
+
+
+@pytest.mark.parametrize("size,accepted", [(265_301, True), (1_000_001, False)])
+def test_preparation_uses_execution_native_rule_source_bound(
+    tmp_path: Path, size: int, accepted: bool
+) -> None:
+    current = checkpoint(tmp_path)
+    unit = current.scope.units[0]
+    root = Path(unit.root)
+    rules = root / ".trellis/spec/core"
+    rules.mkdir(parents=True)
+    (rules / "delivery-recovery.md").write_text("R" * size)
+    _git("init", "-b", "main", cwd=root)
+    _git("config", "user.name", "Test", cwd=root)
+    _git("config", "user.email", "test@example.invalid", cwd=root)
+    _git("add", ".", cwd=root)
+    _git("commit", "-m", "Freeze large project rule", cwd=root)
+    unit = unit.model_copy(update={"base_revision": _git_output("rev-parse", "HEAD", cwd=root)})
+    native = Mock()
+    native.prepare.return_value = current.preparations[0].result
+    native.prepared_context.return_value = ()
+    backend = ProductionJointBackend(
+        native=native, factory=Mock(), clients=Mock(), team=Mock(), project=Mock(), environment={}
+    )
+
+    if accepted:
+        prepared = backend.prepare(unit)
+        (source,) = prepared.context_sources
+        assert source.content == "R" * size
+        assert native_rule_prompt_sources(prepared.context_sources)[0].content != source.content
+    else:
+        with pytest.raises(RequirementPreparationContextExceeded) as refusal:
+            backend.prepare(unit)
+        assert refusal.value.actual_bytes == size
+        assert refusal.value.limit_bytes == 1_000_000
 
 
 def joint_sources(tmp_path: Path) -> tuple[JointCheckpoint, tuple[ContextSource, ...]]:

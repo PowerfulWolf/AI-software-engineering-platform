@@ -93,3 +93,68 @@ def test_linked_worktree_legacy_profile_rebinds_from_explicit_task_revision(
     )
 
     assert result[0].content == "Rules from the sealed base.\n"
+
+
+def test_successor_rebinds_large_frozen_native_rule_for_knowledge_context(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.context.native import (
+        native_rule_prompt_sources,
+        rebind_native_rule_sources,
+    )
+
+    root = tmp_path / "repository"
+    root.mkdir()
+    _git("init", "-b", "main", cwd=root)
+    rules = root / "README.md"
+    rules.write_text("Original rules.\n")
+    _git("add", ".", cwd=root)
+    _git("commit", "-m", "original", cwd=root)
+    original = RepositoryProfile.discover(root, repository_id="repository_fixture")
+    source = ContextSource(
+        source_id="native.rule.0",
+        uri=original.native_rules[0].uri,
+        content=rules.read_text(),
+        required=True,
+    )
+
+    approved_body = "L" * 265_301
+    rules.write_text(approved_body)
+    _git("add", ".", cwd=root)
+    _git("commit", "-m", "approved large rules", cwd=root)
+    approved = RepositoryProfile.discover(root, repository_id="repository_fixture")
+    rules.write_text("Unapproved checkout content.\n")
+
+    rebound = rebind_native_rule_sources(root, approved, (source,))
+    assert rebound[0].content == approved_body
+    projected = native_rule_prompt_sources(rebound)
+    assert approved_body not in (projected[0].content or "")
+    assert hashlib.sha256(approved_body.encode()).hexdigest() in (projected[0].content or "")
+    assert rules.read_text() == "Unapproved checkout content.\n"
+
+    rules.write_text("L" * 1_000_001)
+    _git("add", ".", cwd=root)
+    _git("commit", "-m", "overlarge rules", cwd=root)
+    overlarge = RepositoryProfile.discover(root, repository_id="repository_fixture")
+    with pytest.raises(ValueError, match="native rule exceeds context limit"):
+        rebind_native_rule_sources(root, overlarge, (source,))
+
+
+def test_successor_rebind_rejects_unbounded_native_rule_corpus(tmp_path: Path) -> None:
+    from ai_software_engineer.context.native import rebind_native_rule_sources
+
+    root = tmp_path / "repository"
+    root.mkdir()
+    _git("init", "-b", "main", cwd=root)
+    for index in range(9):
+        (root / f"README-{index}.md").write_text("R" * 950_000)
+    _git("add", ".", cwd=root)
+    _git("commit", "-m", "oversized native corpus", cwd=root)
+    profile = RepositoryProfile.discover(root, repository_id="repository_fixture")
+    sources = tuple(
+        ContextSource(source_id=f"native.rule.{index}", uri=reference.uri, content="old")
+        for index, reference in enumerate(profile.native_rules)
+    )
+
+    with pytest.raises(ValueError, match="native rules exceed context limit"):
+        rebind_native_rule_sources(root, profile, sources)
