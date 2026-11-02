@@ -10,6 +10,38 @@ The legacy K1 state needs a separate, one-use settlement and successor source. A
 
 ## Validation matrix
 
+## Verified legacy shape and implementation seam
+
+The current live row is not an ordinary terminal Coder failure. Task revision 5
+remains `IMPLEMENTING` with attempt 6; the sixth WorkItem is
+`RETRY_SCHEDULED` at dispatch sequence 3 after its only claim ended `EXPIRED`.
+The last queue event is `LEASE_EXPIRED`; there is no sixth invocation, model
+route, native capture or accepted output. The child and parent Requirement
+checkpoints already say `BLOCKED` while their Task reference still points at
+revision 5. Consequently `NativeRecoverySourceReader._sql()` cannot be called
+on the current child checkpoint after an administrative Task terminal event:
+it requires the checkpoint's Task revision/status to match SQL. A dedicated
+settlement reader must bind the old checkpoint to the exact appended terminal
+event, or the public delivery service must append a new replayable child and
+parent checkpoint before the ordinary terminal reader can be reused. It must
+never synthesize a checkpoint only in memory.
+
+The pre-invocation proof must combine the ended claim and unique
+`CLAIMED`/`LEASE_EXPIRED` event chain, an exclusive existing Task lock, no active
+SQL claim, `CapacityInputReader.require_claim_not_started()` with an exact
+`UninvokedClaimBoundary`, and a complete retained worktree inventory compared
+with the latest consumed baseline. Claim expiry or absence of an invocation
+file alone is insufficient. The settlement is a new typed route-transition
+fact; it must not reuse `UNKNOWN`, context-capacity or stopped-failure records.
+Its Task `IMPLEMENTING → BLOCKED` event and WorkItem `RETRY_SCHEDULED → CLOSED`
+event commit in one queue transaction under the Task and queue fences. The
+record is written before consumption and exact replay repairs only missing
+publication. The original retry debit, dispatch, baseline and draft remain
+unchanged. RecoverySource then binds the settlement digest and reads the old
+execution context as a historical input, while explicitly representing that
+the sixth attempt has no Run or Context. The approved new Task gets a fresh
+Responses selection; the old CLI selection is never rewritten.
+
 | Case | Expected result |
 | --- | --- |
 | Frozen route still configured exactly | Existing same-Task resume proceeds |
