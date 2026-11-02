@@ -1,5 +1,43 @@
 # Explicit delivery recovery — T044
 
+## Read-only uninvoked route-transition claim observation (2026-11-02)
+
+`UninvokedRouteClaimReader(dsn, sidecar).inspect(task_id, guard) ->
+UninvokedRouteClaimObservation` is a read-only prerequisite for settling an
+already blocked Delivery whose old Coder WorkItem was dispatched under a frozen
+model route. The caller must hold the exact Task process lock;
+`WorkerExecutionGuard.check_task_scope(task_id)` is checked before and after
+the observation. This reader does not terminate the Task, close the queue,
+create a RecoveryPlan, or grant execution authority.
+
+The reader requires a current `IMPLEMENTING` Task and gapless event revisions,
+one nonclosed Coder WorkItem at the current Task revision/attempt in
+`RETRY_SCHEDULED`, no active Task claim, and exactly one ended `EXPIRED` claim
+for that WorkItem. It authenticates the original immutable `CLAIMED` snapshot,
+its claimed step, the actual renewable lease expiry and heartbeat/ending times,
+the `LEASE_EXPIRED` event and one-generation advance. It then runs
+`CapacityInputReader.require_claim_not_started()` over the full invocation,
+model-route, native continuation and accepted-output stores. A second complete
+SQL/queue observation must equal the first. The original claim's first expiry
+may precede the renewed SQL expiry; neither that fact nor an expired lease alone
+proves no execution.
+
+| Current facts | Read-only result |
+| --- | --- |
+| Exact ended claim, immutable event chain, complete no-start scan | Return typed observation; no settlement yet |
+| Live/ambiguous claim, stale Task, changed queue generation or missing event | Reject without mutation |
+| Any invocation, model route, native capture or accepted current output | Reject without mutation |
+| Task or queue changes during the no-start scan | Reject the second observation |
+
+Good: the current K1 sixth claim returns revision 5 with `CLAIMED` sequence 906
+and `LEASE_EXPIRED` sequence 908, without changing its old Task or draft. Base:
+ordinary stopped-UNKNOWN sources still use their own reader. Bad: treating a
+`RETRY_SCHEDULED` label, absent single file or expired TTL as sufficient proof.
+`tests/recovery/test_route_transition_claim.py` exercises the real MySQL claim
+and a queue drift negative. The full route-transition settlement and successor
+approval still require their separate Task/SQL fence and public tests; this
+read-only observation is never a shortcut to either.
+
 ## Allowed missing file in a Responses role tool turn (2026-11-02)
 
 `PolicyBoundToolRegistry._read_file` first authorizes the repository-relative path.
