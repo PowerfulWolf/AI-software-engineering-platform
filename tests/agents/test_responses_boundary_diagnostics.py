@@ -204,6 +204,71 @@ def test_missing_allowed_file_is_returned_to_coder_without_policy_failure(
     assert _git(root, "status", "--porcelain") == ""
 
 
+def test_non_utf8_allowed_file_refusal_is_returned_to_coder_without_policy_failure(
+    tmp_path: Path,
+) -> None:
+    root, _ = _repository(tmp_path)
+    (root / "src" / "binary.dat").write_bytes(b"\xff\x00private-bytes")
+    _git(root, "add", "src/binary.dat")
+    _git(root, "commit", "-qm", "add binary fixture")
+    request, definition = _request(_git(root, "rev-parse", "HEAD"))
+
+    class BinaryThenStop:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def post(
+            self,
+            url: str,
+            headers: Mapping[str, str],
+            body: bytes,
+            timeout_seconds: float,
+        ) -> HttpResponse:
+            del url, headers, timeout_seconds
+            payload = json.loads(body)
+            self.calls.append(payload)
+            if len(self.calls) == 1:
+                return HttpResponse(
+                    status_code=200,
+                    body=json.dumps(
+                        {
+                            "output": [
+                                {
+                                    "type": "function_call",
+                                    "call_id": "call_binary",
+                                    "name": "read_file",
+                                    "arguments": json.dumps(
+                                        {"path": "src/binary.dat", "max_bytes": 100}
+                                    ),
+                                }
+                            ]
+                        }
+                    ).encode(),
+                )
+            return HttpResponse(status_code=503, body=b"{}")
+
+    provider = BinaryThenStop()
+    result = _adapter(root, definition, provider).run(request)
+
+    assert len(provider.calls) == 2
+    second_input = provider.calls[1]["input"]
+    assert isinstance(second_input, list)
+    output = next(
+        item
+        for item in second_input
+        if isinstance(item, dict)
+        and item.get("type") == "function_call_output"
+        and item.get("call_id") == "call_binary"
+    )
+    refusal = json.loads(output["output"])
+    assert refusal["status"] == "REJECTED"
+    assert refusal["error_code"] == "NON_UTF8_FILE"
+    assert "private-bytes" not in output["output"]
+    assert result.error is not None
+    assert result.error.code is not AgentErrorCode.POLICY_VIOLATION
+    assert _git(root, "status", "--porcelain") == ""
+
+
 def test_responses_coder_creates_allowed_nested_module_and_returns_receipt(
     tmp_path: Path,
 ) -> None:

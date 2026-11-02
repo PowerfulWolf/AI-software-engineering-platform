@@ -1737,6 +1737,32 @@ fail closed，且没有把组织元数据写进目标代码目录。
 | shell interpreter or unallowlisted argv | `WorkspacePolicy.authorize_command` | typed `COMMAND_DENIED` rejection; no shell invocation |
 | non-UTF-8 read or oversized file/output | bounded read/decode | typed rejection or truncated result with explicit marker |
 
+### 20.2.1 Responses read refusal after an authorized binary path
+
+Scope: a `ResponsesAgentAdapter` role invocation has an authorized `read_file` request, and
+`PolicyBoundToolRegistry.execute(ReadFileRequest)` returns
+`ToolRejectedResult(status="REJECTED", tool="read_file", error_code="NON_UTF8_FILE")`.
+The registry never decodes with replacement or returns the binary bytes. The adapter sends the
+typed refusal as `function_call_output` for the same call ID and keeps the bounded model loop
+running. This is an observation about content encoding, not a grant to read the file. It follows
+the existing `FILE_NOT_FOUND` continuation behavior; the error message contains no raw bytes.
+
+| Registry result | Responses adapter result |
+|---|---|
+| Authorized path, non-UTF-8 bytes | Return `REJECTED/NON_UTF8_FILE` to the model; next model turn may choose another file |
+| Authorized path absent | Return `REJECTED/FILE_NOT_FOUND` as before |
+| `PATH_DENIED`, `COMMAND_DENIED` or a write refusal | End Run with bounded `POLICY_VIOLATION`; no model continuation |
+
+Good: the next Responses request contains only the typed refusal, and the role can still produce
+an artifact under its original write policy. Base: ordinary UTF-8 reads still return bounded
+`ReadFileResult`. Bad: replacing undecodable bytes, returning raw file content, making a denied
+path recoverable, or treating the refusal as a successful read. The adapter regression in
+`tests/agents/test_responses_boundary_diagnostics.py` must use a real binary Git file and assert
+the second model turn receives `REJECTED/NON_UTF8_FILE`, no bytes leak and the Run is not classified
+as `POLICY_VIOLATION`; the existing forbidden QA tool test must remain fatal. A previously blocked
+Task is immutable and needs an independently approved same-Requirement recovery plan, not an
+in-place replay under its old Run or authorization.
+
 ### 20.3 Good / Base / Bad
 
 - **Good**: redact first, hash the canonical sealed envelope, persist immutable evidence, and route

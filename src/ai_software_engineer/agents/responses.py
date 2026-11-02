@@ -772,6 +772,9 @@ class ResponsesAgentAdapter:
                         # A permitted path may be absent while Coder creates it.
                         # Report the typed observation instead of a policy failure.
                         "FILE_NOT_FOUND",
+                        # A permitted binary file stays unreadable; the model may
+                        # choose a text source after receiving the typed refusal.
+                        "NON_UTF8_FILE",
                     }:
                         window.policy_refused = True
                         raise _ToolRequestRejected(tool_result.tool, tool_result.error_code)
