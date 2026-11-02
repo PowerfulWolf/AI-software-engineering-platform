@@ -29,6 +29,7 @@ from ai_software_engineer.manager.capacity_input_reader import (
     CapacityInputReader,
     UninvokedClaimBoundary,
 )
+from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.store.mysql_repository import (
     _decode_event,
@@ -76,6 +77,8 @@ class RouteTransitionSettlement(DomainModel):
     task: Task
     task_id: TaskId
     checkpoint_sha256: Sha256
+    parent_delivery_id: DeliveryId | None = None
+    parent_checkpoint_sha256: Sha256 | None = None
     task_revision: StrictInt = Field(ge=1)
     task_sha256: Sha256
     task_event_history_sha256: Sha256
@@ -108,6 +111,7 @@ class RouteTransitionSettlement(DomainModel):
             or self.event.artifact_ids
             or not self.event.reason.startswith("ROUTE_TRANSITION: ")
             or self.claimed_sequence >= self.expired_sequence
+            or (self.parent_delivery_id is None) != (self.parent_checkpoint_sha256 is None)
         ):
             raise ValueError("route-transition settlement requires one exact old Task ending")
         return self
@@ -120,6 +124,8 @@ class RouteTransitionSettlement(DomainModel):
         *,
         scope: RecoveryScope,
         checkpoint_sha256: str,
+        parent_delivery_id: str | None = None,
+        parent_checkpoint_sha256: str | None = None,
         execution_baseline_sha256: str,
         inventory_sha256: str,
         retained_capture_sha256: str,
@@ -129,6 +135,8 @@ class RouteTransitionSettlement(DomainModel):
             task=observed.task,
             task_id=observed.task.id,
             checkpoint_sha256=checkpoint_sha256,
+            parent_delivery_id=parent_delivery_id,
+            parent_checkpoint_sha256=parent_checkpoint_sha256,
             task_revision=observed.task_revision,
             task_sha256=digest(observed.task.to_wire()),
             task_event_history_sha256=observed.task_event_history_sha256,

@@ -1275,6 +1275,32 @@
       "title": "Checkpoint Sha256",
       "type": "string"
     },
+    "parent_delivery_id": {
+      "anyOf": [
+        {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Delivery Id"
+    },
+    "parent_checkpoint_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Checkpoint Sha256"
+    },
     "task_revision": {
       "minimum": 1,
       "title": "Task Revision",

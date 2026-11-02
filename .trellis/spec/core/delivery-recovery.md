@@ -44,9 +44,10 @@ read-only observation is never a shortcut to either.
 tuple[RouteTransitionSettlement, CapturedChanges]` seals a scope-bound v1
 settlement in `state/route-transition-settlements` before consuming it. It
 binds the original child Requirement `BLOCKED` checkpoint that still records
-Task `IMPLEMENTING` revision 5; the later administrative Task event does not
-silently rewrite that checkpoint. It requires the frozen Coder ModelSelection to
-be incompatible with the current
+Task `IMPLEMENTING` revision 5 and its independently verified parent joint
+checkpoint; the later administrative Task event does not silently rewrite
+either checkpoint. It requires the frozen Coder ModelSelection to be
+incompatible with the current
 configured role routes under its exact stored ModelPolicy. The previous
 `preserve_draft` baseline must be the latest consumed binding; its complete
 inventory SHA must match the current Coder worktree. The full current Git

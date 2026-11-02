@@ -27,8 +27,10 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 )
 from ai_software_engineer.manager.queued_delivery import validate_frozen_routes
 from ai_software_engineer.orchestration.state_machine import apply_event, build_event
+from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery.baseline_source import read_recovery_baseline_epochs
 from ai_software_engineer.recovery.models import CapturedChanges, RecoveryScope
+from ai_software_engineer.recovery.native import _parent
 from ai_software_engineer.recovery.route_transition_claim import (
     RouteTransitionSettlement,
     UninvokedRouteClaimObservation,
@@ -79,6 +81,7 @@ class RouteTransitionSettlementService:
         if repository.manifest.repository_root != scope.repository_root:
             raise ValueError("route-transition repository registration changed")
         self.config, self.scope, self.queue = config, scope, queue
+        self.team = team
         self.policy_lookup = policy_lookup
         self.dsn = config.require_mysql_dsn(environment)
         self.project_id = project.manifest.project_id
@@ -157,17 +160,23 @@ class RouteTransitionSettlementService:
                 if existing.scope != self.scope or existing.task_id != task_id:
                     raise QueueConflict("route-transition sealed decision scope changed")
                 if self._committed(existing, guard):
-                    self._require_checkpoint(
+                    checkpoint = self._require_checkpoint(
                         task_id, existing.task_revision, existing.checkpoint_sha256
                     )
+                    if self._require_parent(checkpoint) != (
+                        existing.parent_delivery_id,
+                        existing.parent_checkpoint_sha256,
+                    ):
+                        raise QueueConflict("route-transition parent Requirement changed")
                     retained = self.inspect_retained(existing.task)
                     self._require_retained(existing, retained)
                     return existing, retained.capture
             observed = self.reader.inspect(task_id, guard)
             self._require_route_changed(observed)
             checkpoint = self._require_checkpoint(task_id, observed.task_revision)
+            parent_id, parent_sha256 = self._require_parent(checkpoint)
             retained = self.inspect_retained(observed.task)
-            current = self._current_facts(observed, retained, guard)
+            current = self._current_facts(observed, retained, guard, (parent_id, parent_sha256))
             if current != observed:
                 raise QueueConflict("route-transition facts changed before sealing")
             if existing is None:
@@ -190,6 +199,8 @@ class RouteTransitionSettlementService:
                     event,
                     scope=self.scope,
                     checkpoint_sha256=checkpoint.checkpoint_sha256,
+                    parent_delivery_id=parent_id,
+                    parent_checkpoint_sha256=parent_sha256,
                     execution_baseline_sha256=retained.baseline_sha256,
                     inventory_sha256=retained.inventory_sha256,
                     retained_capture_sha256=retained.capture.capture_sha256,
@@ -198,13 +209,20 @@ class RouteTransitionSettlementService:
             existing.require_observation(observed)
             if existing.checkpoint_sha256 != checkpoint.checkpoint_sha256:
                 raise QueueConflict("route-transition checkpoint changed after sealing")
+            if (existing.parent_delivery_id, existing.parent_checkpoint_sha256) != (
+                parent_id,
+                parent_sha256,
+            ):
+                raise QueueConflict("route-transition parent changed after sealing")
             self._require_retained(existing, retained)
             records.put(self._NAMESPACE, task_id, existing)
             self.queue.settle_uninvoked_route_claim(
                 observed,
                 existing,
                 task_lock=guard,
-                validate_current=lambda: self._current_facts(observed, retained, guard),
+                validate_current=lambda: self._current_facts(
+                    observed, retained, guard, (parent_id, parent_sha256)
+                ),
             )
             return existing, retained.capture
 
@@ -229,6 +247,18 @@ class RouteTransitionSettlementService:
         ):
             raise QueueConflict("route-transition Requirement checkpoint differs")
         return checkpoint
+
+    def _require_parent(
+        self, checkpoint: ProjectDeliveryCheckpoint
+    ) -> tuple[str | None, str | None]:
+        if checkpoint.approval_id is None:
+            raise QueueConflict("route-transition approved Product is missing")
+        approval = FileProductRecordStore(
+            self.sidecar / "state/product", read_only=True
+        ).find_approval(checkpoint.approval_id)
+        if approval is None:
+            raise QueueConflict("route-transition Product approval is missing")
+        return _parent(self.team, checkpoint, approval)
 
     def _require_route_changed(self, observed: UninvokedRouteClaimObservation) -> None:
         selection = observed.original_claim.model_selection
@@ -387,9 +417,12 @@ class RouteTransitionSettlementService:
         observed: UninvokedRouteClaimObservation,
         retained: RouteTransitionRetained,
         guard: WorkerExecutionGuard,
+        expected_parent: tuple[str | None, str | None],
     ) -> UninvokedRouteClaimObservation:
         current = self.reader.inspect(observed.task.id, guard)
-        self._require_checkpoint(observed.task.id, observed.task_revision)
+        checkpoint = self._require_checkpoint(observed.task.id, observed.task_revision)
+        if self._require_parent(checkpoint) != expected_parent:
+            raise QueueConflict("route-transition parent Requirement changed during settlement")
         fresh = self.inspect_retained(current.task)
         if fresh != retained:
             raise QueueConflict("route-transition baseline or complete draft changed")

@@ -286,6 +286,7 @@ def test_expired_uninvoked_route_settlement_closes_task_and_work_atomically(
             "_require_checkpoint",
             lambda _task_id, _revision, _sha=None: SimpleNamespace(checkpoint_sha256="e" * 64),
         )
+        monkeypatch.setattr(service, "_require_parent", lambda _checkpoint: (None, None))
         first, _ = service.settle(task.id)
         replay, _ = service.settle(task.id)
         assert replay == first
