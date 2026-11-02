@@ -25,7 +25,7 @@ from ai_software_engineer.domain import (
     NetworkAccess,
 )
 from tests.agents.test_openai_compatible import StaticPromptBuilder
-from tests.agents.test_responses import _git, _repository
+from tests.agents.test_responses import _git, _repository, _request
 from tests.domain.factories import make_qa_artifact
 
 
@@ -141,6 +141,65 @@ def test_unknown_tool_rejection_code_never_enters_failure_result() -> None:
         _ToolRequestRejected("read_file", "PRIVATE_PROVIDER_KEY_VALUE")
     )
     assert message == "Responses tool request rejected: read_file/UNCLASSIFIED"
+
+
+def test_missing_allowed_file_is_returned_to_coder_without_policy_failure(
+    tmp_path: Path,
+) -> None:
+    root, base = _repository(tmp_path)
+    request, definition = _request(base)
+
+    class MissingThenStop:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def post(
+            self,
+            url: str,
+            headers: Mapping[str, str],
+            body: bytes,
+            timeout_seconds: float,
+        ) -> HttpResponse:
+            del url, headers, timeout_seconds
+            payload = json.loads(body)
+            self.calls.append(payload)
+            if len(self.calls) == 1:
+                return HttpResponse(
+                    status_code=200,
+                    body=json.dumps(
+                        {
+                            "output": [
+                                {
+                                    "type": "function_call",
+                                    "call_id": "call_missing",
+                                    "name": "read_file",
+                                    "arguments": json.dumps(
+                                        {"path": "src/not-yet-created.py", "max_bytes": 100}
+                                    ),
+                                }
+                            ]
+                        }
+                    ).encode(),
+                )
+            return HttpResponse(status_code=503, body=b"{}")
+
+    provider = MissingThenStop()
+    result = _adapter(root, definition, provider).run(request)
+
+    assert len(provider.calls) == 2
+    second_input = provider.calls[1]["input"]
+    assert isinstance(second_input, list)
+    output = next(
+        item
+        for item in second_input
+        if isinstance(item, dict)
+        and item.get("type") == "function_call_output"
+        and item.get("call_id") == "call_missing"
+    )
+    assert json.loads(output["output"])["error_code"] == "FILE_NOT_FOUND"
+    assert result.error is not None
+    assert result.error.code is not AgentErrorCode.POLICY_VIOLATION
+    assert _git(root, "status", "--porcelain") == ""
 
 
 def test_qa_preflight_binding_failure_is_distinct_from_tool_denial(tmp_path: Path) -> None:

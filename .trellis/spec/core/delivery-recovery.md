@@ -1,5 +1,23 @@
 # Explicit delivery recovery — T044
 
+## Allowed missing file in a Responses role tool turn (2026-11-02)
+
+`PolicyBoundToolRegistry._read_file` first authorizes the repository-relative path.
+If that permitted path does not exist, it returns typed `FILE_NOT_FOUND` without
+reading outside the worktree. `ResponsesAgentAdapter` must feed that result back
+as a `function_call_output` so a Coder can create a planned new file or choose a
+different allowed path. A genuine `PATH_DENIED` still terminates the Run as
+`POLICY_VIOLATION`; no rejection text grants new write permission. Existing
+blocked Runs and their policy history remain immutable and need a separate,
+audited same-Requirement recovery decision before another execution identity.
+
+Good: allowed `src/new.py` is missing, so the next provider turn receives
+`FILE_NOT_FOUND`. Base: command timeout remains a typed tool result. Bad: a
+denied path or command reaches another provider turn. The real Git/scripted
+provider regression in `tests/agents/test_responses_boundary_diagnostics.py`
+covers the missing path and denial boundary. Rollback restores the earlier
+blocking behavior for future Runs; it does not alter historical Task facts.
+
 ## Accepted scheduled Coder progress after a lost continuation claim (2026-10-29)
 
 ### Scope and signatures

@@ -769,6 +769,9 @@ class ResponsesAgentAdapter:
                     ) and tool_result.error_code not in {
                         "COMMAND_TIMED_OUT",
                         "COMMAND_FAILED_TO_START",
+                        # A permitted path may be absent while Coder creates it.
+                        # Report the typed observation instead of a policy failure.
+                        "FILE_NOT_FOUND",
                     }:
                         window.policy_refused = True
                         raise _ToolRequestRejected(tool_result.tool, tool_result.error_code)
