@@ -38,6 +38,52 @@ and a queue drift negative. The full route-transition settlement and successor
 approval still require their separate Task/SQL fence and public tests; this
 read-only observation is never a shortcut to either.
 
+### Fenced route-transition settlement
+
+`RouteTransitionSettlementService.settle(task_id) ->
+tuple[RouteTransitionSettlement, CapturedChanges]` seals a scope-bound v1
+settlement in `state/route-transition-settlements` before consuming it. It
+binds the original child Requirement `BLOCKED` checkpoint that still records
+Task `IMPLEMENTING` revision 5; the later administrative Task event does not
+silently rewrite that checkpoint. It requires the frozen Coder ModelSelection to
+be incompatible with the current
+configured role routes under its exact stored ModelPolicy. The previous
+`preserve_draft` baseline must be the latest consumed binding; its complete
+inventory SHA must match the current Coder worktree. The full current Git
+capture is bound separately by SHA. The earlier baseline Plan's complete
+capture may use a different Git base and therefore need not have the same SHA
+as the current capture.
+
+`MySqlRoleQueue.settle_uninvoked_route_claim` locks queue authority, the exact
+Task row and WorkItem, checks no active claim or second open WorkItem, then
+repeats the complete no-start, baseline and inventory observation while still
+holding the Task process lock. It atomically appends one
+`IMPLEMENTING → BLOCKED` StateEvent and one
+`RETRY_SCHEDULED → CLOSED` queue event. The queue event records the settlement
+digest, previous WorkItem digest, `budget_refund=false` and
+`model_result=false`; the old claim, retry debit and candidate history are
+left intact. A persisted decision before SQL may be consumed on replay; a
+decision after SQL is recognized only if Task, terminal StateEvent, preceding
+Task/queue histories, closed WorkItem and queue event all match the record.
+No changed replay is accepted.
+
+| Input | Result |
+| --- | --- |
+| Exact expired uninvoked route, changed config, same complete draft | Seal then commit one old-Task end |
+| Same route remains configured | Reject; ordinary continuation remains available |
+| New invocation, active claim, changed baseline or draft, queue drift | Reject without Task/queue mutation |
+| Exact sealed commit replay | Return original record and capture; no new event or refund |
+
+`schemas/route-transition-settlement.schema.json` is generated from the typed
+record. MySQL tests cover rollback on stale observation, atomic commit and
+replay; route tests cover unchanged and CLI-to-Responses configurations.
+This settlement does not itself authorize a successor. The existing Requirement
+still requires a separate exact RecoveryPlan, independent approval, new
+Responses Task, QA and Review. Until that public path is complete, do not
+consume the old production Task merely because the low-level settlement tests
+pass. Rollback keeps the old Task, baseline, worktree and immutable settlement
+record; an already committed terminal Task must never be revived.
+
 ## Allowed missing file in a Responses role tool turn (2026-11-02)
 
 `PolicyBoundToolRegistry._read_file` first authorizes the repository-relative path.

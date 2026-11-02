@@ -91,6 +91,11 @@ if TYPE_CHECKING:
         VerifierPreparationIntent,
         VerifierPreparationObservation,
     )
+    from ai_software_engineer.recovery.route_transition_claim import (
+        RouteTransitionSettlement,
+        UninvokedRouteClaimObservation,
+    )
+    from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
 
 def record_digest(value: DomainModel) -> str:
@@ -1605,6 +1610,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
         )
         task, proof, event = settlement.task, settlement.investigation, settlement.event
         self._lock_authority(cursor)
+
         cursor.execute(
             "SELECT id,payload_json,revision,status FROM tasks WHERE id=%s FOR UPDATE", (task.id,)
         )
@@ -1737,6 +1743,157 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             },
         )
         self._lock_authority(cursor)
+
+    def settle_uninvoked_route_claim(
+        self,
+        observation: UninvokedRouteClaimObservation,
+        settlement: RouteTransitionSettlement,
+        *,
+        task_lock: WorkerExecutionGuard,
+        validate_current: Callable[[], UninvokedRouteClaimObservation],
+    ) -> bool:
+        """End an old never-invoked route generation in one fenced SQL commit.
+
+        The caller seals the exact decision before calling this method. A fresh
+        complete no-start observation is required while the queue authority and
+        Task row are locked. False means the identical commit already exists.
+        """
+        settlement.validate_integrity()
+        settlement.require_observation(observation)
+        event = settlement.event
+        task = observation.task
+        if (
+            task.status is not TaskStatus.IMPLEMENTING
+            or event.task_id != task.id
+            or event.from_status is not TaskStatus.IMPLEMENTING
+            or event.to_status is not TaskStatus.BLOCKED
+            or event.attempt != task.attempts
+            or event.artifact_ids
+            or not event.reason.startswith("ROUTE_TRANSITION: ")
+            or event.source_revision != observation.step.boundary.source_revision
+            or event.occurred_at < task.updated_at
+            or observation.work_item.status is not WorkItemStatus.RETRY_SCHEDULED
+        ):
+            raise QueueConflict("route-transition settlement has an invalid Task event")
+        next_task = apply_event(task, event)
+        closed = observation.work_item.model_copy(
+            update={
+                "status": WorkItemStatus.CLOSED,
+                "wait_reason": None,
+                "wait_disposition": None,
+                "available_at": None,
+                "updated_at": event.occurred_at,
+            }
+        )
+        detail = {
+            "settlement_sha256": settlement.settlement_sha256,
+            "previous_work_item_sha256": record_digest(observation.work_item),
+            "budget_refund": False,
+            "model_result": False,
+        }
+        task_lock.check_task_scope(task.id)
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            self._transaction(connection),
+            connection.cursor(DictCursor) as cursor,
+        ):
+            self._lock_authority(cursor)
+            cursor.execute(
+                "SELECT id,payload_json,revision,status FROM tasks WHERE id=%s FOR UPDATE",
+                (task.id,),
+            )
+            task_row = cursor.fetchone()
+            if task_row is None:
+                raise QueueNotFound(task.id)
+            current_task = self._decode_model(task_row, "payload_json", Task)
+            if task_row["id"] != current_task.id or task_row["status"] != current_task.status.value:
+                raise QueueCorruption("route-transition Task index differs from payload")
+            current_item = self._get_locked(cursor, observation.work_item.id, lock=True)
+            cursor.execute(
+                "SELECT payload_json FROM state_events WHERE event_id=%s FOR UPDATE",
+                (event.event_id,),
+            )
+            existing_event = cursor.fetchone()
+            if existing_event is not None:
+                cursor.execute(
+                    "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
+                    "AND event_type='ROUTE_TRANSITION_SETTLED' ORDER BY sequence",
+                    (current_item.id,),
+                )
+                queue_events = tuple(cursor.fetchall())
+                if (
+                    json.loads(self._text(existing_event, "payload_json")) != event.to_wire()
+                    or current_task != next_task
+                    or task_row["revision"] != observation.task_revision + 1
+                    or current_item != closed
+                    or len(queue_events) != 1
+                    or json.loads(self._text(queue_events[0], "payload_json"))["detail"] != detail
+                ):
+                    raise QueueConflict("route-transition settlement replay differs")
+                task_lock.check_task_scope(task.id)
+                return False
+            if (
+                current_task != task
+                or task_row["revision"] != observation.task_revision
+                or current_item != observation.work_item
+            ):
+                raise QueueConflict("route-transition Task or work changed")
+            cursor.execute(
+                "SELECT lease_id FROM work_queue_claims WHERE task_id=%s "
+                "AND state='ACTIVE' FOR UPDATE",
+                (task.id,),
+            )
+            if cursor.fetchone() is not None:
+                raise QueueLeaseLost("route-transition still has an active role owner")
+            cursor.execute(
+                "SELECT id FROM work_queue_items WHERE task_id=%s "
+                "AND id<>%s AND status<>'CLOSED' FOR UPDATE",
+                (task.id, current_item.id),
+            )
+            if cursor.fetchone() is not None:
+                raise QueueConflict("route-transition has another open WorkItem")
+            current_observation = validate_current()
+            if current_observation != observation:
+                raise QueueConflict("route-transition complete no-start facts changed")
+            settlement.require_observation(current_observation)
+            task_lock.check_task_scope(task.id)
+            cursor.execute(
+                "INSERT INTO state_events (event_id,task_id,revision,payload_json) "
+                "VALUES (%s,%s,%s,%s)",
+                (
+                    event.event_id,
+                    task.id,
+                    observation.task_revision + 1,
+                    _encode(event.to_wire()),
+                ),
+            )
+            cursor.execute(
+                "UPDATE tasks SET payload_json=%s,status=%s,revision=%s,updated_at=%s "
+                "WHERE id=%s AND revision=%s",
+                (
+                    _encode(next_task.to_wire()),
+                    next_task.status.value,
+                    observation.task_revision + 1,
+                    next_task.updated_at.isoformat(),
+                    task.id,
+                    observation.task_revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise QueueConflict("route-transition Task revision changed during settlement")
+            self._update_item(cursor, closed)
+            self._append_event(
+                cursor,
+                closed,
+                from_status=observation.work_item.status,
+                event_type="ROUTE_TRANSITION_SETTLED",
+                lease_id=None,
+                occurred_at=event.occurred_at,
+                detail=detail,
+            )
+            self._lock_authority(cursor)
+            task_lock.check_task_scope(task.id)
+        return True
 
     def original_claim(self, lease_id: str) -> QueueClaim:
         """Read the original CLAIMED event, never reconstruct it from current work."""

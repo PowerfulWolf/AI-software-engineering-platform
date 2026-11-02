@@ -12,26 +12,35 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
+from pydantic import Field, StrictInt, model_validator
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore
+from ai_software_engineer.domain.artifact import Sha256
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.event import StateEvent
-from ai_software_engineer.domain.task import Task
+from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.manager.capacity_input_reader import (
     CapacityInputReader,
     UninvokedClaimBoundary,
 )
+from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.store.mysql_repository import (
     _decode_event,
     _decode_task,
     open_mysql_connection,
 )
-from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
-from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
+from ai_software_engineer.work_queue.execution_store import (
+    MySqlRoleQueue,
+    QueuedRoleStep,
+    record_digest,
+)
+from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem, WorkItemId
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
 
@@ -56,6 +65,118 @@ class UninvokedRouteClaimObservation:
     claimed_sequence: int
     expired_sequence: int
     queue_event_history_sha256: str
+
+
+class RouteTransitionSettlement(DomainModel):
+    """One immutable old-Task ending with no invented Agent result or refund."""
+
+    kind: Literal["route_transition_settlement"] = "route_transition_settlement"
+    schema_version: Literal["v1"] = "v1"
+    scope: RecoveryScope
+    task: Task
+    task_id: TaskId
+    checkpoint_sha256: Sha256
+    task_revision: StrictInt = Field(ge=1)
+    task_sha256: Sha256
+    task_event_history_sha256: Sha256
+    work_item: QueuedWorkItem
+    work_item_id: WorkItemId
+    work_item_sha256: Sha256
+    step_sha256: Sha256
+    original_claim_sha256: Sha256
+    claimed_sequence: StrictInt = Field(ge=1)
+    expired_sequence: StrictInt = Field(ge=2)
+    queue_event_history_sha256: Sha256
+    execution_baseline_sha256: Sha256
+    inventory_sha256: Sha256
+    retained_capture_sha256: Sha256
+    event: StateEvent
+    settlement_sha256: Sha256
+
+    @model_validator(mode="after")
+    def require_exact_terminal_event(self) -> RouteTransitionSettlement:
+        if (
+            self.event.task_id != self.task_id
+            or self.task.id != self.task_id
+            or self.task.status is not TaskStatus.IMPLEMENTING
+            or self.task_sha256 != digest(self.task.to_wire())
+            or self.work_item.id != self.work_item_id
+            or self.work_item.status is not WorkItemStatus.RETRY_SCHEDULED
+            or self.work_item_sha256 != record_digest(self.work_item)
+            or self.event.from_status is not TaskStatus.IMPLEMENTING
+            or self.event.to_status is not TaskStatus.BLOCKED
+            or self.event.artifact_ids
+            or not self.event.reason.startswith("ROUTE_TRANSITION: ")
+            or self.claimed_sequence >= self.expired_sequence
+        ):
+            raise ValueError("route-transition settlement requires one exact old Task ending")
+        return self
+
+    @classmethod
+    def create(
+        cls,
+        observed: UninvokedRouteClaimObservation,
+        event: StateEvent,
+        *,
+        scope: RecoveryScope,
+        checkpoint_sha256: str,
+        execution_baseline_sha256: str,
+        inventory_sha256: str,
+        retained_capture_sha256: str,
+    ) -> RouteTransitionSettlement:
+        result = cls(
+            scope=scope,
+            task=observed.task,
+            task_id=observed.task.id,
+            checkpoint_sha256=checkpoint_sha256,
+            task_revision=observed.task_revision,
+            task_sha256=digest(observed.task.to_wire()),
+            task_event_history_sha256=observed.task_event_history_sha256,
+            work_item=observed.work_item,
+            work_item_id=observed.work_item.id,
+            work_item_sha256=record_digest(observed.work_item),
+            step_sha256=record_digest(observed.step),
+            original_claim_sha256=record_digest(observed.original_claim),
+            claimed_sequence=observed.claimed_sequence,
+            expired_sequence=observed.expired_sequence,
+            queue_event_history_sha256=observed.queue_event_history_sha256,
+            execution_baseline_sha256=execution_baseline_sha256,
+            inventory_sha256=inventory_sha256,
+            retained_capture_sha256=retained_capture_sha256,
+            event=event,
+            settlement_sha256="0" * 64,
+        )
+        return result.model_copy(update={"settlement_sha256": result.recompute_sha256()})
+
+    def recompute_sha256(self) -> str:
+        return digest(self.model_dump(mode="json", exclude={"settlement_sha256"}))
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+        if self.settlement_sha256 != self.recompute_sha256():
+            raise ValueError("route-transition settlement digest mismatch")
+
+    def require_observation(self, observed: UninvokedRouteClaimObservation) -> None:
+        if (
+            self.task_id != observed.task.id
+            or self.task != observed.task
+            or self.scope.repository_root != observed.task.repository
+            or self.task_revision != observed.task_revision
+            or self.task_sha256 != digest(observed.task.to_wire())
+            or self.task_event_history_sha256 != observed.task_event_history_sha256
+            or self.work_item_id != observed.work_item.id
+            or self.work_item != observed.work_item
+            or self.work_item_sha256 != record_digest(observed.work_item)
+            or self.step_sha256 != record_digest(observed.step)
+            or self.original_claim_sha256 != record_digest(observed.original_claim)
+            or self.claimed_sequence != observed.claimed_sequence
+            or self.expired_sequence != observed.expired_sequence
+            or self.queue_event_history_sha256 != observed.queue_event_history_sha256
+            or self.event.attempt != observed.task.attempts
+            or self.event.source_revision != observed.step.boundary.source_revision
+            or self.event.occurred_at < observed.task.updated_at
+        ):
+            raise ValueError("route-transition settlement differs from complete claim facts")
 
 
 def _time(value: object) -> datetime:

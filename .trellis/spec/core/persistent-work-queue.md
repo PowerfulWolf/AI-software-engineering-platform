@@ -1,5 +1,18 @@
 # Persistent WorkQueue / Dispatcher Contract
 
+## Expired never-invoked route settlement (2026-11-02)
+
+An engineering route-transition settlement is separate from Worker retry,
+completion and requirement cancellation. Under the exact Task process lock and
+queue authority, `MySqlRoleQueue.settle_uninvoked_route_claim` consumes a sealed
+record only after a fresh complete no-start observation and exact latest
+baseline/worktree check. It closes the sole `RETRY_SCHEDULED` Coder item and
+appends the Task `IMPLEMENTING → BLOCKED` event in one SQL transaction. The
+original expired claim, original ModelSelection, attempt count, budget debit
+and all earlier queue events remain unchanged. A queue status label or TTL
+alone is never sufficient. Replay must match the sealed Task and queue event
+chain, with `budget_refund=false` and `model_result=false`.
+
 ## 预 Context 容量等待的原 Task 续领（2026-10-28）
 
 `MySqlRoleQueue.resolve_wait(SCHEDULE_RECOVERY_INPUT)` 只在原 WorkItem 仍为精确容量等待、原 claim 唯一且已结束、Task/step/disposition/来源与 immutable 工程决定一致时消费。一次消费追加 `WAIT_RESOLVED`，保留原 Task、attempt、工作额度、旧 claim 与等待事件；同一 WorkItem 使用 `dispatch_sequence + 1` 回到 READY，下一轮由正常 Dispatcher 产生新 claim。`consumed_recovery_input_resolution(task_id)` 从 SQL `WAIT_RESOLVED` 事件重算唯一已消费决定，逐项核对原 claim、Schedule SHA、WorkItem 身份和无退款；不能用 sidecar 文件存在代替 SQL 消费。后续 Coder Run 的完整补丁来源选择先核验此 SQL 决定及精确 Schedule。无已消费决定时原输入行为保持；损坏或重复决定 fail closed。

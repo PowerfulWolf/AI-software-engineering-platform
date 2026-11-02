@@ -1060,6 +1060,23 @@ refund, original invocation overwrite or verdict bypass is allowed. Knowledge wa
 native gate. Details, rejection matrix and existing-data procedure are in
 `.trellis/spec/core/delivery-recovery.md`.
 
+### Frozen route changed before a Coder invocation (2026-11-02)
+
+An expired claim with no model invocation is not a failed role result. The
+read-only `UninvokedRouteClaimReader` requires an exact held Task lock, the
+original immutable `CLAIMED` allocation, its `LEASE_EXPIRED` generation and a
+complete no-start scan. `RouteTransitionSettlementService` additionally checks
+that the frozen Coder selection is incompatible with current routes under its
+stored policy and that the latest consumed `preserve_draft` baseline still
+matches the full current worktree. Its typed
+`schemas/route-transition-settlement.schema.json` record is sealed before the
+queue fence atomically appends one Task `BLOCKED` event and closes the sole
+orphan WorkItem. The old claim, route, draft, retry debit and history remain;
+there is no Agent result or budget refund. This old-Task settlement is separate
+from the new same-Requirement RecoveryPlan approval and independent QA/Review.
+The public successor path must be complete before a production settlement is
+consumed. See `.trellis/spec/core/delivery-recovery.md` for the exact matrix.
+
 ### Requested recovery scope (D5.1)
 
 Console Continue may carry `coder_scope_request` with an exact accepted Coder progress ID/SHA,
