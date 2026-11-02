@@ -895,14 +895,18 @@ class CandidateVerificationEntry:
             # candidates made resume cost grow with the complete plan ledger.
             if plan.inputs.candidate_revision != candidate_revision:
                 continue
-            try:
-                facts.validate(plan)
-            except RecoveryRejected:
-                continue
             plans.append((plan, path))
         if not plans:
             return None
         plan, path = max(plans, key=lambda item: (item[0].created_at, item[0].plan_sha256))
+        # A newer plan for the same candidate supersedes older proposals even
+        # when its runtime capability has since drifted.  Falling back to an
+        # older valid plan resurrects stale approval controls and can replay a
+        # completed verification attempt.  Let the caller propose a fresh plan.
+        try:
+            facts.validate(plan)
+        except RecoveryRejected:
+            return None
         return store, plan, path
 
     def coordinate(self, plan: CandidateVerificationPlan) -> ManagerVerificationAdvice | None:

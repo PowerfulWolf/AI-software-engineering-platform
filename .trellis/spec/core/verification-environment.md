@@ -1,5 +1,30 @@
 # Manager-owned verification prerequisites and controlled execution
 
+## Current candidate verification plan selection (2026-11-02)
+
+`CandidateVerificationEntry.latest_project(repository_root, delivery_id)` reads and validates
+the identity and integrity of every stored plan, then filters to the currently sealed candidate.
+It chooses the newest candidate plan by `(created_at, plan_sha256)` before checking current
+source, policy and executor facts. If that newest plan is stale, it returns `None` so the normal
+resume path proposes a fresh plan. An older plan for the same candidate must not reappear as an
+approval card merely because its old runtime dependencies still match. Existing admissions,
+invocations and completions remain immutable history; this selection does not replay them.
+
+| Situation | Result |
+| --- | --- |
+| Newest current-candidate plan validates | Return that exact plan |
+| Newest current-candidate plan has changed executor fingerprint | Return `None`; propose a new plan from current facts |
+| Older plan has another candidate revision | Parse and check integrity, but do not run its native current-facts validation |
+| Stored plan is malformed or its scope changed | Reject the read; do not hide corruption behind another plan |
+
+Good: a fresh plan supersedes a completed older attempt even when the fresh dependency tree later
+drifts. Base: an unchanged latest plan is returned normally. Bad: ignore the stale fresh plan and
+show the older completed plan for another approval. `tests/recovery/test_latest_verification_plan.py`
+locks this behavior; `tests/recovery/test_delivery_continuation.py` covers the resulting proposal
+path. No Schema or historical data migration is required. Rollback should retain the new plan and
+its receipts; older code may display its predecessor, so a rollback requires the same public
+current-facts check before approving anything.
+
 ## Candidate Python selectors from typed approved Plan rows (2026-10-30)
 
 ### Scope and signatures
