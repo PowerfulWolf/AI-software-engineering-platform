@@ -12,7 +12,8 @@ Keep a harmless, typed refusal to read a non-UTF-8 file inside a permitted repos
 
 ## Scope and acceptance
 
-- Change only the Responses adapter's handling of the typed `NON_UTF8_FILE` read result, with a real tool-registry + scripted Responses regression. The registry must still refuse binary content; path and command policy refusals remain fatal.
+- Change the Responses adapter's handling of the typed `NON_UTF8_FILE` read result, with a real tool-registry + scripted Responses regression. The registry must still refuse binary content; path and command policy refusals remain fatal.
+- Admit the exact historical completed `read_file/NON_UTF8_FILE` failure through the existing v2 clean terminal-workspace snapshot. All other tool/code pairs and unproven stop/inventory facts remain rejected.
 - Verify the Coder receives a `REJECTED/NON_UTF8_FILE` tool output, can make another model call, and no bytes or path leak into the bounded Agent error.
 - Document the new boundary in `.trellis/spec/core/python-runtime.md` and the existing-data recovery path in `implement.md`.
 - Before live K1 Continue, establish the exact stopped/terminal source, full current Git inventory, frozen K1 artifacts, new platform revision and matching RecoveryPlan. Use only the public interface for the separate approval and new Task. Keep Coder, QA and Reviewer independent.

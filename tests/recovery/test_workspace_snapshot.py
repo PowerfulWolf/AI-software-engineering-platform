@@ -255,7 +255,11 @@ def test_terminal_audit_preserves_legal_patch_and_complete_ignored_environment(
     assert native.store.receipts_for_task(native.task.id) == ()
 
 
-def _completed_responses_refusal(native: Fixture) -> AuditFixture:
+def _completed_responses_refusal(
+    native: Fixture,
+    *,
+    message: str = "Responses tool request rejected: write_file/PARENT_NOT_FOUND",
+) -> AuditFixture:
     audit = _audit(native, environment=False)
     root = native.worktree.path
     (root / "src/app.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -274,7 +278,7 @@ def _completed_responses_refusal(native: Fixture) -> AuditFixture:
         status=AgentRunStatus.FAILED,
         error=AgentFailure(
             code=AgentErrorCode.POLICY_VIOLATION,
-            message="Responses tool request rejected: write_file/PARENT_NOT_FOUND",
+            message=message,
             transient=False,
         ),
     )
@@ -413,10 +417,18 @@ def test_completed_responses_workspace_failure_rejects_nonmatching_scene(
         audit.validate()
 
 
-def test_completed_responses_parent_refusal_can_bind_unchanged_terminal_scene(
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Responses tool request rejected: write_file/PARENT_NOT_FOUND",
+        "Responses tool request rejected: read_file/NON_UTF8_FILE",
+    ],
+)
+def test_completed_responses_refusal_can_bind_unchanged_terminal_scene(
     native: Fixture,
+    message: str,
 ) -> None:
-    audit = _completed_responses_refusal(native)
+    audit = _completed_responses_refusal(native, message=message)
     assert audit.facts.start.inventory_before == audit.observation.inventory_after
     assert not audit.capture.files and not audit.capture.patch
     snapshot = audit.validate()
@@ -424,6 +436,22 @@ def test_completed_responses_parent_refusal_can_bind_unchanged_terminal_scene(
     assert snapshot.completion_kind == "responses_tool_refusal"
     assert snapshot.capture_stop_sha256 is None
     assert snapshot.synchronous_completion_sha256 == audit.facts.routes[-1].attempt_sha256
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Responses tool request rejected: read_file/PATH_DENIED",
+        "Responses tool request rejected: read_file/PARENT_NOT_FOUND",
+        "Responses tool request rejected: write_file/NON_UTF8_FILE",
+    ],
+)
+def test_completed_responses_refusal_rejects_other_tool_and_code_pairs(
+    native: Fixture, message: str
+) -> None:
+    audit = _completed_responses_refusal(native, message=message)
+    with pytest.raises(RecoveryRejected):
+        audit.validate()
 
 
 @pytest.mark.parametrize("problem", ["wrong_route", "wrong_error", "changed_inventory"])
@@ -856,10 +884,17 @@ def test_outer_recovery_fence_audit_never_initializes_or_relocks_queue(
     assert (lock.stat().st_dev, lock.stat().st_ino) == (before.st_dev, before.st_ino)
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Responses tool request rejected: write_file/PARENT_NOT_FOUND",
+        "Responses tool request rejected: read_file/NON_UTF8_FILE",
+    ],
+)
 def test_completed_responses_refusal_rechecks_source_and_scene_under_existing_lock(
-    native: Fixture, monkeypatch: pytest.MonkeyPatch
+    native: Fixture, monkeypatch: pytest.MonkeyPatch, message: str
 ) -> None:
-    audit = _completed_responses_refusal(native)
+    audit = _completed_responses_refusal(native, message=message)
     config, original, lock = _composition(audit, monkeypatch)
     before = lock.stat()
     snapshot = read_terminal_workspace_snapshot(config, {}, original, audit.capture)

@@ -4045,10 +4045,13 @@ not QA verdicts or proof that the current verifier ran.
 
 This branch applies only to a terminal modern Coder Task whose single final
 model route is `route_kind="responses"` and whose exact returned failure is
-`FAILED/POLICY_VIOLATION` with stable message
-`Responses tool request rejected: write_file/PARENT_NOT_FOUND`. It does not
-apply to CLI, unknown invocations, other policy refusals or a dirty Responses
-worktree. Production seams are
+`FAILED/POLICY_VIOLATION` with one of the stable messages
+`Responses tool request rejected: write_file/PARENT_NOT_FOUND` or
+`Responses tool request rejected: read_file/NON_UTF8_FILE`. The latter is a
+historical adapter failure: current Responses handling returns that typed read
+refusal to the model without exposing binary bytes. It does not apply to CLI,
+unknown invocations, other tool/code pairs, other policy refusals or a dirty
+Responses worktree. Production seams are
 `src/ai_software_engineer/recovery/{workspace_snapshot,workspace_records,entry,models}.py`:
 
 ```python
@@ -4074,8 +4077,8 @@ inherited-input mode guard on `RecoveryPlan` without replacing older guards.
 
 ## Contract and ordering
 
-The original `POLICY_VIOLATION` from an exact `write_file/PARENT_NOT_FOUND`
-Responses tool receipt is a completed failed invocation when its final single
+The original `POLICY_VIOLATION` from either exact tool/code pair is a completed
+failed invocation when its final single
 Responses route and sealed invocation outcome agree. Responses has no native
 process-group `capture-stop`. Its absence is not itself a stop proof. The
 ordinary terminal recovery reader may use this narrow completion variant only
@@ -4087,7 +4090,7 @@ and inventory facts are reread under the existing two-pass window. Native v1
 snapshot bytes and all other missing-stop cases remain unchanged/rejected.
 
 This is an exact same-Requirement successor, not a restart of the old Run, a
-refund or acceptance of the refused write. Re-proposal, independent approval,
+refund or acceptance of the refused tool call. Re-proposal, independent approval,
 new Responses Coder, QA and Review remain mandatory. No historical record is
 backfilled. A missing/changed route, outcome, claim, lock or start inventory,
 unexpected receipt or post-start mutation rejects before Plan publication.
@@ -4109,10 +4112,10 @@ fresh model call, approval, queue claim or Task mutation occurs during proposal.
 
 | Scene | Result |
 | --- | --- |
-| Exact completed Responses parent refusal, unchanged inventory, empty capture, no receipt | v2 snapshot and exact new Plan; separate human approval remains required |
+| Exact completed Responses parent-write or non-UTF-8-read refusal, unchanged inventory, empty capture, no receipt | v2 snapshot and exact new Plan; separate human approval remains required |
 | Same failed source with complete inherited recovery input | Plan must use `coder_reapply`; full older patch is required in new Coder Context |
 | Native stopped failure with genuine capture-stop | Original v1 audit and unchanged serialized digest |
-| Missing route/outcome, different error, multiple routes, native route, or start-only UNKNOWN | Reject before Plan; no inferred stop or refund |
+| Missing route/outcome, different tool/code pair, multiple routes, native route, or start-only UNKNOWN | Reject before Plan; no inferred stop or refund |
 | Changed inventory, nonempty capture, receipt, active WorkItem/claim or changed lock | Reject and retain all old facts and files |
 | Changed source/target/SQL/route/inventory between full reads | Reject before approval or dispatch |
 
@@ -4126,7 +4129,8 @@ failure message to invent completion.
 
 `tests/agents/test_responses_continuation.py` reproduces the real adapter's
 returned tool refusal and confirms it leaves a start but no native stop.
-`tests/recovery/test_workspace_snapshot.py` covers pure v2 Good/Bad, existing
+`tests/recovery/test_workspace_snapshot.py` covers both exact v2 tool/code pairs,
+rejects `PATH_DENIED` and mismatched pairs, and checks the existing
 Task lock and two-read scene checks. `tests/recovery/test_workspace_plan.py`
 checks both wire versions, Pydantic and JSON Schema refusal of missing proof
 or inherited-input mode. `tests/recovery/test_responses_terminal_public.py`

@@ -217,10 +217,10 @@ def validate_terminal_workspace_snapshot(
     completion_kind = "native_capture_stop"
     if synchronous_completion:
         error = final_route.result.error if final_route is not None else None
-        if (
-            error is not None
-            and error.message == "Responses tool request rejected: write_file/PARENT_NOT_FOUND"
-        ):
+        if error is not None and error.message in {
+            "Responses tool request rejected: write_file/PARENT_NOT_FOUND",
+            "Responses tool request rejected: read_file/NON_UTF8_FILE",
+        }:
             completion_kind = "responses_tool_refusal"
         elif error is not None and error.message == (
             "failed provider route left repository changes; "
