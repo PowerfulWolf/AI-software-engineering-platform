@@ -694,6 +694,24 @@ class RecoveryPlan(DomainModel):
                         },
                     },
                 },
+                {
+                    "if": {
+                        "required": ["workspace_snapshot", "inherited_reapply_inputs"],
+                        "properties": {
+                            "workspace_snapshot": {
+                                "required": ["completion_kind"],
+                                "properties": {
+                                    "completion_kind": {"const": "responses_tool_refusal"}
+                                },
+                            },
+                            "inherited_reapply_inputs": {"type": "array", "minItems": 1},
+                        },
+                    },
+                    "then": {
+                        "required": ["input_mode"],
+                        "properties": {"input_mode": {"const": "coder_reapply"}},
+                    },
+                },
             ]
         }
     )
@@ -809,6 +827,12 @@ class RecoveryPlan(DomainModel):
         if snapshot is None:
             return self
         snapshot.validate_integrity()
+        if (
+            snapshot.completion_kind == "responses_tool_refusal"
+            and self.inherited_reapply_inputs
+            and self.input_mode != "coder_reapply"
+        ):
+            raise ValueError("completed Responses refusal must reapply its inherited inputs")
         source, capture = self.source, self.capture
         if (
             snapshot.scope.team_id != source.scope.team_id

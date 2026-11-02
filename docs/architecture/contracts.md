@@ -1334,3 +1334,18 @@ and `.trellis/tasks/10-26-stopped-unknown-budget-recovery/` for refusals, tests,
 # 预 Context 容量恢复的工程决定（2026-10-28）
 
 恢复 Coder 在 Context 封存前遇到精确容量等待时，平台只接受当前 durable Console Operation 发起的 `SCHEDULE_RECOVERY_INPUT`。Operation 的 ID、intent SHA 和 RUNNING 记录 SHA 由服务端从同一 OperationStore 核验；可信 Host 提供具有 ENGINEERING 职责的主体。immutable `RecoveryInputScheduleDecision` 绑定原批准 Plan、Task intent、目标 Git revision、dispatch/seed/claim、原等待、三份完整来源和授权引用。SQL `WAIT_RESOLVED` 是激活分轮输入的必要事实，单独的 Schedule 文件没有执行权限。原 Task、attempt、预算、等待与 claim 历史保留；新 dispatch sequence 重新领取。独立 Coder progress/candidate、QA 和 Reviewer 仍使用原门禁。已消费的决定通过 Runtime 追加 `HumanActionEvent`，审计 URI 指向 immutable Schedule；崩溃重放不得重复记账或覆盖授权。完整边界见 `.trellis/spec/core/engineering-authority.md` 与 `persistent-work-queue.md`。
+### Completed Responses tool-refusal recovery
+
+A sealed, single Responses Coder route that returned
+`FAILED/POLICY_VIOLATION: write_file/PARENT_NOT_FOUND` has no native process
+`capture-stop`. The ordinary terminal recovery reader may bind its route
+completion instead only when the invocation outcome agrees, the original
+WorkItem is closed, no interruption receipt exists, and the sealed start
+inventory matches the full current no-follow inventory with an empty Git
+capture. `RecoveryWorkspaceSnapshot` v2 carries
+`completion_kind=responses_tool_refusal` and the final route SHA; v1 keeps the
+native stop SHA unchanged. An inherited full reapply patch requires
+`input_mode=coder_reapply` in the new exact Plan. Public Continue, independent
+approval, fresh Coder and QA/Review remain mandatory. See
+`.trellis/spec/core/delivery-recovery.md` for the signature, rejection matrix,
+test points and stock-data procedure.

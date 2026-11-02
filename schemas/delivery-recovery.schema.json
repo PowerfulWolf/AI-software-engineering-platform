@@ -928,6 +928,40 @@
               "input_mode"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "workspace_snapshot": {
+                "properties": {
+                  "completion_kind": {
+                    "const": "responses_tool_refusal"
+                  }
+                },
+                "required": [
+                  "completion_kind"
+                ]
+              },
+              "inherited_reapply_inputs": {
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "workspace_snapshot",
+              "inherited_reapply_inputs"
+            ]
+          },
+          "then": {
+            "properties": {
+              "input_mode": {
+                "const": "coder_reapply"
+              }
+            },
+            "required": [
+              "input_mode"
+            ]
+          }
         }
       ]
     },
@@ -1743,6 +1777,48 @@
     },
     "RecoveryWorkspaceSnapshot": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "completion_kind": {
+                "const": "native_capture_stop"
+              },
+              "synchronous_completion_sha256": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "capture_stop_sha256"
+            ]
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "v2"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "completion_kind": {
+                "const": "responses_tool_refusal"
+              },
+              "capture_stop_sha256": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "schema_version",
+              "completion_kind",
+              "synchronous_completion_sha256"
+            ]
+          }
+        }
+      ],
       "description": "A stopped terminal workspace audit, not progress, a verdict, or retry authority.",
       "properties": {
         "kind": {
@@ -1752,9 +1828,21 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "v1",
           "default": "v1",
+          "enum": [
+            "v1",
+            "v2"
+          ],
           "title": "Schema Version",
+          "type": "string"
+        },
+        "completion_kind": {
+          "default": "native_capture_stop",
+          "enum": [
+            "native_capture_stop",
+            "responses_tool_refusal"
+          ],
+          "title": "Completion Kind",
           "type": "string"
         },
         "scope": {
@@ -1829,9 +1917,30 @@
           "type": "string"
         },
         "capture_stop_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Capture Stop Sha256",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Stop Sha256"
+        },
+        "synchronous_completion_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Synchronous Completion Sha256"
         },
         "invocation_start_sha256": {
           "pattern": "^[a-f0-9]{64}$",
@@ -1913,7 +2022,6 @@
         "effective_capture_base",
         "capture_sha256",
         "capture_start_sha256",
-        "capture_stop_sha256",
         "invocation_start_sha256",
         "invocation_outcome_sha256",
         "claim_sha256",

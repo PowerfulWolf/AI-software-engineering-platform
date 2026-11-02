@@ -51,6 +51,7 @@ from ai_software_engineer.git.policy import is_protected_rule_path
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
 from ai_software_engineer.orchestration.continuation_models import (
+    ContinuationRecordMissing,
     ExecutionCaptureStart,
     ExecutionCaptureStop,
 )
@@ -108,7 +109,7 @@ class TerminalWorkspaceFacts:
     task_revision: int
     events: tuple[StateEvent, ...]
     start: ExecutionCaptureStart
-    stop: ExecutionCaptureStop
+    stop: ExecutionCaptureStop | None
     invocation_start: DeliveryInvocationStart
     invocation_outcome: DeliveryInvocationOutcome
     historical_claim: QueueClaim
@@ -195,9 +196,14 @@ def validate_terminal_workspace_snapshot(
     capture = CapturedChanges.model_validate(capture.to_wire())
     task = Task.model_validate(facts.task.to_wire())
     start = ExecutionCaptureStart.model_validate(facts.start.to_wire())
-    stop = ExecutionCaptureStop.model_validate(facts.stop.to_wire())
+    stop = (
+        ExecutionCaptureStop.model_validate(facts.stop.to_wire())
+        if facts.stop is not None
+        else None
+    )
     start.validate_integrity()
-    stop.validate_integrity()
+    if stop is not None:
+        stop.validate_integrity()
     invocation = DeliveryInvocationStart.model_validate(facts.invocation_start.to_wire())
     outcome = DeliveryInvocationOutcome.model_validate(facts.invocation_outcome.to_wire())
     invocation.validate_integrity()
@@ -206,6 +212,31 @@ def validate_terminal_workspace_snapshot(
     step = QueuedRoleStep.model_validate(facts.step.to_wire())
     item = QueuedWorkItem.model_validate(facts.current_item.to_wire())
     request, policy = start.request, task.interruption_continuation_policy
+    synchronous_refusal = stop is None
+    final_route = facts.routes[-1] if facts.routes else None
+    if synchronous_refusal:
+        _require(
+            len(facts.routes) == 1
+            and final_route is not None
+            and final_route.route_kind == "responses"
+            and final_route.outcome is RouteAttemptOutcome.FAILED
+            and final_route.result.status is AgentRunStatus.FAILED
+            and final_route.result.error is not None
+            and final_route.result.error.code.value == "POLICY_VIOLATION"
+            and final_route.result.error.message
+            == "Responses tool request rejected: write_file/PARENT_NOT_FOUND"
+            and not final_route.result.error.transient
+            and final_route.result == outcome.result
+            and start.inventory_before == observation.inventory_after
+            and not capture.patch
+            and not capture.files
+        )
+    if synchronous_refusal:
+        assert final_route is not None
+        stopped_at = final_route.completed_at
+    else:
+        assert stop is not None
+        stopped_at = stop.process_stop.stopped_at
     _capture_authority(source, request.permissions, permissions, denied_paths, scope_supplement)
     scope = RecoveryWorkspaceScope.model_validate(facts.scope.to_wire())
     _require(
@@ -241,10 +272,17 @@ def validate_terminal_workspace_snapshot(
         and scope.requirement_id == source.scope.delivery_id
         and scope.dispatch_sha256 == source.dispatch_sha256
         and start.scope.to_wire() == scope.to_wire()
-        and stop.task_id == task.id
-        and stop.run_id == request.run_id
-        and stop.capture_start_sha256 == start.start_sha256
-        and not stop.output_present
+        and (
+            synchronous_refusal
+            or (
+                stop is not None
+                and stop.task_id == task.id
+                and stop.run_id == request.run_id
+                and stop.capture_start_sha256 == start.start_sha256
+                and not stop.output_present
+                and stop.original_error_code is not None
+            )
+        )
         and outcome.start == invocation
         and invocation.request == request
         and outcome.result.status is not AgentRunStatus.SUCCEEDED
@@ -253,7 +291,6 @@ def validate_terminal_workspace_snapshot(
         # The original executor stop and the later admission failure are separate
         # facts. A real timeout can become POLICY_VIOLATION when sealing mutations.
         # Never rewrite either; the exact final route below authenticates outcome.
-        and stop.original_error_code is not None
     )
     recorded = start.claim
     if facts.claim_record_sha256 is not None:
@@ -311,7 +348,7 @@ def validate_terminal_workspace_snapshot(
         and terminal.source_revision == request.source_revision
         and terminal.occurred_at == task.updated_at
         and claim.claimed_at <= invocation.started_at <= start.started_at
-        and start.started_at <= stop.process_stop.stopped_at <= terminal.occurred_at
+        and start.started_at <= stopped_at <= terminal.occurred_at
         and terminal.occurred_at <= observation.observed_at
         and bool(facts.routes)
     )
@@ -353,7 +390,7 @@ def validate_terminal_workspace_snapshot(
         previous_route_time = route.completed_at
     _require(
         facts.routes[-1].result == outcome.result
-        and facts.routes[-1].completed_at >= stop.process_stop.stopped_at
+        and facts.routes[-1].completed_at >= stopped_at
         and capture.task_id == task.id
         and capture.attempt == 1
         and capture.worktree_path == start.worktree_path
@@ -404,7 +441,12 @@ def validate_terminal_workspace_snapshot(
         execution_baseline_sha256=source.execution_baseline_sha256,
         capture_sha256=capture.capture_sha256,
         capture_start_sha256=start.start_sha256,
-        capture_stop_sha256=stop.observation_sha256,
+        capture_stop_sha256=stop.observation_sha256 if stop is not None else None,
+        synchronous_completion_sha256=final_route.attempt_sha256
+        if synchronous_refusal and final_route
+        else None,
+        schema_version="v2" if synchronous_refusal else "v1",
+        completion_kind="responses_tool_refusal" if synchronous_refusal else "native_capture_stop",
         invocation_start_sha256=invocation.start_sha256,
         invocation_outcome_sha256=outcome.outcome_sha256,
         claim_sha256=digest(claim.to_wire())
@@ -427,7 +469,7 @@ def validate_terminal_workspace_snapshot(
             )
             for file in environment
         ),
-        stopped_at=stop.process_stop.stopped_at,
+        stopped_at=stopped_at,
         blocked_at=terminal.occurred_at,
         # Stable durable anchor: a fresh observation must validate the same plan,
         # rather than changing its digest merely because the clock advanced.
@@ -654,7 +696,6 @@ def _read_facts(
         sidecar / "state/continuations" / source.task_id, task_id=source.task_id
     )
     start = continuation.capture_start(source.failed_run_id)
-    stop = continuation.capture_stop(source.failed_run_id)
     invocation_root = sidecar / "state/invocations"
     _reject_symlinks(invocation_root)
     records = KnowledgeRecordStore(invocation_root, read_only=True)
@@ -663,6 +704,20 @@ def _read_facts(
         "invocation-outcomes", start.claim.work_item.id, DeliveryInvocationOutcome
     )
     routes = _read_routes(sidecar, source)
+    try:
+        stop = continuation.capture_stop(source.failed_run_id)
+    except ContinuationRecordMissing:
+        # A completed Responses refusal has no native process-group stop. The
+        # pure auditor below requires its exact route/outcome and unchanged
+        # workspace; all other missing-stop scenes still reject.
+        if any(
+            receipt.request.run_id == source.failed_run_id
+            for receipt in continuation.receipts_for_task(source.task_id)
+        ):
+            raise RecoveryRejected(
+                "terminal refusal conflicts with an interruption receipt"
+            ) from None
+        stop = None
     with (
         closing(open_mysql_connection(config.require_mysql_dsn(environment))) as connection,
         connection.cursor(DictCursor) as cursor,
@@ -715,7 +770,8 @@ def _read_routes(sidecar: Path, source: RecoverySource) -> tuple[ModelRouteAttem
 def _observe(
     git: GitWorktreeManager, facts: TerminalWorkspaceFacts, guard: WorkerExecutionGuard
 ) -> TerminalWorkspaceObservation:
-    NativeCoderContinuation._require_stopped(facts.stop.process_stop, facts.start.request)
+    if facts.stop is not None:
+        NativeCoderContinuation._require_stopped(facts.stop.process_stop, facts.start.request)
     root = Path(facts.start.worktree_path)
     inventory = capture_mutation_inventory(root)
     environment = tuple(file.path for file in inventory.files if file.path.startswith(".venv/"))
@@ -1040,7 +1096,10 @@ def read_terminal_workspace_snapshot(
                 )
                 == original
             )
-            NativeCoderContinuation._require_stopped(facts.stop.process_stop, facts.start.request)
+            if facts.stop is not None:
+                NativeCoderContinuation._require_stopped(
+                    facts.stop.process_stop, facts.start.request
+                )
             git.verify_capture(
                 capture.to_capture(), permissions, denied_paths=original.denied_paths
             )

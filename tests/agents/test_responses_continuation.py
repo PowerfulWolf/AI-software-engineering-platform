@@ -44,6 +44,7 @@ from ai_software_engineer.execution import (
 from ai_software_engineer.manager.production_delivery import ConfiguredDeliveryRouteAdapterFactory
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from ai_software_engineer.tools import PolicyBoundToolRegistry, ToolRequest, ToolResult
+from ai_software_engineer.tools.models import ToolRejectedResult
 from ai_software_engineer.work_queue.ports import QueueLeaseLost
 from tests.agents.test_openai_compatible import StaticPromptBuilder
 from tests.domain.factories import make_implementation_artifact
@@ -150,6 +151,45 @@ def _adapter(
         max_turns=max_turns,
         max_tool_calls=max_tool_calls,
     )
+
+
+def test_completed_write_refusal_leaves_real_failed_result_without_native_stop(
+    native: V2Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class OneRefusal:
+        def post(
+            self,
+            url: str,
+            headers: Mapping[str, str],
+            body: bytes,
+            timeout_seconds: float,
+        ) -> HttpResponse:
+            del url, headers, body, timeout_seconds
+            return _tools(_call("write_file", path="src/app.py", content="VALUE = 2\n"))
+
+    def rejected(registry: PolicyBoundToolRegistry, request: ToolRequest) -> ToolRejectedResult:
+        del registry
+        return ToolRejectedResult(
+            run_id=request.run_id,
+            role=request.role,
+            operation_id=request.operation_id,
+            tool="write_file",
+            error_code="PARENT_NOT_FOUND",
+            error_message="parent is unavailable",
+        )
+
+    monkeypatch.setattr(PolicyBoundToolRegistry, "execute", rejected)
+    result = _adapter(native, OneRefusal()).run(native.request)
+    assert result.status is AgentRunStatus.FAILED
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.POLICY_VIOLATION
+    assert result.error.message == "Responses tool request rejected: write_file/PARENT_NOT_FOUND"
+    assert native.store.capture_start(native.request.run_id).request == native.request
+    assert native.store.receipts_for_task(native.task.id) == ()
+    from ai_software_engineer.orchestration.continuation_models import ContinuationRecordMissing
+
+    with pytest.raises(ContinuationRecordMissing):
+        native.store.capture_stop(native.request.run_id)
 
 
 @pytest.mark.parametrize("kind", ["quota", "http", "timeout", "transport"])

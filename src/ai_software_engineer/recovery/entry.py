@@ -615,12 +615,21 @@ class NativeRecoveryEntry:
                     "--target-branch-name and a meaningful scope qualifier, "
                     "then approve the new plan"
                 )
+        inherited_inputs = self._inherited_inputs(original)
+        if (
+            workspace_snapshot is not None
+            and workspace_snapshot.completion_kind == "responses_tool_refusal"
+            and inherited_inputs
+        ):
+            # The refused Responses write left no new edits. The complete older
+            # approved patch is input for a fresh Coder, never a seeded draft.
+            input_mode = "coder_reapply"
         plan = RecoveryPlan.create(
             input_mode=input_mode,
             source=original.source,
             capture=captured,
             context_capacity_input=original.capacity_input,
-            inherited_reapply_inputs=self._inherited_inputs(original),
+            inherited_reapply_inputs=inherited_inputs,
             workspace_snapshot=workspace_snapshot,
             target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(repository_root)),
             target_preparation_sha256=prepared.preparation_sha256,

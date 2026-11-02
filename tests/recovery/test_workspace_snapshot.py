@@ -255,6 +255,134 @@ def test_terminal_audit_preserves_legal_patch_and_complete_ignored_environment(
     assert native.store.receipts_for_task(native.task.id) == ()
 
 
+def _completed_responses_refusal(native: Fixture) -> AuditFixture:
+    audit = _audit(native, environment=False)
+    root = native.worktree.path
+    (root / "src/app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    capture = CapturedChanges.from_capture(
+        native.git.capture_changes(
+            native.worktree, native.request.permissions, base_revision=native.task.base_ref
+        )
+    )
+    failed = AgentResult(
+        run_id=native.request.run_id,
+        task_id=native.request.task_id,
+        role=AgentRole.CODER,
+        attempt=native.request.attempt,
+        source_revision=native.request.source_revision,
+        context_manifest_id=native.request.context_manifest_id,
+        status=AgentRunStatus.FAILED,
+        error=AgentFailure(
+            code=AgentErrorCode.POLICY_VIOLATION,
+            message="Responses tool request rejected: write_file/PARENT_NOT_FOUND",
+            transient=False,
+        ),
+    )
+    outcome = DeliveryInvocationOutcome(
+        start=audit.facts.invocation_start, result=failed, outcome_sha256="0" * 64
+    )
+    outcome = outcome.model_copy(
+        update={
+            "outcome_sha256": digest(outcome.model_dump(mode="json", exclude={"outcome_sha256"}))
+        }
+    )
+    route = ModelRouteAttempt.create(
+        request=native.request,
+        route_index=1,
+        provider="codex",
+        model="gpt-6-sol",
+        route_kind="responses",
+        started_at=NOW,
+        completed_at=NOW + timedelta(seconds=1),
+        result=failed,
+        fallback=False,
+    )
+    return replace(
+        audit,
+        capture=capture,
+        facts=replace(
+            audit.facts,
+            stop=None,
+            invocation_outcome=outcome,
+            routes=(route,),
+        ),
+        observation=replace(audit.observation, inventory_after=capture_mutation_inventory(root)),
+    )
+
+
+def test_completed_responses_parent_refusal_can_bind_unchanged_terminal_scene(
+    native: Fixture,
+) -> None:
+    audit = _completed_responses_refusal(native)
+    assert audit.facts.start.inventory_before == audit.observation.inventory_after
+    assert not audit.capture.files and not audit.capture.patch
+    snapshot = audit.validate()
+    snapshot.validate_integrity()
+    assert snapshot.completion_kind == "responses_tool_refusal"
+    assert snapshot.capture_stop_sha256 is None
+    assert snapshot.synchronous_completion_sha256 == audit.facts.routes[-1].attempt_sha256
+
+
+@pytest.mark.parametrize("problem", ["wrong_route", "wrong_error", "changed_inventory"])
+def test_completed_responses_refusal_never_covers_unknown_or_changed_scene(
+    native: Fixture, problem: str
+) -> None:
+    audit = _completed_responses_refusal(native)
+    if problem == "wrong_route":
+        route = ModelRouteAttempt.create(
+            request=native.request,
+            route_index=1,
+            provider="codex",
+            model="gpt-6-sol",
+            route_kind="codex_cli",
+            started_at=NOW,
+            completed_at=NOW + timedelta(seconds=1),
+            result=audit.facts.invocation_outcome.result,
+            fallback=False,
+        )
+        audit = replace(audit, facts=replace(audit.facts, routes=(route,)))
+    elif problem == "wrong_error":
+        error = audit.facts.invocation_outcome.result.error
+        assert error is not None
+        result = audit.facts.invocation_outcome.result.model_copy(
+            update={"error": error.model_copy(update={"message": "unknown failure"})}
+        )
+        outcome = audit.facts.invocation_outcome.model_copy(update={"result": result})
+        outcome = outcome.model_copy(
+            update={
+                "outcome_sha256": digest(
+                    outcome.model_dump(mode="json", exclude={"outcome_sha256"})
+                )
+            }
+        )
+        route = ModelRouteAttempt.create(
+            request=native.request,
+            route_index=1,
+            provider="codex",
+            model="gpt-6-sol",
+            route_kind="responses",
+            started_at=NOW,
+            completed_at=NOW + timedelta(seconds=1),
+            result=result,
+            fallback=False,
+        )
+        audit = replace(
+            audit,
+            facts=replace(audit.facts, invocation_outcome=outcome, routes=(route,)),
+        )
+    else:
+        (native.worktree.path / "src/app.py").write_text("VALUE = 5\n", encoding="utf-8")
+        audit = replace(
+            audit,
+            observation=replace(
+                audit.observation,
+                inventory_after=capture_mutation_inventory(native.worktree.path),
+            ),
+        )
+    with pytest.raises((RecoveryRejected, ValueError)):
+        audit.validate()
+
+
 def test_inherited_legal_dirty_file_remains_in_recovery_capture(native: Fixture) -> None:
     audit = _audit(native, inherited=True)
     assert audit.facts.start.inventory_before != audit.observation.inventory_after
@@ -622,6 +750,18 @@ def test_outer_recovery_fence_audit_never_initializes_or_relocks_queue(
     before = lock.stat()
     snapshot = read_terminal_workspace_snapshot(config, {}, original, audit.capture)
     assert snapshot == audit.validate()
+    assert (lock.stat().st_dev, lock.stat().st_ino) == (before.st_dev, before.st_ino)
+
+
+def test_completed_responses_refusal_rechecks_source_and_scene_under_existing_lock(
+    native: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit = _completed_responses_refusal(native)
+    config, original, lock = _composition(audit, monkeypatch)
+    before = lock.stat()
+    snapshot = read_terminal_workspace_snapshot(config, {}, original, audit.capture)
+    assert snapshot == audit.validate()
+    assert snapshot is not None and snapshot.completion_kind == "responses_tool_refusal"
     assert (lock.stat().st_dev, lock.stat().st_ino) == (before.st_dev, before.st_ino)
 
 

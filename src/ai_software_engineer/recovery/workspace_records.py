@@ -11,6 +11,7 @@ from typing import Annotated, Literal, Self
 from pydantic import (
     AfterValidator,
     AwareDatetime,
+    ConfigDict,
     Field,
     StrictInt,
     StringConstraints,
@@ -94,8 +95,42 @@ class RecoveryExcludedPath(DomainModel):
 class RecoveryWorkspaceSnapshot(DomainModel):
     """A stopped terminal workspace audit, not progress, a verdict, or retry authority."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "required": ["schema_version"],
+                        "properties": {"schema_version": {"const": "v2"}},
+                    },
+                    "then": {
+                        "required": [
+                            "schema_version",
+                            "completion_kind",
+                            "synchronous_completion_sha256",
+                        ],
+                        "properties": {
+                            "completion_kind": {"const": "responses_tool_refusal"},
+                            "capture_stop_sha256": {"type": "null"},
+                        },
+                    },
+                    "else": {
+                        "required": ["capture_stop_sha256"],
+                        "properties": {
+                            "completion_kind": {"const": "native_capture_stop"},
+                            "synchronous_completion_sha256": {"type": "null"},
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
     kind: Literal["recovery_workspace_snapshot"] = "recovery_workspace_snapshot"
-    schema_version: Literal["v1"] = "v1"
+    schema_version: Literal["v1", "v2"] = "v1"
+    completion_kind: Literal["native_capture_stop", "responses_tool_refusal"] = Field(
+        default="native_capture_stop", exclude_if=lambda value: value == "native_capture_stop"
+    )
     scope: RecoveryWorkspaceScope
     task_id: TaskId
     task_revision: Annotated[StrictInt, Field(ge=1)]
@@ -111,7 +146,10 @@ class RecoveryWorkspaceSnapshot(DomainModel):
     )
     capture_sha256: Sha256
     capture_start_sha256: Sha256
-    capture_stop_sha256: Sha256
+    capture_stop_sha256: Sha256 | None = Field(default=None, exclude_if=lambda value: value is None)
+    synchronous_completion_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     invocation_start_sha256: Sha256
     invocation_outcome_sha256: Sha256
     claim_sha256: Sha256
@@ -150,6 +188,22 @@ class RecoveryWorkspaceSnapshot(DomainModel):
 
     @model_validator(mode="after")
     def complete_sorted_inventory(self) -> Self:
+        if (
+            self.schema_version == "v1"
+            and (
+                self.completion_kind != "native_capture_stop"
+                or self.capture_stop_sha256 is None
+                or self.synchronous_completion_sha256 is not None
+            )
+        ) or (
+            self.schema_version == "v2"
+            and (
+                self.completion_kind != "responses_tool_refusal"
+                or self.capture_stop_sha256 is not None
+                or self.synchronous_completion_sha256 is None
+            )
+        ):
+            raise ValueError("workspace completion proof does not match snapshot version")
         files = self.inventory_after.files
         paths = tuple(item.path for item in files)
         if (

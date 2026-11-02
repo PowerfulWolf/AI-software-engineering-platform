@@ -1,5 +1,6 @@
 """Exact plan binding and legacy compatibility for terminal workspace audits."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 
 from ai_software_engineer.git.mutation import WorkspaceMutationInventory
 from ai_software_engineer.recovery import RecoveryPlan
+from ai_software_engineer.recovery.models import InheritedReapplyInput
 from ai_software_engineer.recovery.workspace_records import (
     RecoveryWorkspaceScope,
     RecoveryWorkspaceSnapshot,
@@ -68,6 +70,87 @@ def test_terminal_snapshot_binds_exact_plan_and_schema(tmp_path: Path) -> None:
     )
     Draft202012Validator(schema, format_checker=FormatChecker()).validate(plan.to_wire())
     assert RecoveryPlan.model_validate(plan.to_wire()) == plan
+
+
+def test_synchronous_refusal_snapshot_requires_its_own_exact_completion_proof(
+    tmp_path: Path,
+) -> None:
+    old = make_plan(tmp_path / "project")
+    native = snapshot_for(old)
+    synchronous = RecoveryWorkspaceSnapshot.create(
+        **{
+            **native.to_wire(),
+            "schema_version": "v2",
+            "completion_kind": "responses_tool_refusal",
+            "capture_stop_sha256": None,
+            "synchronous_completion_sha256": "8" * 64,
+        }
+    )
+    plan = RecoveryPlan.create(**{**old.to_wire(), "workspace_snapshot": synchronous})
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/delivery-recovery.schema.json").read_text()
+    )
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    validator.validate(plan.to_wire())
+    assert RecoveryPlan.model_validate(plan.to_wire()) == plan
+    for missing in ("completion_kind", "synchronous_completion_sha256"):
+        changed = plan.to_wire()
+        changed["workspace_snapshot"].pop(missing)
+        assert list(validator.iter_errors(changed))
+    with pytest.raises(ValidationError):
+        RecoveryWorkspaceSnapshot.create(
+            **{
+                **native.to_wire(),
+                "schema_version": "v2",
+                "completion_kind": "responses_tool_refusal",
+                "synchronous_completion_sha256": "8" * 64,
+            }
+        )
+
+
+def test_synchronous_refusal_with_inherited_patch_requires_coder_reapply(
+    tmp_path: Path,
+) -> None:
+    old = make_plan(tmp_path / "project")
+    native = snapshot_for(old)
+    snapshot = RecoveryWorkspaceSnapshot.create(
+        **{
+            **native.to_wire(),
+            "schema_version": "v2",
+            "completion_kind": "responses_tool_refusal",
+            "capture_stop_sha256": None,
+            "synchronous_completion_sha256": "8" * 64,
+        }
+    )
+    origin_sha = "e" * 64
+    patch_sha = hashlib.sha256(b"").hexdigest()
+    inherited = InheritedReapplyInput(
+        origin_plan_sha256=origin_sha,
+        origin_task_id="task_recovery_" + origin_sha[:32],
+        origin_context_manifest_id="ctx_" + "d" * 64,
+        patch_uri=f"recovery://{origin_sha}/patch/{patch_sha}",
+        patch_sha256=patch_sha,
+        patch_bytes=0,
+        patch="",
+    )
+    values = {
+        **old.to_wire(),
+        "workspace_snapshot": snapshot,
+        "inherited_reapply_inputs": (inherited,),
+    }
+    with pytest.raises(ValidationError, match="inherited inputs"):
+        RecoveryPlan.create(**values)
+    plan = RecoveryPlan.create(**{**values, "input_mode": "coder_reapply"})
+    assert plan.inherited_reapply_inputs == (inherited,)
+    assert plan.input_mode == "coder_reapply"
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/delivery-recovery.schema.json").read_text()
+    )
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    validator.validate(plan.to_wire())
+    missing_mode = plan.to_wire()
+    missing_mode.pop("input_mode")
+    assert list(validator.iter_errors(missing_mode))
 
 
 def test_absent_snapshot_preserves_historical_plan_bytes_and_digest(tmp_path: Path) -> None:
