@@ -22,11 +22,13 @@ from ai_software_engineer.domain import (
     AgentPermissions,
     AgentRole,
     ArtifactKind,
+    ChangedFile,
+    ChangeType,
     NetworkAccess,
 )
 from tests.agents.test_openai_compatible import StaticPromptBuilder
 from tests.agents.test_responses import _git, _repository, _request
-from tests.domain.factories import make_qa_artifact
+from tests.domain.factories import make_coder_progress_artifact, make_qa_artifact
 
 
 def _qa(base: str) -> tuple[AgentRequest, AgentDefinition]:
@@ -200,6 +202,89 @@ def test_missing_allowed_file_is_returned_to_coder_without_policy_failure(
     assert result.error is not None
     assert result.error.code is not AgentErrorCode.POLICY_VIOLATION
     assert _git(root, "status", "--porcelain") == ""
+
+
+def test_responses_coder_creates_allowed_nested_module_and_returns_receipt(
+    tmp_path: Path,
+) -> None:
+    root, base = _repository(tmp_path)
+    request, definition = _request(base)
+    module = "src/ai_software_engineer/learning_collection/models.py"
+    template = make_coder_progress_artifact()
+    artifact = template.model_copy(
+        update={
+            "task_id": request.task_id,
+            "source_revision": base,
+            "context_manifest_id": request.context_manifest_id,
+            "parent_artifact_ids": request.input_artifact_ids,
+            "producer": template.producer.model_copy(update={"run_id": request.run_id}),
+            "content": template.content.model_copy(
+                update={
+                    "checkpoint_sequence": request.attempt,
+                    "changed_files": (
+                        ChangedFile(
+                            path=module,
+                            change=ChangeType.ADDED,
+                            lines_added=1,
+                            lines_deleted=0,
+                        ),
+                    ),
+                }
+            ),
+        }
+    )
+
+    class NewModule:
+        calls = 0
+
+        def post(
+            self,
+            url: str,
+            headers: Mapping[str, str],
+            body: bytes,
+            timeout_seconds: float,
+        ) -> HttpResponse:
+            del url, headers, timeout_seconds
+            self.calls += 1
+            if self.calls == 1:
+                return HttpResponse(
+                    status_code=200,
+                    body=json.dumps(
+                        {
+                            "output": [
+                                {
+                                    "type": "function_call",
+                                    "call_id": "call_nested_write",
+                                    "name": "write_file",
+                                    "arguments": json.dumps(
+                                        {"path": module, "content": "VALUE = 1\n"}
+                                    ),
+                                }
+                            ]
+                        }
+                    ).encode(),
+                )
+            payload = json.loads(body)
+            outputs = [
+                item
+                for item in payload["input"]
+                if isinstance(item, dict) and item.get("type") == "function_call_output"
+            ]
+            assert len(outputs) == 1
+            receipt = json.loads(outputs[0]["output"])
+            assert receipt["path"] == module and receipt["bytes_written"] == 10
+            return HttpResponse(
+                status_code=200,
+                body=json.dumps(
+                    {"output_text": json.dumps({"artifact": artifact.to_wire()})}
+                ).encode(),
+            )
+
+    provider = NewModule()
+    result = _adapter(root, definition, provider).run(request)
+    assert result.status is AgentRunStatus.SUCCEEDED
+    assert provider.calls == 2
+    assert (root / module).read_text() == "VALUE = 1\n"
 
 
 def test_qa_preflight_binding_failure_is_distinct_from_tool_denial(tmp_path: Path) -> None:

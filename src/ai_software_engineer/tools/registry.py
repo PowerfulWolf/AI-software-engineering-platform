@@ -1,9 +1,11 @@
 """Policy-bound tool registry used by Coder, QA, and Reviewer runs."""
 
+import errno
 import hashlib
 import os
+import secrets
 import stat
-import tempfile
+from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
@@ -149,41 +151,50 @@ class PolicyBoundToolRegistry:
         try:
             path = self._policy.authorize_write(request.path)
             self._authorize_role_write(path)
-            absolute = self._absolute(path)
-            parent = absolute.parent
-            if not parent.is_dir():
-                return self._rejected(
-                    request,
-                    "PARENT_NOT_FOUND",
-                    "parent directory does not exist",
-                )
             payload = request.content.encode("utf-8")
-            # mkstemp starts at 0600. Replacing a source file with that mode
-            # would lose executable bits and make a valid draft unresumable.
-            # File tools preserve regular permissions; new source defaults to
-            # 0644 regardless of the Host's umask, without acquiring special bits.
-            mode = (
-                stat.S_IMODE(absolute.stat(follow_symlinks=False).st_mode)
-                if absolute.exists()
-                else 0o644
-            )
-            if mode & 0o7000:
-                return self._rejected(
-                    request, "WRITE_DENIED", "special file permissions cannot be preserved"
-                )
-            # A same-directory temporary + replace prevents readers from seeing a
-            # partially written report and does not follow an existing target link.
-            fd, temporary_name = tempfile.mkstemp(prefix=".ase-tool-", dir=parent)
+            parent_fd = self._open_write_parent(path)
             try:
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(payload)
-                    os.fchmod(stream.fileno(), mode)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary_name, absolute)
+                try:
+                    existing = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    mode = 0o644
+                else:
+                    if not stat.S_ISREG(existing.st_mode):
+                        return self._rejected(
+                            request, "WRITE_DENIED", "target is not a regular file"
+                        )
+                    mode = stat.S_IMODE(existing.st_mode)
+                if mode & 0o7000:
+                    return self._rejected(
+                        request, "WRITE_DENIED", "special file permissions cannot be preserved"
+                    )
+                # A same-directory temporary + replace keeps readers from seeing
+                # partial writes. Directory descriptors prevent a parent link
+                # swap from moving either operation outside the role worktree.
+                temporary_name = f".ase-tool-{secrets.token_hex(16)}"
+                temporary_fd = os.open(
+                    temporary_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+                try:
+                    with os.fdopen(temporary_fd, "wb") as stream:
+                        stream.write(payload)
+                        os.fchmod(stream.fileno(), mode)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(
+                        temporary_name,
+                        path.name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                finally:
+                    with suppress(FileNotFoundError):
+                        os.unlink(temporary_name, dir_fd=parent_fd)
             finally:
-                if os.path.exists(temporary_name):
-                    os.unlink(temporary_name)
+                os.close(parent_fd)
         except WorkspacePolicyError as error:
             return self._rejected(request, "PATH_DENIED", str(error))
         except PermissionError:
@@ -198,6 +209,31 @@ class PolicyBoundToolRegistry:
             content_sha256=hashlib.sha256(payload).hexdigest(),
             bytes_written=len(payload),
         )
+
+    def _open_write_parent(self, path: PurePosixPath) -> int:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        directory_fd = os.open(self._workspace_root, flags)
+        try:
+            for component in path.parts[:-1]:
+                try:
+                    try:
+                        child_fd = os.open(component, flags, dir_fd=directory_fd)
+                    except FileNotFoundError:
+                        with suppress(FileExistsError):
+                            os.mkdir(component, mode=0o755, dir_fd=directory_fd)
+                        child_fd = os.open(component, flags, dir_fd=directory_fd)
+                except OSError as error:
+                    if error.errno in {errno.ELOOP, errno.ENOTDIR}:
+                        raise PathPolicyViolation(
+                            "write path parent is linked or not a directory"
+                        ) from error
+                    raise
+                os.close(directory_fd)
+                directory_fd = child_fd
+            return directory_fd
+        except BaseException:
+            os.close(directory_fd)
+            raise
 
     def _run_command(self, request: RunCommandRequest) -> ToolResult:
         if Path(request.argv[0]).name.lower() in _SHELL_EXECUTABLES:

@@ -151,6 +151,111 @@ def test_coder_can_read_write_and_run_allowlisted_command(tmp_path: Path) -> Non
     assert fake.calls == [("pytest", "tests/unit", "-q")]
 
 
+def test_coder_write_creates_only_authorized_nested_parent(tmp_path: Path) -> None:
+    registry = PolicyBoundToolRegistry(tmp_path, _agent(AgentRole.CODER))
+    target = tmp_path / "src/ai_software_engineer/learning_collection/models.py"
+
+    result = registry.execute(
+        WriteFileRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.CODER,
+            operation_id="tool.new-module",
+            path="src/ai_software_engineer/learning_collection/models.py",
+            content="VALUE = 1\n",
+        )
+    )
+
+    assert isinstance(result, WriteFileResult)
+    assert target.read_text(encoding="utf-8") == "VALUE = 1\n"
+    assert result.content_sha256 == hashlib.sha256(b"VALUE = 1\n").hexdigest()
+
+
+def test_qa_can_create_nested_test_but_not_source_parent(tmp_path: Path) -> None:
+    registry = PolicyBoundToolRegistry(tmp_path, _agent(AgentRole.QA))
+    allowed = registry.execute(
+        WriteFileRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.QA,
+            operation_id="tool.test-module",
+            path="tests/learning_collection/test_models.py",
+            content="def test_model(): pass\n",
+        )
+    )
+    denied = registry.execute(
+        WriteFileRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.QA,
+            operation_id="tool.source-module",
+            path="src/learning_collection/models.py",
+            content="VALUE = 1\n",
+        )
+    )
+    assert isinstance(allowed, WriteFileResult)
+    assert isinstance(denied, ToolRejectedResult) and denied.error_code == "PATH_DENIED"
+    assert (tmp_path / "tests/learning_collection/test_models.py").is_file()
+    assert not (tmp_path / "src").exists()
+
+
+def test_denied_nested_write_creates_no_parent(tmp_path: Path) -> None:
+    registry = PolicyBoundToolRegistry(
+        tmp_path,
+        _agent(AgentRole.CODER),
+        denied_paths=("src/blocked/**",),
+    )
+    result = registry.execute(
+        WriteFileRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.CODER,
+            operation_id="tool.denied-module",
+            path="src/blocked/package/models.py",
+            content="VALUE = 1\n",
+        )
+    )
+    assert isinstance(result, ToolRejectedResult) and result.error_code == "PATH_DENIED"
+    assert not (tmp_path / "src").exists()
+
+
+def test_nested_write_refuses_linked_and_nondirectory_parent(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "actual").mkdir()
+    (tmp_path / "src/link").symlink_to(tmp_path / "actual", target_is_directory=True)
+    (tmp_path / "src/file").write_text("ordinary file\n")
+    registry = PolicyBoundToolRegistry(tmp_path, _agent(AgentRole.CODER))
+
+    for parent in ("link", "file"):
+        result = registry.execute(
+            WriteFileRequest(
+                run_id="run_tool_registry_001",
+                role=AgentRole.CODER,
+                operation_id=f"tool.{parent}-module",
+                path=f"src/{parent}/models.py",
+                content="VALUE = 1\n",
+            )
+        )
+        assert isinstance(result, ToolRejectedResult) and result.error_code == "PATH_DENIED"
+    assert not (tmp_path / "actual/models.py").exists()
+
+
+def test_write_refuses_existing_link_target(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    original = tmp_path / "src/original.py"
+    original.write_text("VALUE = 1\n")
+    (tmp_path / "src/linked.py").symlink_to(original)
+    registry = PolicyBoundToolRegistry(tmp_path, _agent(AgentRole.CODER))
+    result = registry.execute(
+        WriteFileRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.CODER,
+            operation_id="tool.link-target",
+            path="src/linked.py",
+            content="VALUE = 2\n",
+        )
+    )
+    assert isinstance(result, ToolRejectedResult) and result.error_code == "WRITE_DENIED"
+    assert original.read_text() == "VALUE = 1\n"
+    assert (tmp_path / "src/linked.py").is_symlink()
+
+
 def test_registry_returns_typed_rejection_for_shell_or_denied_paths(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     registry = PolicyBoundToolRegistry(

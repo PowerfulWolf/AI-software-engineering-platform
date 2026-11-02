@@ -148,6 +148,10 @@ T024 将 Agent 与目标项目之间的操作收敛为三个 typed tools：`read
 path，命令是 tokenized `argv` 数组。不存在自由文本 `exec` 或 `shell` 字段，registry 也会拒绝
 `sh`/`bash` 等解释器。
 
+授权写入一个新文件时，`write_file` 可以在角色 worktree 内建立该文件缺失的父目录；
+授权仍只针对精确目标路径，不能借此创建越权文件、跟随父目录符号链接或修改受保护规则。
+已有文件保持原子替换和常规权限位。旧 Run 的拒绝不会因工具升级而自动重试。
+
 `PolicyBoundToolRegistry` 在创建时绑定一个 `AgentDefinition`、role worktree、可选 run ID 和
 `WorkspacePolicy`。调用先做 identity、路径或命令授权，再执行：
 

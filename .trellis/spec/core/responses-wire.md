@@ -8,7 +8,9 @@ Reference: https://developers.openai.com/api/docs/guides/structured-outputs#supp
 ## 2. Signatures
 
 `_request_body(...) -> bytes`, `_artifact_schema(role) -> dict[str, object]`,
-`_decode_artifact_output(content: str) -> Artifact`, `http_error_detail(body: bytes, api_key: str) -> str`.
+`_decode_artifact_output(content: str) -> Artifact`, `http_error_detail(body: bytes, api_key: str) -> str`,
+`PolicyBoundToolRegistry._write_file(request: WriteFileRequest) -> ToolResult`,
+`PolicyBoundToolRegistry._open_write_parent(path: PurePosixPath) -> int`.
 No domain Artifact Schema or persisted Task/verdict contract changes.
 
 ## 3. Contracts
@@ -19,6 +21,13 @@ No domain Artifact Schema or persisted Task/verdict contract changes.
   includes the original messages, all prior assistant output items (including opaque reasoning),
   and exact `function_call_output` receipts. Only new calls execute; historical outputs are context,
   not another tool dispatch. Output cannot introduce system/user instruction roles.
+- An authorized `write_file` target may be a new file below absent parent directories. The
+  registry creates only those parents under the role worktree after exact target/role policy
+  validation; every component is opened relative to a directory descriptor without following
+  symlinks. A linked, non-directory or protected parent is refused. Existing regular-file mode
+  and atomic replacement remain intact. A typed write receipt proves the file write, not a
+  verdict. A previously consumed `PARENT_NOT_FOUND` Run remains failed and needs a new exact
+  recovery decision; a platform release never replays it.
 - Strict response roots are objects. The provider envelope is exactly `{"artifact": ...}`;
   Coder's progress/implementation union lives below this object, never at the root.
 - QA's optional free-form `content.environment` is a JSON-encoded object string (or null) on the
@@ -83,6 +92,8 @@ No domain Artifact Schema or persisted Task/verdict contract changes.
 | HTTP 400 with structured message | MODEL_PROVIDER_ERROR and safe detail; no blind fallback |
 | Raw/non-JSON response body | Generic bounded message, never raw body |
 | QA tool request denied by machine policy | Nontransient POLICY_VIOLATION with `tool kind/allowlisted refusal code`; no command or file operation starts, no QA artifact |
+| Authorized nested new source/test file with absent parent | Create bounded parents in the role worktree and return a normal write receipt |
+| Missing parent is a symlink/non-directory or target is a symlink | Refuse; no write through the link or outside the role worktree |
 | Request/worktree binding or final Git check rejects | Distinct constant POLICY_VIOLATION cause; no raw exception/path, no QA artifact |
 | Unknown tool refusal code | `UNCLASSIFIED` in the diagnostic, never the untrusted code |
 | CLI semantic report error | Fixed rule code plus existing type/root/hash; no private values |
@@ -114,6 +125,11 @@ Shared structured-model/diagnostic tests must continue to pass after extracting 
 immutable v2 stores and claim fixtures, with only HTTP/time ports scripted. It covers dirty
 provider failures, exact stop/source/operation binding, same-branch fresh continuation,
 deadline caps and budget attribution, forbidden fallback, policy refusal and execution uncertainty.
+`tests/tools/test_registry.py` asserts authorized nested Coder/QA writes create only in-worktree
+parents and typed receipts, while denied paths, linked parents, non-directory parents and linked
+targets cannot be written. `tests/agents/test_responses_boundary_diagnostics.py` sends an actual
+Responses `write_file` call to an absent allowed parent, checks the next turn receives the exact
+write receipt, and accepts a valid Coder progress artifact.
 `tests/agents/test_http_deadline.py` uses a real loopback HTTP server: success/error body drip,
 status/header drip, normal responses, body byte bounds, exact endpoint redirect and invalid
 window rejection. This verifies transport behavior without a production provider.
@@ -130,5 +146,9 @@ free-form QA dict sent directly to strict API; swallowing AgentRunFailed as unkn
 
 Correct: normalize every tool schema; use a closed artifact envelope and adapter-only metadata
 codec; run unchanged domain validation; retain safe typed failure detail through Console.
+
+Nested-write Good: an approved `src/pkg/new/models.py` succeeds while only `src/pkg/` exists.
+Base: an existing regular file preserves mode after atomic replacement. Bad: a parent symlink or
+denied `tests/**` alias is followed, or a historical failed Run is replayed after deployment.
 
 Conversation reference: https://developers.openai.com/api/docs/guides/conversation-state
