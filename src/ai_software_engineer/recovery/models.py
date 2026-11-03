@@ -720,7 +720,10 @@ class RecoveryPlan(DomainModel):
                                 "required": ["completion_kind"],
                                 "properties": {
                                     "completion_kind": {
-                                        "const": "responses_workspace_policy_failure"
+                                        "enum": [
+                                            "responses_workspace_policy_failure",
+                                            "responses_write_path_refusal",
+                                        ]
                                     }
                                 },
                             },
@@ -854,12 +857,14 @@ class RecoveryPlan(DomainModel):
         if snapshot is None:
             return self
         snapshot.validate_integrity()
-        if snapshot.completion_kind == "responses_workspace_policy_failure" and (
-            not self.capture.patch or not self.capture.files
-        ):
+        if snapshot.completion_kind in {
+            "responses_workspace_policy_failure",
+            "responses_write_path_refusal",
+        } and (not self.capture.patch or not self.capture.files):
             raise ValueError("completed Responses workspace failure requires its lawful patch")
         if (
-            snapshot.completion_kind == "responses_workspace_policy_failure"
+            snapshot.completion_kind
+            in {"responses_workspace_policy_failure", "responses_write_path_refusal"}
             or (
                 snapshot.completion_kind == "responses_tool_refusal"
                 and self.inherited_reapply_inputs

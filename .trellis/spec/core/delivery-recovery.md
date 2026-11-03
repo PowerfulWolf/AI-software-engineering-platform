@@ -4041,6 +4041,52 @@ An old K1 Coder start-only UNKNOWN fact and a manual collect-only command are
 not QA verdicts or proof that the current verifier ran.
 # Completed synchronous Responses tool-refusal recovery (2026-11-03)
 
+## Completed Responses write-path refusal with preexisting legal draft (2026-11-03)
+
+`RecoveryWorkspaceSnapshot` v4 has `completion_kind="responses_write_path_refusal"`. It is
+available only for an exact completed, single Responses Coder route and matching invocation
+outcome `FAILED/POLICY_VIOLATION` with fixed message
+`Responses tool request rejected: write_file/PATH_DENIED`. No raw refused path was persisted, so
+the snapshot does **not** declare that attempted write authorized or that its refusal was a
+false positive. The original refusal, Run, route and Task stay immutable.
+
+`validate_terminal_workspace_snapshot(...)` requires the existing Task lock, closed claim and
+terminal Task/event, no capture-stop or interruption receipt, exact route completion SHA and time,
+the same complete inventory at original Run start and current observation, no ignored environment,
+and a nonempty complete Git capture consisting only of paths allowed by the frozen Coder grant.
+It rechecks the same scene twice, including Task/queue/source and symlink boundaries. Any
+post-start mutation, missing route/outcome, extra route, changed claim or inventory, excluded
+environment, or unauthorized captured file refuses proposal. It does not invoke a model or
+repair the old result.
+
+| Terminal input | Public Continue result |
+| --- | --- |
+| One exact `write_file/PATH_DENIED` final route, matching outcome, unchanged nonempty lawful draft | Seal v4 snapshot and propose a new `coder_reapply` Plan |
+| The same failure with an empty worktree, changed inventory, excluded environment or a denied captured path | Reject the v4 source; keep the old Task and files |
+| Missing final route/outcome, additional route, open claim or mismatched Task/source | Reject before Plan creation; do not infer a stop or refund |
+
+The public same-Requirement Continue may propose a new `RecoveryPlan` only after these checks.
+`input_mode=coder_reapply` is required and carries the full old lawful draft plus inherited
+patches into a new Task. A separate exact engineering approval authorizes that Task. Its Coder
+uses current policy; QA and Reviewer remain independent and candidate-bound. A new `write_file`
+request still undergoes the Task allowlist, role guard and no-follow checks. Public errors remain
+bounded as `POLICY_VIOLATION` and do not expose the refused path.
+
+Good: a completed `PATH_DENIED` Run with three preexisting approved test files and unchanged
+inventory produces v4 and a new reapply Plan. Base: existing v1–v3 snapshots retain their exact
+wire and digests. Bad: post-start edits, denied captured paths, missing outcome or a request to
+replay the failed Run are refused. `tests/tools/test_registry.py`,
+`tests/recovery/test_workspace_snapshot.py`, `tests/recovery/test_workspace_plan.py` and the
+isolated public recovery fixture cover these boundaries. Regenerate the static
+`schemas/delivery-recovery.schema.json` through `scripts/sync-recovery-workspace-schema.py`.
+
+Existing K1 facts need no SQL or artifact migration. First sync the joint parent through public
+Continue so its child-history ancestor check is current. After a tested release and controlled
+restart, read the exact terminal scene, use public Continue for the new Plan, review the complete
+reapply and target source, approve it independently, then observe fresh Responses Coder, QA and
+Review. Rollback before new approval restores the prior platform binary; after append-only facts
+exist, keep them and repair forward.
+
 ## Scope and signatures
 
 This branch applies only to a terminal modern Coder Task whose single final

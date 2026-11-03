@@ -223,6 +223,10 @@ def validate_terminal_workspace_snapshot(
         }:
             completion_kind = "responses_tool_refusal"
         elif error is not None and error.message == (
+            "Responses tool request rejected: write_file/PATH_DENIED"
+        ):
+            completion_kind = "responses_write_path_refusal"
+        elif error is not None and error.message == (
             "failed provider route left repository changes; "
             "provider_diagnostic=Responses workspace policy validation rejected"
         ):
@@ -244,6 +248,13 @@ def validate_terminal_workspace_snapshot(
                     and start.inventory_before == observation.inventory_after
                     and not capture.patch
                     and not capture.files
+                )
+                or (
+                    completion_kind == "responses_write_path_refusal"
+                    and start.inventory_before == observation.inventory_after
+                    and bool(capture.patch)
+                    and bool(capture.files)
+                    and not observation.ignored_paths
                 )
                 or (
                     completion_kind == "responses_workspace_policy_failure"
@@ -472,6 +483,8 @@ def validate_terminal_workspace_snapshot(
         schema_version=(
             "v3"
             if completion_kind == "responses_workspace_policy_failure"
+            else "v4"
+            if completion_kind == "responses_write_path_refusal"
             else "v2"
             if synchronous_completion
             else "v1"

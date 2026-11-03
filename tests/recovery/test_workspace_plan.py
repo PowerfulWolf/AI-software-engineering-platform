@@ -229,6 +229,61 @@ def test_responses_workspace_failure_requires_reapply_even_without_inheritance(
     assert list(validator.iter_errors(missing_mode))
 
 
+def test_responses_path_refusal_with_prior_draft_requires_reapply_and_exact_schema(
+    tmp_path: Path,
+) -> None:
+    old = make_plan(tmp_path / "project")
+    capture = CapturedChanges.from_capture(
+        replace(
+            old.capture.to_capture(),
+            patch=b"diff --git a/src/example.py b/src/example.py\n",
+            file_sha256s=(("src/example.py", "b" * 64),),
+        )
+    )
+    inventory = WorkspaceMutationInventory(
+        files=(
+            MutationFile(path="src/example.py", kind="file", sha256="b" * 64, mode=0o644, size=1),
+        )
+    )
+    native = snapshot_for(old)
+    snapshot = RecoveryWorkspaceSnapshot.create(
+        **{
+            **native.to_wire(),
+            "schema_version": "v4",
+            "completion_kind": "responses_write_path_refusal",
+            "capture_stop_sha256": None,
+            "synchronous_completion_sha256": "8" * 64,
+            "capture_sha256": capture.capture_sha256,
+            "inventory_before_sha256": inventory.sha256,
+            "inventory_after": inventory,
+            "inventory_after_sha256": inventory.sha256,
+        }
+    )
+    with pytest.raises(ValidationError, match="reapply"):
+        RecoveryPlan.create(**{**old.to_wire(), "capture": capture, "workspace_snapshot": snapshot})
+    plan = RecoveryPlan.create(
+        **{
+            **old.to_wire(),
+            "capture": capture,
+            "workspace_snapshot": snapshot,
+            "input_mode": "coder_reapply",
+        }
+    )
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/delivery-recovery.schema.json").read_text()
+    )
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    assert not list(validator.iter_errors(plan.to_wire()))
+    missing_mode = plan.to_wire()
+    missing_mode.pop("input_mode")
+    assert list(validator.iter_errors(missing_mode))
+    wrong_proof = plan.to_wire()
+    wrong_proof["workspace_snapshot"]["excluded_paths"] = [
+        {"path": ".venv/pyvenv.cfg", "kind": "file", "sha256": "a" * 64, "mode": 420, "size": 1}
+    ]
+    assert list(validator.iter_errors(wrong_proof))
+
+
 def test_absent_snapshot_preserves_historical_plan_bytes_and_digest(tmp_path: Path) -> None:
     old = make_plan(tmp_path / "project")
     wire = old.to_wire()

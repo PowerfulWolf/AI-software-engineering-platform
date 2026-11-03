@@ -350,6 +350,63 @@ def _completed_responses_workspace_failure(native: Fixture) -> AuditFixture:
     )
 
 
+def _completed_responses_path_refusal(native: Fixture) -> AuditFixture:
+    audit = _audit(native, inherited=True, environment=False)
+    result = audit.facts.invocation_outcome.result.model_copy(
+        update={
+            "error": AgentFailure(
+                code=AgentErrorCode.POLICY_VIOLATION,
+                message="Responses tool request rejected: write_file/PATH_DENIED",
+                transient=False,
+            )
+        }
+    )
+    outcome = audit.facts.invocation_outcome.model_copy(update={"result": result})
+    outcome = outcome.model_copy(
+        update={
+            "outcome_sha256": digest(outcome.model_dump(mode="json", exclude={"outcome_sha256"}))
+        }
+    )
+    route = ModelRouteAttempt.create(
+        request=native.request,
+        route_index=1,
+        provider="codex",
+        model="gpt-6-sol",
+        route_kind="responses",
+        started_at=NOW,
+        completed_at=NOW + timedelta(seconds=1),
+        result=result,
+        fallback=False,
+    )
+    return replace(
+        audit, facts=replace(audit.facts, stop=None, invocation_outcome=outcome, routes=(route,))
+    )
+
+
+def test_completed_responses_path_refusal_preserves_prior_legal_draft(native: Fixture) -> None:
+    audit = _completed_responses_path_refusal(native)
+    assert audit.facts.start.inventory_before == audit.observation.inventory_after
+    assert audit.capture.files and audit.capture.patch
+    snapshot = audit.validate()
+    assert snapshot.schema_version == "v4"
+    assert snapshot.completion_kind == "responses_write_path_refusal"
+    assert snapshot.capture_stop_sha256 is None
+    assert snapshot.synchronous_completion_sha256 == audit.facts.routes[-1].attempt_sha256
+
+
+def test_completed_responses_path_refusal_rejects_post_start_mutation(native: Fixture) -> None:
+    audit = _completed_responses_path_refusal(native)
+    (native.worktree.path / "src/app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    with pytest.raises(RecoveryRejected):
+        replace(
+            audit,
+            observation=replace(
+                audit.observation,
+                inventory_after=capture_mutation_inventory(native.worktree.path),
+            ),
+        ).validate()
+
+
 def test_completed_responses_workspace_failure_retains_only_lawful_patch(native: Fixture) -> None:
     audit = _completed_responses_workspace_failure(native)
     snapshot = audit.validate()
@@ -441,6 +498,7 @@ def test_completed_responses_refusal_can_bind_unchanged_terminal_scene(
 @pytest.mark.parametrize(
     "message",
     [
+        "Responses tool request rejected: write_file/PATH_DENIED",
         "Responses tool request rejected: read_file/PATH_DENIED",
         "Responses tool request rejected: read_file/PARENT_NOT_FOUND",
         "Responses tool request rejected: write_file/NON_UTF8_FILE",

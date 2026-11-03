@@ -1732,7 +1732,7 @@ fail closed，且没有把组织元数据写进目标代码目录。
 | Tampered JSON, digest, filename or manifest references | store read/seal validation | `EvidenceCorruption`/`RunEvidenceConflict`; no partial result |
 | Test references another run's command | `record_test` | `EvidenceCaptureError` |
 | Tool request role/run differs from bound registry | `PolicyBoundToolRegistry.execute` | `ToolRequestIdentityMismatch`; do not execute |
-| Path traversal, `.trellis`, artifact/state/verdict/report path | `WorkspacePolicy` plus role guard | typed `PATH_DENIED` rejection |
+| Path traversal, `.trellis`, reserved root artifact/state/verdict/report output | `WorkspacePolicy` plus role guard | typed `PATH_DENIED` rejection |
 | QA write outside `tests/**`; Reviewer write anywhere | role guard | typed `PATH_DENIED` rejection |
 | shell interpreter or unallowlisted argv | `WorkspacePolicy.authorize_command` | typed `COMMAND_DENIED` rejection; no shell invocation |
 | non-UTF-8 read or oversized file/output | bounded read/decode | typed rejection or truncated result with explicit marker |

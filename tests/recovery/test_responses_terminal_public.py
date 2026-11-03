@@ -4,15 +4,28 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 import ai_software_engineer.manager.production_delivery as production_delivery
-from ai_software_engineer.agents import AgentErrorCode, HttpResponse, ResponsesAgentAdapter
+from ai_software_engineer.agents import (
+    AgentErrorCode,
+    AgentRequest,
+    AgentResult,
+    HttpResponse,
+    ResponsesAgentAdapter,
+)
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
-from ai_software_engineer.domain import AgentRole, TaskStatus
+from ai_software_engineer.domain import (
+    AgentDefinition,
+    AgentRole,
+    ChangedFile,
+    ChangeType,
+    TaskStatus,
+)
 from ai_software_engineer.git import WorkspacePolicyError
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
@@ -27,8 +40,9 @@ from ai_software_engineer.recovery.resume import DeliveryResumeOutcome, Delivery
 from ai_software_engineer.recovery.seed import RecoverySeedService
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.tools import PolicyBoundToolRegistry, ToolRequest
-from ai_software_engineer.tools.models import ToolRejectedResult
+from ai_software_engineer.tools.models import ToolRejectedResult, ToolResult, WriteFileRequest
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationOutcome
+from tests.domain.factories import make_coder_progress_artifact
 from tests.git.test_worktree import _git
 from tests.recovery import facts_window_fixture
 from tests.recovery.facts_window_fixture import modern_failed_native_fixture
@@ -130,7 +144,21 @@ def _refused_write(registry: PolicyBoundToolRegistry, request: ToolRequest) -> T
     )
 
 
-@pytest.mark.parametrize("failure_mode", ["refusal", "workspace"])
+def _refused_path(registry: PolicyBoundToolRegistry, request: ToolRequest) -> ToolResult:
+    assert isinstance(request, WriteFileRequest)
+    if request.path == "feature.txt":
+        return _real_tool_execute(registry, request)
+    return ToolRejectedResult(
+        run_id=request.run_id,
+        role=request.role,
+        operation_id=request.operation_id,
+        tool="write_file",
+        error_code="PATH_DENIED",
+        error_message="fixture reproduces the completed denied write",
+    )
+
+
+@pytest.mark.parametrize("failure_mode", ["refusal", "workspace", "path"])
 def test_public_continue_reapplies_inherited_patch_after_completed_responses_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_mode: str
 ) -> None:
@@ -170,11 +198,103 @@ def test_public_continue_reapplies_inherited_patch_after_completed_responses_fai
         )
         real_adapter = production_delivery.ResponsesAgentAdapter
 
-        def refused_adapter(**kwargs: object) -> ResponsesAgentAdapter:
+        class ProgressTransport:
+            def __init__(self, agent: AgentDefinition) -> None:
+                self.agent = agent
+                self.request: AgentRequest | None = None
+                self.calls = 0
+
+            def post(
+                self, url: str, headers: Mapping[str, str], body: bytes, timeout_seconds: float
+            ) -> HttpResponse:
+                del url, headers, body, timeout_seconds
+                self.calls += 1
+                if self.calls == 1:
+                    return HttpResponse(
+                        status_code=200,
+                        body=json.dumps(
+                            {
+                                "output": [
+                                    {
+                                        "type": "function_call",
+                                        "call_id": "call_progress_write",
+                                        "name": "write_file",
+                                        "arguments": json.dumps(
+                                            {"path": "feature.txt", "content": "PARTIAL = True\n"}
+                                        ),
+                                    }
+                                ]
+                            }
+                        ).encode(),
+                    )
+                assert self.request is not None
+                request = self.request
+                template = make_coder_progress_artifact()
+                assert request.work_slice is not None
+                progress = template.model_copy(
+                    update={
+                        "task_id": request.task_id,
+                        "source_revision": request.source_revision,
+                        "context_manifest_id": request.context_manifest_id,
+                        "created_at": datetime.now(UTC),
+                        "parent_artifact_ids": request.input_artifact_ids,
+                        "producer": template.producer.model_copy(
+                            update={
+                                "run_id": request.run_id,
+                                "agent_id": self.agent.id,
+                                "agent_version": self.agent.version,
+                            }
+                        ),
+                        "content": template.content.model_copy(
+                            update={
+                                "checkpoint_sequence": request.attempt,
+                                "changed_files": (
+                                    ChangedFile(
+                                        path="feature.txt",
+                                        change=ChangeType.ADDED,
+                                        lines_added=1,
+                                        lines_deleted=0,
+                                    ),
+                                ),
+                                "completed_step_ids": (),
+                                "remaining_step_ids": request.work_slice.selected_step_ids,
+                                "tests_run": (),
+                                "next_actions": ("Complete the remaining source edit.",),
+                            }
+                        ),
+                    }
+                )
+                return HttpResponse(
+                    status_code=200,
+                    body=json.dumps(
+                        {"output_text": json.dumps({"artifact": progress.to_wire()})}
+                    ).encode(),
+                )
+
+        class ProgressAdapter:
+            def __init__(
+                self, adapter: ResponsesAgentAdapter, transport: ProgressTransport
+            ) -> None:
+                self.adapter, self.transport = adapter, transport
+
+            def run(self, request: AgentRequest) -> AgentResult:
+                self.transport.request = request
+                return self.adapter.run(request)
+
+        adapter_count = 0
+
+        def refused_adapter(**kwargs: object) -> object:
+            nonlocal adapter_count
+            adapter_count += 1
+            if failure_mode == "path" and adapter_count == 1:
+                agent = kwargs["agent"]
+                assert isinstance(agent, AgentDefinition)
+                transport = ProgressTransport(agent)
+                return ProgressAdapter(real_adapter(**kwargs, transport=transport), transport)
             return real_adapter(
                 **kwargs,
                 transport=_RefuseFirstWrite()
-                if failure_mode == "refusal"
+                if failure_mode in {"refusal", "path"}
                 else _WriteThenHistoricalUv(),
             )
 
@@ -183,7 +303,11 @@ def test_public_continue_reapplies_inherited_patch_after_completed_responses_fai
             refusal.setattr(
                 PolicyBoundToolRegistry,
                 "execute",
-                _refused_write if failure_mode == "refusal" else _historical_uv_wrote_environment,
+                _refused_write
+                if failure_mode == "refusal"
+                else _refused_path
+                if failure_mode == "path"
+                else _historical_uv_wrote_environment,
             )
             first_result = first_host.resume_delivery(
                 ResumeProjectDelivery(
@@ -206,8 +330,8 @@ def test_public_continue_reapplies_inherited_patch_after_completed_responses_fai
             for item in routes.list_for_run(run_dir.name)
             if item.task_id == failed_task.id and item.role is AgentRole.CODER
         ]
-        assert len(matching) == 1
-        failed_route = matching[0]
+        assert len(matching) == (2 if failure_mode == "path" else 1)
+        failed_route = next(item for item in matching if item.result.error is not None)
         assert failed_route.route_kind == "responses"
         assert failed_route.result.error is not None
         assert failed_route.result.error.code is AgentErrorCode.POLICY_VIOLATION
@@ -228,7 +352,9 @@ def test_public_continue_reapplies_inherited_patch_after_completed_responses_fai
             ResumeProjectDelivery(delivery_id=old.source.scope.delivery_id)
         )
         assert isinstance(proposed, DeliveryResumeResult)
-        assert proposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
+        assert proposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED, (
+            proposed.next_action
+        )
         assert proposed.recovery_plan_file is not None
         second_entry = second_host.recovery_entry()
         _, second_plan = second_entry.open_plan(Path(proposed.recovery_plan_file))
@@ -237,6 +363,8 @@ def test_public_continue_reapplies_inherited_patch_after_completed_responses_fai
             "responses_tool_refusal"
             if failure_mode == "refusal"
             else "responses_workspace_policy_failure"
+            if failure_mode == "workspace"
+            else "responses_write_path_refusal"
         )
         if failure_mode == "workspace":
             assert second_plan.workspace_snapshot.schema_version == "v3"
@@ -244,6 +372,12 @@ def test_public_continue_reapplies_inherited_patch_after_completed_responses_fai
             assert {item.path for item in second_plan.workspace_snapshot.excluded_paths} == {
                 ".venv/pyvenv.cfg"
             }
+        if failure_mode == "path":
+            assert second_plan.workspace_snapshot.schema_version == "v4"
+            assert second_plan.workspace_snapshot.inventory_before_sha256 == (
+                second_plan.workspace_snapshot.inventory_after_sha256
+            )
+            assert {item.path for item in second_plan.capture.files} == {"feature.txt"}
         assert second_plan.input_mode == "coder_reapply"
         assert len(second_plan.inherited_reapply_inputs or ()) == 1
         assert second_plan.inherited_reapply_inputs[0].patch == first_plan.capture.patch

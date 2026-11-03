@@ -1,7 +1,6 @@
 """Role isolation and fail-closed behavior of the policy-bound tool registry."""
 
 import hashlib
-import os
 import stat
 import sys
 from pathlib import Path
@@ -20,6 +19,7 @@ from ai_software_engineer.execution import (
     CommandResult,
     SubprocessCommandExecutor,
 )
+from ai_software_engineer.owned_processes import OwnedProcessesUncertain, OwnedProcessObservation
 from ai_software_engineer.tools import (
     PolicyBoundToolRegistry,
     ReadFileRequest,
@@ -227,6 +227,58 @@ def test_coder_write_creates_only_authorized_nested_parent(tmp_path: Path) -> No
     assert isinstance(result, WriteFileResult)
     assert target.read_text(encoding="utf-8") == "VALUE = 1\n"
     assert result.content_sha256 == hashlib.sha256(b"VALUE = 1\n").hexdigest()
+
+
+def test_approved_source_module_named_artifacts_is_writable(tmp_path: Path) -> None:
+    path = "src/ai_software_engineer/artifacts/accepted.py"
+    agent = _agent(AgentRole.CODER)
+    agent = agent.model_copy(
+        update={"permissions": agent.permissions.model_copy(update={"write_paths": (path,)})}
+    )
+    registry = PolicyBoundToolRegistry(tmp_path, agent)
+
+    result = registry.execute(
+        WriteFileRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.CODER,
+            operation_id="tool.approved-source-module",
+            path=path,
+            content="VALUE = 1\n",
+        )
+    )
+
+    assert isinstance(result, WriteFileResult)
+    assert (tmp_path / path).read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "artifacts/qa-report.json",
+        "ArtIfacts/qa-report.json",
+        "state/task.json",
+        "verdict/approval.json",
+        "src/qa-report.json",
+    ],
+)
+def test_role_cannot_write_delivery_fact_outputs_even_with_broad_grant(
+    tmp_path: Path, path: str
+) -> None:
+    registry = PolicyBoundToolRegistry(tmp_path, _agent(AgentRole.CODER, broad_write=True))
+
+    result = registry.execute(
+        WriteFileRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.CODER,
+            operation_id="tool.protected-output",
+            path=path,
+            content="{}",
+        )
+    )
+
+    assert isinstance(result, ToolRejectedResult)
+    assert result.error_code == "PATH_DENIED"
+    assert not (tmp_path / path).exists()
 
 
 def test_qa_can_create_nested_test_but_not_source_parent(tmp_path: Path) -> None:
@@ -452,18 +504,16 @@ def test_real_command_uncertain_stop_is_not_converted_to_tool_rejection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Start and reap a real command, then simulate inability to inspect the
-    # owned group. No live fixture child is left behind by the injected fault.
-    original_killpg = os.killpg
-    observed: list[int] = []
+    # Start and reap a real command, then inject the ownership boundary's
+    # explicit uncertainty. The runner must not turn it into a tool rejection.
+    observed: list[OwnedProcessObservation] = []
 
-    def unknown_group(pid: int, sig: int) -> None:
-        if sig == 0:
-            observed.append(pid)
-            raise PermissionError("cannot inspect owned group")
-        original_killpg(pid, sig)
+    def uncertain_stop(self: OwnedProcessObservation, *, timeout_seconds: float = 1.0) -> None:
+        del timeout_seconds
+        observed.append(self)
+        raise OwnedProcessesUncertain("complete owned-session observation unavailable")
 
-    monkeypatch.setattr("ai_software_engineer.execution.os.killpg", unknown_group)
+    monkeypatch.setattr(OwnedProcessObservation, "stop_session", uncertain_stop)
     agent = _agent(AgentRole.CODER).model_copy(
         update={
             "permissions": _agent(AgentRole.CODER).permissions.model_copy(
@@ -475,7 +525,9 @@ def test_real_command_uncertain_stop_is_not_converted_to_tool_rejection(
     )
     executor = SubprocessCommandExecutor(tmp_path, agent.permissions)
     registry = PolicyBoundToolRegistry(tmp_path, agent, command_executor=executor)
-    with pytest.raises(CommandExecutionUncertain, match="group state is unknown"):
+    with pytest.raises(
+        CommandExecutionUncertain, match="owned command session stop remains unknown"
+    ):
         registry.execute(
             RunCommandRequest(
                 run_id="run_tool_registry_001",

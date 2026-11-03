@@ -1354,3 +1354,12 @@ native stop SHA unchanged. An inherited full reapply patch requires
 approval, fresh Coder and QA/Review remain mandatory. See
 `.trellis/spec/core/delivery-recovery.md` for the signature, rejection matrix,
 test points and stock-data procedure.
+
+An exact completed `write_file/PATH_DENIED` Responses Coder route with a complete, unchanged
+start/current inventory and a lawful preexisting draft can bind a distinct v4
+`responses_write_path_refusal` snapshot. It never approves the refused request or claims its
+unrecorded path was allowed. The public same-Requirement RecoveryPlan must use
+`coder_reapply`, retain the full draft and inherited patches, and receive a separate engineering
+decision before a new Task runs. Source modules named `artifacts` remain writable only if the
+Task explicitly grants their paths; role-owned artifact/state/verdict outputs and Trellis remain
+protected. The old Run and policy failure stay immutable.

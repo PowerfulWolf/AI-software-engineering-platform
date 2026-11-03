@@ -136,7 +136,25 @@ class RecoveryWorkspaceSnapshot(DomainModel):
                 {
                     "if": {
                         "required": ["schema_version"],
-                        "properties": {"schema_version": {"enum": ["v2", "v3"]}},
+                        "properties": {"schema_version": {"const": "v4"}},
+                    },
+                    "then": {
+                        "required": [
+                            "schema_version",
+                            "completion_kind",
+                            "synchronous_completion_sha256",
+                        ],
+                        "properties": {
+                            "completion_kind": {"const": "responses_write_path_refusal"},
+                            "capture_stop_sha256": {"type": "null"},
+                            "excluded_paths": {"type": "array", "maxItems": 0},
+                        },
+                    },
+                },
+                {
+                    "if": {
+                        "required": ["schema_version"],
+                        "properties": {"schema_version": {"enum": ["v2", "v3", "v4"]}},
                     },
                     "else": {
                         "required": ["capture_stop_sha256"],
@@ -151,9 +169,12 @@ class RecoveryWorkspaceSnapshot(DomainModel):
     )
 
     kind: Literal["recovery_workspace_snapshot"] = "recovery_workspace_snapshot"
-    schema_version: Literal["v1", "v2", "v3"] = "v1"
+    schema_version: Literal["v1", "v2", "v3", "v4"] = "v1"
     completion_kind: Literal[
-        "native_capture_stop", "responses_tool_refusal", "responses_workspace_policy_failure"
+        "native_capture_stop",
+        "responses_tool_refusal",
+        "responses_workspace_policy_failure",
+        "responses_write_path_refusal",
     ] = Field(
         default="native_capture_stop", exclude_if=lambda value: value == "native_capture_stop"
     )
@@ -239,6 +260,16 @@ class RecoveryWorkspaceSnapshot(DomainModel):
                     or self.synchronous_completion_sha256 is None
                     or not self.excluded_paths
                     or self.inventory_before_sha256 == self.inventory_after_sha256
+                )
+            )
+            or (
+                self.schema_version == "v4"
+                and (
+                    self.completion_kind != "responses_write_path_refusal"
+                    or self.capture_stop_sha256 is not None
+                    or self.synchronous_completion_sha256 is None
+                    or self.excluded_paths
+                    or self.inventory_before_sha256 != self.inventory_after_sha256
                 )
             )
         ):

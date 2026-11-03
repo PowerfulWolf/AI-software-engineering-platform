@@ -280,11 +280,22 @@ class PolicyBoundToolRegistry:
             raise PathPolicyViolation("reviewer has no repository write capability")
         if self._agent.role is AgentRole.QA and (not path.parts or path.parts[0] != "tests"):
             raise PathPolicyViolation("qa may write only under tests/")
-        if any(
-            part == ".trellis"
-            or part in {"artifacts", "state", "verdict"}
-            or "report" in part.lower()
-            for part in path.parts
+        # Artifact/state/verdict stores live outside source packages. A package
+        # such as src/.../artifacts is ordinary code when the Task grants it.
+        reserved_root = path.parts[0].casefold() in {
+            "artifacts",
+            "state",
+            "verdict",
+            "reports",
+        }
+        report_output = "report" in path.name.casefold() and path.suffix.casefold() in {
+            ".json",
+            ".md",
+        }
+        if (
+            any(part.casefold() == ".trellis" for part in path.parts)
+            or reserved_root
+            or report_output
         ):
             raise PathPolicyViolation("role tools cannot modify policy, artifact, or verdict files")
 

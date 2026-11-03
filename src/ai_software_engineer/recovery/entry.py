@@ -617,7 +617,8 @@ class NativeRecoveryEntry:
                 )
         inherited_inputs = self._inherited_inputs(original)
         if workspace_snapshot is not None and (
-            workspace_snapshot.completion_kind == "responses_workspace_policy_failure"
+            workspace_snapshot.completion_kind
+            in {"responses_workspace_policy_failure", "responses_write_path_refusal"}
             or (workspace_snapshot.completion_kind == "responses_tool_refusal" and inherited_inputs)
         ):
             # Synchronous Responses failure has no native stop. Keep its exact

@@ -28,6 +28,12 @@ No domain Artifact Schema or persisted Task/verdict contract changes.
   and atomic replacement remain intact. A typed write receipt proves the file write, not a
   verdict. A previously consumed `PARENT_NOT_FOUND` Run remains failed and needs a new exact
   recovery decision; a platform release never replays it.
+- The role guard reserves root `artifacts/`, `state/`, `verdict/`, `reports/`, any `.trellis`
+  component and JSON/Markdown report output filenames. An explicitly granted source package such
+  as `src/ai_software_engineer/artifacts/accepted.py` is code, not a delivery Artifact store;
+  `WorkspacePolicy` still enforces its Task write allowlist and denies. QA and Reviewer retain
+  their independent write restrictions. An old `write_file/PATH_DENIED` result remains failed
+  even if this guard is corrected; it never becomes a successful tool receipt.
 - Strict response roots are objects. The provider envelope is exactly `{"artifact": ...}`;
   Coder's progress/implementation union lives below this object, never at the root.
 - QA's optional free-form `content.environment` is a JSON-encoded object string (or null) on the
