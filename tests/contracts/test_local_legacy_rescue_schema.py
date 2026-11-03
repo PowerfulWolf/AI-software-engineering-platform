@@ -28,7 +28,11 @@ def validator(name: str, model: str) -> Draft202012Validator:
 @pytest.mark.parametrize(
     "name",
     [
+        "baseline-invocation-proof.schema.json",
+        "baseline-quiescence-proof.schema.json",
+        "console-deletion-cleanup.schema.json",
         "console-operation.schema.json",
+        "contained-unknown-budget-settlement.schema.json",
         "execution-baseline-plan.schema.json",
         "execution-baseline-queue-consumption.schema.json",
     ],
@@ -70,6 +74,37 @@ def test_published_containment_matches_both_real_methods_and_refuses_missing_sur
     active_survey = cast(dict[str, object], active["local_execution_survey"])
     active_survey["blockers"] = ["CODEX_EXECUTION_ACTIVE"]
     assert not check.is_valid(active)
+
+    response_claim = local.original_claim.model_copy(
+        update={
+            "model_selection": local.original_claim.model_selection.model_copy(
+                update={"route_kind": "responses"}
+            )
+        }
+    )
+    responses = LegacyExecutionContainment.create(
+        **local.model_dump(mode="python", exclude={"containment_sha256", "original_claim"}),
+        original_claim=response_claim,
+    )
+    assert check.is_valid(responses.to_wire())
+    for field, replacement in (("method", "os_reboot"), ("local_execution_survey", None)):
+        invalid = responses.to_wire()
+        invalid[field] = replacement
+        assert not check.is_valid(invalid), (name, field)
+    missing_method = responses.to_wire()
+    missing_method.pop("method")
+    assert not check.is_valid(missing_method), name
+    for route in (None, "unknown"):
+        invalid = responses.to_wire()
+        claim_wire = cast(dict[str, object], invalid["original_claim"])
+        selection_wire = cast(dict[str, object], claim_wire["model_selection"])
+        selection_wire["route_kind"] = route
+        assert not check.is_valid(invalid), (name, route)
+    missing_route = responses.to_wire()
+    claim_wire = cast(dict[str, object], missing_route["original_claim"])
+    selection_wire = cast(dict[str, object], claim_wire["model_selection"])
+    selection_wire.pop("route_kind")
+    assert not check.is_valid(missing_route), name
 
 
 def test_static_console_confirmation_fields_are_exclusive_and_only_true() -> None:

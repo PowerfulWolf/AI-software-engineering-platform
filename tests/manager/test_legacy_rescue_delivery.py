@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from ai_software_engineer.agents import (
     AgentRequest,
     AgentResult,
     AgentRunStatus,
+    HttpResponse,
     StructuredModelResult,
 )
 from ai_software_engineer.agents.codex_cli import (
@@ -34,6 +36,7 @@ from ai_software_engineer.agents.fallback import (
     ModelRouteAttempt,
     model_route_root,
 )
+from ai_software_engineer.agents.responses import ResponsesAgentAdapter
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import FileContextStore
@@ -72,6 +75,7 @@ from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, Stage
 from ai_software_engineer.evaluation import FileEvaluationEventStore, HumanAction, HumanActionEvent
 from ai_software_engineer.execution import SubprocessCommandExecutor
 from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
+from ai_software_engineer.git.mutation import WorkspaceMutationInventory, capture_mutation_inventory
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager import production_backend, production_delivery
 from ai_software_engineer.manager.baseline_production import (
@@ -96,6 +100,10 @@ from ai_software_engineer.manager.local_survey_observation import (
     IsolatedLegacyLocalExecutionObserver,
 )
 from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.orchestration.continuation_models import (
+    ContinuationScope,
+    ExecutionCaptureStart,
+)
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.runtime import _default_case_id
 from ai_software_engineer.store import MySqlTaskRepository
@@ -136,15 +144,17 @@ from tests.manager.test_production_continuation_v2 import DESIRED, _progress, _R
         "local_stop",
         "first_checkpoint",
         "ignored_source",
+        "responses_route",
     ),
     [
-        (False, False, False, False, False),
-        (False, True, False, False, False),
-        (True, False, False, False, False),
-        (False, False, True, False, False),
-        (False, True, True, False, False),
-        (False, False, True, True, False),
-        (False, False, True, False, True),
+        (False, False, False, False, False, False),
+        (False, True, False, False, False, False),
+        (True, False, False, False, False, False),
+        (False, False, True, False, False, False),
+        (False, True, True, False, False, False),
+        (False, False, True, True, False, False),
+        (False, False, True, False, True, False),
+        (False, False, True, True, False, True),
     ],
 )
 def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
@@ -156,6 +166,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     local_stop: bool,
     first_checkpoint: bool,
     ignored_source: bool,
+    responses_route: bool,
 ) -> None:
     pause_rescue = local_stop and not crash_before_consumption and not sealed_final
     repository = tmp_path / "target"
@@ -173,6 +184,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     expected_binding: str | None = None
     expected_epoch: NativeRuleEpoch | None = None
     first_progress_id: str | None = None
+    unknown_inventory_before: WorkspaceMutationInventory | None = None
     retained_path = "src/artifacts/accepted.py"
     retained_body = "VALUE = 42\n"
     original_complete = _ScriptedStructuredClient.complete
@@ -448,7 +460,78 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
             results.append(result)
             return result
 
+    class ObservedResponses(ResponsesAgentAdapter):
+        def run(self, request: AgentRequest) -> AgentResult:
+            nonlocal unknown_inventory_before
+            if request.role is AgentRole.CODER and request.attempt == 2:
+                cwd = self._workspace_root
+                record_call(self, request, cwd)
+                assert request.continuation_checkpoint_id == first_progress_id
+                assert (cwd / "hello.txt").read_text() == "first retained draft\n"
+                unknown_inventory_before = capture_mutation_inventory(cwd)
+                # A genuine local child finishes its write, then the old
+                # synchronous invocation disappears before recording a final.
+                with subprocess.Popen(
+                    (
+                        sys.executable,
+                        "-c",
+                        "from pathlib import Path; "
+                        "Path('hello.txt').write_text('unknown retained draft\\n')",
+                    ),
+                    cwd=cwd,
+                    env={"PATH": os.environ.get("PATH", os.defpath)},
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                ) as process:
+                    assert process.wait(timeout=5) == 0
+                raise ContinuationExecutionUncertain("fixture: Responses start has no final result")
+
+            # All accepted roles use the real Responses adapter boundary. The
+            # fixture transport is local and supplies role-specific JSON.
+            self._agent_id = self._agent.id
+            self._agent_version = self._agent.version
+            adapter = self
+
+            class FixtureTransport:
+                calls = 0
+
+                def post(
+                    self,
+                    url: str,
+                    headers: Mapping[str, str],
+                    body: bytes,
+                    timeout_seconds: float,
+                ) -> HttpResponse:
+                    del url, headers, body, timeout_seconds
+                    self.calls += 1
+                    output_path = tmp_path / f"response-output-{request.run_id}.json"
+                    outcome = Runner(adapter, request).run(
+                        ("--output-last-message", str(output_path)),
+                        cwd=adapter._workspace_root,
+                        environment=environment,
+                        stdin="",
+                        timeout_seconds=request.timeout_seconds,
+                    )
+                    assert outcome.returncode == 0
+                    return HttpResponse(
+                        status_code=200,
+                        body=json.dumps(
+                            {
+                                "output_text": json.dumps(
+                                    {"artifact": json.loads(output_path.read_text())}
+                                )
+                            }
+                        ).encode(),
+                    )
+
+            self._transport = FixtureTransport()
+            result = super().run(request)
+            results.append(result)
+            return result
+
     monkeypatch.setattr(production_delivery, "CodexCliAgentAdapter", ObservedCodex)
+    monkeypatch.setattr(production_delivery, "ResponsesAgentAdapter", ObservedResponses)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
         default_project_id="project_test",
@@ -456,13 +539,22 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         live_model_execution=True,
         model_routes=(
             ProviderRouteConfig(
-                provider="codex", model="gpt-primary", kind=ModelProviderKind.CODEX_CLI
+                provider="codex",
+                model="gpt-primary",
+                kind=(
+                    ModelProviderKind.RESPONSES
+                    if responses_route
+                    else ModelProviderKind.CODEX_CLI
+                ),
+                endpoint="https://example.invalid/responses" if responses_route else None,
+                api_key_env="ASE_FIXTURE_API_KEY" if responses_route else None,
             ),
         ),
         execution_retry_policy=ExecutionRetryPolicy(coder=StageRetryPolicy(max_attempts=4)),
     )
     environment = {
         "ASE_MYSQL_DSN": mysql_dsn,
+        "ASE_FIXTURE_API_KEY": "fixture-key",
         "PATH": os.environ.get("PATH", os.defpath),
         "GIT_AUTHOR_NAME": "ASE Fixture",
         "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
@@ -494,6 +586,9 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert len(calls) == 2, pending.failure_summary
     first, unknown = calls
     assert first.workspace == unknown.workspace and first.branch == unknown.branch
+    expected_route = "responses" if responses_route else "codex_cli"
+    assert first.claim.model_selection.route_kind == expected_route
+    assert unknown.claim.model_selection.route_kind == expected_route
     sidecar = host.projects()[0].root / "repositories" / pending.repository_id
     records = KnowledgeRecordStore(sidecar / "state/invocations", read_only=True)
     original_start = records.get(
@@ -520,8 +615,8 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         path: path.read_bytes() for path in (sidecar / "artifacts").rglob("*.json")
     }
     capture_root = sidecar / "state/continuations" / pending.task_id
-    assert not (capture_root / f"capture-start-{unknown.request.run_id}.json").exists()
-    assert not (capture_root / f"capture-stop-{unknown.request.run_id}.json").exists()
+    capture_start_path = capture_root / f"capture-start-{unknown.request.run_id}.json"
+    original_capture_start_bytes: bytes | None = None
     with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
         frozen = tasks.get(pending.task_id)
         revision = tasks.current_revision(pending.task_id)
@@ -536,6 +631,34 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         WorkItemStatus.WAITING_HUMAN,
     ), pending.failure_summary
     assert frozen.attempts == frozen.work_attempt == 2 and not frozen.retry_failures
+    if responses_route:
+        assert unknown_inventory_before is not None
+        policy = frozen.interruption_continuation_policy
+        assert policy is not None
+        capture_start = ExecutionCaptureStart.create(
+            scope=ContinuationScope(
+                team_id=config.team_id,
+                project_id="project_test",
+                repository_id=pending.repository_id,
+                requirement_id=pending.delivery_id,
+                dispatch_sha256=host.work_queue.step_for_invocation(
+                    waiting.id, None
+                ).allocation_sha256,
+            ),
+            request=unknown.request,
+            claim=unknown.claim,
+            task_intent_sha256=task_intent_sha256(frozen),
+            task_revision=original_start.checkpoint_sequence,
+            policy_sha256=policy.policy_sha256,
+            worktree_path=str(unknown.workspace),
+            inventory_before=unknown_inventory_before,
+            started_at=original_start.started_at,
+        )
+        continuations.put_capture_start(capture_start)
+        original_capture_start_bytes = capture_start_path.read_bytes()
+    else:
+        assert not capture_start_path.exists()
+    assert not (capture_root / f"capture-stop-{unknown.request.run_id}.json").exists()
     original_bytes = {path: path.read_bytes() for path in (sidecar / "policy").rglob("*.json")}
     workspace_bytes = {
         path.relative_to(unknown.workspace): path.read_bytes()
@@ -730,7 +853,6 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert proposed is not None and proposed.status is ConsoleOperationStatus.SUCCEEDED, proposed
     assert proposed.result is not None and proposed.result.execution_baseline_plan is not None
     plan = proposed.result.execution_baseline_plan
-    import json
 
     def validate_schema(value: object, name: str) -> None:
         schema = json.loads((Path(__file__).parents[2] / "schemas" / name).read_text())
@@ -893,6 +1015,9 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert _git_output("branch", "--show-current", cwd=unknown.workspace) == unknown.branch
     assert records.get("invocation-starts", waiting.id, DeliveryInvocationStart) == original_start
     assert records.find("invocation-outcomes", waiting.id, DeliveryInvocationOutcome) is None
+    if responses_route:
+        assert capture_start_path.read_bytes() == original_capture_start_bytes
+        assert not (capture_root / f"capture-stop-{unknown.request.run_id}.json").exists()
     assert continuations.receipts_for_task(frozen.id) == first_receipts
     assert not routes.list_for_run(unknown.request.run_id)
     # Full subsequent collection must still accept the independently disposed
@@ -1022,6 +1147,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         host.continue_execution_baseline(continue_command, project_id="project_test")
     delivered = service.status(pending.delivery_id).checkpoint
     assert delivered.stage is DeliveryStage.DONE, delivered.failure_summary
+    assert all(call.claim.model_selection.route_kind == expected_route for call in calls)
     assert [call.request.role for call in calls] == [
         AgentRole.CODER,
         AgentRole.CODER,
@@ -1068,6 +1194,9 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
     assert pending.preparation_sha256 == delivered.preparation_sha256
     assert records.get("invocation-starts", waiting.id, DeliveryInvocationStart) == original_start
     assert records.find("invocation-outcomes", waiting.id, DeliveryInvocationOutcome) is None
+    if responses_route:
+        assert capture_start_path.read_bytes() == original_capture_start_bytes
+        assert not (capture_root / f"capture-stop-{unknown.request.run_id}.json").exists()
     assert continuations.receipts_for_task(frozen.id) == first_receipts
     baseline_store = FileExecutionBaselineStore(
         sidecar / "state/execution-baselines" / frozen.id, read_only=True

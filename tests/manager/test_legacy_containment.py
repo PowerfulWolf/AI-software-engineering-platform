@@ -66,6 +66,7 @@ from ai_software_engineer.recovery import CapturedChanges, FileRecoveryStore, Re
 from ai_software_engineer.recovery.bounded_input import complete_reapply_source_refs
 from ai_software_engineer.recovery.models import digest
 from ai_software_engineer.recovery.records import RecoverySeedRecord
+from ai_software_engineer.work_queue.claim_snapshot import OriginalClaimRecord
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
 from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
@@ -171,6 +172,9 @@ def legacy_fixture(
         def original_claim(self, lease_id: str) -> QueueClaim:
             assert lease_id == claim.lease.id
             return claim
+
+        def original_claim_record(self, lease_id: str) -> OriginalClaimRecord:
+            return OriginalClaimRecord(self.original_claim(lease_id), has_immutable_snapshot=True)
 
         def claims_for_work_item(self, identity: str) -> tuple[QueueClaim, ...]:
             assert identity == item.id
@@ -951,7 +955,7 @@ def test_non_native_or_unrecorded_route_cannot_use_boot_containment(
     claim = claim.model_copy(
         update={"model_selection": claim.model_selection.model_copy(update={"route_kind": route})}
     )
-    with pytest.raises(ValueError, match="本机 Coder"):
+    with pytest.raises(ValueError, match=r"本机 Coder|工程停止确认"):
         LegacyExecutionContainment.create(
             **containment.model_dump(
                 mode="python", exclude={"original_claim", "containment_sha256"}
@@ -1274,6 +1278,101 @@ def test_local_operator_prerequisite_can_use_the_existing_boot_without_faking_ol
     assert value.original_start == original.original_start
     assert "process_stop" not in value.to_wire()
     assert "outcome" not in value.to_wire()
+
+
+@pytest.mark.parametrize("later_boot", [False, True])
+def test_responses_start_only_requires_local_survey_and_operator_stop_declaration(
+    tmp_path: Path,
+    later_boot: bool,
+) -> None:
+    collector, task, item, original = legacy_fixture(tmp_path)
+    claim = original.original_claim.model_copy(
+        update={
+            "model_selection": original.original_claim.model_selection.model_copy(
+                update={"route_kind": "responses"}
+            )
+        }
+    )
+    boot = original.boot.model_copy(
+        update={
+            "booted_at": STARTED + timedelta(days=1) if later_boot else STARTED - timedelta(days=1)
+        }
+    )
+    survey = LegacyLocalExecutionSurvey.create(
+        worktree_path=str(tmp_path.resolve()),
+        machine_sha256=boot.machine_sha256,
+        boot_session_sha256=boot.boot_session_sha256,
+        account_sha256="c" * 64,
+        observed_at=STARTED + timedelta(days=1),
+        scanner_version="local-execution-v1",
+        blockers=(),
+    )
+    collector.queue.original_claim = Mock(return_value=claim)
+    collector.observer = Mock(observe=Mock(return_value=boot))
+    collector.local_execution_observer = Mock(observe=Mock(return_value=survey))
+    collector._sealed_legacy_observation = None
+    value = collector._legacy_containment(task, item)
+    value.validate_integrity()
+    assert value.original_claim.model_selection.route_kind == "responses"
+    assert value.method == "operator_confirmed_local_stop"
+    assert value.local_execution_survey == survey
+    assert "process_stop" not in value.to_wire()
+    assert "outcome" not in value.to_wire()
+    (proof,) = collector._invocations(task, (item,), (), (), legacy=value)
+    assert proof.proof_kind == "legacy_execution_contained"
+    assert proof.outcome_sha256 is None and proof.interruption_receipt_sha256 is None
+    reservation = collector._reservation(task, item, (), legacy=value)
+    assert reservation.retry_cause == "legacy_execution_abandoned"
+    assert reservation.next_execution_attempt == task.attempts + 1
+    assert reservation.current_invocation_outcome_sha256 is None
+    assert reservation.interruption_receipt_sha256 is None
+    request = value.original_start.request
+    failed = AgentResult(
+        run_id=request.run_id,
+        task_id=request.task_id,
+        role=request.role,
+        attempt=request.attempt,
+        source_revision=request.source_revision,
+        context_manifest_id=request.context_manifest_id,
+        status=AgentRunStatus.FAILED,
+        error=AgentFailure(
+            code=AgentErrorCode.PROVIDER_UNAVAILABLE,
+            message="fixture completed response",
+            transient=True,
+        ),
+    )
+    collector.route_root = tmp_path / "model-routes"
+    FileModelRouteAttemptStore(collector.route_root).append(
+        ModelRouteAttempt.create(
+            request=request,
+            route_index=1,
+            provider="codex",
+            model="fixture Responses",
+            route_kind="responses",
+            started_at=STARTED,
+            completed_at=STARTED + timedelta(seconds=1),
+            result=failed,
+            fallback=False,
+        )
+    )
+    with pytest.raises(ValueError, match="封存最终结果"):
+        collector._legacy_containment(task, item)
+
+
+def test_responses_start_only_refuses_claim_without_immutable_snapshot(tmp_path: Path) -> None:
+    collector, task, item, original = legacy_fixture(tmp_path)
+    claim = original.original_claim.model_copy(
+        update={
+            "model_selection": original.original_claim.model_selection.model_copy(
+                update={"route_kind": "responses"}
+            )
+        }
+    )
+    collector.queue.original_claim_record = Mock(
+        return_value=OriginalClaimRecord(claim, has_immutable_snapshot=False)
+    )
+    with pytest.raises(ValueError, match="不可变的原领取快照"):
+        collector._legacy_containment(task, item)
 
 
 @pytest.mark.parametrize("drift", ["missing", "machine", "boot", "observed_before", "digest"])

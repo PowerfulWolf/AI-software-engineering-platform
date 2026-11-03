@@ -1109,6 +1109,11 @@ Task permissions change. Optional omitted fields preserve historical wire/digest
 Run 中保存，因此工程人员必须明确确认原执行同机本地、未迁移、执行之后已整机重启和
 可信时间；`EngineeringAdmission` 不可自动批准。所有默认新增字段从旧 wire 省略，旧摘要不变。
 
+同步 Responses Coder 的 start-only UNKNOWN 也可走此工程处置，但原 claim 必须精确冻结
+`route_kind=responses` 且来自不可变 `CLAIMED` 事件完整快照，原调用及全部派生工具必须由有权限工程主体确认已在本机结束，
+并通过当前完整本机执行调查。即使整机重启，Responses 也不接受仅凭 reboot 的审批；
+旧 Run 和模型结果仍保持 UNKNOWN，按原 Task 剩余普通工作额度产生新 Run，独立 QA/Review 不变。
+
 完整 proof、plan、人工 authority、operation start 和 binding append-only。队列在 owner-fenced
 事务中保留原 UNKNOWN 历史、消耗下一次普通 work allowance、创建不同 WorkItem；真实新
 Run/Context/claim 与 QA/Review gates 保持。`HumanActionEvent(SUPPLY_EVIDENCE)` 进入原评估

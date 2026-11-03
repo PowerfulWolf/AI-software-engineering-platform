@@ -537,6 +537,42 @@ def guards(node: dict[str, object]) -> None:
     elif title == "LegacyExecutionContainment":
         node["allOf"] = [
             {
+                "properties": {
+                    "original_claim": {
+                        "properties": {
+                            "model_selection": {
+                                "required": ["route_kind"],
+                                "properties": {"route_kind": {"enum": ["codex_cli", "responses"]}},
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "if": {
+                    "properties": {
+                        "original_claim": {
+                            "properties": {
+                                "model_selection": {
+                                    "required": ["route_kind"],
+                                    "properties": {"route_kind": {"const": "responses"}},
+                                }
+                            }
+                        }
+                    }
+                },
+                "then": {
+                    "required": ["method", "local_execution_survey"],
+                    "properties": {
+                        "method": {"const": "operator_confirmed_local_stop"},
+                        "local_execution_survey": {
+                            "type": "object",
+                            "properties": {"blockers": {"maxItems": 0}},
+                        },
+                    },
+                },
+            },
+            {
                 "if": {
                     "required": ["method"],
                     "properties": {"method": {"const": "operator_confirmed_local_stop"}},

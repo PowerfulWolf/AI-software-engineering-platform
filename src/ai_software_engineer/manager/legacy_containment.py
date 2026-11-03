@@ -151,7 +151,7 @@ class LegacyExecutionContainment(DomainModel):
         QueueClaim.model_validate(claim.to_wire())
         if (
             request.role is not AgentRole.CODER
-            or claim.model_selection.route_kind != "codex_cli"
+            or claim.model_selection.route_kind not in {"codex_cli", "responses"}
             or claim.claimed_at > start.started_at
             or self.scope.repository_root not in item.repository_scopes
             or (
@@ -175,6 +175,8 @@ class LegacyExecutionContainment(DomainModel):
         ):
             raise ValueError("旧执行救援缺少精确本机 Coder 调用和真实历史领取记录")
         if self.method == "os_reboot":
+            if claim.model_selection.route_kind == "responses":
+                raise ValueError("Responses 旧执行必须由本机调查和工程停止确认隔离")
             if self.local_execution_survey is not None:
                 raise ValueError("整机重启隔离记录不能混入本机人工停止调查")
             if self.boot.booted_at <= start.started_at:

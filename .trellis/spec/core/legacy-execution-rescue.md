@@ -19,6 +19,15 @@ start record fails closed. Rescue never writes, replaces, or completes any origi
   (`machine_sha256`, `boot_session_sha256`, `booted_at`), twice observed stable. The exact
   `LegacyExecutionContainment` embeds `original_start`, `original_claim`, native child
   `requirement_id`, `dispatch_sha256`, `scope`, `task_intent_sha256`, `boot`, `containment_sha256`.
+- `LegacyExecutionContainment.validate_binding() -> Self` accepts an exact original
+  `QueueClaim.model_selection.route_kind` of `codex_cli` or `responses`; the latter requires
+  `method=operator_confirmed_local_stop` and `local_execution_survey`, never `os_reboot`.
+  Responses additionally requires the original `CLAIMED` event's immutable full claim snapshot;
+  a legacy claim reconstructed from allocation columns does not prove the frozen route.
+  All seven embedded static Schemas enforce the same route and method constraints.
+- `ProductionBaselineFactCollector._legacy_containment(task, item) -> LegacyExecutionContainment`
+  chooses the current survey from that original claim and rechecks its start, stop/outcome
+  absence, route history, Task, lease and managed worktree before any Plan is published.
 - `manager/legacy_local_execution.py`: `TrustedLegacyLocalExecutionObserver.observe(*,
   worktree_root: Path, boot: LocalBootObservation) -> LegacyLocalExecutionSurvey`, with exact
   worktree/device/account/boot/scanner boundary, observed time, bounded blocker enums and SHA.
@@ -88,10 +97,16 @@ OS booleans/dates/PIDs cannot bypass the observer. Original historical UNKNOWN/o
 When boot does not postdate the original start, collect a fresh trusted survey over the current
 effective-account local execution boundary and the manager-owned original checkout. Fixed bounded
 OS queries inspect native Codex execution/wrappers and attributable cwd/open workspace references. App-server
-identity alone is not native delivery execution. Unknown ownership/state, query denial/truncation,
+identity alone is not delivery execution. Unknown ownership/state, query denial/truncation,
 target-associated processes and incomplete coverage refuse preparation. Commands never signal
 discovered processes, read environment variables or publish raw arguments. The original exact
-request/claim must still prove native local routing; unknown fallback or remote boundaries refuse.
+request/claim must prove either a native local Codex CLI route or a synchronous Responses route
+whose tool execution is bound to the local managed worktree; unknown route or fallback boundaries
+refuse. A Responses model request may run at the provider, but only the local ASE tool loop can
+write the worktree. For a Responses start-only Run, always require the current local survey and
+`operator_confirmed_local_stop`, even after a later host reboot; reboot alone is not a substitute
+for confirmation that the local invocation and every derived tool can no longer write. The
+original invocation outcome, route final and capture-stop remain absent and are not synthesized.
 
 ### Safe diagnosis of an incomplete current survey
 
@@ -160,6 +175,8 @@ with a published legacy binding must reproduce the same proof without a new clai
 | Unreadable OS identity or incomplete survey / live execution | WAITING explanation, no plan or new invocation |
 | Original final result now exists | Reject rescue; use original result replay |
 | Start-only capture binds exact current facts | Validate it read-only, then allow new containment facts; preserve its bytes |
+| Responses start-only route, complete current survey and exact operator declaration | Preserve UNKNOWN; consume one remaining work allowance through the same Task and a new Run |
+| Responses route with reboot-only approval, incomplete survey, or a sealed route result | Refuse without consuming the original WorkItem |
 | Start-only capture is malformed, mismatched, or worktree-drifted | Reject rescue and preserve the original UNKNOWN history |
 | Missing original claim/start or nonlocal execution | Reject; no new invocation |
 | Exact earlier expired claim, no preparation or execution facts | Seal reclaimed uninvoked proof and preserve old Run |
@@ -179,8 +196,11 @@ public operation schema/Host/native completion, UI capability/stale guards and C
 Focused commands:
 `pytest tests/manager/test_legacy_containment.py tests/manager/test_legacy_snapshot.py`,
 `pytest tests/manager/test_legacy_rescue_delivery.py tests/web_console/test_legacy_rescue_acceptance.py`,
+`pytest tests/contracts/test_local_legacy_rescue_schema.py tests/contracts/test_repair_schema_generation.py`,
 `node --test tests/team_view/browser/legacy-rescue.test.cjs` (configured Playwright NODE_PATH).
-The public fixture must reach original Task DONE through distinct native Coder/QA/Review claims,
+The Responses regression asserts both same-boot and later-boot survey selection, no old
+outcome/stop invention, and the original proof remains eligible for the normal Plan gate.
+The public fixture must reach original Task DONE through distinct configured Coder/QA/Review claims,
 same candidate SHA, preserve unknown start/no original outcome, keep files/index/HEAD/branch,
 record `HumanActionEvent(SUPPLY_EVIDENCE)` and validate all four updated static Schema documents.
 After delivery, traverse `_invocations` across the complete Task queue: the old unknown has exact

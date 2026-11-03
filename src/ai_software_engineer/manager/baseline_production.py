@@ -3434,7 +3434,13 @@ class ProductionBaselineFactCollector:
             raise ValueError("旧执行救援启动记录与当前原权限和等待版本不一致")
         if records.find("invocation-outcomes", item.id, DeliveryInvocationOutcome) is not None:
             raise ValueError("原调用结果已存在, 请先让平台处理原结果, 无需旧执行救援")
-        claim = self.queue.original_claim(start.lease_id)
+        claim_record = self.queue.original_claim_record(start.lease_id)
+        claim = claim_record.claim
+        if (
+            claim.model_selection.route_kind == "responses"
+            and not claim_record.has_immutable_snapshot
+        ):
+            raise ValueError("Responses 旧执行缺少不可变的原领取快照")
         capture_root = self.state / "continuations" / task.id
         if any(
             (capture_root / name).exists() or (capture_root / name).is_symlink()
@@ -3469,7 +3475,7 @@ class ProductionBaselineFactCollector:
             return sealed
         survey = None
         method: Literal["os_reboot", "operator_confirmed_local_stop"] = "os_reboot"
-        if boot.booted_at <= start.started_at:
+        if boot.booted_at <= start.started_at or claim.model_selection.route_kind == "responses":
             worktree = self.git.recover(
                 WorktreeSpec(
                     task_id=task.id,

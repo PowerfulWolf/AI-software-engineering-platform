@@ -71,6 +71,29 @@ def test_reclaimed_claim_proof_schemas_regenerate_standalone(
     Draft202012Validator.check_schema(fresh)
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "baseline-invocation-proof",
+        "baseline-quiescence-proof",
+        "console-deletion-cleanup",
+        "console-operation",
+        "contained-unknown-budget-settlement",
+        "execution-baseline-plan",
+        "execution-baseline-queue-consumption",
+    ],
+)
+def test_responses_containment_guards_match_standalone_regeneration(
+    standalone_regenerated: dict[str, Any], name: str
+) -> None:
+    published = json.loads((ROOT / "schemas" / (name + ".schema.json")).read_text())
+    fresh = standalone_regenerated[name + ".schema.json"]
+    assert (
+        published["$defs"]["LegacyExecutionContainment"]
+        == fresh["$defs"]["LegacyExecutionContainment"]
+    )
+
+
 @pytest.mark.parametrize("generated", [False, True])
 def test_knowledge_isolation_guard_does_not_select_omitted_default_purpose(
     standalone_regenerated: dict[str, Any], generated: bool
