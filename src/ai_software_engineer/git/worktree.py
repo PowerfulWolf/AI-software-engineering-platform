@@ -10,9 +10,10 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 
 from pydantic import TypeAdapter
 
@@ -56,6 +57,17 @@ _GIT_SAFETY_CONFIG: Final[tuple[str, ...]] = (
     "-c",
     "core.fsmonitor=false",
 )
+
+
+# Several Requirements may now run in parallel against one repository. Git keeps
+# its own lock files, but concurrent worktree/branch updates then fail at random.
+# Commands issued by this manager are short; serialize them within the process.
+_GIT_PROCESS_LOCK = threading.RLock()
+
+
+def _locked_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+    with _GIT_PROCESS_LOCK:
+        return subprocess.run(*args, **kwargs)
 
 
 class GitWorkspaceError(RuntimeError):
@@ -1285,7 +1297,7 @@ class GitWorktreeManager:
         if self._git is None:
             raise InvalidRepository("Git executable is unavailable")
         try:
-            completed = subprocess.run(
+            completed = _locked_run(
                 (self._git, *_GIT_SAFETY_CONFIG, *arguments),
                 cwd=cwd,
                 env=_GIT_ENV
@@ -1305,14 +1317,14 @@ class GitWorktreeManager:
         if completed.returncode != 0:
             message = completed.stderr.decode("utf-8", errors="replace").strip()
             raise GitCommandError(message or "Git command failed")
-        return completed.stdout
+        return cast(bytes, completed.stdout)
 
     def _run_git_diff_bytes(self, arguments: tuple[str, ...], *, cwd: Path) -> bytes:
         """Run a read-only diff command where Git uses status 1 to mean differences."""
         if self._git is None:
             raise InvalidRepository("Git executable is unavailable")
         try:
-            completed = subprocess.run(
+            completed = _locked_run(
                 (self._git, *_GIT_SAFETY_CONFIG, *arguments),
                 cwd=cwd,
                 env=_GIT_ENV,
@@ -1329,7 +1341,7 @@ class GitWorktreeManager:
         if completed.returncode not in (0, 1):
             message = completed.stderr.decode("utf-8", errors="replace").strip()
             raise GitCommandError(message or "Git diff command failed")
-        return completed.stdout
+        return cast(bytes, completed.stdout)
 
     def _invoke_git(
         self, arguments: tuple[str, ...], *, cwd: Path
@@ -1337,7 +1349,7 @@ class GitWorktreeManager:
         if self._git is None:
             raise InvalidRepository("Git executable is unavailable")
         try:
-            return subprocess.run(
+            return _locked_run(
                 (self._git, *_GIT_SAFETY_CONFIG, *arguments),
                 cwd=cwd,
                 env=_GIT_ENV,

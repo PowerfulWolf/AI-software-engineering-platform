@@ -26,6 +26,15 @@ from tests.team_view.test_read_models import source
 from tests.web_console.test_transport import _Console, _Reader
 
 
+@pytest.fixture
+def legacy_team_read_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests pin the original admission: two joiners, no read queue."""
+    from ai_software_engineer.web_console import transport
+
+    monkeypatch.setattr(transport, "_TEAM_READ_MAX_JOINERS", 2)
+    monkeypatch.setattr(transport, "_TEAM_READ_MAX_QUEUED", 0)
+
+
 class _ReaderWithDetails:
     def __init__(self) -> None:
         self.calls: list[object] = []
@@ -171,6 +180,7 @@ def test_legacy_reader_has_no_capability_and_cannot_fake_empty_current_reads() -
     asyncio.run(exercise())
 
 
+@pytest.mark.usefixtures("legacy_team_read_admission")
 @pytest.mark.parametrize("mode", ["summary", "detail"])
 @pytest.mark.parametrize("cancel", [False, True])
 def test_all_team_read_modes_share_worker_and_join_only_complete_query(

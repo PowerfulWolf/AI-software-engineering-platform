@@ -1377,6 +1377,9 @@ const deliveryButton = (text, action, className = "link") => {
 };
 const suspendedDeliveryControls = new WeakMap();
 const knowledgeApprovalControls = new WeakMap();
+// Controls whose own readiness changes after they are built (for example an
+// approval that waits for the full body read) re-evaluate on every sync.
+const liveDisabledConditions = new WeakMap();
 function setDeliveryControlDisabled(control, disabled) {
   const ready = canControlCurrentTeam() && !knowledgeApprovalControls.get(control)?.unavailable();
   if (ready) suspendedDeliveryControls.delete(control);
@@ -1397,13 +1400,17 @@ function syncDeliveryControls() {
       if (knowledge.status.textContent !== message) knowledge.status.textContent = message;
       knowledge.status.hidden = !unavailable;
     }
+    const condition = liveDisabledConditions.get(control);
+    const own = condition ? Boolean(condition()) : null;
     if (!ready || unavailable) {
-      if (!suspendedDeliveryControls.has(control))
-        suspendedDeliveryControls.set(control, Boolean(control.disabled));
+      if (!suspendedDeliveryControls.has(control) || own !== null)
+        suspendedDeliveryControls.set(control, own ?? Boolean(control.disabled));
       control.disabled = true;
     } else if (suspendedDeliveryControls.has(control)) {
-      control.disabled = suspendedDeliveryControls.get(control);
+      control.disabled = own ?? suspendedDeliveryControls.get(control);
       suspendedDeliveryControls.delete(control);
+    } else if (own !== null && control.disabled !== own) {
+      control.disabled = own;
     }
   }
 }
@@ -5570,6 +5577,67 @@ function compactPaths(value) {
   if (values.length === 1) return compactPath(values[0]);
   return `${compactPath(values[0])} 等 ${values.length} 个目录`;
 }
+// Readable view of a stage document. Raw JSON stays available in a fold; the
+// default view shows labelled sections and hides hashes and internal locators.
+const documentFieldLabels = {
+  summary: "摘要", goals: "目标", non_goals: "不做的事", assumptions: "前提假设",
+  questions: "待确认问题", open_questions: "待确认问题", requirements: "需求", statement: "需求内容",
+  priority: "优先级", rationale: "原因", acceptance: "验收标准", acceptance_criteria: "验收标准",
+  description: "说明", verification: "验证方式", test_ids: "相关测试", branch_name: "交付分支",
+  version: "版本", product: "产品规格", title: "标题", name: "名称", objective: "目标",
+  components: "涉及组件", responsibility: "职责", affected_paths: "涉及路径",
+  implementation_steps: "实现步骤", steps: "步骤", test_strategy: "测试策略", risks: "风险",
+  mitigation: "应对", verification_points: "验证点", phases: "阶段", work_graph: "工作拆分",
+  packages: "工作包", step_ids: "包含步骤", dependencies: "依赖", decisions: "决策",
+  findings: "发现的问题", severity: "严重程度", verdict: "结论", evidence: "证据",
+  summary_markdown: "说明", changes: "改动", files: "文件", commands: "执行的命令",
+  outcome: "结果", reason: "原因", notes: "备注", units: "代码目录", blocking_issues: "阻塞问题",
+};
+const hiddenDocumentField = key =>
+  /sha256|digest|_id$|^id$|^ids$|source_uri|checkpoint|scope_sha|schema|^kind$|integrity/.test(key);
+const priorityLabels = {MUST: "必须", SHOULD: "应该", COULD: "可以", WONT: "暂不"};
+function structuredDocumentValue(value, depth = 0) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "object") {
+    const text = typeof value === "string" ? (priorityLabels[value] || value) : String(value);
+    return el(text.length > 80 || text.includes("\n") ? "p" : "span", text, "doc-value");
+  }
+  if (Array.isArray(value)) {
+    const items = value.map(item => structuredDocumentValue(item, depth + 1)).filter(Boolean);
+    if (!items.length) return null;
+    const list = el(value.every(item => typeof item !== "object") ? "ul" : "ol", undefined, "doc-list");
+    for (const item of items) { const li = el("li"); li.append(item); list.append(li); }
+    return list;
+  }
+  const box = el("div", undefined, depth ? "doc-object" : "doc-root");
+  for (const [key, child] of Object.entries(value)) {
+    if (hiddenDocumentField(key)) continue;
+    const rendered = structuredDocumentValue(child, depth + 1);
+    if (!rendered) continue;
+    const row = el("div", undefined, "doc-field");
+    row.append(el(depth ? "strong" : "h5", documentFieldLabels[key] || key), rendered);
+    box.append(row);
+  }
+  return box.childElementCount ? box : null;
+}
+function readableDocumentBody(content) {
+  let value;
+  try { value = JSON.parse(content); } catch { return null; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  // A joint ProductSpec nests the reviewable content under "product".
+  const body = value.product && typeof value.product === "object" ? {version: value.version, ...value.product} : value;
+  return structuredDocumentValue(body);
+}
+function approvalSpecView(request) {
+  const spec = request.product_spec_source;
+  const documents = detailReadingItem(request).documents || [];
+  const doc = documents.find(item => spec ? item.source_uri === spec.source_uri : /ProductSpec/.test(item.source_uri || ""));
+  const view = doc?.content ? readableDocumentBody(doc.content) : null;
+  if (!view) return [];
+  const box = viewBlock(el("div", undefined, "approval-spec"), "approval-spec", [doc.source_uri, doc.sha256]);
+  box.append(view);
+  return [box];
+}
 function documentList(parent, documents) {
   if (!documents.length) {
     parent.append(el("p", "暂无已提交产物。", "muted"));
@@ -5581,12 +5649,20 @@ function documentList(parent, documents) {
     d.append(
       el("summary", doc.name),
     );
-    d.append(
-      el(
-        "pre",
-        doc.content || "当前提供已提交文档的身份引用；正文尚未接入此视图。",
-      ),
-    );
+    const readable = doc.content ? readableDocumentBody(doc.content) : null;
+    if (readable) {
+      d.append(readable);
+      const raw = engineeringDetails("原始内容", doc.source_uri + ":raw");
+      raw.append(el("pre", doc.content));
+      d.append(raw);
+    } else {
+      d.append(
+        el(
+          "pre",
+          doc.content || "当前提供已提交文档的身份引用；正文尚未接入此视图。",
+        ),
+      );
+    }
     const identity = engineeringDetails("文档来源与校验摘要", doc.source_uri + ":identity");
     identity.append(el("p", doc.source_uri, "paths"), el("p", "SHA-256 · " + doc.sha256, "paths"));
     d.append(identity);
@@ -7315,6 +7391,10 @@ function requestOperation(panel, request, discussionSection) {
         delivery_id:request.id, expected_checkpoint_sha256:request.checkpoint_sha256});
     }, "primary");
     setDeliveryControlDisabled(approve, !productApprovalReadReady(request));
+    liveDisabledConditions.set(approve, () => {
+      const current = requestById(request.id);
+      return !current || !productApprovalReadReady(current);
+    });
     approval.append(
       el("h3", "产品文档已准备好"),
       el(
@@ -7323,6 +7403,7 @@ function requestOperation(panel, request, discussionSection) {
         "muted",
       ),
       ...(productApprovalReadReady(request) ? [] : [el("p", "当前完整 ProductSpec 尚未读取并核对，读取完成后才可批准。", "muted")]),
+      ...approvalSpecView(request),
       approve,
     );
     appendDiscussionContent(approval);

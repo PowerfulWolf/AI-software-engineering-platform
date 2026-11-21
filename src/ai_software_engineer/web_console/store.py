@@ -71,7 +71,9 @@ class ConsoleOperationStore(Protocol):
     def get(self, operation_id: str) -> ConsoleOperation: ...
     def list_current(self) -> tuple[ConsoleOperation, ...]: ...
     def summary_page(self, query: OperationSummaryQuery) -> OperationSummaryPage: ...
-    def claim_next(self, *, at: datetime) -> ConsoleOperation | None: ...
+    def claim_next(
+        self, *, at: datetime, busy_lanes: frozenset[str] = frozenset()
+    ) -> ConsoleOperation | None: ...
 
     def succeed(
         self, operation_id: str, *, expected: str, result: ConsoleCommandResult, at: datetime
@@ -170,13 +172,16 @@ class InMemoryConsoleOperationStore:
                     "operation summaries cannot be read safely"
                 ) from error
 
-    def claim_next(self, *, at: datetime) -> ConsoleOperation | None:
+    def claim_next(
+        self, *, at: datetime, busy_lanes: frozenset[str] = frozenset()
+    ) -> ConsoleOperation | None:
         with self._lock:
             queued = sorted(
                 (
                     history[-1]
                     for history in self._histories.values()
                     if history[-1].status is ConsoleOperationStatus.QUEUED
+                    and operation_lane(history[-1]) not in busy_lanes
                 ),
                 key=lambda item: (item.requested_at, item.operation_id),
             )
@@ -480,12 +485,14 @@ class FileConsoleOperationStore:
             inventory.update(hashlib.sha256(body).digest())
         return inventory.hexdigest()
 
-    def claim_next(self, *, at: datetime) -> ConsoleOperation | None:
+    def claim_next(
+        self, *, at: datetime, busy_lanes: frozenset[str] = frozenset()
+    ) -> ConsoleOperation | None:
         with self._locked():
             inventory = self._operation_inventory_sha256()
             if self._idle_inventory_sha256 == inventory:
                 return None
-            queued = sorted(
+            all_queued = sorted(
                 (
                     item
                     for item in self._list_current()
@@ -493,6 +500,10 @@ class FileConsoleOperationStore:
                 ),
                 key=lambda item: (item.requested_at, item.operation_id),
             )
+            queued = [item for item in all_queued if operation_lane(item) not in busy_lanes]
+            if all_queued and not queued:
+                # Work is waiting behind a busy lane; never cache this as idle.
+                return None
             if not queued:
                 # Only reuse a fully validated no-QUEUED conclusion for exactly
                 # the same complete bytes, not mtime or a retained model object.
@@ -891,3 +902,21 @@ __all__ = [
     "FileConsoleOperationStore",
     "InMemoryConsoleOperationStore",
 ]
+
+
+def operation_lane(operation: ConsoleOperation) -> str:
+    """Operations in one lane run strictly in order; different lanes may overlap.
+
+    A Requirement's operations share its delivery lane, so one Requirement never
+    runs two Manager operations at once. Project- and Team-level operations get
+    their own lanes, so creating a Requirement does not wait behind another
+    Requirement's long delivery.
+    """
+    intent = operation.intent
+    delivery = getattr(intent, "delivery_id", None)
+    if delivery:
+        return f"delivery:{delivery}"
+    project = getattr(intent, "project_id", None)
+    if project:
+        return f"project:{project}"
+    return "team"

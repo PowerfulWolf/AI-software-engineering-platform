@@ -21,7 +21,7 @@ from ai_software_engineer.service_pause import ServicePauseControl, ServicePause
 from .models import ConsoleCommandResult, ConsoleIntent, ConsoleOperation
 from .preparation_store import InMemoryPreparationProgressStore, PreparationProgressStore
 from .shutdown import ShutdownRefusal, ShutdownResult, ShutdownState, shutdown_deadline
-from .store import ConsoleOperationError, ConsoleOperationStore
+from .store import ConsoleOperationError, ConsoleOperationStore, operation_lane
 from .summary_models import OperationSummaryPage, OperationSummaryQuery
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,9 +59,14 @@ class ProjectConsole:
         operation_scope: Callable[[str], AbstractContextManager[None]] | None = None,
         preparation_store: PreparationProgressStore | None = None,
         pause_control: ServicePauseControl | None = None,
+        max_parallel_operations: int = 1,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError("console poll interval must be positive")
+        if not 1 <= max_parallel_operations <= 16:
+            raise ValueError("console parallelism must be between 1 and 16")
+        self._max_parallel = max_parallel_operations
+        self._running_lanes: dict[str, str] = {}
         self._store = store
         self._executor = executor
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -120,10 +125,15 @@ class ProjectConsole:
 
     def run_once(self) -> ConsoleOperation | None:
         with self._condition:
-            if self._draining or self._active_operations:
+            if self._draining or self._active_operations >= self._max_parallel:
                 return None
             try:
-                running = self._store.claim_next(at=self._clock())
+                if self._max_parallel == 1:
+                    running = self._store.claim_next(at=self._clock())
+                else:
+                    running = self._store.claim_next(
+                        at=self._clock(), busy_lanes=frozenset(self._running_lanes.values())
+                    )
             except BaseException:
                 self._refuse_locked(
                     "操作领取记录未能可靠保存, 不能确认安全停止; 服务保留, 需检查记录保存故障。"
@@ -132,6 +142,29 @@ class ProjectConsole:
             if running is None:
                 return None
             self._active_operations += 1
+            self._running_lanes[running.operation_id] = operation_lane(running)
+            if self._max_parallel > 1:
+                # Each claimed operation runs on its own thread; the dispatcher
+                # immediately returns to claim work in other lanes.
+                worker = Thread(
+                    target=self._execute_claimed,
+                    args=(running,),
+                    name=f"console-operation-{running.operation_id[-8:]}",
+                    daemon=True,
+                )
+                self._threads.add(worker)
+                try:
+                    worker.start()
+                except BaseException:
+                    self._threads.discard(worker)
+                    self._active_operations -= 1
+                    self._running_lanes.pop(running.operation_id, None)
+                    self._refuse_locked("操作执行线程未能启动, 服务保留, 需检查执行记录。")
+                    raise
+                return running
+        return self._execute_claimed(running)
+
+    def _execute_claimed(self, running: ConsoleOperation) -> ConsoleOperation:
         persisted = False
         try:
             # Keep process ownership attached through both execution and durable
@@ -146,6 +179,8 @@ class ProjectConsole:
         finally:
             with self._condition:
                 self._active_operations -= 1
+                self._running_lanes.pop(running.operation_id, None)
+                self._wake.set()
                 if not persisted:
                     self._refuse_locked(
                         "操作最终记录未能可靠保存, 不能确认安全停止; 服务保留, 需检查记录保存故障。"

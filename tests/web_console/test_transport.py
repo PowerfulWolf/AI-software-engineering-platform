@@ -48,6 +48,13 @@ from tests.manager.test_execution_baseline import setup as baseline_setup
 from tests.web_console.test_core import _create_intent, _Executor
 
 
+@pytest.fixture
+def legacy_team_read_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Worker-lifetime tests keep the original admission: two joiners, no queue."""
+    monkeypatch.setattr("ai_software_engineer.web_console.transport._TEAM_READ_MAX_JOINERS", 2)
+    monkeypatch.setattr("ai_software_engineer.web_console.transport._TEAM_READ_MAX_QUEUED", 0)
+
+
 class _Console:
     def __init__(self, store: ConsoleOperationStore | None = None) -> None:
         self.store = store if store is not None else InMemoryConsoleOperationStore("team_test")
@@ -132,6 +139,7 @@ class _HeldSnapshotReader(_Reader):
         return super().snapshot(project_id)
 
 
+@pytest.mark.usefixtures("legacy_team_read_admission")
 @pytest.mark.parametrize("cancel_first", [False, True])
 def test_team_snapshot_admission_tracks_actual_worker_lifetime(cancel_first: bool) -> None:
     async def exercise() -> None:
@@ -205,6 +213,7 @@ def test_team_snapshot_admission_releases_after_read_failure(safe_failure: bool)
         assert client.get("/api/v1/team?project_id=project_next").status_code == 200
 
 
+@pytest.mark.usefixtures("legacy_team_read_admission")
 @pytest.mark.parametrize("phase", ["wire", "render"])
 def test_team_snapshot_admission_includes_worker_serialization(
     monkeypatch: pytest.MonkeyPatch, phase: str

@@ -1379,12 +1379,24 @@ class _TeamReadFlight:
     retired: bool = False
 
 
+_TEAM_READ_MAX_JOINERS = 16
+_TEAM_READ_MAX_QUEUED = 16
+_TEAM_READ_QUEUE_SECONDS = 25.0
+
+
 class _TeamSnapshotReads:
-    """One worker-owned read; only two completely identical queries may join."""
+    """One worker-owned read at a time; identical queries share it, others queue.
+
+    A different query (summary vs. detail, another Project) used to be rejected
+    with 503 the moment any read was active, so a page reading a summary and a
+    body together failed routinely. It now waits for the active read to finish,
+    bounded by a queue size and a deadline, and only then reports busy.
+    """
 
     def __init__(self) -> None:
         self._lock = Lock()
         self._active: _TeamReadFlight | None = None
+        self._queued = 0
 
     async def response(
         self,
@@ -1394,23 +1406,48 @@ class _TeamSnapshotReads:
         mode: Literal["full", "summary", "detail"] = "full",
         query: TeamDetailQuery | None = None,
     ) -> Response:
-        with self._lock:
-            flight = self._active
-            joined = flight is not None
-            if flight is None:
-                flight = _TeamReadFlight(project_id, mode, query)
-                self._active = flight
-            elif (
-                flight.project_id != project_id
-                or flight.mode != mode
-                or flight.query != query
-                or flight.waiters >= 2
-                or flight.task is None
-                or flight.task.done()
-            ):
-                return _error(503, "TEAM_READ_IN_PROGRESS", "团队信息正在读取, 请稍后重试。")
-            else:
-                flight.waiters += 1
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _TEAM_READ_QUEUE_SECONDS
+        queued = False
+        try:
+            while True:
+                with self._lock:
+                    flight = self._active
+                    joined = flight is not None
+                    blocking: asyncio.Task[_RenderedTeamResponse] | None = None
+                    if flight is None:
+                        flight = _TeamReadFlight(project_id, mode, query)
+                        self._active = flight
+                        break
+                    if (
+                        flight.project_id == project_id
+                        and flight.mode == mode
+                        and flight.query == query
+                        and flight.waiters < _TEAM_READ_MAX_JOINERS
+                        and flight.task is not None
+                        and not flight.task.done()
+                    ):
+                        flight.waiters += 1
+                        break
+                    if not queued:
+                        if self._queued >= _TEAM_READ_MAX_QUEUED:
+                            return _error(
+                                503, "TEAM_READ_IN_PROGRESS", "团队信息正在读取, 请稍后重试。"
+                            )
+                        self._queued += 1
+                        queued = True
+                    blocking = flight.task
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return _error(503, "TEAM_READ_IN_PROGRESS", "团队信息正在读取, 请稍后重试。")
+                if blocking is None or blocking.done():
+                    await asyncio.sleep(min(0.02, remaining))
+                else:
+                    await asyncio.wait({blocking}, timeout=remaining)
+        finally:
+            if queued:
+                with self._lock:
+                    self._queued -= 1
 
         if not joined:
             execution = self._execute(reader, flight)

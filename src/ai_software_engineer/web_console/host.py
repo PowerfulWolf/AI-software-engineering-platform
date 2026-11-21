@@ -124,6 +124,9 @@ class _SetupTeamReader:
         )
 
 
+CONSOLE_PARALLEL_OPERATIONS = 3
+
+
 def _load_console_config(environment: Mapping[str, str]) -> tuple[ProductionConfig, Path]:
     config_path = ProductionConfig.path_from_environment(environment).expanduser().absolute()
     config = (
@@ -245,6 +248,8 @@ def _production_console_app(
             preparation_store=open_preparation_progress_store(
                 host.team_workspace.directory("work-items") / "console-preparation-progress"
             ),
+            # Different Requirements deliver concurrently; one Requirement stays serial.
+            max_parallel_operations=CONSOLE_PARALLEL_OPERATIONS,
         )
         reader = ProductionTeamReader(config, variables)
     except (OSError, ProductionConfigError, QueueError, StoreError, ValueError):

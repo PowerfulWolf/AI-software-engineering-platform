@@ -18,6 +18,13 @@ from ai_software_engineer.web_console import create_console_app, transport
 from tests.web_console.test_transport import _Console
 
 
+@pytest.fixture
+def legacy_team_read_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Worker-lifetime tests keep the original admission: two joiners, no queue."""
+    monkeypatch.setattr(transport, "_TEAM_READ_MAX_JOINERS", 2)
+    monkeypatch.setattr(transport, "_TEAM_READ_MAX_QUEUED", 0)
+
+
 class _HeldReader:
     def __init__(self, failure: type[Exception] | None = None) -> None:
         self.entered = Event()
@@ -54,6 +61,7 @@ def _current(reads: transport._TeamSnapshotReads) -> transport._TeamReadFlight |
     return reads._active
 
 
+@pytest.mark.usefixtures("legacy_team_read_admission")
 def test_public_same_project_shares_one_worker_with_two_waiters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -243,6 +251,7 @@ def test_master_cancelled_before_coroutine_start_retires_its_reservation(
     asyncio.run(exercise())
 
 
+@pytest.mark.usefixtures("legacy_team_read_admission")
 def test_cancelled_master_after_worker_entry_keeps_actual_worker_admission() -> None:
     async def exercise() -> None:
         reads, reader = transport._TeamSnapshotReads(), _HeldReader()
@@ -298,6 +307,7 @@ def test_scheduling_failure_retires_exact_flight(
     asyncio.run(exercise())
 
 
+@pytest.mark.usefixtures("legacy_team_read_admission")
 def test_worker_completion_starts_fresh_read_before_old_notification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -425,6 +435,7 @@ def test_unexpected_failure_does_not_publish_traceback_owned_scope(
     asyncio.run(exercise())
 
 
+@pytest.mark.usefixtures("legacy_team_read_admission")
 @pytest.mark.parametrize("phase", ["wire", "render"])
 def test_waiter_timeout_keeps_worker_through_serialization(
     monkeypatch: pytest.MonkeyPatch, phase: str
@@ -470,6 +481,7 @@ def test_waiter_timeout_keeps_worker_through_serialization(
     asyncio.run(exercise())
 
 
+@pytest.mark.usefixtures("legacy_team_read_admission")
 def test_all_cancelled_consumers_keep_worker_and_detach_callbacks() -> None:
     class ScopeSentinel:
         pass
@@ -524,5 +536,63 @@ def test_all_cancelled_consumers_keep_worker_and_detach_callbacks() -> None:
         fresh = await reads.response(reader, None)
         assert fresh.status_code == 200
         assert reader.projects == [None, None]
+
+    asyncio.run(exercise())
+
+
+def test_different_reads_queue_behind_the_active_read_instead_of_failing() -> None:
+    async def exercise() -> None:
+        reader = _HeldReader()
+        app = create_console_app(_Console(), reader, team_id="team_test")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://127.0.0.1:8765"
+        ) as client:
+            owner = asyncio.create_task(client.get("/api/v1/team?project_id=project_one"))
+            assert await asyncio.to_thread(reader.entered.wait, 2)
+            queued = [
+                asyncio.create_task(client.get(path))
+                for path in (
+                    "/api/v1/team?project_id=project_other",
+                    "/api/v1/team",
+                    "/api/v1/team?project_id=project_one",
+                )
+            ]
+            await asyncio.sleep(0.05)
+            assert not any(task.done() for task in queued)
+            assert reader.projects == ["project_one"]
+            reader.release.set()
+            responses = await asyncio.wait_for(asyncio.gather(owner, *queued), 5)
+            assert [response.status_code for response in responses] == [200, 200, 200, 200]
+            # One read runs at a time; the identical request shared the first one.
+            assert sorted(map(str, reader.projects)) == sorted(
+                ["project_one", "project_other", "None"]
+            )
+
+    asyncio.run(exercise())
+
+
+def test_full_queue_and_deadline_report_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transport, "_TEAM_READ_MAX_QUEUED", 1)
+    monkeypatch.setattr(transport, "_TEAM_READ_QUEUE_SECONDS", 0.3)
+
+    async def exercise() -> None:
+        reader = _HeldReader()
+        app = create_console_app(_Console(), reader, team_id="team_test")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://127.0.0.1:8765"
+        ) as client:
+            owner = asyncio.create_task(client.get("/api/v1/team?project_id=project_one"))
+            try:
+                assert await asyncio.to_thread(reader.entered.wait, 2)
+                waiting = asyncio.create_task(client.get("/api/v1/team?project_id=project_two"))
+                await asyncio.sleep(0.05)
+                full = await asyncio.wait_for(client.get("/api/v1/team"), 2)
+                assert full.status_code == 503
+                assert full.json()["error"]["code"] == "TEAM_READ_IN_PROGRESS"
+                expired = await asyncio.wait_for(waiting, 2)
+                assert expired.status_code == 503
+            finally:
+                reader.release.set()
+                assert (await asyncio.wait_for(owner, 5)).status_code == 200
 
     asyncio.run(exercise())

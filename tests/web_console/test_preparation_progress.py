@@ -93,6 +93,15 @@ from tests.work_queue.test_dispatcher import MemoryQueue, agent, dispatcher, ite
 NOW = datetime(2026, 10, 10, tzinfo=UTC)
 
 
+@pytest.fixture
+def legacy_team_read_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests pin the original admission: two joiners, no read queue."""
+    from ai_software_engineer.web_console import transport
+
+    monkeypatch.setattr(transport, "_TEAM_READ_MAX_JOINERS", 2)
+    monkeypatch.setattr(transport, "_TEAM_READ_MAX_QUEUED", 0)
+
+
 def scope() -> PreparationProgressScope:
     return PreparationProgressScope(
         operation_id="operation_" + "a" * 32,
@@ -426,6 +435,7 @@ def test_progress_http_is_get_only_and_does_not_change_operation_history(tmp_pat
     assert {p: p.read_bytes() for p in (tmp_path / "operations").rglob("*.json")} == before
 
 
+@pytest.mark.usefixtures("legacy_team_read_admission")
 def test_progress_http_remains_independent_while_team_reader_is_busy(tmp_path: Path) -> None:
     console, _, submitted = _console(tmp_path)
     reader = _HeldSnapshotReader()

@@ -3898,3 +3898,15 @@ code {
   border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 
 #service-maintenance { background: #fffbeb; color: #78350f; border-color: #fcd34d; }
+
+/* Readable stage documents */
+.doc-root { display: grid; gap: 12px; font-size: 0.875rem; line-height: 1.7; color: #24364f; }
+.doc-root > .doc-field > h5 { margin: 0 0 4px; font-size: 0.8125rem; color: #4a6185; font-weight: 600; }
+.doc-object { display: grid; gap: 4px; }
+.doc-object .doc-field { display: grid; grid-template-columns: max-content 1fr; gap: 0 8px; align-items: baseline; }
+.doc-object .doc-field > strong { color: #5b6f8f; font-weight: 500; font-size: 0.8125rem; }
+.doc-list { margin: 0; padding-left: 1.25em; display: grid; gap: 6px; }
+.doc-list > li > .doc-object { padding: 6px 0; }
+.doc-value { overflow-wrap: anywhere; white-space: pre-wrap; margin: 0; }
+.approval-spec { margin: 12px 0; padding: 12px 14px; border: 1px solid #dfe6ef; border-radius: 8px;
+  background: white; max-height: 480px; overflow: auto; }
