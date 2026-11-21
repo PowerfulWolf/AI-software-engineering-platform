@@ -272,6 +272,9 @@ function requireProductApprovalRead(intent, expectedBinding) {
 function teamDetailReadNotice() {
   const state = teamDetailRead, target = selectedTeamDetailTarget();
   if (state?.status === "ready" && state.loadedKey === target?.key) return null;
+  // Keep showing the previous body while its newer version loads in the background;
+  // only a first read or a failed read needs a notice.
+  if (["loading", "waiting"].includes(state?.status) && state?.value) return null;
   const box = viewBlock(el("div", undefined, "detail-body-read-status admin-notice"), "detail-body-read-status",
     [state?.status, state?.issue, state?.loadedKey, target?.key, state?.value?.as_of]);
   box.setAttribute("role", "status");
@@ -322,6 +325,15 @@ let refreshing = false;
 let refreshFlight = null;
 let teamRefreshTimer = null;
 let teamRefreshDelay = 5000;
+let quietRefresh = false;
+// Status text changes only when its meaning changes; the read time lives in the
+// tooltip so a 5-second poll does not repaint the bar on every tick.
+function setConnectionStatus(status, className, text, readAt = null) {
+  if (status.className !== className) status.className = className;
+  if (status.textContent !== text) status.textContent = text;
+  const title = readAt ? "最近读取 " + readAt : "";
+  if (status.title !== title) status.title = title;
+}
 let requestedProjectId = null;
 let activeRefreshProject = null;
 let refreshQueued = false;
@@ -1374,6 +1386,9 @@ function setDeliveryControlDisabled(control, disabled) {
 function syncDeliveryControls() {
   const ready = canControlCurrentTeam();
   document.getElementById("project-creator").hidden = page !== "requests" || !ready;
+  // The discussion availability note follows the same live gate as the controls;
+  // otherwise a transient pause stays on screen after the gate has cleared.
+  for (const cache of discussionFormCaches.values()) cache?.syncAvailability?.();
   for (const control of document.querySelectorAll('[data-delivery-control="true"]')) {
     const knowledge = knowledgeApprovalControls.get(control);
     const unavailable = knowledge?.unavailable();
@@ -12451,8 +12466,11 @@ async function refreshSettingsSnapshot(signal) {
     // Keep the last settings observation during a service restart.
   }
 }
-async function refresh(projectId, includeRuntimeStatus = false) {
+async function refresh(projectId, includeRuntimeStatus = false, {background = false} = {}) {
   if (projectId && projectId !== currentProjectId() && !mayCloseComposer()) return;
+  // A periodic poll never announces itself; any explicit refresh, navigation or
+  // runtime-status request makes the in-flight cycle visible again.
+  if (!background || projectId || includeRuntimeStatus) quietRefresh = false;
   if (projectId) {
     selectionIntentRevision++;
     clearTeamDetailRead();
@@ -12474,13 +12492,16 @@ async function refresh(projectId, includeRuntimeStatus = false) {
   teamRefreshTimer = null;
   // Coalesce explicit navigation, but never queue periodic ticks behind a slow poll.
   // Keep shared Console/Operations reads serial: aborting them would revoke readiness.
+  if (background && !projectId && !includeRuntimeStatus) quietRefresh = true;
   refreshFlight = (async () => {
     do {
       refreshQueued = false;
       activeRefreshProject = requestedProjectId || currentProjectId();
       const runtimeStatus = requestedRuntimeStatus;
       requestedRuntimeStatus = false;
-      await refreshSnapshot(activeRefreshProject, runtimeStatus);
+      const quiet = quietRefresh && !runtimeStatus && !projectSwitchPending();
+      quietRefresh = false;
+      await refreshSnapshot(activeRefreshProject, runtimeStatus, quiet);
     } while (refreshQueued);
   })();
   try { await refreshFlight; }
@@ -12496,7 +12517,7 @@ function scheduleTeamRefresh() {
 }
 function pollTeamSnapshot() {
   teamRefreshTimer = null;
-  return refresh();
+  return refresh(undefined, false, {background: true});
 }
 function recordTeamReadOutcome(issue) {
   teamRefreshDelay = ["busy", "timeout"].includes(issue)
@@ -12512,10 +12533,12 @@ function showRefreshProgress() {
     ? `正在切换到「${name}」…当前仍显示「${projectName()}」的数据。`
     : "正在刷新团队与交付记录…";
 }
-async function refreshSnapshot(target, includeRuntimeStatus) {
+async function refreshSnapshot(target, includeRuntimeStatus, quiet = false) {
   refreshing = true;
-  document.getElementById("refresh").disabled = true;
-  showRefreshProgress();
+  if (!quiet) {
+    document.getElementById("refresh").disabled = true;
+    showRefreshProgress();
+  }
   syncDeliveryControls();
   const status = document.getElementById("connection");
   const superseded = () => requestedProjectId !== null && requestedProjectId !== target;
@@ -12632,7 +12655,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
         else await loadAdministration(controller.signal, {refreshConsole: false});
       }
       renderCurrentFacts(changed);
-      if (!superseded() && !systemReadFinished) {
+      if (!quiet && !superseded() && !systemReadFinished) {
         status.className = "";
         status.textContent = "团队记录已更新 · 正在读取交付操作记录…";
       }
@@ -12673,16 +12696,13 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       showRefreshProgress();
       return;
     }
-    status.className = operationsAvailable && consoleAvailable === true ? "" : "error";
-    status.textContent = consoleAvailable
+    setConnectionStatus(status, operationsAvailable && consoleAvailable === true ? "" : "error", consoleAvailable
       ? (consoleMode === "inspection" ? "维护仅查看服务已连接 · 需求交付已暂停" : consoleDeliveryReady
           ? "团队与交付控制台已连接"
           : "设置控制台已连接 · 交付运行时尚未就绪") +
-        " · 最近读取 " +
-        time(snapshot.as_of) +
-        " · 读取完成后自动更新，繁忙时稍后重试" + (operationsAvailable ? "" : " · 交付操作记录读取失败，保留上次历史；当前操作暂不可用")
+        " · 每 5 秒自动更新" + (operationsAvailable ? "" : " · 交付操作记录读取失败，保留上次历史；当前操作暂不可用")
       : consoleAvailable === false ? "只读团队记录已连接；当前服务未提供交付控制接口。"
-        : "团队记录已更新；交付控制连接暂不可用，当前操作暂停。";
+        : "团队记录已更新；交付控制连接暂不可用，当前操作暂停。", time(snapshot.as_of));
   } catch (error) {
     if (superseded()) return;
     const issue = controller.signal.aborted ? "timeout"

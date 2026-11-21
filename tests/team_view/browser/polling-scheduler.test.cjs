@@ -35,7 +35,26 @@ test("the browser starts its next Team read five seconds after a slow read compl
   await h.page.clock.runFor(1);
   await observed(h.page, () => !refreshing);
   assert.equal(reads, 2);
-  assert.match(await h.page.locator("#connection").innerText(), /读取完成后自动更新/);
+  assert.match(await h.page.locator("#connection").innerText(), /每 5 秒自动更新/);
+  assert.match(await h.page.locator("#connection").getAttribute("title"), /^最近读取 /);
+});
+
+test("periodic polls stay quiet: no progress text and the refresh button stays enabled", async t => {
+  const h = await ui(t, {automaticPolling: true});
+  let release, started;
+  const held = new Promise(resolve => {release = resolve;});
+  const entered = new Promise(resolve => {started = resolve;});
+  t.after(() => release());
+  await h.page.clock.runFor(5000);
+  await observed(h.page, () => !refreshing);
+  const settled = await h.page.locator("#connection").innerText();
+  await h.page.route("**/api/v1/team?**", async route => {started(); await held; await route.fulfill({json: h.team});});
+  await h.page.clock.runFor(5000); await entered;
+  assert.equal(await h.page.evaluate(() => refreshing), true);
+  assert.equal(await h.page.locator("#connection").innerText(), settled);
+  assert.equal(await h.page.locator("#refresh").isDisabled(), false);
+  release(); await observed(h.page, () => !refreshing);
+  assert.equal(await h.page.locator("#connection").innerText(), settled);
 });
 
 test("browser automatic busy retries back off and retain the editable draft", async t => {
