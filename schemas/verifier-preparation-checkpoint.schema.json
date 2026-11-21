@@ -380,6 +380,34 @@
           "minimum": 0,
           "title": "Reserve Rework Attempts",
           "type": "integer"
+        },
+        "max_steps_per_run": {
+          "anyOf": [
+            {
+              "maximum": 16,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Steps Per Run"
+        },
+        "max_coder_runs": {
+          "anyOf": [
+            {
+              "maximum": 20,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Coder Runs"
         }
       },
       "required": [

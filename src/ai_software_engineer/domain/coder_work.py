@@ -79,6 +79,14 @@ def select_coder_work_slice(
     # not sixteen executions. If only one work slot remains, it covers all pending work.
     slots = max(1, work_remaining - window.reserve_rework_attempts)
     count = ceil(len(pending) / slots)
+    cap = window.max_steps_per_run
+    if cap is not None and ceil(len(pending) / cap) <= slots:
+        # A bounded window fills each invocation up to the steps that fit its
+        # time budget, so small plans finish in one run and keep budget for
+        # rework. When the remaining slots cannot cover all pending work at
+        # that cap (for example rework after QA FAIL on the last slot), the
+        # legacy aggregation keeps every step reachable instead of stranding it.
+        count = min(len(pending), cap)
     return CoderWorkSlice(
         task_id=task.id,
         attempt=attempt,

@@ -247,6 +247,10 @@ class PlannerStageService:
             if plan.execution_window != context.execution_window:
                 raise ValueError("Planner output changed the trusted execution window")
             validate_execution_plan(command.product_spec, command.technical_design, plan)
+            if plan.execution_window is not None:
+                plan.execution_window.validate_step_count(
+                    _planned_step_count(command.technical_design, plan)
+                )
             validate_execution_plan_revision(
                 plan, self._execution_plans.find_for_request(plan.request_id)
             )
@@ -420,6 +424,17 @@ class PlannerStageService:
             checkpoint=checkpoint,
             replayed=replayed,
         )
+
+
+def _planned_step_count(design: TechnicalDesign, plan: ExecutionPlan) -> int:
+    """Count the approved steps a Task will deliver, as planned delivery projects them."""
+    if plan.work_graph is None:
+        return len(design.implementation_steps)
+    return len(
+        dict.fromkeys(
+            step_id for package in plan.work_graph.packages for step_id in package.step_ids
+        )
+    )
 
 
 def _ready_request(request: ProjectRequest, *, transitioned_at: AwareDatetime) -> ProjectRequest:

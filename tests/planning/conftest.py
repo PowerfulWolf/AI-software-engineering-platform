@@ -143,7 +143,9 @@ def approval(spec: ProductSpec) -> ProductSpecApproval:
     )
 
 
-def technical_design(spec: ProductSpec, approved: ProductSpecApproval) -> TechnicalDesign:
+def technical_design(
+    spec: ProductSpec, approved: ProductSpecApproval, *, step_count: int = 1
+) -> TechnicalDesign:
     return TechnicalDesign.create(
         spec,
         approved,
@@ -178,6 +180,15 @@ def technical_design(spec: ProductSpec, approved: ProductSpecApproval) -> Techni
                 description="Build an abstract plan and preview every delivery phase.",
                 component_ids=("component_planning_preview",),
                 verification="Run tests/planning.",
+            ),
+            *(
+                DesignStep(
+                    id=f"design_step_planner_{index:02d}",
+                    description=f"Deliver approved serial step {index}.",
+                    component_ids=("component_planning_preview",),
+                    verification="Run tests/planning.",
+                )
+                for index in range(2, step_count + 1)
             ),
         ),
         created_at=NOW + timedelta(minutes=3),

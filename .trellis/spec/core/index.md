@@ -235,6 +235,8 @@
   registered verification and claimed preparation before model invocation.
 - [`coder-slice-output-guidance.md`](coder-slice-output-guidance.md): shared prior/selected/deferred
   output guidance and fixed native rejection diagnostics without relaxing candidate gates.
+- [`plan-work-capacity.md`](plan-work-capacity.md): optional window step capacity, plan-time
+  "requirement too big" rejection and capped Coder slices that keep rework reachable.
 - [`execution-baseline.md`](execution-baseline.md): same-Task source rebinding, complete retained
   patches, exact engineering decisions and historical source/queue accounting.
 

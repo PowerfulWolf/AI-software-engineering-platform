@@ -5,6 +5,7 @@
 | 文档 | 适用场景 |
 |---|---|
 | [生产部署与配置](production-setup.md) | 环境准备、启动、模型路由、设置、数据位置与备份责任 |
+| [固定发布版本运行](runtime-releases.md) | 服务从只读发布版本运行，与 ASE 正在开发的检出分离；发版、切换与回滚 |
 | [交付恢复与问题反馈](delivery-recovery.md) | 定位失败、恢复审批、重试预算和交接 |
 | [角色执行队列运维](worker-operations.md) | Worker 升级、旧需求接入、租约中断与回滚 |
 | [规划与知识运维](planning-and-knowledge.md) | 规划分流、知识索引、缺口恢复、管理 API 与历史兼容 |

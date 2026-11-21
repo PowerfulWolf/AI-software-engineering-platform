@@ -261,3 +261,112 @@ def test_legacy_plan_keeps_exact_wire_digest_and_receives_no_new_execution_polic
     reloaded = PlanArtifact.model_validate_json(legacy.model_dump_json())
     assert reloaded.to_wire() == legacy.to_wire()
     assert artifact_digest(reloaded) == artifact_digest(legacy)
+
+
+def _bounded_plan(count: int, *, steps_per_run: int = 3, coder_runs: int = 3) -> PlanArtifact:
+    plan = _plan(count)
+    window = PlanExecutionWindow.for_seconds(
+        1800, max_steps_per_run=steps_per_run, max_coder_runs=coder_runs
+    )
+    return plan.model_copy(
+        update={"content": plan.content.model_copy(update={"execution_window": window})}
+    )
+
+
+def test_legacy_window_wire_omits_capacity_and_keeps_old_semantics() -> None:
+    window = PlanExecutionWindow.for_seconds(1800)
+    assert window.to_wire() == {
+        "kind": "serial_coder_window_v1",
+        "hard_seconds": 1800,
+        "finalization_reserve_seconds": 300,
+        "reserve_rework_attempts": 1,
+    }
+    assert window.step_capacity is None
+    window.validate_step_count(100)
+
+
+def test_bounded_window_caps_each_coder_run_at_its_step_limit() -> None:
+    plan = _bounded_plan(6)
+    first = select_coder_work_slice(
+        _task(), plan, attempt=1, source_revision="a" * 40, progress=None
+    )
+    assert first is not None
+    assert len(first.selected_step_ids) == 3
+    assert len(first.later_step_ids) == 3
+    checkpoint = _progress(first.selected_step_ids, first.later_step_ids)
+    validate_coder_slice_output(first, checkpoint)
+    second = select_coder_work_slice(
+        _task(attempt=2), plan, attempt=2, source_revision="a" * 40, progress=checkpoint
+    )
+    assert second is not None
+    assert second.selected_step_ids == first.later_step_ids
+    assert second.later_step_ids == ()
+
+
+def test_bounded_window_keeps_all_rework_reachable_on_the_last_slot() -> None:
+    # Rework after QA FAIL re-enters with no progress; one slot must still be
+    # able to publish a complete candidate instead of a stranded partial slice.
+    work = select_coder_work_slice(
+        _task(attempt=3), _bounded_plan(6), attempt=3, source_revision="a" * 40, progress=None
+    )
+    assert work is not None
+    assert len(work.selected_step_ids) == 6
+    assert work.later_step_ids == ()
+    validate_coder_slice_output(work, make_implementation_artifact())
+
+
+def test_bounded_window_finishes_a_small_plan_in_one_run() -> None:
+    work = select_coder_work_slice(
+        _task(), _bounded_plan(2), attempt=1, source_revision="a" * 40, progress=None
+    )
+    assert work is not None
+    assert len(work.selected_step_ids) == 2
+    assert work.later_step_ids == ()
+
+
+def test_bounded_window_fills_runs_up_to_the_cap() -> None:
+    work = select_coder_work_slice(
+        _task(), _bounded_plan(4), attempt=1, source_revision="a" * 40, progress=None
+    )
+    assert work is not None
+    assert len(work.selected_step_ids) == 3
+    assert len(work.later_step_ids) == 1
+
+
+def test_oversized_plan_is_rejected_before_any_coder_run() -> None:
+    from ai_software_engineer.domain.execution_window import PlanExceedsWorkCapacity
+
+    window = PlanExecutionWindow.for_seconds(1800, max_steps_per_run=3, max_coder_runs=3)
+    assert window.step_capacity == 6
+    window.validate_step_count(6)
+    with pytest.raises(PlanExceedsWorkCapacity, match="需求过大") as raised:
+        window.validate_step_count(16)
+    assert raised.value.step_count == 16
+    assert raised.value.capacity == 6
+
+
+def test_bounded_window_requires_complete_and_usable_capacity() -> None:
+    with pytest.raises(ValueError, match="both max_steps_per_run and max_coder_runs"):
+        PlanExecutionWindow.for_seconds(1800, max_steps_per_run=3)
+    with pytest.raises(ValueError, match="at least one Coder run"):
+        PlanExecutionWindow.for_seconds(1800, max_steps_per_run=3, max_coder_runs=1)
+
+
+def test_bounded_window_round_trips_its_capacity() -> None:
+    window = PlanExecutionWindow.for_seconds(1800, max_steps_per_run=2, max_coder_runs=4)
+    assert window.to_wire()["max_steps_per_run"] == 2
+    assert PlanExecutionWindow.model_validate(window.to_wire()) == window
+
+
+def test_production_composition_uses_the_bounded_default() -> None:
+    from ai_software_engineer.domain.execution_window import (
+        DEFAULT_CODER_STEPS_PER_RUN,
+        bounded_coder_window,
+    )
+
+    window = bounded_coder_window(1800, max_work_attempts=3)
+    assert window.max_steps_per_run == DEFAULT_CODER_STEPS_PER_RUN
+    assert window.step_capacity == DEFAULT_CODER_STEPS_PER_RUN * 2
+    assert bounded_coder_window(1800, max_work_attempts=1).step_capacity == (
+        DEFAULT_CODER_STEPS_PER_RUN
+    )

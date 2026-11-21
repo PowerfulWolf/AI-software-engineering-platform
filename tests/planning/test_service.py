@@ -378,3 +378,76 @@ def test_stale_request_revision_is_rejected_before_agent_or_plan_write(tmp_path:
             )
         )
     assert plan_store.records == {}
+
+
+def _bounded_planner_run(
+    tmp_path: Path, *, step_count: int, steps_per_run: int
+) -> tuple[PlannerStageService, ProduceExecutionPlanCommand, InMemoryExecutionPlanStore]:
+    from ai_software_engineer.domain.execution_window import PlanExecutionWindow
+
+    current_request = planning_request(preparation(tmp_path))
+    current = request_revision(current_request)
+    spec = product_spec(current_request)
+    approved = approval(spec)
+    design = technical_design(spec, approved, step_count=step_count)
+    window = PlanExecutionWindow.for_seconds(
+        1800, max_steps_per_run=steps_per_run, max_coder_runs=2
+    )
+    plan = ExecutionPlan.create(
+        spec,
+        design,
+        plan_id="execution_plan_planning_001",
+        version=1,
+        phases=execution_plan(spec, design).phases,
+        execution_window=window,
+        created_at=NOW + timedelta(minutes=4),
+    )
+    request_store = FileProductRecordStore(tmp_path / "product-records")
+    request_store.put_request_revision(designing_request_revision(current.request))
+    request_store.put_request_revision(current)
+    design_store, checkpoint = committed_design_handoff(tmp_path, current, spec, approved, design)
+    design_run = design_store.get_run(checkpoint.run_id)
+    assert design_run.planning_authorization is not None
+    plan_store = InMemoryExecutionPlanStore()
+    service = PlannerStageService(
+        context_builder=PlannerContextBuilder(),
+        adapter=FakePlannerAgentAdapter(
+            default=FakePlannerScenario(behavior=FakePlannerBehavior.READY, execution_plan=plan)
+        ),
+        execution_plans=plan_store,
+        request_revisions=request_store,
+        design_records=design_store,
+    )
+    command = ProduceExecutionPlanCommand(
+        run_id="run_planner_capacity_001",
+        current_request_revision=current,
+        product_spec=spec,
+        product_approval=approved,
+        technical_design=design,
+        design_checkpoint=checkpoint,
+        planning_authorization=design_run.planning_authorization,
+        expected_execution_plan_version=1,
+        transitioned_at=NOW + timedelta(minutes=5),
+        execution_window=window,
+    )
+    return service, command, plan_store
+
+
+def test_plan_larger_than_its_work_capacity_fails_before_delivery(tmp_path: Path) -> None:
+    service, command, plan_store = _bounded_planner_run(tmp_path, step_count=4, steps_per_run=3)
+
+    with pytest.raises(RuntimeError, match="需求过大"):
+        service.produce(command)
+
+    record = plan_store.find_run(command.run_id)
+    assert record is not None
+    assert record.execution_plan is None
+    assert "需求过大" in (record.error_message or "")
+
+
+def test_plan_within_its_work_capacity_is_ready(tmp_path: Path) -> None:
+    service, command, _ = _bounded_planner_run(tmp_path, step_count=3, steps_per_run=3)
+
+    result = service.produce(command)
+
+    assert result.ready_request.status is ProjectRequestStatus.READY_FOR_DELIVERY

@@ -9,6 +9,7 @@ import pytest
 
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.domain.enums import TeamRole
+from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy
 from ai_software_engineer.manager import production_backend
 from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
 from ai_software_engineer.manager.production_agents import ExecutionPlanDraft
@@ -67,6 +68,12 @@ def test_backend_preserves_committed_projection_instead_of_native_fast_plan(
     backend = object.__new__(ProductionProjectDeliveryBackend)
     monkeypatch.setattr(backend, "_trusted_plan_projection", trusted, raising=False)
     monkeypatch.setattr(backend, "_structured_clients", client, raising=False)
+    monkeypatch.setattr(
+        backend,
+        "_config",
+        SimpleNamespace(execution_retry_policy=ExecutionRetryPolicy()),
+        raising=False,
+    )
     facts = SimpleNamespace(
         workspace=SimpleNamespace(repository_root=tmp_path),
         product=requests,

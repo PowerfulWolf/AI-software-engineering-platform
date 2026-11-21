@@ -143,6 +143,12 @@ def compile_joint_plan(checkpoint: JointCheckpoint, plan: JointExecutionPlan) ->
             ):
                 raise ComplexPlanRequired()
             graph = design_work_graph(design, package_id="package_" + unit.unit_id)
+        if checkpoint.execution_window is not None:
+            # Reject an oversized unit before any Coder starts; a frozen budget
+            # that cannot finish the approved steps only produces timeouts.
+            checkpoint.execution_window.validate_step_count(
+                len(dict.fromkeys(step for package in graph.packages for step in package.step_ids))
+            )
         units.append(
             unit.model_copy(
                 update={

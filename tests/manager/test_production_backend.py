@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Never
+from typing import Never, cast
 
 import pytest
 
@@ -53,6 +53,7 @@ from ai_software_engineer.domain import (
     TeamRole,
     WorkItemStatus,
 )
+from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy
 from ai_software_engineer.manager import production_backend
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
@@ -240,6 +241,9 @@ def test_planner_retry_uses_a_new_run_identity_after_a_failed_run(
     monkeypatch.setattr(backend, "_facts_for_checkpoint", lambda checkpoint: facts)
     backend._structured_clients = SimpleNamespace(for_project=lambda *args: object())
     backend._trusted_plan_projection = False
+    backend._config = cast(
+        ProductionConfig, SimpleNamespace(execution_retry_policy=ExecutionRetryPolicy())
+    )
     checkpoint = ProjectDeliveryCheckpoint.create(
         delivery_id=delivery_id,
         repository_id="repository_planner_retry",

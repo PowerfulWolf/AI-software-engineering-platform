@@ -87,7 +87,7 @@ from ai_software_engineer.domain.engineering_authority import (
     OperatorDuty,
 )
 from ai_software_engineer.domain.execution_baseline import BaselinePurpose
-from ai_software_engineer.domain.execution_window import PlanExecutionWindow
+from ai_software_engineer.domain.execution_window import bounded_coder_window
 from ai_software_engineer.git.policy import delivery_write_paths
 from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.manager.baseline import (
@@ -743,8 +743,9 @@ class ProductionProjectDeliveryBackend:
                         and prior_run.outcome is PlannerRunOutcome.READY_FOR_DELIVERY
                         and prior_run.execution_plan is not None
                         else projected_window
-                        or PlanExecutionWindow.for_seconds(
-                            _delivery_timeout_seconds(AgentRole.CODER)
+                        or bounded_coder_window(
+                            _delivery_timeout_seconds(AgentRole.CODER),
+                            max_work_attempts=self._config.execution_retry_policy.delivery_policy().max_work_attempts,
                         )
                     ),
                 )

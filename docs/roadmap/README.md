@@ -4,6 +4,7 @@
 这里维护未完成的范围、优先级和待验收事项。
 
 - [路线摘要](milestones.md)：当前优先级、剩余验收及历史任务编号说明。
+- [自我迭代阶梯](self-iteration-ladder.md)：当前主线。从小需求开始让 ASE 交付自身修改，原 K1 拆分为 L4–L9。
 - [详细待办](backlog.md)：知识闭环、Manager 协调、能力接入和可靠性的步骤与验收标准。
 - [工程任务索引](../../.trellis/tasks/README.md)：具体任务的当前记录与证据。
 - [2026-09-28 交付复盘](../archive/2026-09-28-ase-delivery-retrospective.md)：本轮后续规划的事实来源。

@@ -9,7 +9,12 @@ import pytest
 from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.manager.production_agents import ExecutionPlanDraft, _execution_plan
-from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage, digest
+from ai_software_engineer.multi_directory.models import (
+    JointCheckpoint,
+    JointExecutionPlan,
+    JointStage,
+    digest,
+)
 from ai_software_engineer.multi_directory.planning import compile_joint_plan
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
 from ai_software_engineer.multi_directory.service import (
@@ -214,3 +219,53 @@ def test_native_planner_rejects_model_window_drift(tmp_path: Path) -> None:
     altered = draft.model_copy(update={"execution_window": PlanExecutionWindow.for_seconds(1800)})
     with pytest.raises(ValueError, match="trusted frozen"):
         _execution_plan(request, altered)
+
+
+def _two_step_plan(
+    seed: JointCheckpoint, window: PlanExecutionWindow
+) -> tuple[JointCheckpoint, JointExecutionPlan]:
+    base = _single_checkpoint(Path(seed.scope.units[0].root).parent)
+    assert base.plan is not None
+    unit = base.plan.units[0]
+    graph = unit.plan.work_graph
+    assert graph is not None
+    package = graph.packages[0]
+    widened = graph.model_copy(
+        update={
+            "packages": (
+                package.model_copy(update={"step_ids": (*package.step_ids, "design_step_extra")}),
+            )
+        }
+    )
+    plan = base.plan.model_copy(
+        update={
+            "units": (
+                unit.model_copy(
+                    update={"plan": unit.plan.model_copy(update={"work_graph": widened})}
+                ),
+            )
+        }
+    )
+    bounded = JointCheckpoint.seal({**seed.to_wire(), "execution_window": window})
+    return bounded, plan
+
+
+def test_joint_unit_larger_than_its_window_is_rejected_before_delivery(tmp_path: Path) -> None:
+    from ai_software_engineer.domain.execution_window import PlanExceedsWorkCapacity
+
+    _, _, seed = _planning_seed(tmp_path)
+    small = PlanExecutionWindow.for_seconds(900, max_steps_per_run=1, max_coder_runs=2)
+    bounded, plan = _two_step_plan(seed, small)
+
+    with pytest.raises(PlanExceedsWorkCapacity, match="需求过大"):
+        compile_joint_plan(bounded, plan)
+
+
+def test_joint_unit_within_its_window_compiles_with_the_frozen_window(tmp_path: Path) -> None:
+    _, _, seed = _planning_seed(tmp_path)
+    roomy = PlanExecutionWindow.for_seconds(900, max_steps_per_run=2, max_coder_runs=2)
+    bounded, plan = _two_step_plan(seed, roomy)
+
+    compiled = compile_joint_plan(bounded, plan)
+
+    assert compiled.units[0].plan.execution_window == roomy

@@ -1548,6 +1548,16 @@ class JointDeliveryService:
         output_schema = model.model_json_schema()
         if model is JointTechnicalDesign:
             output_schema["required"] = [*output_schema.get("required", []), "blocking_issues"]
+            window = checkpoint.execution_window
+            capacity = window.step_capacity if window is not None else None
+            if window is not None and capacity is not None:
+                instructions += (
+                    f" Each write unit may have at most {capacity} implementation_steps: one "
+                    f"Coder run completes at most {window.max_steps_per_run} "
+                    "steps inside the frozen execution window. If the approved scope cannot fit, "
+                    "do not merge unrelated work into oversized steps; add a blocking_issue asking "
+                    "the user to split the Requirement into smaller Requirements."
+                )
         if model is JointExecutionPlan and checkpoint.design is not None:
             if checkpoint.execution_window is not None:
                 instructions += (

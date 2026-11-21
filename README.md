@@ -30,6 +30,8 @@ Repository 目录和 Requirement 交付事实保持隔离。
 | 能力演进 | 受控工具与专用执行器；学习结果可发布非执行性的 Skill 设计建议 | 新能力统一描述、验证、注册、按角色启用与版本回退；禁止 Agent 自行扩权 |
 
 下一步优先补齐自动知识闭环，再建设统一的新能力接入、验证与发布流程；Manager 全阶段协调和组合回归作为可靠性工作同步推进。
+当前做法见[自我迭代阶梯](docs/roadmap/self-iteration-ladder.md)：服务从[固定发布版本](docs/operations/runtime-releases.md)运行，
+需求从小到大交付；技术方案超过单需求工作容量时在规划阶段即被拒绝，不再进入注定超时的 Coder 执行。
 完整拆解见 [TODO 扩展](docs/roadmap/backlog.md)。
 
 ## 设计原则
