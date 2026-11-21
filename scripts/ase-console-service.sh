@@ -359,6 +359,22 @@ read_supervisor_lock_owner() {
   printf '%s\n' "$lock_owner_pid"
 }
 
+read_dead_supervisor_lock_owner() {
+  [ -d "$SUPERVISOR_LOCK_DIR" ] && [ ! -L "$SUPERVISOR_LOCK_DIR" ] || return 1
+  [ -f "$SUPERVISOR_LOCK_OWNER_FILE" ] && [ ! -L "$SUPERVISOR_LOCK_OWNER_FILE" ] || return 1
+  lock_owner_pid=$(sed -n '1p' "$SUPERVISOR_LOCK_OWNER_FILE")
+  lock_owner_script=$(sed -n '2p' "$SUPERVISOR_LOCK_OWNER_FILE")
+  case "$lock_owner_pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  case "$lock_owner_script" in
+    /*/scripts/ase-console-service.sh) ;;
+    *) return 1 ;;
+  esac
+  ! process_exists "$lock_owner_pid" || return 1
+  printf '%s\n' "$lock_owner_pid"
+}
+
 acquire_supervisor_ownership() {
   if mkdir "$SUPERVISOR_LOCK_DIR" 2>/dev/null; then
     umask 077
@@ -374,7 +390,12 @@ acquire_supervisor_ownership() {
   fi
   # A lock without a complete owner record may be an owner still publishing
   # its claim. Never remove it: an unverifiable lock fails closed.
-  lock_owner_pid=$(read_supervisor_lock_owner 2>/dev/null) || return 1
+  if ! lock_owner_pid=$(read_supervisor_lock_owner 2>/dev/null); then
+    # A complete record whose owner process no longer exists is stale even
+    # when the checkout or temporary release that wrote it has been deleted;
+    # otherwise one removed release directory would block every later start.
+    lock_owner_pid=$(read_dead_supervisor_lock_owner 2>/dev/null) || return 1
+  fi
   lock_owner_script=$(sed -n '2p' "$SUPERVISOR_LOCK_OWNER_FILE")
   if process_matches_supervisor "$lock_owner_pid" "$lock_owner_script"; then
     return 1

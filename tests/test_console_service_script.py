@@ -1147,3 +1147,63 @@ def test_service_supervisor_records_failure_when_runtime_environment_cannot_load
         os.kill(supervisor_pid, 0)
     finally:
         _run(launcher, environment, "stop")
+
+
+def _stale_lock(state: Path, *, pid: int, script: str) -> Path:
+    lock = state / "ase-console-supervisor.lock"
+    lock.mkdir(parents=True)
+    (lock / "owner").write_text(f"{pid}\n{script}\n", encoding="utf-8")
+    return lock
+
+
+def _dead_pid() -> int:
+    finished = subprocess.Popen(("true",))
+    finished.wait(timeout=5)
+    return finished.pid
+
+
+def test_service_supervisor_reclaims_dead_owner_whose_release_was_deleted(
+    tmp_path: Path,
+) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    state.mkdir()
+    deleted = "/private/tmp/deleted-ase-release/scripts/ase-console-service.sh"
+    lock = _stale_lock(state, pid=_dead_pid(), script=deleted)
+    supervisor = subprocess.Popen(
+        (str(launcher), "supervise"),
+        env=environment,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not (state / "ase-console-supervisor.pid").exists():
+            time.sleep(0.05)
+        assert supervisor.poll() is None
+        assert (lock / "owner").read_text(encoding="utf-8").splitlines() == [
+            str(supervisor.pid),
+            str(launcher),
+        ]
+    finally:
+        supervisor.terminate()
+        supervisor.wait(timeout=5)
+
+
+def test_service_supervisor_keeps_unverifiable_or_live_deleted_release_locks(
+    tmp_path: Path,
+) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    state.mkdir()
+    deleted = "/private/tmp/deleted-ase-release/scripts/ase-console-service.sh"
+    lock = _stale_lock(state, pid=os.getpid(), script=deleted)
+    refused = _run(launcher, environment, "supervise")
+    assert refused.returncode == 1
+    assert "another ase-console supervisor" in refused.stderr
+    assert (lock / "owner").read_text(encoding="utf-8").startswith(f"{os.getpid()}\n")
+
+    (lock / "owner").write_text(f"{_dead_pid()}\n", encoding="utf-8")
+    incomplete = _run(launcher, environment, "supervise")
+    assert incomplete.returncode == 1
+    assert (lock / "owner").exists()
