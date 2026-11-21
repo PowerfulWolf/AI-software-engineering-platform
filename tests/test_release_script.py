@@ -21,7 +21,10 @@ FAKE_UV = """#!/bin/sh
 mkdir -p .venv/bin
 printf '#!/bin/sh\\n' > .venv/bin/ase-console
 chmod +x .venv/bin/ase-console
-ln -s "$(command -v python3)" .venv/bin/python
+# Like a real editable install, the venv only works at the path it was built in.
+printf '#!/bin/sh\\n[ "$(cd "$(dirname "$0")/../.." && pwd -P)" = "%s" ] || exit 7\\n' \\
+  "$(pwd -P)" > .venv/bin/python
+chmod +x .venv/bin/python
 """
 
 
@@ -79,6 +82,8 @@ def test_release_lifecycle_switches_through_controlled_restart_and_rolls_back(
     assert installed.returncode == 0, installed.stderr
     release = tmp_path / "runtime" / "releases" / "v0.2.0"
     assert (release / ".venv" / "bin" / "ase-console").exists()
+    # The environment must work at the installed path (editable installs record it).
+    assert subprocess.run((str(release / ".venv" / "bin" / "python"),)).returncode == 0
     assert not os.stat(release / "src" / "pkg" / "__init__.py").st_mode & stat.S_IWUSR
     # The release is an independent clone, not a worktree of the dev repository.
     assert "runtime" not in _git(repo, "worktree", "list")

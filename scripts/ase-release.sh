@@ -81,7 +81,10 @@ cmd_install() {
     fail "release $tag is already installed at $dest"
   fi
   mkdir -p "$RELEASES"
-  staging="$RELEASES/.installing-$tag.$$"
+  # Install in the final directory: uv's editable install records this exact
+  # path, so the release must never be renamed after `uv sync`. A failed
+  # install removes the partial directory.
+  staging=$dest
   trap 'chmod -R u+w "$staging" 2>/dev/null || true; rm -rf "$staging"' EXIT INT TERM
   # A full independent clone: release directories never share Git state with
   # the worktrees ASE creates in the development repository.
@@ -94,8 +97,10 @@ cmd_install() {
     .venv/bin/python -m compileall -q src >/dev/null
   )
   # The engine source of a release is never edited in place.
+  # Fail the install unless the release imports from its own directory.
+  "$staging/.venv/bin/python" -c "import ai_software_engineer.web_console.lifecycle" \
+    || fail "release $tag does not import from $staging"
   chmod -R a-w "$staging/src"
-  mv "$staging" "$dest"
   trap - EXIT INT TERM
   echo "installed $tag at $dest"
 }
