@@ -175,9 +175,13 @@ _VERIFICATION_RULES = (
     "with levels 'documentation' or 'document'; kind 'source' only with levels "
     "'inspection', 'source-inspection' or 'review'; kind 'native_ui' only with 'ui', "
     "'native-ui' or 'ui-inspection'. Inspection never replaces unit, integration, e2e, "
-    "security or other executable levels; those need verification_argv. A pure "
-    "documentation change is verified by kind 'document' inspection with level "
-    "'documentation', or by a read-only git command with level 'static'. These rules are "
+    "security or other executable levels; those need verification_argv. verification_argv "
+    "must start with a registered test runner (pytest, python -m pytest, python -m "
+    "unittest, uv run pytest, npm/pnpm/yarn/bun test, go test, ctest, mvn/gradle test); "
+    "git, shell, grep, diff or any other command is rejected. A pure documentation "
+    "change is verified only by kind 'document' inspection with level 'documentation' "
+    "(list the changed file in paths and the checks, including the allowed change "
+    "scope, in checklist). These rules are "
     "complete: never report the platform validator, its tests or its rejection branches "
     "as a blocking issue; blocking_issues are only for product or repository facts that "
     "remain unknown."
@@ -485,6 +489,14 @@ class JointDeliveryService:
                         return self._close_checkpoint(checkpoint)
                 if checkpoint.children:
                     raise ValueError("未配置工程执行停止校验, 不能关闭已有工程执行的需求。")
+                return self._close_checkpoint(checkpoint)
+            if (
+                checkpoint.stage in {JointStage.DESIGNING, JointStage.PLANNING}
+                and not checkpoint.children
+            ):
+                # Upstream stages own no engineering execution, and this close is
+                # itself the Requirement's only active operation. A design/plan that
+                # exhausted its budget must not leave the Requirement stuck forever.
                 return self._close_checkpoint(checkpoint)
             if checkpoint.stage is JointStage.DELIVERING:
                 guard = close_guard

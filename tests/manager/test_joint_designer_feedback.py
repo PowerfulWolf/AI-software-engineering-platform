@@ -501,3 +501,23 @@ def test_invalid_write_path_feedback_is_safe_and_bounded(
     assert "unit index: 1; component index: 1; path index: 1" in feedback
     assert digest(invalid) in feedback
     assert "secret" not in feedback
+
+
+def test_design_stage_that_exhausted_its_budget_can_be_closed(tmp_path: Path) -> None:
+    from ai_software_engineer.multi_directory.service import CloseRequirement
+
+    service, backend, seed, _ = setup_design(tmp_path)
+    valid = backend.designs[1]
+    assert isinstance(valid, JointTechnicalDesign)
+    backend.designs = [valid.model_copy(update={"blocking_issues": ("unresolved",)})] * 3
+    with pytest.raises(ValueError, match="design attempt budget exhausted"):
+        service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+    stuck = service.status(seed.delivery_id).checkpoint
+    assert stuck.stage is JointStage.DESIGNING and not stuck.children
+    closed = service.close_requirement(
+        CloseRequirement(
+            delivery_id=stuck.delivery_id, expected_checkpoint_sha256=stuck.checkpoint_sha256
+        )
+    ).checkpoint
+    assert closed.stage is JointStage.CLOSED
+    assert closed.product_spec == stuck.product_spec

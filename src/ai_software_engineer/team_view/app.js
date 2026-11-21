@@ -4454,6 +4454,9 @@ function requestTasks(request) {
 }
 function canCloseRequirement(request) {
   if (request.stage === "BLOCKED" || productDiscussionStages.has(request.stage)) return true;
+  // Design/planning own no engineering execution; a stuck upstream stage can be withdrawn.
+  if (["DESIGNING", "PLANNING"].includes(request.stage))
+    return !requestTasks(request).length && !activeOperation(request.id, request.project_id);
   if (request.stage !== "DELIVERING") return false;
   const tasks = requestTasks(request);
   if (!tasks.length) return false;

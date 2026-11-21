@@ -336,3 +336,46 @@ def test_corrected_inspection_alias_preserves_executable_levels(tmp_path: Path) 
     )
     require_native_verification_contract(corrected, original)
     assert original.units[0].design.acceptance_mappings[0].test_levels[0] == "source_inspection"
+
+
+@pytest.mark.parametrize(
+    ("argv", "allowed"),
+    [
+        (("python3", "-m", "pytest", "-q", "tests/test_safe.py::test_ok"), True),
+        (("git", "diff", "--name-status", "HEAD~1", "HEAD"), False),
+        (("bash", "-c", "grep FAQ docs/a.md"), False),
+    ],
+)
+def test_design_admission_rejects_commands_planning_cannot_run(
+    tmp_path: Path, argv: tuple[str, ...], allowed: bool
+) -> None:
+    cp = checkpoint(tmp_path)
+    assert cp.design
+    unit = cp.design.units[0]
+    mapping = unit.design.acceptance_mappings[0].model_copy(
+        update={
+            "test_levels": ("static",),
+            "verification_argv": argv,
+            "verification_inspection": None,
+        }
+    )
+    design = cp.design.model_copy(
+        update={
+            "units": (
+                unit.model_copy(
+                    update={
+                        "design": unit.design.model_copy(update={"acceptance_mappings": (mapping,)})
+                    }
+                ),
+                *cp.design.units[1:],
+            )
+        }
+    )
+    if allowed:
+        require_native_verification_contract(design)
+    else:
+        with pytest.raises(
+            JointDesignVerificationRejected, match="不是受支持的测试运行器"
+        ) as error:
+            require_native_verification_contract(design)
+        assert [failure.code for failure in error.value.failures] == ["UNSUPPORTED_TEST_COMMAND"]

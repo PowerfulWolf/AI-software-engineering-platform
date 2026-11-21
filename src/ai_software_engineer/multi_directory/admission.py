@@ -5,6 +5,7 @@ from ai_software_engineer.manager.production_agents import (
     AcceptanceVerificationRejected,
     native_acceptance_mapping,
 )
+from ai_software_engineer.multi_directory.integration_commands import is_test_command
 from ai_software_engineer.multi_directory.models import JointTechnicalDesign
 
 
@@ -74,6 +75,18 @@ def require_native_verification_contract(
                 native_acceptance_mapping(mapping)
             except AcceptanceVerificationRejected as error:
                 failures.append(error)
+                continue
+            if mapping.verification_argv is not None and not is_test_command(
+                tuple(mapping.verification_argv)
+            ):
+                # Planning and delivery preflight run only registered test runners.
+                # Reject here, where the Designer still has retry budget, instead of
+                # letting the Planner inherit a command that blocks the Plan.
+                failures.append(
+                    AcceptanceVerificationRejected(
+                        mapping.acceptance_criterion_id, "UNSUPPORTED_TEST_COMMAND"
+                    )
+                )
                 continue
             previous = retained_levels.get((unit.unit_id, mapping.acceptance_criterion_id))
             if previous is not None and not {_retained_level(level) for level in previous} <= {

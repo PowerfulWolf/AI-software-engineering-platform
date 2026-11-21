@@ -166,6 +166,10 @@ class AcceptanceVerificationRejected(ValueError):
                 "不得删除原设计要求的验证层级来绕过检查, 请改用可执行验证"
             ),
             "VERIFICATION_MAPPING_REMOVED": "不得删除原仓库的验收映射或改为只读来绕过验证修正",
+            "UNSUPPORTED_TEST_COMMAND": (
+                "verification_argv 不是受支持的测试运行器 (pytest/unittest/npm test/go test 等); "
+                "纯文档或源码核对请改用 verification_inspection"
+            ),
         }
         super().__init__(f"验收项 {criterion_id}: {reasons[code]}。请保持验证层级并修正验证方式。")
 
