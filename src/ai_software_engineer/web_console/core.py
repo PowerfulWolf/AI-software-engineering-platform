@@ -21,7 +21,13 @@ from ai_software_engineer.service_pause import ServicePauseControl, ServicePause
 from .models import ConsoleCommandResult, ConsoleIntent, ConsoleOperation
 from .preparation_store import InMemoryPreparationProgressStore, PreparationProgressStore
 from .shutdown import ShutdownRefusal, ShutdownResult, ShutdownState, shutdown_deadline
-from .store import ConsoleOperationError, ConsoleOperationStore, operation_lane
+from .store import (
+    SETTLEMENT_LANE,
+    ConsoleOperationError,
+    ConsoleOperationStore,
+    is_settlement,
+    operation_lane,
+)
 from .summary_models import OperationSummaryPage, OperationSummaryQuery
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,6 +73,7 @@ class ProjectConsole:
             raise ValueError("console parallelism must be between 1 and 16")
         self._max_parallel = max_parallel_operations
         self._running_lanes: dict[str, str] = {}
+        self._running_settlements: set[str] = set()
         self._store = store
         self._executor = executor
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -132,7 +139,7 @@ class ProjectConsole:
                     running = self._store.claim_next(at=self._clock())
                 else:
                     running = self._store.claim_next(
-                        at=self._clock(), busy_lanes=frozenset(self._running_lanes.values())
+                        at=self._clock(), busy_lanes=self._busy_lanes_locked()
                     )
             except BaseException:
                 self._refuse_locked(
@@ -143,6 +150,8 @@ class ProjectConsole:
                 return None
             self._active_operations += 1
             self._running_lanes[running.operation_id] = operation_lane(running)
+            if is_settlement(running):
+                self._running_settlements.add(running.operation_id)
             if self._max_parallel > 1:
                 # Each claimed operation runs on its own thread; the dispatcher
                 # immediately returns to claim work in other lanes.
@@ -164,6 +173,12 @@ class ProjectConsole:
                 return running
         return self._execute_claimed(running)
 
+    def _busy_lanes_locked(self) -> frozenset[str]:
+        lanes = set(self._running_lanes.values())
+        if self._running_settlements:
+            lanes.add(SETTLEMENT_LANE)
+        return frozenset(lanes)
+
     def _execute_claimed(self, running: ConsoleOperation) -> ConsoleOperation:
         persisted = False
         try:
@@ -180,6 +195,7 @@ class ProjectConsole:
             with self._condition:
                 self._active_operations -= 1
                 self._running_lanes.pop(running.operation_id, None)
+                self._running_settlements.discard(running.operation_id)
                 self._wake.set()
                 if not persisted:
                     self._refuse_locked(

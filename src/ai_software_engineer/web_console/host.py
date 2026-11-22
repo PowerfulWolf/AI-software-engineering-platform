@@ -282,7 +282,22 @@ def _production_console_app(
     )
 
 
+def _enable_stack_dumps() -> None:
+    """`kill -USR1 <pid>` writes every thread's stack to the service log.
+
+    Parallel lanes make a stuck operation hard to diagnose from outside; this is
+    read-only and changes nothing in the running service.
+    """
+    import faulthandler
+    import signal
+    import sys
+
+    if hasattr(signal, "SIGUSR1"):
+        faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True, chain=False)
+
+
 def main() -> None:
+    _enable_stack_dumps()
     try:
         config, config_path = _load_console_config(os.environ)
         config_bytes = config_path.read_bytes() if config_path.exists() else None

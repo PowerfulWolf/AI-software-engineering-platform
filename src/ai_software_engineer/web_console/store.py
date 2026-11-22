@@ -181,7 +181,7 @@ class InMemoryConsoleOperationStore:
                     history[-1]
                     for history in self._histories.values()
                     if history[-1].status is ConsoleOperationStatus.QUEUED
-                    and operation_lane(history[-1]) not in busy_lanes
+                    and _claimable(history[-1], busy_lanes)
                 ),
                 key=lambda item: (item.requested_at, item.operation_id),
             )
@@ -500,7 +500,7 @@ class FileConsoleOperationStore:
                 ),
                 key=lambda item: (item.requested_at, item.operation_id),
             )
-            queued = [item for item in all_queued if operation_lane(item) not in busy_lanes]
+            queued = [item for item in all_queued if _claimable(item, busy_lanes)]
             if all_queued and not queued:
                 # Work is waiting behind a busy lane; never cache this as idle.
                 return None
@@ -920,3 +920,21 @@ def operation_lane(operation: ConsoleOperation) -> str:
     if project:
         return f"project:{project}"
     return "team"
+
+
+# Requirement close/delete settle engineering records under one global authority
+# row and take minutes. At most one runs at a time; the rest wait in the queue
+# without occupying a parallel slot that a delivery could use.
+SETTLEMENT_LANE = "settlement"
+_SETTLEMENT_ACTIONS = frozenset({"CLOSE_REQUIREMENT", "DELETE_REQUIREMENT"})
+
+
+def is_settlement(operation: ConsoleOperation) -> bool:
+    action = getattr(operation.intent, "action", None)
+    return getattr(action, "value", action) in _SETTLEMENT_ACTIONS
+
+
+def _claimable(operation: ConsoleOperation, busy_lanes: frozenset[str]) -> bool:
+    if operation_lane(operation) in busy_lanes:
+        return False
+    return not (is_settlement(operation) and SETTLEMENT_LANE in busy_lanes)

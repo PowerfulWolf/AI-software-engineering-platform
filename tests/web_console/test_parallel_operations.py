@@ -130,3 +130,41 @@ def test_lane_queue_skips_busy_lane_without_caching_idle() -> None:
     assert lane == f"delivery:{a}"
     assert store.claim_next(at=now, busy_lanes=frozenset({lane})) is None
     assert store.claim_next(at=now) is not None
+
+
+def test_only_one_settlement_runs_and_it_never_blocks_other_lanes() -> None:
+    from ai_software_engineer.web_console.models import (
+        CloseRequirementIntent,
+        CreateRequirementIntent,
+    )
+
+    store = InMemoryConsoleOperationStore("team_test")
+    executor = _HeldExecutor()
+    console = ProjectConsole(
+        store=store, executor=executor, poll_seconds=0.01, max_parallel_operations=3
+    )
+    console.start()
+    try:
+        for letter in "jk":
+            console.submit(
+                CloseRequirementIntent(
+                    project_id=PROJECT,
+                    delivery_id="delivery_multi_" + letter * 40,
+                    expected_checkpoint_sha256="1" * 64,
+                ),
+                idempotency_key="op-key-close-" + letter,
+            )
+        console.submit(
+            CreateRequirementIntent(project_id=PROJECT, name="New", repository_roots=("/tmp",)),
+            idempotency_key="op-key-create-1",
+        )
+        _wait(lambda: len(executor.order) == 2)
+        time.sleep(0.1)
+        # One close plus the create run; the second close waits without a slot.
+        assert len(executor.order) == 2 and executor.peak == 2
+        assert "none" in executor.order
+        executor.release.set()
+        _wait(lambda: len(executor.order) == 3)
+    finally:
+        executor.release.set()
+        console.close(timeout=5)
