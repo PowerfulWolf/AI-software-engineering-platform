@@ -2585,7 +2585,11 @@ def _filtered_environment(source: Mapping[str, str]) -> dict[str, str]:
         "SSL_CERT_FILE",
         "UV_CACHE_DIR",
     )
-    return {name: source[name] for name in allowlist if source.get(name)}
+    env = {name: source[name] for name in allowlist if source.get(name)}
+    # A CA bundle path that no longer exists breaks every HTTPS call in the child.
+    if "SSL_CERT_FILE" in env and not os.path.isfile(env["SSL_CERT_FILE"]):
+        del env["SSL_CERT_FILE"]
+    return env
 
 
 def _failure(

@@ -1218,7 +1218,11 @@ def _cli_failure_diagnostic(stderr: str) -> str:
 
 def _filtered_environment(source: Mapping[str, str]) -> dict[str, str]:
     allowed = ("PATH", "HOME", "CODEX_HOME", "LANG", "LC_ALL", "TMPDIR", "SSL_CERT_FILE")
-    return {name: source[name] for name in allowed if source.get(name)}
+    env = {name: source[name] for name in allowed if source.get(name)}
+    # A CA bundle path that no longer exists breaks every HTTPS call in the child.
+    if "SSL_CERT_FILE" in env and not os.path.isfile(env["SSL_CERT_FILE"]):
+        del env["SSL_CERT_FILE"]
+    return env
 
 
 def _safe_text(value: str, label: str) -> str:
