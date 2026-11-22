@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import functools
 import json
+import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime
@@ -162,6 +164,37 @@ def _ensure_current_dispatch_tables(cursor: object) -> None:
     )
 
 
+# Requirements now dispatch in parallel and every dispatch write serializes on one
+# authority row. A lock-wait timeout or deadlock only means another Requirement held
+# that row; each attempt runs in its own rolled-back transaction, so retry it.
+_LOCK_CONTENTION_CODES = frozenset({1205, 1213})
+_LOCK_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0)
+
+
+def _is_lock_contention(error: BaseException) -> bool:
+    cause = error.__cause__
+    return (
+        isinstance(cause, pymysql.MySQLError)
+        and bool(cause.args)
+        and cause.args[0] in _LOCK_CONTENTION_CODES
+    )
+
+
+def _retry_lock_contention[**P, R](method: Callable[P, R]) -> Callable[P, R]:
+    @functools.wraps(method)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        for delay in _LOCK_RETRY_DELAYS:
+            try:
+                return method(*args, **kwargs)
+            except DispatchStoreUnavailable as error:
+                if not _is_lock_contention(error):
+                    raise
+                time.sleep(delay)
+        return method(*args, **kwargs)
+
+    return wrapper
+
+
 class MySqlDispatchAuthority:
     """Publish dispatch bundles under a MySQL/InnoDB global reservation lock."""
 
@@ -201,6 +234,7 @@ class MySqlDispatchAuthority:
                     "cannot initialize MySQL dispatch authority"
                 ) from error
 
+    @_retry_lock_contention
     def seed_snapshot(self, snapshot: DispatchWorkforceSnapshot) -> DispatchWorkforceSnapshot:
         """Register immutable current workforce inputs before the first preview."""
         snapshot.validate_integrity()
@@ -241,6 +275,7 @@ class MySqlDispatchAuthority:
             )
             return snapshot
 
+    @_retry_lock_contention
     def current_snapshot(
         self,
         *,
@@ -253,6 +288,7 @@ class MySqlDispatchAuthority:
         ):
             return self._current_snapshot(connection, repository_id, task_id)
 
+    @_retry_lock_contention
     def commit_if_current(
         self,
         record: DispatchCommitRecord,
@@ -337,6 +373,7 @@ class MySqlDispatchAuthority:
             raise DispatchCommitNotFound(f"dispatch commit {commit_id} was not found")
         return _decode_allocation(row)
 
+    @_retry_lock_contention
     def commit_recovery(
         self,
         *,
@@ -391,6 +428,7 @@ class MySqlDispatchAuthority:
             self._current_snapshot(connection, repository_id, task_id)
             return record
 
+    @_retry_lock_contention
     def commit_continuation(
         self,
         *,
@@ -449,6 +487,7 @@ class MySqlDispatchAuthority:
             self._current_snapshot(connection, repository_id, task_id)
             return record
 
+    @_retry_lock_contention
     def reserve_verification(
         self,
         *,
@@ -504,6 +543,7 @@ class MySqlDispatchAuthority:
             )
             return record
 
+    @_retry_lock_contention
     def complete_verification(
         self,
         *,
@@ -543,6 +583,7 @@ class MySqlDispatchAuthority:
                 (completion_sha256, plan_sha256),
             )
 
+    @_retry_lock_contention
     def abandon_verification(
         self,
         *,

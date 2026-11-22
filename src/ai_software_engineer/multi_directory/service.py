@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Protocol, TypeVar
@@ -177,6 +178,24 @@ def _child_blocker_action(unit_id: str, checkpoint: ProjectDeliveryCheckpoint) -
 # The exact admission rules for acceptance verification. Upstream roles cannot read
 # the platform validator, so state the contract instead of letting them guess and
 # then report the unknown validator as a blocking issue.
+
+
+_TRANSIENT_BACKOFF_SECONDS = (10, 20, 40, 80, 120)
+
+
+def _transient_backoff(failures: int) -> None:
+    """Wait before the next upstream retry so a busy gateway (503/504) can recover.
+
+    Without a pause, all transient retries were spent within a few minutes of one
+    overload. The wait observes service pause, so it never delays a safe restart.
+    """
+    from ai_software_engineer.service_pause import check_service_pause
+
+    delay = _TRANSIENT_BACKOFF_SECONDS[min(max(failures, 1), len(_TRANSIENT_BACKOFF_SECONDS)) - 1]
+    deadline = time.monotonic() + delay
+    while time.monotonic() < deadline:
+        check_service_pause()
+        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
 
 
 def _validation_repair_instructions(error: ValidationError) -> str:
@@ -1772,6 +1791,8 @@ class JointDeliveryService:
                 key = stage + ("_capacity_timeout" if error.expandable_timeout else "_transient")
                 attempts[key] = attempts.get(key, 0) + 1
                 self._save(checkpoint, attempts=attempts)
+                if not error.expandable_timeout:
+                    _transient_backoff(attempts[key])
             raise
 
     def _attempt(self, checkpoint: JointCheckpoint, name: str, limit: int = 3) -> JointCheckpoint:

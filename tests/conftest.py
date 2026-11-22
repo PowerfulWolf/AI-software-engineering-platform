@@ -38,3 +38,14 @@ def isolated_mysql_facts(request: pytest.FixtureRequest) -> Iterator[None]:
         yield
     finally:
         reset_mysql_test_facts(dsn)
+
+
+@pytest.fixture(autouse=True)
+def no_upstream_transient_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Production waits between transient upstream retries; tests run them back to back."""
+
+    monkeypatch.setattr(
+        "ai_software_engineer.multi_directory.service._TRANSIENT_BACKOFF_SECONDS",
+        (0, 0, 0, 0, 0),
+    )
+    monkeypatch.setattr("ai_software_engineer.orchestration.retry.TRANSIENT_BACKOFF_SECONDS", ())

@@ -1120,7 +1120,10 @@ class RetryingOrchestrator(SerialOrchestrator):
             ),
         )
         updated = self._repository.get(task.id)
-        return updated.attempts if updated.attempts > task.attempts else None
+        if updated.attempts <= task.attempts:
+            return None
+        transient_backoff(updated.attempts - 1)
+        return updated.attempts
 
     def _record_attempt(self, task: Task, attempt: int) -> None:
         self._guard_write()
@@ -1286,3 +1289,24 @@ __all__ = [
     "RetryResult",
     "RetryingOrchestrator",
 ]
+
+
+TRANSIENT_BACKOFF_SECONDS: tuple[float, ...] = (10, 20, 40, 80, 120)
+
+
+def transient_backoff(failures: int) -> None:
+    """Wait before a granted transient retry so an overloaded gateway can recover.
+
+    The wait observes service pause, so a safe restart is never delayed by it.
+    """
+    import time
+
+    from ai_software_engineer.service_pause import check_service_pause
+
+    if not TRANSIENT_BACKOFF_SECONDS:
+        return
+    delay = TRANSIENT_BACKOFF_SECONDS[min(max(failures, 1), len(TRANSIENT_BACKOFF_SECONDS)) - 1]
+    deadline = time.monotonic() + delay
+    while time.monotonic() < deadline:
+        check_service_pause()
+        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
