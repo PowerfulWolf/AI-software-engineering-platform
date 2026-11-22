@@ -66,6 +66,12 @@ class ProductionConfigError(RuntimeError):
 class ModelProviderKind(StrEnum):
     CODEX_CLI = "codex_cli"
     RESPONSES = "responses"
+    # Local signed-in Claude Code CLI; upstream structured roles only.
+    CLAUDE_CLI = "claude_cli"
+
+
+# Roles that edit a worktree and run commands; they need a full agent adapter.
+EXECUTION_ROLES = frozenset({TeamRole.CODER, TeamRole.QA, TeamRole.REVIEWER})
 
 
 class ProductionDatabaseConfig(DomainModel):
@@ -93,6 +99,11 @@ class ProviderRouteConfig(DomainModel):
         if self.kind is ModelProviderKind.CODEX_CLI:
             if self.endpoint is not None or self.api_key_env is not None:
                 raise ValueError("Codex CLI route cannot embed endpoint or API key settings")
+        elif self.kind is ModelProviderKind.CLAUDE_CLI:
+            if self.endpoint is not None or self.api_key_env is not None:
+                raise ValueError("Claude CLI route cannot embed endpoint or API key settings")
+            if self.connection_mode is not None:
+                raise ValueError("Claude CLI route cannot declare a Codex CLI connection mode")
         else:
             if self.connection_mode is not None:
                 raise ValueError("Responses route cannot declare a Codex CLI connection mode")
@@ -153,6 +164,7 @@ class ProductionConfig(DomainModel):
     model_routes: Annotated[tuple[ProviderRouteConfig, ...], Field(min_length=1, max_length=16)]
     agent_model_routes: Annotated[tuple[AgentModelRoutePolicy, ...], Field(max_length=7)] = ()
     codex_executable: NonEmptyStr = "codex"
+    claude_executable: NonEmptyStr = "claude"
     codex_cli_proxy_base_url: str | None = None
     codex_cli_proxy_api_key_env: EnvVarName | None = None
     live_model_execution: StrictBool = False
@@ -299,6 +311,17 @@ class ProductionConfig(DomainModel):
                 ),
                 f"{policy.role.value} resolved Agent model routes",
             )
+            if policy.role in EXECUTION_ROLES and any(
+                route.kind is ModelProviderKind.CLAUDE_CLI for route in resolved
+            ):
+                raise ValueError(
+                    f"{policy.role.value} cannot use a Claude CLI route; "
+                    "Claude CLI serves Manager/Product/Designer/Planner only"
+                )
+        if not self.agent_model_routes and all(
+            route.kind is ModelProviderKind.CLAUDE_CLI for route in self.enabled_routes()
+        ):
+            raise ValueError("Coder/QA/Reviewer need at least one non-Claude-CLI model route")
         ensure_unique(self.team_knowledge_paths, "team knowledge selection")
         if len(self.team_knowledge_paths) > 64:
             raise ValueError("team knowledge selection exceeds document budget")
@@ -362,7 +385,10 @@ class ProductionConfig(DomainModel):
         """Return the role's frozen primary/fallback order, or the legacy global order."""
         policy = next((item for item in self.agent_model_routes if item.role == role), None)
         if policy is None:
-            return self.enabled_routes()
+            enabled = self.enabled_routes()
+            if role in EXECUTION_ROLES:
+                return tuple(r for r in enabled if r.kind is not ModelProviderKind.CLAUDE_CLI)
+            return enabled
         return tuple(self._resolve_route_reference(reference) for reference in policy.routes)
 
     def _resolve_route_reference(

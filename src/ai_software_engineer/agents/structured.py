@@ -619,6 +619,90 @@ class ResponsesStructuredModelClient:
         }
         if _RESPONSES_STREAMING["enabled"]:
             body["stream"] = True
+        from ai_software_engineer.agents.repository_tools import (
+            MAX_TOOL_ROUNDS,
+            TOOL_DEFINITIONS,
+            current_read_access,
+            run_tool,
+            tool_instructions,
+        )
+
+        repositories = current_read_access()
+        conversation: list[JsonValue] = list(cast(list[JsonValue], body["input"]))
+        if repositories:
+            # Responses routes have no native repository access; serve read-only
+            # tools so any model can verify code facts during Design/Planning.
+            conversation[0] = {
+                "role": "system",
+                "content": instructions + tool_instructions(repositories),
+            }
+            body["tools"] = cast(JsonValue, list(TOOL_DEFINITIONS))
+            body["store"] = False
+        rounds = 0
+        while True:
+            body["input"] = cast(JsonValue, conversation)
+            if repositories and rounds >= MAX_TOOL_ROUNDS:
+                body["tool_choice"] = "none"
+            provider, response = self._round_trip(
+                body,
+                instructions=instructions,
+                input_payload=input_payload,
+                output_schema=output_schema,
+                timeout_seconds=timeout_seconds,
+                input_images=input_images,
+            )
+            calls = _structured_function_calls(provider) if repositories else ()
+            if not calls or rounds >= MAX_TOOL_ROUNDS:
+                break
+            rounds += 1
+            assert repositories is not None
+            conversation += [
+                *_replayable_output(provider),
+                *(
+                    cast(
+                        JsonValue,
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": run_tool(repositories, name, arguments),
+                        },
+                    )
+                    for call_id, name, arguments in calls
+                ),
+            ]
+        try:
+            output = json.loads(_output_text(provider))
+            if not isinstance(output, Mapping):
+                raise ValueError("structured output is not an object")
+        except (UnicodeError, json.JSONDecodeError, ValueError) as error:
+            raise StructuredModelError(
+                AgentErrorCode.INVALID_OUTPUT,
+                "Responses structured output is invalid",
+                transient=False,
+                http_status=response.status_code,
+                request_id=safe_request_id(response.request_id, secret=self._api_key),
+                correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
+            ) from error
+        return StructuredModelResult(
+            payload=output,
+            duration_ms=_elapsed_ms(started),
+            usage=_usage(provider),
+            http_status=response.status_code,
+            request_id=safe_request_id(response.request_id, secret=self._api_key),
+            correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
+        )
+
+    def _round_trip(
+        self,
+        body: WirePayload,
+        *,
+        instructions: str,
+        input_payload: Mapping[str, object],
+        output_schema: Mapping[str, object],
+        timeout_seconds: int,
+        input_images: tuple[Path, ...],
+    ) -> tuple[Mapping[str, Any], Any]:
+        """One admitted HTTP round trip; every tool turn is observed separately."""
         request_bytes = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
         require_structured_admission_open(
             origin="responses_before_transport_admission",
@@ -709,31 +793,40 @@ class ResponsesStructuredModelClient:
                 request_id=safe_request_id(response.request_id, secret=self._api_key),
                 correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
             ) from error
-        try:
-            output = json.loads(_output_text(provider))
-            if not isinstance(output, Mapping):
-                raise ValueError("structured output is not an object")
-        except (UnicodeError, json.JSONDecodeError, ValueError) as error:
-            raise StructuredModelError(
-                AgentErrorCode.INVALID_OUTPUT,
-                "Responses structured output is invalid",
-                transient=False,
-                http_status=response.status_code,
-                request_id=safe_request_id(response.request_id, secret=self._api_key),
-                correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
-            ) from error
-        return StructuredModelResult(
-            payload=output,
-            duration_ms=_elapsed_ms(started),
-            usage=_usage(provider),
-            http_status=response.status_code,
-            request_id=safe_request_id(response.request_id, secret=self._api_key),
-            correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
-        )
+        return provider, response
 
 
 # Process-wide: once a gateway refuses ``stream``, later calls send plain JSON.
 _RESPONSES_STREAMING: dict[str, bool] = {"enabled": True}
+
+
+def _structured_function_calls(
+    provider: Mapping[str, object],
+) -> tuple[tuple[str, str, str], ...]:
+    output = provider.get("output")
+    if not isinstance(output, list):
+        return ()
+    calls = []
+    for item in output:
+        if isinstance(item, Mapping) and item.get("type") == "function_call":
+            call_id, name, arguments = item.get("call_id"), item.get("name"), item.get("arguments")
+            if isinstance(call_id, str) and isinstance(name, str) and isinstance(arguments, str):
+                calls.append((call_id, name, arguments))
+    return tuple(calls)
+
+
+def _replayable_output(provider: Mapping[str, object]) -> list[JsonValue]:
+    """Carry the assistant turn (reasoning, calls, messages) into the next request."""
+    output = provider.get("output")
+    if not isinstance(output, list):
+        return []
+    return [
+        cast(JsonValue, dict(item))
+        for item in output
+        if isinstance(item, Mapping)
+        and item.get("type") in {"reasoning", "function_call", "message"}
+        and (item.get("type") != "message" or item.get("role") == "assistant")
+    ]
 
 
 class ResponsesStreamFailed(ValueError):

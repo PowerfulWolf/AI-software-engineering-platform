@@ -58,3 +58,15 @@ def test_persistent_contention_still_fails_closed() -> None:
     with pytest.raises(DispatchStoreUnavailable):
         commit()
     assert len(calls) == len(authority._LOCK_RETRY_DELAYS) + 1
+
+
+def test_dispatch_failure_shows_only_the_numeric_mysql_code() -> None:
+    from ai_software_engineer.manager import production_backend
+    from ai_software_engineer.manager.delivery import DeliveryBackendFailure
+
+    def fail() -> str:
+        raise _unavailable(2013)
+
+    with pytest.raises(DeliveryBackendFailure) as caught:
+        production_backend.ProductionProjectDeliveryBackend._guard("Dispatch", fail)
+    assert caught.value.safe_summary == "Dispatch is temporarily unavailable (MySQL 2013)"

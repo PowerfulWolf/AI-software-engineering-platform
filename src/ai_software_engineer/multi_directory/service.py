@@ -1700,7 +1700,20 @@ class JointDeliveryService:
                 timeout_seconds=timeout_seconds,
             )
 
-        result = ask("")
+        from ai_software_engineer.agents.repository_tools import (
+            ReadableRepository,
+            repository_read_access,
+        )
+
+        readable = tuple(
+            ReadableRepository(
+                root=Path(unit.root), revision=unit.base_revision, label=f"repo{index + 1}"
+            )
+            for index, unit in enumerate(checkpoint.scope.units)
+            if Path(unit.root).is_dir()
+        )
+        with repository_read_access(readable):
+            result = ask("")
         try:
             return model.model_validate(result.payload)
         except ValidationError as error:
@@ -1708,7 +1721,8 @@ class JointDeliveryService:
             # wrong once it is told which one. Only field locations and messages
             # are returned, never the submitted values.
             repair = _validation_repair_instructions(error)
-        result = ask(repair)
+        with repository_read_access(readable):
+            result = ask(repair)
         try:
             return model.model_validate(result.payload)
         except ValidationError as error:

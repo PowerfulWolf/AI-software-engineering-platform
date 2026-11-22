@@ -181,7 +181,8 @@
             {
               "enum": [
                 "codex_cli",
-                "responses"
+                "responses",
+                "claude_cli"
               ]
             },
             {
@@ -272,7 +273,8 @@
         "kind": {
           "enum": [
             "codex_cli",
-            "responses"
+            "responses",
+            "claude_cli"
           ]
         },
         "connection_mode": {
@@ -342,7 +344,7 @@
           "if": {
             "properties": {
               "kind": {
-                "const": "codex_cli"
+                "const": "responses"
               }
             },
             "required": [
@@ -350,16 +352,6 @@
             ]
           },
           "then": {
-            "properties": {
-              "endpoint": {
-                "type": "null"
-              },
-              "api_key_env": {
-                "type": "null"
-              }
-            }
-          },
-          "else": {
             "required": [
               "endpoint",
               "api_key_env"
@@ -374,6 +366,35 @@
               },
               "api_key_env": {
                 "$ref": "#/$defs/env_var"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "endpoint": {
+                "type": "null"
+              },
+              "api_key_env": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "claude_cli"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "connection_mode": {
+                "type": "null"
               }
             }
           }
@@ -682,6 +703,11 @@
       "type": "string",
       "minLength": 1,
       "default": "codex"
+    },
+    "claude_executable": {
+      "type": "string",
+      "minLength": 1,
+      "default": "claude"
     },
     "codex_cli_proxy_base_url": {
       "anyOf": [

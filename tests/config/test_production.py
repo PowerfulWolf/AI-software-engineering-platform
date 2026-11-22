@@ -578,3 +578,66 @@ def test_importing_production_config_does_not_create_default_workspace(tmp_path:
 
     assert completed.returncode == 0, completed.stderr
     assert not (home / ".ase").exists()
+
+
+def _claude_config(tmp_path: Path, coder_uses_claude: bool) -> dict[str, object]:
+    gpt = {
+        "provider": "codex",
+        "model": "codex/gpt-6.2-sol",
+        "kind": "responses",
+        "endpoint": "https://llm.example.invalid/v1",
+        "api_key_env": "SOL_6_API_KEY",
+    }
+    claude = {"provider": "claude", "model": "claude-opus-5-5", "kind": "claude_cli"}
+    refs = [
+        {"provider": "codex", "model": "codex/gpt-6.2-sol"},
+        {"provider": "claude", "model": "claude-opus-5-5"},
+    ]
+    return {
+        "platform_root": str(tmp_path),
+        "model_routes": [gpt, claude],
+        "agent_model_routes": [
+            {
+                "role": role,
+                "routes": refs
+                if role in {"manager", "product", "designer", "planner"} or coder_uses_claude
+                else refs[:1],
+            }
+            for role in ("manager", "product", "designer", "planner", "coder", "qa", "reviewer")
+        ],
+    }
+
+
+def test_claude_cli_route_is_valid_for_upstream_roles(tmp_path: Path) -> None:
+    from ai_software_engineer.domain.enums import TeamRole
+
+    config = ProductionConfig.model_validate(_claude_config(tmp_path, coder_uses_claude=False))
+    assert [r.kind.value for r in config.routes_for(TeamRole.DESIGNER)] == [
+        "responses",
+        "claude_cli",
+    ]
+    assert [r.kind.value for r in config.routes_for(TeamRole.CODER)] == ["responses"]
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / "production-config.schema.json").read_text()
+    )
+    Draft202012Validator(schema).validate(config.to_wire())
+
+
+def test_claude_cli_route_is_refused_for_execution_roles(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="cannot use a Claude CLI route"):
+        ProductionConfig.model_validate(_claude_config(tmp_path, coder_uses_claude=True))
+
+
+def test_claude_cli_route_cannot_embed_endpoint() -> None:
+    from ai_software_engineer.config import ProviderRouteConfig
+
+    with pytest.raises(ValueError, match="Claude CLI route cannot embed"):
+        ProviderRouteConfig.model_validate(
+            {
+                "provider": "claude",
+                "model": "claude-opus-5-5",
+                "kind": "claude_cli",
+                "endpoint": "https://x.invalid",
+                "api_key_env": "K",
+            }
+        )

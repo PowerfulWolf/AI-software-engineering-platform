@@ -22,7 +22,12 @@ from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 from ai_software_engineer.domain.agent import AgentDefinition
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.execution_window import PlannedVerificationRequirement
-from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.model import (
+    DomainModel,
+    NonEmptyStr,
+    ProviderRouteKind,
+    ensure_unique,
+)
 from ai_software_engineer.domain.native_verification import (
     NativeVerificationCapabilityDetail,
     NativeVerificationWaitReason,
@@ -210,7 +215,7 @@ def inspect_delivery_prerequisites(
     plan_sha256: str,
     requirements: tuple[PlannedVerificationRequirement, ...],
     definitions: Mapping[AgentRole, AgentDefinition],
-    route_kinds: Mapping[AgentRole, Literal["codex_cli", "responses"]],
+    route_kinds: Mapping[AgentRole, ProviderRouteKind],
     environment: Mapping[str, str],
     controlled_capabilities: tuple[DiscoveredControlledCapability, ...] = (),
     controlled_discovery_failure: NativeVerificationWaitReason | None = None,

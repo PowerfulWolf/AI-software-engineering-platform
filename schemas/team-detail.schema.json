@@ -1151,7 +1151,8 @@
     "ProviderRouteKind": {
       "enum": [
         "codex_cli",
-        "responses"
+        "responses",
+        "claude_cli"
       ],
       "type": "string"
     },

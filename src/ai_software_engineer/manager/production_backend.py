@@ -11,7 +11,7 @@ from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast, runtime_checkable
 
 from ai_software_engineer.agents import (
     AgentRequest,
@@ -31,6 +31,7 @@ from ai_software_engineer.config import (
     ProviderRouteConfig,
 )
 from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
+from ai_software_engineer.config.production import EXECUTION_ROLES
 from ai_software_engineer.context import (
     ContextBudget,
     ContextBundle,
@@ -88,6 +89,7 @@ from ai_software_engineer.domain.engineering_authority import (
 )
 from ai_software_engineer.domain.execution_baseline import BaselinePurpose
 from ai_software_engineer.domain.execution_window import bounded_coder_window
+from ai_software_engineer.domain.model import ProviderRouteKind
 from ai_software_engineer.git.policy import delivery_write_paths
 from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.manager.baseline import (
@@ -318,6 +320,22 @@ class ConfiguredStructuredClientFactory:
                     environment=self._environment,
                     allow_native_commands=role is not TeamRole.MANAGER,
                 )
+            elif route.kind is ModelProviderKind.CLAUDE_CLI:
+                from ai_software_engineer.agents.claude_cli import ClaudeCliStructuredModelClient
+
+                if role in EXECUTION_ROLES:
+                    raise ProductionConfigError(
+                        "Claude CLI routes serve Manager/Product/Designer/Planner only"
+                    )
+                client = ClaudeCliStructuredModelClient(
+                    repository_root=repository_roots[0],
+                    additional_repository_roots=repository_roots[1:],
+                    model=route.model,
+                    executable=self._config.claude_executable,
+                    reasoning_effort=route.reasoning_effort,
+                    environment=self._environment,
+                    allow_repository_reads=role is not TeamRole.MANAGER,
+                )
             else:
                 assert route.api_key_env is not None and route.endpoint is not None
                 api_key = self._environment.get(route.api_key_env)
@@ -344,6 +362,16 @@ class ConfiguredStructuredClientFactory:
                 )
             )
         return FallbackStructuredModelClient(tuple(routes), role=role)
+
+
+_DISPATCH_RETRIES = 3
+
+
+def _mysql_code_suffix(error: BaseException) -> str:
+    # Only the numeric MySQL error code is safe to surface, never server text.
+    cause = error.__cause__
+    code = cause.args[0] if cause is not None and cause.args else None
+    return f" (MySQL {code})" if isinstance(code, int) else ""
 
 
 class _NoProjectRules(ProjectRuleProvider):
@@ -754,7 +782,24 @@ class ProductionProjectDeliveryBackend:
         return self._guard("Planner", execute)
 
     def commit_dispatch(self, checkpoint: ProjectDeliveryCheckpoint) -> DispatchCommitRecord:
-        return self._guard("Dispatch", lambda: self._commit_dispatch(checkpoint))
+        return self._guard("Dispatch", lambda: self._commit_dispatch_retrying(checkpoint))
+
+    def _commit_dispatch_retrying(
+        self, checkpoint: ProjectDeliveryCheckpoint
+    ) -> DispatchCommitRecord:
+        """A dispatch transaction that failed in MySQL was rolled back; retry it.
+
+        Parallel Requirements contend for the one dispatch authority row, and a
+        single unavailable moment used to stop the Requirement for a human.
+        """
+        from ai_software_engineer.orchestration.retry import transient_backoff
+
+        for failures in range(1, _DISPATCH_RETRIES + 1):
+            try:
+                return self._commit_dispatch(checkpoint)
+            except DispatchStoreUnavailable:
+                transient_backoff(failures)
+        return self._commit_dispatch(checkpoint)
 
     def run_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> RetryResult:
         try:
@@ -2378,7 +2423,7 @@ class ProductionProjectDeliveryBackend:
             raise ValueError(
                 "new engineering-policy Task requires planned verification requirements"
             )
-        route_kinds: dict[AgentRole, Literal["codex_cli", "responses"]] = {
+        route_kinds: dict[AgentRole, ProviderRouteKind] = {
             role: self._config.routes_for(team_role)[0].kind.value
             for role, team_role in (
                 (AgentRole.QA, TeamRole.QA),
@@ -3273,7 +3318,7 @@ class ProductionProjectDeliveryBackend:
         except DispatchStoreUnavailable as error:
             raise DeliveryBackendFailure(
                 DeliveryFailureCode.RESOURCE_UNAVAILABLE,
-                f"{label} is temporarily unavailable",
+                f"{label} is temporarily unavailable" + _mysql_code_suffix(error),
             ) from error
         except DispatchError as error:
             raise DeliveryBackendFailure(

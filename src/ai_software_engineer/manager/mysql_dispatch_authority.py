@@ -810,7 +810,8 @@ class MySqlDispatchAuthority:
             raise
         except pymysql.MySQLError as error:
             connection.rollback()
-            raise DispatchStoreUnavailable("MySQL dispatch transaction failed") from error
+            code = error.args[0] if error.args and isinstance(error.args[0], int) else "?"
+            raise DispatchStoreUnavailable(f"MySQL dispatch transaction failed ({code})") from error
         except BaseException:
             connection.rollback()
             raise

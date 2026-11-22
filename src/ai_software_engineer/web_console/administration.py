@@ -1038,6 +1038,23 @@ class LocalConsoleAdministration:
                 credential_environment_name=key_name,
                 credential_configured=configured,
             )
+        if route.kind is ModelProviderKind.CLAUDE_CLI:
+            from ai_software_engineer.agents.claude_cli import default_claude_executable
+
+            executable = self._saved_config.claude_executable
+            path = Path(
+                default_claude_executable() if executable == "claude" else executable
+            ).expanduser()
+            return ModelRouteRuntimeStatus(
+                provider=route.provider,
+                model=route.model,
+                reasoning_effort=route.reasoning_effort,
+                kind=route.kind,
+                enabled=route.enabled,
+                ready=not route.enabled or path.exists() or shutil.which(str(path)) is not None,
+                credential_environment_name=None,
+                credential_configured=None,
+            )
         assert route.api_key_env is not None
         configured = self._runtime_variable(route.api_key_env)[0] is not None
         return ModelRouteRuntimeStatus(
