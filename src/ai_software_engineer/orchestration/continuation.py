@@ -161,6 +161,8 @@ class NativeCoderContinuation:
         self._resolved_receipts = resolved_interruption_receipts
         self._retained_source_paths = retained_source_paths
         self._starts: dict[str, _Started] = {}
+        self._released: dict[str, WorkspaceMutationInventory] = {}
+        self._before: dict[str, WorkspaceMutationInventory] = {}
         self._prepared: set[str] = set()
 
     def prepare(self, request: AgentRequest, root: Path) -> str | None:
@@ -230,7 +232,8 @@ class NativeCoderContinuation:
         )
         if existing is not None:
             if policy.schema_version == "v2" and (
-                request.run_id not in self._prepared or request.run_id in self._starts
+                request.run_id not in self._prepared
+                or (request.run_id in self._starts and request.run_id not in self._released)
             ):
                 self._uncertain(task, "已发布接续准入。但原执行是否开始无法确认。现场已保留。")
             if (
@@ -293,6 +296,9 @@ class NativeCoderContinuation:
         assert policy is not None
         self._require_active_request(request, task)
         if request.run_id in self._starts:
+            resumed = self._resume_released(request, root, claim)
+            if resumed is not None:
+                return resumed
             self._uncertain(task, "同一执行记录已开始。不能再次调用模型。")
         try:
             self._workspace(request, root)
@@ -321,6 +327,45 @@ class NativeCoderContinuation:
             claim.lease.id,
             before.sha256,
         )
+        self._before[request.run_id] = before
+        return before
+
+    def release_unanswered(self, request: AgentRequest, root: Path) -> bool:
+        """A route refused the first turn before any model output or tool call.
+
+        Only the unchanged workspace of this exact started request may be handed to
+        the next configured route of the same invocation; the persisted capture
+        start stays the single start record for the run.
+        """
+        started = self._starts.get(request.run_id)
+        before = self._before.get(request.run_id)
+        if started is None or before is None or started.request != request:
+            return False
+        try:
+            if capture_mutation_inventory(root).sha256 != started.inventory_sha256:
+                return False
+        except (MutationInventoryRejected, GitWorkspaceError, ValueError):
+            return False
+        self._released[request.run_id] = before
+        return True
+
+    def _resume_released(
+        self, request: AgentRequest, root: Path, claim: QueueClaim
+    ) -> WorkspaceMutationInventory | None:
+        started = self._starts[request.run_id]
+        before = self._released.pop(request.run_id, None)
+        if (
+            before is None
+            or started.request != request
+            or started.work_item_id != claim.work_item.id
+            or started.lease_id != claim.lease.id
+        ):
+            return None
+        try:
+            if capture_mutation_inventory(root).sha256 != started.inventory_sha256:
+                return None
+        except (MutationInventoryRejected, GitWorkspaceError, ValueError):
+            return None
         return before
 
     def record_native_stop(

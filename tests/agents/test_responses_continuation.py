@@ -644,3 +644,49 @@ def test_tool_response_narration_is_not_a_final_artifact(
     receipt.validate_integrity()
     assert receipt.cause == ("local_execution_limit" if local else "provider_transient")
     assert set(receipt.capture.to_capture().changed_paths) == {"src/app.py", "src/created.py"}
+
+
+class _Refuse:
+    def __init__(self, status: int, body: bytes) -> None:
+        self.status, self.body, self.calls = status, body, 0
+
+    def post(
+        self, url: str, headers: Mapping[str, str], body: bytes, timeout_seconds: float
+    ) -> HttpResponse:
+        del url, headers, body, timeout_seconds
+        self.calls += 1
+        return HttpResponse(status_code=self.status, body=self.body)
+
+
+def test_first_turn_quota_refusal_hands_the_same_run_to_the_fallback_route(
+    native: V2Fixture,
+) -> None:
+    from ai_software_engineer.agents.openai_compatible import HttpTransport
+
+    control = native.service()
+
+    def adapter(transport: object) -> ResponsesAgentAdapter:
+        return ResponsesAgentAdapter(
+            workspace_root=native.worktree.path,
+            endpoint="https://example.invalid/responses",
+            api_key="fixture-key",
+            model="fixture",
+            agent=_definition(native.request),
+            prompt_builder=StaticPromptBuilder(),
+            transport=cast(HttpTransport, transport),
+            execution_guard=native.guard,
+            interruption_control=control,
+        )
+
+    quota = _Refuse(403, b'{"error":{"message":"Insufficient user quota"}}')
+    second = _Refuse(400, b'{"error":{"message":"bad request"}}')
+    fallback = FallbackAgentAdapter(
+        (
+            ProviderAgentRoute(provider="primary", model="fixture", adapter=adapter(quota)),
+            ProviderAgentRoute(provider="fallback", model="fixture", adapter=adapter(second)),
+        ),
+        attempt_store=FileModelRouteAttemptStore(native.store_root.parent / "routes"),
+    )
+    outcome = fallback.run(native.request)
+    assert quota.calls == 1 and second.calls == 1
+    assert outcome.error is not None and outcome.error.code is not AgentErrorCode.QUOTA_EXHAUSTED

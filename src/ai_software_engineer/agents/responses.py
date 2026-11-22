@@ -520,6 +520,19 @@ class ResponsesAgentAdapter:
             )
         return input_items
 
+    def _release_unanswered_route(self, request: AgentRequest, window: _ExecutionWindow) -> None:
+        """The provider refused the very first turn: no model ran and nothing changed.
+
+        Handing the same invocation record back lets the configured fallback route
+        start this exact run instead of treating the second route as a duplicate call.
+        """
+        control = self._interruption_control
+        release = getattr(control, "release_unanswered", None)
+        if control is None or window.before is None or release is None:
+            return
+        if release(request, self._workspace_root):
+            window.before = None
+
     def _failure_result(
         self,
         request: AgentRequest,
@@ -702,6 +715,8 @@ class ResponsesAgentAdapter:
             if not 200 <= response.status_code < 300:
                 window.remaining()
                 status, code, transient = _http_failure(response)
+                if turn == 1 and tool_calls == 0 and not window.completed_operations:
+                    self._release_unanswered_route(request, window)
                 message = (
                     f"Responses provider returned HTTP {response.status_code}; "
                     + http_error_detail(response.body, self._api_key)

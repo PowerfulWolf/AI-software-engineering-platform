@@ -629,7 +629,8 @@ class QueuedDeliverySupervisor:
                 ContinuationExecutionUncertain,
                 CommandExecutionUncertain,
                 OwnedProcessesUncertain,
-            ):
+            ) as uncertain:
+                _log_uncertain_chain(task_id, uncertain)
                 WorkerDeliveryFailureControl(self.guard).wait(
                     repository.get(task_id),
                     classification="EXECUTION_UNCERTAIN",
@@ -690,3 +691,20 @@ class QueuedDeliverySupervisor:
         ):
             raise QueueConflict("knowledge resolution belongs to another queued run")
         self.queue.make_ready(work_item_id, now=datetime.now(UTC))
+
+
+def _log_uncertain_chain(task_id: str, error: BaseException) -> None:
+    """Record which check made an execution unconfirmable (types, messages, frames)."""
+    import logging
+    import traceback
+
+    links: list[str] = []
+    current: BaseException | None = error
+    while current is not None and len(links) < 6:
+        frames = traceback.extract_tb(current.__traceback__)[-3:]
+        where = ", ".join(f"{frame.filename.rsplit('/', 1)[-1]}:{frame.lineno}" for frame in frames)
+        links.append(f"{type(current).__name__}({str(current)[:160]}) at {where}")
+        current = current.__cause__ or current.__context__
+    logging.getLogger(__name__).warning(
+        "Task %s execution uncertain: %s", task_id, " <- ".join(links)
+    )

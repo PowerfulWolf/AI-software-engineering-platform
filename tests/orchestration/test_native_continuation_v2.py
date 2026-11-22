@@ -948,3 +948,34 @@ def test_deleted_denied_path_is_a_real_policy_refusal_without_receipt(
         )
     assert f.store.receipts_for_task(f.task.id) == ()
     assert f.repository.get(f.task.id).attempts == 1
+
+
+def test_route_refused_before_any_output_hands_the_same_start_to_the_fallback_route(
+    v2_fixture: V2Fixture,
+) -> None:
+    from ai_software_engineer.agents.continuation import ContinuationExecutionUncertain
+
+    f = v2_fixture
+    service = f.service()
+    before = service.started(f.request, f.worktree.path)
+    assert before is not None
+    start = f.store.capture_start(f.request.run_id)
+    # A second route without the explicit hand-off is still a duplicate call.
+    with pytest.raises(ContinuationExecutionUncertain):
+        service.started(f.request, f.worktree.path)
+    assert service.release_unanswered(f.request, f.worktree.path)
+    assert service.started(f.request, f.worktree.path) == before
+    assert f.store.capture_start(f.request.run_id) == start
+    # The hand-off is single use; the fallback route's work finishes normally.
+    with pytest.raises(ContinuationExecutionUncertain):
+        service.started(f.request, f.worktree.path)
+    (f.worktree.path / "src/app.py").write_text("VALUE = 9\n")
+    service.finished(f.request, f.worktree.path, before=before)
+
+
+def test_route_hand_off_is_refused_once_the_workspace_changed(v2_fixture: V2Fixture) -> None:
+    f = v2_fixture
+    service = f.service()
+    assert service.started(f.request, f.worktree.path) is not None
+    (f.worktree.path / "src/app.py").write_text("VALUE = 7\n")
+    assert not service.release_unanswered(f.request, f.worktree.path)

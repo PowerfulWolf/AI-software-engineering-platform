@@ -215,20 +215,58 @@ def _index_objects(manager: GitWorktreeManager, root: Path) -> tuple[ArchivedInd
         identities.add(fields[1].decode("ascii"))
     if len(identities) > _MAX_FILES:
         raise WorktreeReleaseRejected("Git 暂存对象超过完整保全上限。")
-    objects = []
+    bodies = _blob_bodies(manager, root, identities)
+    return tuple(
+        ArchivedIndexObject(
+            object_id=identity, byte_count=len(body), sha256=hashlib.sha256(body).hexdigest()
+        )
+        for identity, body in sorted(bodies.items())
+    )
+
+
+def _blob_bodies(manager: GitWorktreeManager, root: Path, identities: set[str]) -> dict[str, bytes]:
+    """Read blobs with two batched Git processes instead of one or two per file.
+
+    Sizes are checked against the preservation bounds before any body is read.
+    """
+    ordered = sorted(identities)
+    if not ordered:
+        return {}
+    request = "".join(identity + "\n" for identity in ordered).encode("ascii")
+    checks = manager._run_git_bytes(
+        ("cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"),
+        cwd=root,
+        input=request,
+    ).splitlines()
+    if len(checks) != len(ordered):
+        raise WorktreeReleaseRejected("Git 暂存对象无法完整读取。")
     total = 0
-    for identity in sorted(identities):
-        size = int(manager._run_git(("cat-file", "-s", identity), cwd=root))
+    for identity, line in zip(ordered, checks, strict=True):
+        fields = line.decode("ascii", "replace").split()
+        if len(fields) != 3 or fields[0] != identity or fields[1] != "blob":
+            raise WorktreeReleaseRejected("Git 暂存对象无法完整读取。")
+        size = int(fields[2])
         total += size
         if size > 32 * 1024 * 1024 or total > _MAX_BYTES:
             raise WorktreeReleaseRejected("Git 暂存对象超过完整保全上限。")
-        body = manager._run_git_bytes(("cat-file", "blob", identity), cwd=root)
-        objects.append(
-            ArchivedIndexObject(
-                object_id=identity, byte_count=len(body), sha256=hashlib.sha256(body).hexdigest()
-            )
-        )
-    return tuple(objects)
+    raw = manager._run_git_bytes(("cat-file", "--batch"), cwd=root, input=request)
+    bodies: dict[str, bytes] = {}
+    offset = 0
+    for identity in ordered:
+        header_end = raw.find(b"\n", offset)
+        if header_end < 0:
+            raise WorktreeReleaseRejected("Git 暂存对象无法完整读取。")
+        fields = raw[offset:header_end].decode("ascii", "replace").split()
+        if len(fields) != 3 or fields[0] != identity or fields[1] != "blob":
+            raise WorktreeReleaseRejected("Git 暂存对象无法完整读取。")
+        start, end = header_end + 1, header_end + 1 + int(fields[2])
+        if raw[end : end + 1] != b"\n":
+            raise WorktreeReleaseRejected("Git 暂存对象无法完整读取。")
+        bodies[identity] = raw[start:end]
+        offset = end + 1
+    if offset != len(raw):
+        raise WorktreeReleaseRejected("Git 暂存对象无法完整读取。")
+    return bodies
 
 
 def _verify_reset_image(
@@ -260,9 +298,10 @@ def _verify_reset_image(
     if actual_index != expected:
         raise WorktreeReleaseRejected("资源释放期间 Git 暂存区已变化, 原文件仍保留。")
     current = {entry.path: entry for entry in inventory}
+    head_bodies = _blob_bodies(manager, root, {identity for _, identity in expected.values()})
     for path, (mode, identity) in expected.items():
         entry = current.get(path)
-        body = manager._run_git_bytes(("cat-file", "blob", identity), cwd=root)
+        body = head_bodies[identity]
         if (
             entry is None
             or (
@@ -379,10 +418,11 @@ def archive_and_remove(
                             member.type = tarfile.DIRTYPE
                             archive.addfile(member)
                     archive.add(index, arcname="saved-git-index", recursive=False)
+                    archived_bodies = _blob_bodies(
+                        manager, worktree.path, {item.object_id for item in index_objects}
+                    )
                     for item in index_objects:
-                        body = manager._run_git_bytes(
-                            ("cat-file", "blob", item.object_id), cwd=worktree.path
-                        )
+                        body = archived_bodies[item.object_id]
                         if hashlib.sha256(body).hexdigest() != item.sha256:
                             raise WorktreeReleaseRejected("Git 暂存对象保全期间已变化。")
                         member = tarfile.TarInfo("saved-index-objects/" + item.object_id)
