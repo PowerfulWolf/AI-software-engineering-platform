@@ -86,7 +86,14 @@ class WorkspacePolicy:
 
     def authorize_command(self, arguments: tuple[str, ...]) -> tuple[str, ...]:
         """Return safe argv when it starts with one complete allowed token prefix."""
-        if not arguments or any(_is_shell_like(token) for token in arguments):
+        # Commands never pass through a shell, so a newline or tab inside an
+        # argument (for example multi-line ``python3 -c`` source) is plain data.
+        # The executable token itself must still be a single clean word.
+        if (
+            not arguments
+            or _is_shell_like(arguments[0])
+            or any(_is_shell_like(token, allow_whitespace=True) for token in arguments[1:])
+        ):
             raise CommandPolicyViolation("command argv is empty or contains shell syntax")
         if not any(
             len(arguments) >= len(prefix) and arguments[: len(prefix)] == prefix
@@ -169,11 +176,14 @@ def _validated_commands(commands: tuple[str, ...]) -> tuple[tuple[str, ...], ...
     return tuple(validated)
 
 
-def _is_shell_like(token: str) -> bool:
+def _is_shell_like(token: str, *, allow_whitespace: bool = False) -> bool:
     return (
         not token
         or token in _SHELL_CONTROL_TOKENS
-        or any(ord(character) < 32 for character in token)
+        or any(
+            ord(character) < 32 and not (allow_whitespace and character in "\n\t")
+            for character in token
+        )
         or "$(" in token
         or "`" in token
     )

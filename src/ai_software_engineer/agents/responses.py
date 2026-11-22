@@ -791,7 +791,11 @@ class ResponsesAgentAdapter:
                         # A denied command never ran. Report the typed refusal so the
                         # model can use a permitted command, but bound repeated tries.
                         command_denials += 1
-                        _log_command_denial(request, arguments, tool_result.error_message)
+                        _log_command_denial(
+                            request,
+                            getattr(tool_request, "argv", None),
+                            tool_result.error_message,
+                        )
                         if command_denials > _MAX_COMMAND_DENIALS:
                             window.policy_refused = True
                             raise _ToolRequestRejected(tool_result.tool, tool_result.error_code)
@@ -1430,11 +1434,11 @@ __all__ = [
 ]
 
 
-def _log_command_denial(request: AgentRequest, arguments: object, message: str) -> None:
+def _log_command_denial(request: AgentRequest, argv: object, message: str) -> None:
     """Keep the refused argv visible to engineers; the command itself never ran."""
     import logging
 
-    argv = arguments.get("argv") if isinstance(arguments, dict) else None
+    argv = list(argv) if isinstance(argv, tuple) else argv
     logging.getLogger(__name__).warning(
         "Run %s command denied: argv=%s reason=%s",
         request.run_id,
