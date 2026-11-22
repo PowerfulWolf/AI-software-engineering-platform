@@ -338,13 +338,15 @@ def test_schema_invalid_output_does_not_enter_matrix_correction_loop(
 ) -> None:
     service, backend, seed, _ = setup_matrix(tmp_path)
     # model_copy deliberately bypasses validation to simulate a malformed provider reply.
-    backend.responses = (backend.plan.model_copy(update={"units": ()}),)
+    malformed = backend.plan.model_copy(update={"units": ()})
+    backend.responses = (malformed, malformed)
     with pytest.raises(StructuredModelError) as raised:
         service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
     assert raised.value.code is AgentErrorCode.INVALID_OUTPUT
     final = service.status(seed.delivery_id).checkpoint
     assert final.attempts == {"plan": 1} and final.planning_feedback is None
-    assert len(backend.inputs) == 1
+    # One bounded in-call schema repair, inside the same attempt; no matrix loop.
+    assert len(backend.inputs) == 2
 
 
 @pytest.mark.parametrize("limit", [1, 3])
@@ -406,3 +408,13 @@ def test_infeasible_verification_is_corrected_within_frozen_planner_budget(
     assert "Unit 1, package 1, test 1" in feedback.required_changes[0]
     if limit > 1:
         assert backend.inputs[1]["planning_feedback"] == feedback.to_wire()
+
+
+def test_schema_invalid_output_is_repaired_once_within_the_same_attempt(
+    tmp_path: Path,
+) -> None:
+    service, backend, seed, valid = setup_matrix(tmp_path)
+    backend.responses = (valid.model_copy(update={"units": ()}), valid)
+    with pytest.raises(DeliveryReached):
+        service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+    assert len(backend.inputs) == 2

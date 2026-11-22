@@ -9,7 +9,12 @@ from typing import Annotated, Protocol, TypeVar
 
 from pydantic import AwareDatetime, Field, ValidationError
 
-from ai_software_engineer.agents import AgentErrorCode, StructuredModelClient, StructuredModelError
+from ai_software_engineer.agents import (
+    AgentErrorCode,
+    StructuredModelClient,
+    StructuredModelError,
+    StructuredModelResult,
+)
 from ai_software_engineer.context.native import native_rule_prompt_sources
 from ai_software_engineer.context.ports import ContextBudgetExceeded
 from ai_software_engineer.domain.branch import BRANCH_NAMING_INSTRUCTIONS
@@ -168,6 +173,20 @@ def _child_blocker_action(unit_id: str, checkpoint: ProjectDeliveryCheckpoint) -
 # The exact admission rules for acceptance verification. Upstream roles cannot read
 # the platform validator, so state the contract instead of letting them guess and
 # then report the unknown validator as a blocking issue.
+
+
+def _validation_repair_instructions(error: ValidationError) -> str:
+    problems = []
+    for entry in error.errors(include_input=False, include_url=False)[:12]:
+        location = ".".join(str(part) for part in entry["loc"]) or "(root)"
+        problems.append(f"{location}: {entry['msg']}"[:300])
+    return (
+        " Your previous reply failed schema validation, so nothing was saved. "
+        "Problems: " + "; ".join(problems) + ". Return one complete corrected object that "
+        "satisfies every constraint; do not omit any previously required content."
+    )
+
+
 _VERIFICATION_RULES = (
     " Verification admission contract (exact, enforced by the platform): each acceptance "
     "mapping declares exactly one of verification_argv or verification_inspection, never "
@@ -1632,21 +1651,32 @@ class JointDeliveryService:
             output_schema["$defs"]["PlanTestItem"]["properties"]["level"]["enum"] = sorted(
                 {level for item in requirements for level in item.test_levels}
             )
-        if image_paths:
-            result = client.complete(
-                instructions=_POLICY + instructions,
+
+        def ask(extra: str) -> StructuredModelResult:
+            if image_paths:
+                return client.complete(
+                    instructions=_POLICY + instructions + extra,
+                    input_payload=payload,
+                    output_schema=output_schema,
+                    timeout_seconds=timeout_seconds,
+                    input_images=image_paths,
+                )
+            return client.complete(
+                instructions=_POLICY + instructions + extra,
                 input_payload=payload,
                 output_schema=output_schema,
                 timeout_seconds=timeout_seconds,
-                input_images=image_paths,
             )
-        else:
-            result = client.complete(
-                instructions=_POLICY + instructions,
-                input_payload=payload,
-                output_schema=output_schema,
-                timeout_seconds=timeout_seconds,
-            )
+
+        result = ask("")
+        try:
+            return model.model_validate(result.payload)
+        except ValidationError as error:
+            # One bounded in-call repair: a model can usually fix a field it got
+            # wrong once it is told which one. Only field locations and messages
+            # are returned, never the submitted values.
+            repair = _validation_repair_instructions(error)
+        result = ask(repair)
         try:
             return model.model_validate(result.payload)
         except ValidationError as error:

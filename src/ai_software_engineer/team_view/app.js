@@ -7039,6 +7039,7 @@ function taskRow(work, agentId) {
   const historicalTask = work.kind === "task" && isHistoricalRequestTask(task);
   if (historicalTask) row.append(el("span", "历史记录", "badge"));
   else if (a) row.append(assignmentBadge(task, a));
+  else if (historicalRequest && task.stage === "CLOSED") row.append(el("span", "已关闭", "badge"));
   else if (historicalRequest) row.append(el("span", "本轮已完成", "badge done"));
   else if (work.kind === "request") row.append(requestNodeBadge(task));
   else row.append(badge(taskPresentationStatus(task)));
