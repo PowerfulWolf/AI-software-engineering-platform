@@ -31,7 +31,6 @@ from ai_software_engineer.config import (
     ProviderRouteConfig,
 )
 from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
-from ai_software_engineer.config.production import EXECUTION_ROLES
 from ai_software_engineer.context import (
     ContextBudget,
     ContextBundle,
@@ -323,10 +322,6 @@ class ConfiguredStructuredClientFactory:
             elif route.kind is ModelProviderKind.CLAUDE_CLI:
                 from ai_software_engineer.agents.claude_cli import ClaudeCliStructuredModelClient
 
-                if role in EXECUTION_ROLES:
-                    raise ProductionConfigError(
-                        "Claude CLI routes serve Manager/Product/Designer/Planner only"
-                    )
                 client = ClaudeCliStructuredModelClient(
                     repository_root=repository_roots[0],
                     additional_repository_roots=repository_roots[1:],

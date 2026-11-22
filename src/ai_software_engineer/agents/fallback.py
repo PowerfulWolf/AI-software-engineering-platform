@@ -444,13 +444,18 @@ class FallbackAgentAdapter:
         return attempts
 
 
+# A route that is out of quota, rate limited or refusing credentials says nothing
+# about the work; the next configured route (for example the local Claude CLI)
+# takes over. Output, policy and workspace failures never switch routes.
+_ROUTE_FAILURE_CODES = frozenset({AgentErrorCode.QUOTA_EXHAUSTED, AgentErrorCode.RATE_LIMITED})
+
+
 def _allows_fallback(result: AgentResult) -> bool:
-    return (
-        result.status is not AgentRunStatus.SUCCEEDED
-        and result.error is not None
-        and result.error.transient
-        and result.error.code in TRANSIENT_CODES
-    )
+    if result.status is AgentRunStatus.SUCCEEDED or result.error is None:
+        return False
+    if result.error.transient and result.error.code in TRANSIENT_CODES:
+        return True
+    return result.error.code in _ROUTE_FAILURE_CODES
 
 
 def _digest_attempt(attempt: ModelRouteAttempt) -> str:

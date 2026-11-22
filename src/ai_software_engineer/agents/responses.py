@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -1330,6 +1331,12 @@ def _http_failure(response: HttpResponse) -> tuple[AgentRunStatus, AgentErrorCod
     if response.status_code == 408:
         return AgentRunStatus.TIMED_OUT, AgentErrorCode.TIMEOUT, True
     if response.status_code in {401, 403}:
+        if re.search(
+            r"quota|insufficient|balance|billing|余额|额度",
+            response.body[:4096].decode("utf-8", "replace"),
+            re.IGNORECASE,
+        ):
+            return AgentRunStatus.FAILED, AgentErrorCode.QUOTA_EXHAUSTED, False
         return AgentRunStatus.FAILED, AgentErrorCode.AUTHENTICATION_ERROR, False
     if response.status_code == 429:
         code = (

@@ -317,7 +317,7 @@ def inspect_delivery_prerequisites(
     ordinary_roles = {
         role
         for role, route in route_kinds.items()
-        if route == "responses"
+        if route in {"responses", "claude_cli"}
         and all(
             is_ordinary_verification_requirement(item) for item in requirements if item.role is role
         )

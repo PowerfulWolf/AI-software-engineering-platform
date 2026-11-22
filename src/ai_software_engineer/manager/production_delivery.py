@@ -70,6 +70,10 @@ if TYPE_CHECKING:
     )
 
 
+# Routes whose tool calls are executed by the platform (not a native CLI sandbox).
+_PLATFORM_TOOL_ROUTES = frozenset({ModelProviderKind.RESPONSES, ModelProviderKind.CLAUDE_CLI})
+
+
 class DeliveryRouteAdapterFactory(Protocol):
     """Testable construction seam for one provider bound to one role worktree."""
 
@@ -328,7 +332,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             request=request,
             workspace_root=Path(binding.worktree.path),
             guard=self._execution_guard,
-            allow_ordinary_commands=route.kind is ModelProviderKind.RESPONSES,
+            allow_ordinary_commands=route.kind in _PLATFORM_TOOL_ROUTES,
             route_sha256=_verifier_route_sha256(route, config),
         )
 
@@ -373,7 +377,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             verification_evidence = self._registered_verifier.provider_for(
                 workspace_root=Path(binding.worktree.path),
                 guard=self._execution_guard,
-                allow_ordinary_commands=route.kind is ModelProviderKind.RESPONSES,
+                allow_ordinary_commands=route.kind in _PLATFORM_TOOL_ROUTES,
                 require_prepared=True,
                 route_sha256=_verifier_route_sha256(route, config),
             )
@@ -435,17 +439,37 @@ class ConfiguredDeliveryRouteAdapterFactory:
                     self._interruption_control if definition.role is AgentRole.CODER else None
                 ),
             )
-        assert route.api_key_env is not None and route.endpoint is not None
-        api_key = environment.get(route.api_key_env)
-        if not api_key:
-            raise ProductionConfigError(
-                "enabled Responses route is missing API key environment variable: "
-                f"{route.api_key_env}"
+        transport = None
+        if route.kind is ModelProviderKind.CLAUDE_CLI:
+            # Same platform tool loop and policy; each model turn is served by the
+            # locally signed-in Claude CLI instead of an HTTP gateway.
+            from ai_software_engineer.agents.claude_cli import (
+                CLAUDE_CLI_ENDPOINT,
+                ClaudeCliResponsesTransport,
             )
+
+            endpoint, api_key = CLAUDE_CLI_ENDPOINT, "claude-cli-local"
+            transport = ClaudeCliResponsesTransport(
+                model=route.model,
+                executable=config.claude_executable,
+                reasoning_effort=route.reasoning_effort,
+                environment=environment,
+            )
+        else:
+            assert route.api_key_env is not None and route.endpoint is not None
+            endpoint = route.endpoint
+            resolved_key = environment.get(route.api_key_env)
+            if not resolved_key:
+                raise ProductionConfigError(
+                    "enabled Responses route is missing API key environment variable: "
+                    f"{route.api_key_env}"
+                )
+            api_key = resolved_key
         return ResponsesAgentAdapter(
             workspace_root=binding.worktree.path,
             execution_guard=self._execution_guard,
-            endpoint=route.endpoint,
+            endpoint=endpoint,
+            transport=transport,
             api_key=api_key,
             model=route.model,
             reasoning_effort=route.reasoning_effort,

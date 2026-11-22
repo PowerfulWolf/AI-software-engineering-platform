@@ -623,9 +623,12 @@ def test_claude_cli_route_is_valid_for_upstream_roles(tmp_path: Path) -> None:
     Draft202012Validator(schema).validate(config.to_wire())
 
 
-def test_claude_cli_route_is_refused_for_execution_roles(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="cannot use a Claude CLI route"):
-        ProductionConfig.model_validate(_claude_config(tmp_path, coder_uses_claude=True))
+def test_claude_cli_route_can_back_every_role(tmp_path: Path) -> None:
+    from ai_software_engineer.domain.enums import TeamRole
+
+    config = ProductionConfig.model_validate(_claude_config(tmp_path, coder_uses_claude=True))
+    for role in TeamRole:
+        assert [r.kind.value for r in config.routes_for(role)] == ["responses", "claude_cli"]
 
 
 def test_claude_cli_route_cannot_embed_endpoint() -> None:

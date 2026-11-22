@@ -66,7 +66,7 @@ class ProductionConfigError(RuntimeError):
 class ModelProviderKind(StrEnum):
     CODEX_CLI = "codex_cli"
     RESPONSES = "responses"
-    # Local signed-in Claude Code CLI; upstream structured roles only.
+    # Local signed-in Claude Code CLI (structured stages and platform-tool agents).
     CLAUDE_CLI = "claude_cli"
 
 
@@ -311,17 +311,6 @@ class ProductionConfig(DomainModel):
                 ),
                 f"{policy.role.value} resolved Agent model routes",
             )
-            if policy.role in EXECUTION_ROLES and any(
-                route.kind is ModelProviderKind.CLAUDE_CLI for route in resolved
-            ):
-                raise ValueError(
-                    f"{policy.role.value} cannot use a Claude CLI route; "
-                    "Claude CLI serves Manager/Product/Designer/Planner only"
-                )
-        if not self.agent_model_routes and all(
-            route.kind is ModelProviderKind.CLAUDE_CLI for route in self.enabled_routes()
-        ):
-            raise ValueError("Coder/QA/Reviewer need at least one non-Claude-CLI model route")
         ensure_unique(self.team_knowledge_paths, "team knowledge selection")
         if len(self.team_knowledge_paths) > 64:
             raise ValueError("team knowledge selection exceeds document budget")
@@ -385,10 +374,7 @@ class ProductionConfig(DomainModel):
         """Return the role's frozen primary/fallback order, or the legacy global order."""
         policy = next((item for item in self.agent_model_routes if item.role == role), None)
         if policy is None:
-            enabled = self.enabled_routes()
-            if role in EXECUTION_ROLES:
-                return tuple(r for r in enabled if r.kind is not ModelProviderKind.CLAUDE_CLI)
-            return enabled
+            return self.enabled_routes()
         return tuple(self._resolve_route_reference(reference) for reference in policy.routes)
 
     def _resolve_route_reference(

@@ -133,3 +133,150 @@ def test_images_are_refused_so_fallback_can_choose_another_route(tmp_path: Path)
             timeout_seconds=30,
             input_images=(tmp_path / "a.png",),
         )
+
+
+TURN = {
+    "model": "m",
+    "input": [
+        {"role": "system", "content": [{"type": "input_text", "text": "You are the Coder."}]},
+        {"role": "user", "content": [{"type": "input_text", "text": "Fix the FAQ."}]},
+        {"type": "reasoning", "id": "r", "summary": []},
+        {"type": "function_call", "call_id": "c1", "name": "read_file", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "line 1"},
+    ],
+    "tools": [
+        {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
+        {"type": "function", "name": "write_file", "parameters": {"type": "object"}},
+    ],
+    "text": {"format": {"type": "json_schema", "schema": {"type": "object", "title": "Art"}}},
+}
+
+
+def test_turn_rendering_keeps_the_whole_conversation_and_tool_contract() -> None:
+    from ai_software_engineer.agents.claude_cli import render_responses_turn
+
+    prompt, schema = render_responses_turn(TURN)
+    assert "You are the Coder." in prompt and "Fix the FAQ." in prompt
+    assert "TOOL RESULT [c1]:\nline 1" in prompt and '"title": "Art"' in prompt
+    names = schema["properties"]["tool_calls"]["items"]["properties"]["name"]["enum"]  # type: ignore[index]
+    assert names == ["read_file", "write_file"]
+
+
+def _transport(monkeypatch: pytest.MonkeyPatch, stdout: str, code: int = 0):  # type: ignore[no-untyped-def]
+    from ai_software_engineer.agents.claude_cli import ClaudeCliResponsesTransport
+
+    seen: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        seen["argv"], seen["input"] = argv, kwargs["input"]
+        return subprocess.CompletedProcess(argv, code, stdout, "")
+
+    monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
+    return ClaudeCliResponsesTransport(model="claude-opus-5-5", executable="/opt/claude"), seen
+
+
+def test_transport_turns_tool_requests_into_function_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    structured_output = {
+        "action": "call_tools",
+        "tool_calls": [{"name": "write_file", "arguments_json": '{"path": "a.md"}'}],
+        "final_json": "",
+    }
+    transport, seen = _transport(monkeypatch, json.dumps({"structured_output": structured_output}))
+    response = transport.post("u", {}, json.dumps(TURN).encode(), 60)
+    output = json.loads(response.body)["output"]
+    assert response.status_code == 200
+    assert output[0]["type"] == "function_call" and output[0]["name"] == "write_file"
+    assert json.loads(output[0]["arguments"]) == {"path": "a.md"}
+    argv = seen["argv"]
+    assert argv[argv.index("--tools") + 1] == ""  # type: ignore[union-attr]
+
+
+def test_transport_returns_the_final_artifact_as_output_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    structured_output = {"action": "final", "tool_calls": [], "final_json": '{"ok": true}'}
+    transport, _ = _transport(monkeypatch, json.dumps({"structured_output": structured_output}))
+    output = json.loads(transport.post("u", {}, json.dumps(TURN).encode(), 60).body)["output"]
+    assert output[0]["content"][0]["text"] == '{"ok": true}'
+
+
+@pytest.mark.parametrize(
+    ("document", "status"),
+    [
+        ({"is_error": True, "result": "API Error: 529 Overloaded"}, 503),
+        ({"is_error": True, "result": "Please run /login"}, 401),
+    ],
+)
+def test_transport_maps_cli_failures_to_http_status(
+    monkeypatch: pytest.MonkeyPatch, document: dict[str, object], status: int
+) -> None:
+    transport, _ = _transport(monkeypatch, json.dumps(document), code=1)
+    assert transport.post("u", {}, json.dumps(TURN).encode(), 60).status_code == status
+
+
+def test_agent_route_failures_fall_back_but_work_failures_do_not() -> None:
+    from ai_software_engineer.agents.fallback import _allows_fallback
+    from ai_software_engineer.agents.models import AgentFailure, AgentResult, AgentRunStatus
+
+    def failed(code: AgentErrorCode, transient: bool) -> AgentResult:
+        return AgentResult.model_construct(
+            status=AgentRunStatus.FAILED,
+            error=AgentFailure(code=code, message="x", transient=transient),
+        )
+
+    assert _allows_fallback(failed(AgentErrorCode.QUOTA_EXHAUSTED, False))
+    assert _allows_fallback(failed(AgentErrorCode.RATE_LIMITED, False))
+    assert not _allows_fallback(failed(AgentErrorCode.AUTHENTICATION_ERROR, False))
+    assert not _allows_fallback(failed(AgentErrorCode.INVALID_OUTPUT, False))
+    assert not _allows_fallback(failed(AgentErrorCode.POLICY_VIOLATION, False))
+
+
+def test_responses_agent_runs_platform_tools_through_the_claude_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_software_engineer.agents.claude_cli import (
+        CLAUDE_CLI_ENDPOINT,
+        ClaudeCliResponsesTransport,
+    )
+    from ai_software_engineer.agents.responses import ResponsesAgentAdapter
+    from tests.agents.test_openai_compatible import StaticPromptBuilder
+    from tests.agents.test_responses import _repository
+    from tests.agents.test_responses_boundary_diagnostics import _qa
+
+    root, base = _repository(tmp_path)
+    request, definition = _qa(base)
+    prompts: list[str] = []
+    replies = [
+        {
+            "action": "call_tools",
+            "tool_calls": [{"name": "read_file", "arguments_json": '{"path": "README.md"}'}],
+            "final_json": "",
+        },
+        {"action": "final", "tool_calls": [], "final_json": "{}"},
+    ]
+
+    real_run = subprocess.run
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        if argv[0] != "/opt/claude":
+            return real_run(argv, **kwargs)
+        prompts.append(kwargs["input"])
+        reply = replies[min(len(prompts), len(replies)) - 1]
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"structured_output": reply}), "")
+
+    monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
+    adapter = ResponsesAgentAdapter(
+        workspace_root=root,
+        endpoint=CLAUDE_CLI_ENDPOINT,
+        api_key="claude-cli-local",
+        model="claude-opus-5-5",
+        agent=definition,
+        prompt_builder=StaticPromptBuilder(),
+        transport=ClaudeCliResponsesTransport(model="claude-opus-5-5", executable="/opt/claude"),
+    )
+    adapter.run(request)
+    assert len(prompts) >= 2
+    # The platform executed read_file and sent its result back on the next turn.
+    assert "TOOL RESULT [" in prompts[1]
