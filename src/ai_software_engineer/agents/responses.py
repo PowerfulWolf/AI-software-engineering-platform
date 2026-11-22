@@ -926,7 +926,14 @@ def _tool_definitions(role: AgentRole) -> list[WirePayload]:
         {
             "type": "function",
             "name": "run_command",
-            "description": "Run one tokenized, allowlisted command without a shell.",
+            "description": (
+                "Run one tokenized, allowlisted command without a shell. Pass the "
+                "program and its arguments as separate argv items; shell operators "
+                "(| > >> < && || ;) and shell interpreters are refused; `uv run X` "
+                "runs X directly in the prepared environment. "
+                "Run tools directly, e.g. ['python3', '-m', 'pytest', '-q', "
+                "'tests/config'], ['ruff', 'check', 'src'], ['git', 'diff']."
+            ),
             "strict": True,
             "parameters": {
                 "type": "object",

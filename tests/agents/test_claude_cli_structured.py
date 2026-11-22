@@ -51,6 +51,18 @@ def test_manager_gets_no_tools(tmp_path: Path) -> None:
     assert "--allowedTools" not in argv
 
 
+def test_knowledge_calls_get_no_repository_tools_and_few_turns(tmp_path: Path) -> None:
+    from ai_software_engineer.agents.model_diagnostics import model_call_phase
+
+    with model_call_phase("knowledge_assessment"):
+        argv = _client(tmp_path).argv(SCHEMA)
+    assert argv[argv.index("--tools") + 1] == ""
+    assert "--allowedTools" not in argv and "--add-dir" not in argv
+    assert int(argv[argv.index("--max-turns") + 1]) <= 4
+    stage = _client(tmp_path).argv(SCHEMA)
+    assert stage[stage.index("--tools") + 1] == "Read,Grep,Glob"
+
+
 def test_environment_drops_unrelated_secrets(tmp_path: Path) -> None:
     client = _client(tmp_path)
     assert "SOL_6_API_KEY" not in client._environment

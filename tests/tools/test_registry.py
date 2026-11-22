@@ -155,7 +155,7 @@ def test_coder_can_read_write_and_run_allowlisted_command(tmp_path: Path) -> Non
     "arguments",
     [
         ("uv", "sync"),
-        ("uv", "run", "pytest", "tests/unit", "-q"),
+        ("uv", "run", "--with", "requests", "pytest", "tests/unit", "-q"),
         ("uv", "venv", ".venv"),
         ("uv", "pip", "install", "pytest"),
     ],
@@ -185,6 +185,25 @@ def test_role_tool_rejects_uv_environment_mutation_before_executor(
     assert isinstance(result, ToolRejectedResult)
     assert result.error_code == "COMMAND_DENIED"
     assert fake.calls == []
+    assert not (tmp_path / ".venv").exists()
+
+
+def test_uv_run_executes_the_wrapped_tool_directly_without_environment_sync(
+    tmp_path: Path,
+) -> None:
+    agent = _agent(AgentRole.CODER)
+    fake = FakeCommandExecutor()
+    registry = PolicyBoundToolRegistry(tmp_path, agent, command_executor=fake)
+    result = registry.execute(
+        RunCommandRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.CODER,
+            operation_id="tool.uv-run",
+            argv=("uv", "run", "--frozen", "pytest", "tests/unit", "-q"),
+        )
+    )
+    assert isinstance(result, RunCommandResult)
+    assert fake.calls == [("pytest", "tests/unit", "-q")]
     assert not (tmp_path / ".venv").exists()
 
 

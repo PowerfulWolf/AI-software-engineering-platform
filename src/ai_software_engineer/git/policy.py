@@ -23,6 +23,12 @@ class CommandPolicyViolation(WorkspacePolicyError):
 
 
 _SHELL_CONTROL_TOKENS: Final = frozenset({";", "&&", "||", "|", ">", ">>", "<", "<<"})
+# A named test subdirectory (never ``tests`` itself) is still a focused scope:
+# it cannot collect the whole suite, and the final verification evidence keeps
+# its own exact-node requirement.
+_PYTEST_DIRECTORY = re.compile(
+    r"^tests/[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/?$"
+)
 _PYTEST_SELECTOR = re.compile(
     r"^tests/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*test_[A-Za-z0-9_.-]+\.py"
     r"(?:::[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)?"
@@ -245,7 +251,10 @@ def _authorize_focused_pytest(arguments: tuple[str, ...]) -> None:
                     raise CommandPolicyViolation("pytest 选项缺少值")
                 index += 2
             continue
-        if not _PYTEST_SELECTOR.fullmatch(selector):
+        if not (
+            _PYTEST_SELECTOR.fullmatch(selector)
+            or (_PYTEST_DIRECTORY.fullmatch(selector) and ".." not in selector.split("/"))
+        ):
             raise CommandPolicyViolation(
                 "pytest 执行被拒绝: 每个测试位置必须是 tests/ 下明确的文件或节点; "
                 "禁止附加目录、全量范围或未验证的配置选项"

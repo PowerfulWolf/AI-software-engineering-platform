@@ -36,7 +36,9 @@ _TRANSIENT = re.compile(
     re.IGNORECASE,
 )
 _AUTH = re.compile(r"login|log in|auth|401|403|credential|not signed", re.IGNORECASE)
-_MAX_TURNS = "60"
+_MAX_TURNS = "40"
+# Without tools only the structured answer remains (it may take a repair turn).
+_MAX_TURNS_WITHOUT_TOOLS = "4"
 
 
 def default_claude_executable() -> str:
@@ -82,7 +84,13 @@ class ClaudeCliStructuredModelClient:
             self._environment["PATH"] = f"{local_bin}:{path}"
 
     def argv(self, schema: Mapping[str, object]) -> tuple[str, ...]:
-        tools = READ_ONLY_TOOLS if self._reads else ""
+        from ai_software_engineer.agents.model_diagnostics import current_call_phase
+
+        # Knowledge intent/assessment calls already receive their evidence; letting
+        # them browse the repository multiplied each call into dozens of full-context
+        # turns (hundreds of thousands of input tokens for a ~2k-token answer).
+        reads = self._reads and current_call_phase() == "stage_reply"
+        tools = READ_ONLY_TOOLS if reads else ""
         return (
             self._executable,
             "-p",
@@ -102,10 +110,10 @@ class ClaudeCliStructuredModelClient:
             "--no-session-persistence",
             "--strict-mcp-config",
             "--max-turns",
-            _MAX_TURNS,
+            _MAX_TURNS if reads else _MAX_TURNS_WITHOUT_TOOLS,
             *(
                 argument
-                for root in (self._additional if self._reads else ())
+                for root in (self._additional if reads else ())
                 for argument in ("--add-dir", str(root))
             ),
         )

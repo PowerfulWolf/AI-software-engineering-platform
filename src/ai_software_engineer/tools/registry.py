@@ -236,6 +236,11 @@ class PolicyBoundToolRegistry:
             raise
 
     def _run_command(self, request: RunCommandRequest) -> ToolResult:
+        direct = _without_uv_run(request.argv)
+        if direct != request.argv:
+            # `uv run X` would sync or create an environment first; X itself runs
+            # in the already prepared one, under the same command policy.
+            request = request.model_copy(update={"argv": direct})
         executable = Path(request.argv[0]).name.lower()
         if executable in _SHELL_EXECUTABLES:
             return self._rejected(
@@ -251,7 +256,9 @@ class PolicyBoundToolRegistry:
             return self._rejected(
                 request,
                 "COMMAND_DENIED",
-                "uv environment operations are not exposed through the role tool protocol",
+                "uv environment operations are not exposed through the role tool protocol; "
+                "run the tool directly instead (for example python3 -m pytest ..., ruff, mypy); "
+                + self._permitted_commands_hint(),
             )
         try:
             result = self._executor.run(
@@ -323,6 +330,22 @@ class PolicyBoundToolRegistry:
             error_code=code,
             error_message=message or "tool request rejected",
         )
+
+
+_UV_RUN_FLAGS = frozenset({"--frozen", "--locked", "--no-sync", "--offline", "-q", "--quiet"})
+
+
+def _without_uv_run(argv: tuple[str, ...]) -> tuple[str, ...]:
+    """Map ``uv run [safe flags] X ...`` to ``X ...``; anything else stays as given."""
+    if len(argv) < 3 or Path(argv[0]).name.lower() != "uv" or argv[1] != "run":
+        return argv
+    index = 2
+    while index < len(argv) and argv[index] in _UV_RUN_FLAGS:
+        index += 1
+    rest = argv[index:]
+    if not rest or rest[0].startswith("-"):
+        return argv
+    return rest
 
 
 __all__ = [

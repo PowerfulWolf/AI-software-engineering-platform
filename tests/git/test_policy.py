@@ -213,9 +213,18 @@ def test_verifier_command_policy_requires_focused_pytest_selectors(tmp_path: Pat
         ("python", "-m", "pytest", "tests/unit/test_service.py::test_one")
     ) == ("python", "-m", "pytest", "tests/unit/test_service.py::test_one")
 
+    # A named test subdirectory is a bounded scope; the whole suite is not.
+    assert policy.authorize_command(("pytest", "-q", "tests/unit")) == (
+        "pytest",
+        "-q",
+        "tests/unit",
+    )
+
     for arguments in (
         ("pytest",),
-        ("pytest", "tests/unit"),
+        ("pytest", "tests"),
+        ("pytest", "tests/"),
+        ("pytest", "tests/../tests"),
         ("pytest", "-m", "not", "mysql"),
         ("python", "-c", "import pytest; pytest.main(['tests/unit/test_service.py'])"),
     ):
