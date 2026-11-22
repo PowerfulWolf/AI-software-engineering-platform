@@ -15,7 +15,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -613,7 +613,12 @@ class ResponsesStructuredModelClient:
                     "schema": cast(JsonValue, strict_output_schema(output_schema)),
                 }
             },
+            # Long Designer/Planner generations exceed gateway idle limits (HTTP
+            # 504 after ~100s) unless bytes keep flowing; a non-streaming gateway
+            # still answers with plain JSON, which is parsed the same way.
         }
+        if _RESPONSES_STREAMING["enabled"]:
+            body["stream"] = True
         request_bytes = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
         require_structured_admission_open(
             origin="responses_before_transport_admission",
@@ -639,7 +644,7 @@ class ResponsesStructuredModelClient:
                 {
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
-                    "Accept": "application/json",
+                    "Accept": "text/event-stream, application/json",
                 },
                 request_bytes,
                 float(timeout_seconds),
@@ -659,6 +664,20 @@ class ResponsesStructuredModelClient:
                 transient=True,
             ) from error
         _record_http_round_trip(admission, response=response)
+        if (
+            response.status_code == 400
+            and body.get("stream") is True
+            and b"stream" in response.body[:4096].lower()
+        ):
+            # This gateway rejects streaming. Fall back for every later call and
+            # let the stage's transient budget retry this one without it.
+            _RESPONSES_STREAMING["enabled"] = False
+            raise StructuredModelError(
+                AgentErrorCode.PROVIDER_UNAVAILABLE,
+                "Responses gateway rejected streaming; retrying without streaming",
+                transient=True,
+                http_status=response.status_code,
+            )
         if not 200 <= response.status_code < 300:
             code, transient = _http_failure(response)
             raise StructuredModelError(
@@ -671,9 +690,26 @@ class ResponsesStructuredModelClient:
                 correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
             )
         try:
-            provider = json.loads(response.body.decode("utf-8"))
-            if not isinstance(provider, Mapping):
-                raise ValueError("provider payload is not an object")
+            provider = responses_provider_payload(response.body)
+        except ResponsesStreamFailed as error:
+            raise StructuredModelError(
+                AgentErrorCode.PROVIDER_UNAVAILABLE,
+                "Responses structured provider ended the streamed response without output",
+                transient=True,
+                http_status=response.status_code,
+                request_id=safe_request_id(response.request_id, secret=self._api_key),
+                correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
+            ) from error
+        except (UnicodeError, json.JSONDecodeError, ValueError) as error:
+            raise StructuredModelError(
+                AgentErrorCode.INVALID_OUTPUT,
+                "Responses structured output is invalid",
+                transient=False,
+                http_status=response.status_code,
+                request_id=safe_request_id(response.request_id, secret=self._api_key),
+                correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
+            ) from error
+        try:
             output = json.loads(_output_text(provider))
             if not isinstance(output, Mapping):
                 raise ValueError("structured output is not an object")
@@ -694,6 +730,57 @@ class ResponsesStructuredModelClient:
             request_id=safe_request_id(response.request_id, secret=self._api_key),
             correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
         )
+
+
+# Process-wide: once a gateway refuses ``stream``, later calls send plain JSON.
+_RESPONSES_STREAMING: dict[str, bool] = {"enabled": True}
+
+
+class ResponsesStreamFailed(ValueError):
+    """The provider reported a failed or incomplete streamed response."""
+
+
+def responses_provider_payload(body: bytes) -> Mapping[str, Any]:
+    """Return the final Responses object from plain JSON or an SSE event stream."""
+    text = body.decode("utf-8")
+    stripped = text.lstrip()
+    if stripped.startswith("{"):
+        provider = json.loads(stripped)
+        if not isinstance(provider, Mapping):
+            raise ValueError("provider payload is not an object")
+        return provider
+    completed: Mapping[str, Any] | None = None
+    deltas: list[str] = []
+    for line in text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        event = json.loads(data)
+        if not isinstance(event, Mapping):
+            continue
+        kind = event.get("type")
+        if kind == "response.output_text.delta" and isinstance(event.get("delta"), str):
+            deltas.append(event["delta"])
+        elif kind in {"response.completed", "response.done"} and isinstance(
+            event.get("response"), Mapping
+        ):
+            completed = event["response"]
+        elif kind in {"response.failed", "response.incomplete", "error"}:
+            raise ResponsesStreamFailed(f"streamed response ended with {kind}")
+    if completed is not None and completed.get("output"):
+        return completed
+    if deltas:
+        fallback: dict[str, Any] = {
+            "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "".join(deltas)}]}
+            ]
+        }
+        if completed is not None and isinstance(completed.get("usage"), Mapping):
+            fallback["usage"] = completed["usage"]
+        return fallback
+    raise ValueError("streamed response carried no output")
 
 
 def _record_http_round_trip(

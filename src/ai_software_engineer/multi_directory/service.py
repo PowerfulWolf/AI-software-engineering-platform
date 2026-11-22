@@ -59,6 +59,10 @@ from ai_software_engineer.multi_directory.attachments import (
     MAX_REQUIREMENT_SCREENSHOTS,
     RequirementAttachmentStore,
 )
+from ai_software_engineer.multi_directory.branch_allocation import (
+    repository_branches,
+    unique_branch_name,
+)
 from ai_software_engineer.multi_directory.budget import (
     DesignRetryPolicy,
     stage_budget,
@@ -1238,6 +1242,15 @@ class JointDeliveryService:
                     next_action="Reply to the Product Agent questions.",
                 )
             draft.require_branch_name()
+            if draft.branch_name is not None:
+                draft = draft.model_copy(
+                    update={
+                        "branch_name": unique_branch_name(
+                            draft.branch_name,
+                            repository_branches(unit.root for unit in checkpoint.scope.units),
+                        )
+                    }
+                )
             spec = JointProductSpec(
                 scope_sha256=digest(checkpoint.scope),
                 version=checkpoint.attempts["product"],
