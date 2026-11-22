@@ -259,7 +259,11 @@ class PolicyBoundToolRegistry:
                 timeout_seconds=request.timeout_seconds,
             )
         except WorkspacePolicyError as error:
-            return self._rejected(request, "COMMAND_DENIED", str(error))
+            # Tell the model what it may run instead, so the next try can succeed
+            # rather than spending the bounded denial budget on guesses.
+            return self._rejected(
+                request, "COMMAND_DENIED", f"{error}; {self._permitted_commands_hint()}"
+            )
         except CommandServicePaused as error:
             from ai_software_engineer.service_pause import ServicePauseRequested
 
@@ -301,6 +305,14 @@ class PolicyBoundToolRegistry:
 
     def _absolute(self, path: PurePosixPath) -> Path:
         return self._workspace_root.joinpath(*path.parts)
+
+    def _permitted_commands_hint(self) -> str:
+        commands = list(self._agent.permissions.commands)
+        if not commands:
+            return "this role may not run commands; finish with file edits only"
+        shown = "; ".join(commands[:12])
+        more = f" (+{len(commands) - 12} more)" if len(commands) > 12 else ""
+        return f"permitted command prefixes: {shown}{more}"[:1200]
 
     def _rejected(self, request: ToolRequest, code: str, message: str) -> ToolRejectedResult:
         return ToolRejectedResult(
