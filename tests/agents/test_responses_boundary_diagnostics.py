@@ -134,7 +134,9 @@ def test_qa_tool_denial_reports_only_tool_and_typed_reason(
     assert "pytest" not in result.error.message
     assert "src/" not in result.error.message
     assert "private-provider-key" not in result.model_dump_json()
-    assert provider.calls == 1
+    # A denied command never runs and is reported back to the model a bounded
+    # number of times; a write outside the role scope fails at once.
+    assert provider.calls == (4 if reason == "COMMAND_DENIED" else 1)
     assert _git(root, "status", "--porcelain") == ""
 
 
@@ -418,3 +420,46 @@ def test_qa_final_workspace_mutation_is_distinct_from_tool_denial(tmp_path: Path
     assert "Responses final workspace validation rejected" in result.error.message
     assert "unexpected.py" not in result.error.message
     assert (root / "src" / "unexpected.py").is_file()
+
+
+def test_denied_command_is_reported_to_the_model_which_can_continue(tmp_path: Path) -> None:
+    root, base = _repository(tmp_path)
+    request, definition = _qa(base)
+
+    class Recovering:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.seen: list[dict[str, object]] = []
+
+        def post(
+            self,
+            url: str,
+            headers: Mapping[str, str],
+            body: bytes,
+            timeout_seconds: float,
+        ) -> HttpResponse:
+            del url, headers, timeout_seconds
+            self.calls += 1
+            if self.calls == 1:
+                output: list[dict[str, object]] = [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_denied",
+                        "name": "run_command",
+                        "arguments": json.dumps({"argv": ["bash", "-c", "true"]}),
+                    }
+                ]
+            else:
+                sent = json.loads(body)
+                self.seen.extend(
+                    item for item in sent["input"] if item.get("type") == "function_call_output"
+                )
+                output = [{"type": "message", "content": [{"type": "output_text", "text": "{}"}]}]
+            return HttpResponse(status_code=200, body=json.dumps({"output": output}).encode())
+
+    provider = Recovering()
+    result = _adapter(root, definition, provider).run(request)
+
+    assert provider.calls == 2
+    assert any("COMMAND_DENIED" in str(item["output"]) for item in provider.seen)
+    assert not (result.error is not None and "tool request rejected" in result.error.message)

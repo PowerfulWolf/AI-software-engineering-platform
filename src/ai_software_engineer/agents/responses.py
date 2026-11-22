@@ -130,6 +130,9 @@ _SAFE_TOOL_REJECTION_CODES = frozenset(
 )
 
 
+_MAX_COMMAND_DENIALS = 3
+
+
 class _ToolRequestRejected(WorkspacePolicyError):
     """Only stable tool kind and refusal code cross the AgentResult boundary."""
 
@@ -663,6 +666,7 @@ class ResponsesAgentAdapter:
             else self._input_items(request, window.continuation_prompt)
         )
         tool_calls = 0
+        command_denials = 0
         latest_usage: AgentUsage | None = None
         if self._interruption_control is not None:
             window.before = self._interruption_control.started(request, self._workspace_root)
@@ -764,7 +768,17 @@ class ResponsesAgentAdapter:
                     window.completed_operations.append(tool_request.operation_id)
                     if self._execution_guard is not None:
                         self._execution_guard.check()
-                    if isinstance(
+                    if (
+                        isinstance(tool_result, ToolRejectedResult)
+                        and tool_result.error_code == "COMMAND_DENIED"
+                    ):
+                        # A denied command never ran. Report the typed refusal so the
+                        # model can use a permitted command, but bound repeated tries.
+                        command_denials += 1
+                        if command_denials > _MAX_COMMAND_DENIALS:
+                            window.policy_refused = True
+                            raise _ToolRequestRejected(tool_result.tool, tool_result.error_code)
+                    elif isinstance(
                         tool_result, ToolRejectedResult
                     ) and tool_result.error_code not in {
                         "COMMAND_TIMED_OUT",
