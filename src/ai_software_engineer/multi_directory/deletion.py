@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import os
 import re
+import threading
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, ExitStack, closing, contextmanager
 from datetime import UTC, datetime
@@ -50,6 +51,12 @@ from ai_software_engineer.store.mysql_repository import (
     open_mysql_connection,
 )
 from ai_software_engineer.work_queue.models import QueuedWorkItem
+
+# Requirements now run in parallel lanes, but close/delete settlement holds the
+# global dispatch authority row while it checks and cancels engineering records.
+# Two settlements waiting on each other outlived the MySQL read timeout and broke
+# the connection (InterfaceError). Settlements are rare and short: run one at a time.
+_REQUIREMENT_SETTLEMENT_LOCK = threading.RLock()
 
 
 class _VerificationPlanEnvelope(DomainModel):
@@ -143,7 +150,7 @@ class ProductionRequirementDeletionGuard:
         physical: bool = False,
     ) -> Iterator[RequirementPurgePlan | None]:
         targets = self._targets(checkpoint)
-        with ExitStack() as stack:
+        with _REQUIREMENT_SETTLEMENT_LOCK, ExitStack() as stack:
             for task_id, (sidecar, _) in sorted(targets.items()):
                 stack.enter_context(_task_lock(sidecar / "state/queue-worker-locks", task_id))
             if self._targets(checkpoint) != targets:

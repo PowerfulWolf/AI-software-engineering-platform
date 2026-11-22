@@ -378,17 +378,18 @@ class ClaudeCliResponsesTransport:
         request = json.loads(body)
         prompt, schema = render_responses_turn(request)
         started = time.monotonic()
+        from ai_software_engineer.owned_processes import run_owned_subprocess
+
         with tempfile.TemporaryDirectory(prefix="ase-claude-turn-") as scratch:
             try:
-                completed = subprocess.run(
+                # Engineering runs must own and confirm the stop of every child
+                # process; an untracked CLI would leave the execution unconfirmable.
+                completed = run_owned_subprocess(
                     self._client.argv(schema),
-                    cwd=scratch,
+                    cwd=Path(scratch),
                     env=self._client._environment,
                     input=prompt,
-                    capture_output=True,
-                    text=True,
-                    timeout=max(1.0, timeout_seconds),
-                    check=False,
+                    timeout=max(1, int(timeout_seconds)),
                 )
             except subprocess.TimeoutExpired as error:
                 raise TimeoutError("Claude CLI turn timed out") from error

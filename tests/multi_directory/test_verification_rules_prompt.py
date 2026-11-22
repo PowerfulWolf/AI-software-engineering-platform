@@ -33,3 +33,13 @@ def test_stated_levels_are_exactly_the_admitted_levels(kind: str) -> None:
             validate_inspection_levels(_inspection(kind), (other,))
     with pytest.raises(ValueError):
         validate_inspection_levels(_inspection(kind), ("unit",))
+
+
+def test_stated_pytest_rules_match_the_plan_validator() -> None:
+    from ai_software_engineer.manager.python_verification_runner import MAX_PYTEST_SELECTIONS
+    from ai_software_engineer.multi_directory import planning
+
+    assert f"'{planning._PYTHON_CAPABILITY}'" in _VERIFICATION_RULES
+    assert f"at most {MAX_PYTEST_SELECTIONS} unique pytest nodes" in _VERIFICATION_RULES
+    for allowed in ("-q", "--disable-warnings"):
+        assert allowed in _VERIFICATION_RULES

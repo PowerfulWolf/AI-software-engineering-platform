@@ -171,7 +171,7 @@ def _transport(monkeypatch: pytest.MonkeyPatch, stdout: str, code: int = 0):  # 
         seen["argv"], seen["input"] = argv, kwargs["input"]
         return subprocess.CompletedProcess(argv, code, stdout, "")
 
-    monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr("ai_software_engineer.owned_processes.run_owned_subprocess", fake_run)
     return ClaudeCliResponsesTransport(model="claude-opus-5-5", executable="/opt/claude"), seen
 
 
@@ -257,16 +257,12 @@ def test_responses_agent_runs_platform_tools_through_the_claude_cli(
         {"action": "final", "tool_calls": [], "final_json": "{}"},
     ]
 
-    real_run = subprocess.run
-
     def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        if argv[0] != "/opt/claude":
-            return real_run(argv, **kwargs)
         prompts.append(kwargs["input"])
         reply = replies[min(len(prompts), len(replies)) - 1]
         return subprocess.CompletedProcess(argv, 0, json.dumps({"structured_output": reply}), "")
 
-    monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr("ai_software_engineer.owned_processes.run_owned_subprocess", fake_run)
     adapter = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint=CLAUDE_CLI_ENDPOINT,
@@ -280,3 +276,19 @@ def test_responses_agent_runs_platform_tools_through_the_claude_cli(
     assert len(prompts) >= 2
     # The platform executed read_file and sent its result back on the next turn.
     assert "TOOL RESULT [" in prompts[1]
+
+
+def test_transport_runs_a_real_tracked_process(tmp_path: Path) -> None:
+    from ai_software_engineer.agents.claude_cli import ClaudeCliResponsesTransport
+
+    fake = tmp_path / "claude"
+    fake.write_text(
+        "#!/bin/sh\ncat >/dev/null\n"
+        'echo \'{"structured_output": {"action": "final", "tool_calls": [], '
+        '"final_json": "{\\"ok\\": true}"}}\'\n'
+    )
+    fake.chmod(0o755)
+    transport = ClaudeCliResponsesTransport(model="claude-opus-5-5", executable=str(fake))
+    response = transport.post("u", {}, json.dumps(TURN).encode(), 30)
+    assert response.status_code == 200
+    assert json.loads(response.body)["output"][0]["content"][0]["text"] == '{"ok": true}'
