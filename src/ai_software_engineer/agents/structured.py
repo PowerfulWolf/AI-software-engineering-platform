@@ -949,8 +949,26 @@ def require_structured_admission_open(
     raise StructuredAdmissionPaused(receipt)
 
 
+_QUOTA_TEXT = re.compile(r"quota|insufficient|balance|billing|余额|额度", re.IGNORECASE)
+# A route that is down, out of quota or refusing our credentials says nothing
+# about the request; another configured route (another provider or a local CLI)
+# should take over instead of the whole stage stopping. Output and policy
+# failures, service pause and a local time limit stay with the original route.
+_ROUTE_FAILURES = frozenset(
+    {
+        AgentErrorCode.QUOTA_EXHAUSTED,
+        AgentErrorCode.RATE_LIMITED,
+        AgentErrorCode.AUTHENTICATION_ERROR,
+        AgentErrorCode.PROVIDER_UNAVAILABLE,
+        AgentErrorCode.PROVIDER_ERROR,
+    }
+)
+
+
 def _allows_fallback(error: StructuredModelError) -> bool:
-    return error.retryable
+    if error.retryable:
+        return True
+    return error.code in _ROUTE_FAILURES and error.timeout_kind is None
 
 
 def _verified_images(values: tuple[Path, ...]) -> tuple[Path, ...]:
@@ -1071,6 +1089,10 @@ def _usage(payload: Mapping[str, object]) -> AgentUsage | None:
 
 def _http_failure(response: HttpResponse) -> tuple[AgentErrorCode, bool]:
     if response.status_code in {401, 403}:
+        # Gateways report an exhausted account balance as 403. Retrying the same
+        # route cannot help, but another configured route can take over.
+        if _QUOTA_TEXT.search(response.body[:4096].decode("utf-8", "replace")):
+            return AgentErrorCode.QUOTA_EXHAUSTED, False
         return AgentErrorCode.AUTHENTICATION_ERROR, False
     if response.status_code == 408:
         return AgentErrorCode.TIMEOUT, True

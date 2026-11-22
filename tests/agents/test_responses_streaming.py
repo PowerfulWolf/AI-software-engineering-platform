@@ -133,3 +133,72 @@ def test_client_parses_a_streamed_reply(monkeypatch: pytest.MonkeyPatch) -> None
         instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1
     )
     assert result.payload == {"a": 1}
+
+
+def test_quota_exhausted_gateway_falls_back_to_the_next_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from collections.abc import Mapping
+
+    from ai_software_engineer.agents import (
+        AgentErrorCode,
+        FallbackStructuredModelClient,
+        HttpResponse,
+        ResponsesStructuredModelClient,
+        StructuredModelError,
+        StructuredModelResult,
+        StructuredModelRoute,
+        structured,
+    )
+
+    monkeypatch.setitem(structured._RESPONSES_STREAMING, "enabled", False)
+
+    class Gateway:
+        def post(
+            self, url: str, headers: Mapping[str, str], body: bytes, timeout: float
+        ) -> HttpResponse:
+            return HttpResponse(
+                status_code=403,
+                body=b'{"error":{"message":"Insufficient user quota, remaining quota: -0.01"}}',
+            )
+
+    primary = ResponsesStructuredModelClient(
+        endpoint="https://example.invalid/v1/responses",
+        api_key="k",
+        model="gpt",
+        transport=Gateway(),
+    )
+    with pytest.raises(StructuredModelError) as raised:
+        primary.complete(instructions="x", input_payload={}, output_schema={}, timeout_seconds=1)
+    assert raised.value.code is AgentErrorCode.QUOTA_EXHAUSTED
+    assert raised.value.transient is False
+
+    class Local:
+        calls = 0
+
+        def complete(self, **_: object) -> StructuredModelResult:
+            Local.calls += 1
+            return StructuredModelResult(payload={"a": 1}, duration_ms=1)
+
+    client = FallbackStructuredModelClient(
+        (
+            StructuredModelRoute(provider="codex", model="gpt", client=primary),
+            StructuredModelRoute(provider="claude", model="opus", client=Local()),
+        )
+    )
+    result = client.complete(
+        instructions="x", input_payload={}, output_schema={}, timeout_seconds=1
+    )
+    assert result.payload == {"a": 1} and Local.calls == 1
+
+
+def test_invalid_output_does_not_fall_back() -> None:
+    from ai_software_engineer.agents import AgentErrorCode, StructuredModelError
+    from ai_software_engineer.agents.structured import _allows_fallback
+
+    assert not _allows_fallback(
+        StructuredModelError(AgentErrorCode.INVALID_OUTPUT, "bad", transient=False)
+    )
+    assert _allows_fallback(
+        StructuredModelError(AgentErrorCode.AUTHENTICATION_ERROR, "denied", transient=False)
+    )
