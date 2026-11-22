@@ -189,14 +189,19 @@ def collect_git_resources(
                 branch_names={task.id: task.branch_name},
             )
             for name in names:
-                if name in {"main", "master", "develop"} or any(
+                if name in {"main", "master", "develop"}:
+                    raise ValueError("Task branch is protected or shared")
+                ref = "refs/heads/" + name
+                if any(
                     other.id not in task_roots
                     and other.repository == task.repository
                     and other.branch_name == name
                     for other in tasks
                 ):
-                    raise ValueError("Task branch is protected or shared")
-                ref = "refs/heads/" + name
+                    # Another Requirement's Task still owns this branch name: deleting
+                    # this Requirement's data must leave that shared branch untouched.
+                    refs.pop((repo.repository_id, ref), None)
+                    continue
                 current = manager._run_git(
                     ("for-each-ref", "--format=%(objectname)", ref), cwd=repo.repository_root
                 )

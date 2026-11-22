@@ -1898,6 +1898,21 @@ class JointDeliveryService:
         if checkpoint.stage in {JointStage.BLOCKED, JointStage.CLOSED, JointStage.DONE}:
             return
         if (
+            checkpoint.stage is JointStage.PREPARING
+            and checkpoint.requirement is None
+            and not checkpoint.dialogue
+            and checkpoint.product_spec is None
+            and checkpoint.approval is None
+            and checkpoint.design is None
+            and checkpoint.plan is None
+            and not checkpoint.children
+            and checkpoint.integration is None
+        ):
+            # An intake that stopped before any discussion (for example its frozen
+            # baseline is no longer current) can neither proceed nor be closed;
+            # it owns nothing but its own records, so deletion is its exit.
+            return
+        if (
             checkpoint.stage
             not in {
                 JointStage.READY_FOR_DISCUSSION,

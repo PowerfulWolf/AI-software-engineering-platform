@@ -359,7 +359,7 @@ def test_completion_publication_before_pending_removal_replays_public_delete(
 
 @pytest.mark.parametrize("sequence", [1, 2])
 @pytest.mark.parametrize("already_deleted", [False, True])
-def test_legacy_preparing_delete_requires_existing_exact_revocation(
+def test_preparing_requirement_without_discussion_can_be_deleted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, already_deleted: bool, sequence: int
 ) -> None:
     from ai_software_engineer.multi_directory.models import JointStage
@@ -407,6 +407,7 @@ def test_legacy_preparing_delete_requires_existing_exact_revocation(
             service.delete_requirement(command)
             assert not service.journal.directory(preparing.delivery_id).exists()
             return
-    with pytest.raises(ValueError, match="before ProductSpec approval"):
-        service.delete_requirement(command)
-    assert service.journal.current(preparing.delivery_id) == preparing
+    # A stopped intake owns only its own records: it cannot proceed or be closed,
+    # so it must still be deletable, with or without an earlier revocation.
+    service.delete_requirement(command)
+    assert not service.journal.directory(preparing.delivery_id).exists()
