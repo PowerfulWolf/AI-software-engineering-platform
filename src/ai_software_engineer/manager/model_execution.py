@@ -213,12 +213,20 @@ class ManagerModelExecutor:
             }
         )
         # All limits are independent. This hard loop bound is additional to durable admission.
+        pending_backoff = 0
         for _ in range(
             self.retry_policy.max_attempts
             + self.retry_policy.max_transient_failures
             + self.time_policy.max_capacity_timeouts
         ):
+            from ai_software_engineer.orchestration.retry import transient_backoff
             from ai_software_engineer.service_pause import service_pause_requested
+
+            if pending_backoff:
+                # A gateway under resource pressure (HTTP 503) needs time; retrying
+                # in the same second spent the whole Manager allowance at once.
+                transient_backoff(pending_backoff)
+                pending_backoff = 0
 
             if service_pause_requested():
                 raise StructuredModelError(
@@ -349,6 +357,8 @@ class ManagerModelExecutor:
                         self.store.put("manager-final", run_id, final)
                     if state == "FAILED":
                         raise
+                    if state == "TRANSIENT":
+                        pending_backoff = transient + 1
                     continue
                 with guard.write_scope():
                     self.store.put(
