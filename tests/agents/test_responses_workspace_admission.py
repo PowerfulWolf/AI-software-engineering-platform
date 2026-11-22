@@ -56,7 +56,7 @@ def test_exact_seed_classifies_only_current_route_mutations(tmp_path: Path, muta
     adapter = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1/responses",
-        api_key="test-key",
+        credential="test-key",
         model="fixture",
         agent=definition,
         transport=provider,
@@ -103,7 +103,7 @@ def test_seed_drift_is_rejected_before_provider(tmp_path: Path) -> None:
     adapter = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1/responses",
-        api_key="test-key",
+        credential="test-key",
         model="fixture",
         agent=definition,
         transport=provider,

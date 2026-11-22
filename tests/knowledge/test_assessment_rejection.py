@@ -699,7 +699,7 @@ def _http_rejection(
             model="fixture-http-model",
             client=ResponsesStructuredModelClient(
                 endpoint="https://example.invalid/v1",
-                api_key="fixture",
+                credential="fixture",
                 model="fixture-http-model",
                 transport=transport,
             ),

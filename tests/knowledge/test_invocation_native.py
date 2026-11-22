@@ -593,7 +593,7 @@ class _HttpTransport:
 def _http_client(transport: _HttpTransport, model: str) -> ResponsesStructuredModelClient:
     return ResponsesStructuredModelClient(
         endpoint="https://example.invalid/v1",
-        api_key="fixture",
+        credential="fixture",
         model=model,
         transport=transport,
     )

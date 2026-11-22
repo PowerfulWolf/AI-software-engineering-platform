@@ -257,8 +257,8 @@ class RuntimeSession:
         self._repository_root = _validated_repository_root(repository_root)
         self._case_model_id = _model_identity(self._agent_definitions)
         variables = environment if environment is not None else os.environ
-        api_key = variables.get(config.api_key_env)
-        if config.api_key_required and not api_key:
+        credential = variables.get(config.api_key_env)
+        if config.api_key_required and not credential:
             raise RuntimeConfigurationError(
                 f"required API key environment variable is missing: {config.api_key_env}"
             )
@@ -277,7 +277,7 @@ class RuntimeSession:
                 {
                     role: OpenAICompatibleAgentAdapter(
                         endpoint=config.endpoint,
-                        api_key=api_key,
+                        credential=credential,
                         model=definition.model,
                         agent_id=definition.id,
                         agent_version=definition.version,

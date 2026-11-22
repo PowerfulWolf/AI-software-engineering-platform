@@ -168,11 +168,11 @@ class ServicePauseControl:
     def operation_scope(self, operation_id: str) -> Iterator[None]:
         if not operation_id or len(operation_id) > 256:
             raise ValueError("pause scope needs a bounded exact Operation identity")
-        token = _scope.set(ServicePauseScope(self, operation_id))
+        reset_token = _scope.set(ServicePauseScope(self, operation_id))
         try:
             yield
         finally:
-            _scope.reset(token)
+            _scope.reset(reset_token)
 
     def record_stop(
         self, scope: ServicePauseScope, stop: NativeProcessStop, request: PauseRequest
@@ -242,11 +242,11 @@ def pause_admission() -> Iterator[None]:
 
 @contextmanager
 def pause_invocation(request: AgentRequest) -> Iterator[None]:
-    token = _request.set(request)
+    reset_token = _request.set(request)
     try:
         yield
     finally:
-        _request.reset(token)
+        _request.reset(reset_token)
 
 
 def record_invocation_pause(stop: NativeProcessStop | SynchronousToolLoopStop | None) -> None:

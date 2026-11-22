@@ -230,11 +230,11 @@ def _authorize_focused_pytest(arguments: tuple[str, ...]) -> None:
     selected = False
     index = 0
     while index < len(selectors):
-        token = selectors[index]
-        if token == "--" or token in flags:
+        selector = selectors[index]
+        if selector == "--" or selector in flags:
             index += 1
             continue
-        option, separator, value = token.partition("=")
+        option, separator, value = selector.partition("=")
         if option in value_options:
             if separator:
                 if not value:
@@ -245,7 +245,7 @@ def _authorize_focused_pytest(arguments: tuple[str, ...]) -> None:
                     raise CommandPolicyViolation("pytest 选项缺少值")
                 index += 2
             continue
-        if not _PYTEST_SELECTOR.fullmatch(token):
+        if not _PYTEST_SELECTOR.fullmatch(selector):
             raise CommandPolicyViolation(
                 "pytest 执行被拒绝: 每个测试位置必须是 tests/ 下明确的文件或节点; "
                 "禁止附加目录、全量范围或未验证的配置选项"

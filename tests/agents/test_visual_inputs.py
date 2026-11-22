@@ -49,7 +49,7 @@ def test_responses_sends_actual_image_with_receipt_label(tmp_path: Path, count: 
     ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1",
-        api_key="fixture",
+        credential="fixture",
         model="fixture",
         agent=definition,
         prompt_builder=visual_prompt(count),

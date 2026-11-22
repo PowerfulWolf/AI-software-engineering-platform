@@ -92,15 +92,15 @@ class OperationSummaryCursor(DomainModel):
         return base64.urlsafe_b64encode(self.model_dump_json().encode()).decode().rstrip("=")
 
     @classmethod
-    def decode(cls, token: str) -> Self:
+    def decode(cls, encoded: str) -> Self:
         try:
             payload = base64.b64decode(
-                token + "=" * (-len(token) % 4), altchars=b"-_", validate=True
+                encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True
             )
             value = cls.model_validate_json(payload)
         except (ValueError, binascii.Error) as error:
             raise ValueError("invalid operation summary cursor") from error
-        if value.encode() != token:
+        if value.encode() != encoded:
             raise ValueError("noncanonical operation summary cursor")
         return value
 

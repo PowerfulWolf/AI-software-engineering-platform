@@ -111,7 +111,7 @@ def test_responses_client_runs_a_tool_turn_then_returns_the_object(
 
     client = ResponsesStructuredModelClient(
         endpoint="https://example.invalid/v1/responses",
-        api_key="k",
+        credential="k",
         model="m",
         transport=Gateway(),
     )
@@ -143,7 +143,7 @@ def test_without_access_no_tools_are_sent(monkeypatch: pytest.MonkeyPatch) -> No
 
     client = ResponsesStructuredModelClient(
         endpoint="https://example.invalid/v1/responses",
-        api_key="k",
+        credential="k",
         model="m",
         transport=Gateway(),
     )

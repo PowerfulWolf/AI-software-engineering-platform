@@ -229,11 +229,11 @@ def observe_recovery_preparation(
             observer = _Observer(scope, sink, clock or (lambda: datetime.now(UTC)))
     except Exception:
         _LOGGER.error("PREPARATION_OBSERVATION_SETUP_FAILED")
-    token = _OBSERVER.set(observer)
+    reset_token = _OBSERVER.set(observer)
     try:
         yield
     finally:
-        _OBSERVER.reset(token)
+        _OBSERVER.reset(reset_token)
 
 
 def _observe(build: Callable[[_Observer], PreparationRecord | None]) -> None:

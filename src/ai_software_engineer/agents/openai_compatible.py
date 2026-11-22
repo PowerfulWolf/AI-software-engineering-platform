@@ -623,7 +623,7 @@ class OpenAICompatibleAgentAdapter:
         self,
         *,
         endpoint: str,
-        api_key: str | None,
+        credential: str | None,
         model: str,
         agent_id: str,
         agent_version: str,
@@ -632,7 +632,7 @@ class OpenAICompatibleAgentAdapter:
         transport: HttpTransport | None = None,
     ) -> None:
         self._endpoint = _normalize_endpoint(endpoint)
-        self._api_key = _optional_text(api_key, "api_key")
+        self._api_key = _optional_text(credential, "credential")
         self._model = _required_text(model, "model")
         self._agent_id = _required_text(agent_id, "agent_id")
         self._agent_version = _required_text(agent_version, "agent_version")

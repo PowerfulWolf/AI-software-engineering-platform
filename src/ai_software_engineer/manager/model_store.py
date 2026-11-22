@@ -31,7 +31,7 @@ _writer: ContextVar[tuple[Connection, str] | None] = ContextVar(
 def manager_record_transaction(connection: Connection, team_id: str) -> Iterator[None]:
     """Only an owned authority opens this scope; commit follows its final fence check."""
     connection.begin()
-    token = _writer.set((connection, team_id))
+    reset_token = _writer.set((connection, team_id))
     try:
         yield
         connection.commit()
@@ -39,7 +39,7 @@ def manager_record_transaction(connection: Connection, team_id: str) -> Iterator
         connection.rollback()
         raise
     finally:
-        _writer.reset(token)
+        _writer.reset(reset_token)
 
 
 class MySqlManagerRecordStore:

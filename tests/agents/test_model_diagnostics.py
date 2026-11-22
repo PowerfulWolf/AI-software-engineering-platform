@@ -56,7 +56,7 @@ def test_all_routes_keep_safe_http_diagnostics(last_status: int) -> None:
                 model=model,
                 client=ResponsesStructuredModelClient(
                     endpoint="https://example.invalid/v1",
-                    api_key="private-key",
+                    credential="private-key",
                     model=model,
                     transport=Transport(status, request_id),
                 ),
@@ -122,7 +122,7 @@ def test_timeout_has_no_invented_http_response_and_phase_resets() -> None:
                 model="model-test",
                 client=ResponsesStructuredModelClient(
                     endpoint="https://example.invalid",
-                    api_key="private-key",
+                    credential="private-key",
                     model="model-test",
                     transport=TimeoutTransport(),
                 ),
@@ -153,7 +153,7 @@ def test_parallel_observer_scopes_do_not_mix_calls() -> None:
                     model=model,
                     client=ResponsesStructuredModelClient(
                         endpoint="https://example.invalid",
-                        api_key="private-key",
+                        credential="private-key",
                         model=model,
                         transport=Transport(200, "req-test"),
                     ),

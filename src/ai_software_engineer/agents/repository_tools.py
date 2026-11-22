@@ -98,11 +98,11 @@ def repository_read_access(repositories: Sequence[ReadableRepository]) -> Iterat
         else ReadableRepository(repository.root, repository.revision, f"repo{index + 1}")
         for index, repository in enumerate(repositories)
     )
-    token = _ACCESS.set(labelled or None)
+    reset_token = _ACCESS.set(labelled or None)
     try:
         yield
     finally:
-        _ACCESS.reset(token)
+        _ACCESS.reset(reset_token)
 
 
 def current_read_access() -> tuple[ReadableRepository, ...] | None:

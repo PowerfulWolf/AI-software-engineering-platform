@@ -166,7 +166,7 @@ class Transport:
 def http_client(transport: Transport) -> ResponsesStructuredModelClient:
     return ResponsesStructuredModelClient(
         endpoint="https://example.invalid/v1",
-        api_key="private-credential",
+        credential="private-credential",
         model="fixture-model",
         transport=transport,
     )

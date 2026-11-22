@@ -191,8 +191,8 @@ class MissingPlannedTestEntry(DomainModel):
             or self.requirement_sha256 != role_verification_digest(self.requirement.to_wire())
             or self.path not in self.requirement.planned_new_files
             or not any(
-                token == self.path or token.startswith(self.path + "::")
-                for token in self.requirement.argv
+                selector == self.path or selector.startswith(self.path + "::")
+                for selector in self.requirement.argv
             )
         ):
             raise ValueError("missing entry must bind an exact frozen QA command row")

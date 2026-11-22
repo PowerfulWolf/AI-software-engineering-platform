@@ -91,7 +91,7 @@ def test_client_streams_and_falls_back_when_gateway_rejects_stream(
 
     client = ResponsesStructuredModelClient(
         endpoint="https://example.invalid/v1/responses",
-        api_key="k",
+        credential="k",
         model="test",
         transport=Gateway(),
     )
@@ -125,7 +125,7 @@ def test_client_parses_a_streamed_reply(monkeypatch: pytest.MonkeyPatch) -> None
 
     client = ResponsesStructuredModelClient(
         endpoint="https://example.invalid/v1/responses",
-        api_key="k",
+        credential="k",
         model="test",
         transport=Gateway(),
     )
@@ -164,7 +164,7 @@ def test_quota_exhausted_gateway_falls_back_to_the_next_route(
 
     primary = ResponsesStructuredModelClient(
         endpoint="https://example.invalid/v1/responses",
-        api_key="k",
+        credential="k",
         model="gpt",
         transport=Gateway(),
     )

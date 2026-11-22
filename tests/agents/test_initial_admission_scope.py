@@ -104,7 +104,7 @@ def test_later_runs_keep_normal_checkpoint_and_source_checks(
         result = ResponsesAgentAdapter(
             workspace_root=root,
             endpoint="https://example.invalid/v1/responses",
-            api_key="test-key",
+            credential="test-key",
             model="fixture",
             agent=definition,
             transport=transport,
@@ -195,7 +195,7 @@ def test_default_baseline_admission_still_checks_every_run(tmp_path: Path, provi
         else ResponsesAgentAdapter(
             workspace_root=root,
             endpoint="https://example.invalid/v1/responses",
-            api_key="test-key",
+            credential="test-key",
             model="fixture",
             agent=definition,
             transport=transport,
@@ -248,7 +248,7 @@ def test_fresh_adapter_after_verifier_feedback_uses_clean_candidate(
         result = ResponsesAgentAdapter(
             workspace_root=root,
             endpoint="https://example.invalid/v1/responses",
-            api_key="test-key",
+            credential="test-key",
             model="fixture",
             agent=definition,
             transport=transport,

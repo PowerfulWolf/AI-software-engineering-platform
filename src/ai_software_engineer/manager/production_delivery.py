@@ -444,11 +444,12 @@ class ConfiguredDeliveryRouteAdapterFactory:
             # Same platform tool loop and policy; each model turn is served by the
             # locally signed-in Claude CLI instead of an HTTP gateway.
             from ai_software_engineer.agents.claude_cli import (
+                CLAUDE_CLI_CREDENTIAL,
                 CLAUDE_CLI_ENDPOINT,
                 ClaudeCliResponsesTransport,
             )
 
-            endpoint, api_key = CLAUDE_CLI_ENDPOINT, "claude-cli-local"
+            endpoint, credential = CLAUDE_CLI_ENDPOINT, CLAUDE_CLI_CREDENTIAL
             transport = ClaudeCliResponsesTransport(
                 model=route.model,
                 executable=config.claude_executable,
@@ -464,13 +465,13 @@ class ConfiguredDeliveryRouteAdapterFactory:
                     "enabled Responses route is missing API key environment variable: "
                     f"{route.api_key_env}"
                 )
-            api_key = resolved_key
+            credential = resolved_key
         return ResponsesAgentAdapter(
             workspace_root=binding.worktree.path,
             execution_guard=self._execution_guard,
             endpoint=endpoint,
             transport=transport,
-            api_key=api_key,
+            credential=credential,
             model=route.model,
             reasoning_effort=route.reasoning_effort,
             agent=definition,

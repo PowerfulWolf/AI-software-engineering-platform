@@ -110,11 +110,11 @@ class OwnedRecordFinalization:
     @contextmanager
     def activate(self) -> Iterator[None]:
         """Only trusted owned worker threads carry their parent's save boundary."""
-        token = _record_finalization.set(self)
+        reset_token = _record_finalization.set(self)
         try:
             yield
         finally:
-            _record_finalization.reset(token)
+            _record_finalization.reset(reset_token)
 
     def _finish(self) -> None:
         with self._lock:
@@ -171,13 +171,13 @@ class HostOwnedProcessRegistry:
             raise ValueError("owned execution requires an exact operation identity")
         from ai_software_engineer.service_pause import current_service_pause
 
-        token = _operation_context.set(
+        reset_token = _operation_context.set(
             OwnedOperationContext(self, operation_id, current_service_pause())
         )
         try:
             yield
         finally:
-            _operation_context.reset(token)
+            _operation_context.reset(reset_token)
 
     def snapshot(self) -> tuple[OwnedProcessSnapshot, ...]:
         with self._condition:

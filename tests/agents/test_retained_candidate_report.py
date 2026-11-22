@@ -86,7 +86,7 @@ def test_report_existing_candidate_requires_trusted_rescue_comparison(
             workspace_root=root,
             model="fixture",
             endpoint="https://example.invalid/v1",
-            api_key="test-key",
+            credential="test-key",
             agent=definition,
             prompt_builder=StaticPromptBuilder(),
             transport=RecordingTransport(

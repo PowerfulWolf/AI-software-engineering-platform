@@ -266,7 +266,7 @@ def test_responses_agent_runs_platform_tools_through_the_claude_cli(
     adapter = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint=CLAUDE_CLI_ENDPOINT,
-        api_key="claude-cli-local",
+        credential="claude-cli-local",
         model="claude-opus-5-5",
         agent=definition,
         prompt_builder=StaticPromptBuilder(),

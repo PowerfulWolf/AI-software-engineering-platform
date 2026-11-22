@@ -214,7 +214,7 @@ class KnowledgeIndexStore:
                 )
                 if not eligible:
                     continue
-                token = uuid4().hex
+                lease_token = uuid4().hex
                 claimed = job.model_copy(
                     update={
                         "status": "PROCESSING",
@@ -226,7 +226,12 @@ class KnowledgeIndexStore:
                 ).sealed()
                 connection.execute(
                     "UPDATE jobs SET payload=?,claim_owner=?,claim_until=? WHERE job_id=?",
-                    (claimed.model_dump_json(), token, now.timestamp() + lease_seconds, job.job_id),
+                    (
+                        claimed.model_dump_json(),
+                        lease_token,
+                        now.timestamp() + lease_seconds,
+                        job.job_id,
+                    ),
                 )
                 source_row = connection.execute(
                     "SELECT source FROM jobs WHERE job_id=?", (job.job_id,)
@@ -234,7 +239,7 @@ class KnowledgeIndexStore:
                 source = source_row[0] if source_row is not None else None
                 if source is not None and not isinstance(source, bytes):
                     raise KnowledgeError("INDEX_SOURCE_INTEGRITY")
-                return claimed, source, token
+                return claimed, source, lease_token
         return None
 
     def finish(self, job: KnowledgeIndexJob, token: str, *, now: datetime) -> None:

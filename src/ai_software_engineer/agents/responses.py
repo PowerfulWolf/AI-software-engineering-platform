@@ -224,7 +224,7 @@ class ResponsesAgentAdapter:
         *,
         workspace_root: str | Path,
         endpoint: str,
-        api_key: str,
+        credential: str,
         model: str,
         reasoning_effort: ReasoningEffort = "medium",
         agent: AgentDefinition,
@@ -245,7 +245,7 @@ class ResponsesAgentAdapter:
             raise ResponsesAgentConfigurationError(
                 "Responses workspace must be an existing real directory"
             )
-        if not api_key or any(ord(character) < 32 for character in api_key):
+        if not credential or any(ord(character) < 32 for character in credential):
             raise ResponsesAgentConfigurationError("Responses API key is missing or invalid")
         if not model.strip() or any(ord(character) < 32 for character in model):
             raise ResponsesAgentConfigurationError("Responses model is invalid")
@@ -262,7 +262,7 @@ class ResponsesAgentAdapter:
         self._prepared_inputs: dict[str, _PreparedResponsesInput] = {}
         self._workspace_root = root
         self._endpoint = _normalize_endpoint(endpoint)
-        self._api_key = api_key
+        self._api_key = credential
         self._model = model
         self._reasoning_effort = reasoning_effort
         self._agent = agent

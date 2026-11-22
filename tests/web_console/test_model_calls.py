@@ -164,7 +164,7 @@ def test_fallback_to_durable_console_diagnostics_end_to_end(tmp_path: Path) -> N
                 model=name,
                 client=ResponsesStructuredModelClient(
                     endpoint="https://example.invalid",
-                    api_key="private-key",
+                    credential="private-key",
                     model=name,
                     transport=Transport(status, f"req-{name}"),
                 ),

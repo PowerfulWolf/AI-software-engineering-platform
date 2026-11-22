@@ -277,7 +277,7 @@ def test_responses_rejects_static_contract_before_provider_call(tmp_path: Path) 
     adapter = ResponsesAgentAdapter(
         workspace_root=tmp_path,
         endpoint="https://example.invalid/v1/responses",
-        api_key="fixture-key",
+        credential="fixture-key",
         model="fixture",
         agent=make_agent().model_copy(update={"role": request.role}),
         prompt_builder=StaticPromptBuilder(

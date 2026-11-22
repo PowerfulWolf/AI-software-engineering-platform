@@ -59,20 +59,20 @@ _phase: ContextVar[CallPhase] = ContextVar("model_call_phase", default="stage_re
 
 @contextmanager
 def capture_model_calls(sink: CallSink) -> Iterator[None]:
-    token = _sink.set(sink)
+    reset_token = _sink.set(sink)
     try:
         yield
     finally:
-        _sink.reset(token)
+        _sink.reset(reset_token)
 
 
 @contextmanager
 def model_call_phase(phase: CallPhase) -> Iterator[None]:
-    token = _phase.set(phase)
+    reset_token = _phase.set(phase)
     try:
         yield
     finally:
-        _phase.reset(token)
+        _phase.reset(reset_token)
 
 
 def current_call_phase() -> CallPhase:
@@ -84,9 +84,9 @@ def record_model_call(call: ModelCallDiagnostic) -> None:
         sink(call)
 
 
-def safe_request_id(value: str | None, *, secret: str = "") -> str | None:
+def safe_request_id(value: str | None, *, credential: str = "") -> str | None:
     """Ignore arbitrary header content, credential echoes and secret-like IDs."""
-    if not value or (secret and secret in value):
+    if not value or (credential and credential in value):
         return None
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value):
         return None

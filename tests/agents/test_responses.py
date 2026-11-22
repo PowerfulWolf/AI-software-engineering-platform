@@ -127,7 +127,7 @@ def test_http_error_detail_is_bounded_and_redacts_the_configured_key(tmp_path: P
     result = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1",
-        api_key="test-key",
+        credential="test-key",
         model="model",
         agent=definition,
         prompt_builder=StaticPromptBuilder(),
@@ -218,7 +218,7 @@ def test_responses_progress_binds_exact_attempt_in_transport_and_acceptance(
     result = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1",
-        api_key="test-key",
+        credential="test-key",
         model="model",
         agent=definition,
         prompt_builder=StaticPromptBuilder(),
@@ -398,7 +398,7 @@ def test_responses_tool_loop_creates_and_validates_coder_commit(
     adapter = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1/responses",
-        api_key="test-key",
+        credential="test-key",
         model="qwen3.8-max",
         reasoning_effort="high",
         agent=definition,
@@ -459,7 +459,7 @@ def test_quota_failure_with_partial_changes_is_not_fallback_eligible(tmp_path: P
     adapter = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1/responses",
-        api_key="test-key",
+        credential="test-key",
         model="deepseek-v4-pro",
         agent=definition,
         prompt_builder=StaticPromptBuilder(),
@@ -496,7 +496,7 @@ def test_dirty_provider_failure_keeps_safe_transport_diagnostic(tmp_path: Path) 
     result = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1/responses",
-        api_key="test-key",
+        credential="test-key",
         model="deepseek-v4-pro",
         agent=definition,
         prompt_builder=StaticPromptBuilder(),
@@ -529,7 +529,7 @@ def test_authentication_error_is_typed_and_safe(tmp_path: Path) -> None:
     result = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1/responses",
-        api_key="test-key",
+        credential="test-key",
         model="deepseek-v4-pro",
         agent=definition,
         prompt_builder=StaticPromptBuilder(),
@@ -591,7 +591,7 @@ def test_responses_unsupported_version_preserves_draft_without_candidate(tmp_pat
     result = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1",
-        api_key="test-key",
+        credential="test-key",
         model="model",
         agent=definition,
         prompt_builder=StaticPromptBuilder(),

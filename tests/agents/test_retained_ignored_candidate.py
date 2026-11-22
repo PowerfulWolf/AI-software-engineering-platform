@@ -126,7 +126,7 @@ def _adapter(
         candidate_commit_skill=skill,
         initial_workspace_admission=admission,
         endpoint="https://example.invalid/responses",
-        api_key="fixture-key",
+        credential="fixture-key",
         agent=definition,
         transport=_ResponsesOutput(artifact),
     )

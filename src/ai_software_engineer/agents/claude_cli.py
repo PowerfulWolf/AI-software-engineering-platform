@@ -241,6 +241,8 @@ def _failure(detail: str, returncode: int, api_status: object = None) -> Structu
 
 
 CLAUDE_CLI_ENDPOINT = "https://claude-cli.local/v1/responses"
+# Placeholder bearer value for the local CLI transport; it authorizes nothing.
+CLAUDE_CLI_CREDENTIAL = "claude-cli-local"
 _TURN_INSTRUCTIONS = (
     "You are the model behind one turn of an ASE engineering agent (Coder, QA or "
     "Reviewer). The platform owns the workspace: you cannot read, write or run anything "

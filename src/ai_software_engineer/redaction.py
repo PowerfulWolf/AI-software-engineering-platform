@@ -1313,9 +1313,7 @@ def _inspect_source(
     detected = redact_text(content).occurrences
     if not any(occurrence.kind == "secret_assignment" for occurrence in detected):
         return detected
-    if source_path is not None and source_path.casefold().endswith(
-        (".js", ".jsx", ".ts", ".tsx")
-    ):
+    if source_path is not None and source_path.casefold().endswith((".js", ".jsx", ".ts", ".tsx")):
         # The complete-source detector intentionally has no JavaScript parser.
         # Mask only a small, typed family of local string-parser calls before
         # applying the generic assignment rule. Unknown objects/methods and all

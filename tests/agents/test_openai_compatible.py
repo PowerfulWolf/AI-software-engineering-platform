@@ -152,7 +152,7 @@ def _provider_body(artifact: Artifact) -> bytes:
 def _adapter(transport: RecordingTransport) -> OpenAICompatibleAgentAdapter:
     return OpenAICompatibleAgentAdapter(
         endpoint="https://model.example.invalid/v1",
-        api_key="secret-provider-key",
+        credential="secret-provider-key",
         model="test-model",
         agent_id="agent_coder_001",
         agent_version="v0.1",
@@ -349,7 +349,7 @@ def test_endpoint_must_be_safe_http_url(endpoint: str) -> None:
     with pytest.raises(OpenAICompatibleConfigurationError, match="endpoint"):
         OpenAICompatibleAgentAdapter(
             endpoint=endpoint,
-            api_key=None,
+            credential=None,
             model="model",
             agent_id="agent_coder_001",
             agent_version="v0.1",
@@ -502,7 +502,7 @@ def test_default_prompt_builder_does_not_invent_success_without_context() -> Non
     transport = RecordingTransport(response=HttpResponse(status_code=200, body=b"{}"))
     adapter = OpenAICompatibleAgentAdapter(
         endpoint="https://model.example.invalid/v1",
-        api_key=None,
+        credential=None,
         model="model",
         agent_id="agent_coder_001",
         agent_version="v0.1",

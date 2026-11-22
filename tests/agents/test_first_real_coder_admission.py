@@ -72,7 +72,7 @@ def adapter_for(
         else ResponsesAgentAdapter(
             workspace_root=root,
             endpoint="https://example.invalid/v1/responses",
-            api_key="test-key",
+            credential="test-key",
             model="fixture",
             agent=definition,
             transport=boundary,

@@ -158,10 +158,10 @@ def _validated_read[**P, R](method: Callable[P, R]) -> Callable[P, R]:
     def read(*args: P.args, **kwargs: P.kwargs) -> R:
         owner = cast(FileRecoveryStore, args[0])
         graph = _READ_GRAPH.get()
-        token = None
+        reset_token = None
         if graph is None or graph.owner is not owner:
             graph = _ReadGraph(owner)
-            token = _READ_GRAPH.set(graph)
+            reset_token = _READ_GRAPH.set(graph)
         key = (method.__name__, *args[1:], *sorted(kwargs.items()))
         try:
             if key in graph.active:
@@ -178,8 +178,8 @@ def _validated_read[**P, R](method: Callable[P, R]) -> Callable[P, R]:
             finally:
                 graph.active.remove(key)
         finally:
-            if token is not None:
-                _READ_GRAPH.reset(token)
+            if reset_token is not None:
+                _READ_GRAPH.reset(reset_token)
 
     return read
 

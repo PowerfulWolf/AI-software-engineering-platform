@@ -83,11 +83,11 @@ def _require_worker_parent(request: LocalSurveyRequest) -> None:
 
 
 def _parent_birth(pid: int, deadline: float) -> str:
-    token = _DEADLINE.set(deadline)
+    reset_token = _DEADLINE.set(deadline)
     try:
         return TrustedLegacyLocalExecutionObserver()._birth(pid)
     finally:
-        _DEADLINE.reset(token)
+        _DEADLINE.reset(reset_token)
 
 
 class _WorkerSurveyEngine(TrustedLegacyLocalExecutionObserver):

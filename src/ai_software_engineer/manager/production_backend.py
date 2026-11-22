@@ -333,15 +333,15 @@ class ConfiguredStructuredClientFactory:
                 )
             else:
                 assert route.api_key_env is not None and route.endpoint is not None
-                api_key = self._environment.get(route.api_key_env)
-                if not api_key:
+                credential = self._environment.get(route.api_key_env)
+                if not credential:
                     raise ProductionConfigError(
                         "enabled Responses route is missing API key environment variable: "
                         f"{route.api_key_env}"
                     )
                 client = ResponsesStructuredModelClient(
                     endpoint=route.endpoint,
-                    api_key=api_key,
+                    credential=credential,
                     model=route.model,
                     reasoning_effort=route.reasoning_effort,
                 )

@@ -402,17 +402,17 @@ class TrustedLegacyLocalExecutionObserver:
         }
         index = 0
         while index < len(arguments):
-            token = arguments[index]
-            if token in valued:
+            argument = arguments[index]
+            if argument in valued:
                 if index + 1 >= len(arguments):
                     return None
                 index += 2
-            elif token in flags or (token.split("=", 1)[0] in valued and "=" in token):
+            elif argument in flags or (argument.split("=", 1)[0] in valued and "=" in argument):
                 index += 1
-            elif token.startswith("-"):
+            elif argument.startswith("-"):
                 return None
             else:
-                return token
+                return argument
         return None
 
     @staticmethod
@@ -849,7 +849,7 @@ class TrustedLegacyLocalExecutionObserver:
             raise ValueError("本机执行调查的工作区不存在")
         uid = os.getuid()
         blockers: set[LegacyLocalExecutionBlocker] = set()
-        token = _DEADLINE.set(deadline)
+        reset_token = _DEADLINE.set(deadline)
         query_pids: set[int] = set()
         query_token = _QUERY_PIDS.set(query_pids)
         phase = "platform_boundary"
@@ -992,7 +992,7 @@ class TrustedLegacyLocalExecutionObserver:
                 extra={"phase": phase, "reason": reason, "elapsed_seconds": elapsed},
             )
         finally:
-            _DEADLINE.reset(token)
+            _DEADLINE.reset(reset_token)
             _QUERY_PIDS.reset(query_token)
         return LegacyLocalExecutionSurvey.create(
             worktree_path=str(root),

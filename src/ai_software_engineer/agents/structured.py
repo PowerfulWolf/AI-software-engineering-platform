@@ -541,13 +541,13 @@ class ResponsesStructuredModelClient:
         self,
         *,
         endpoint: str,
-        api_key: str,
+        credential: str,
         model: str,
         reasoning_effort: ReasoningEffort = "medium",
         transport: HttpTransport | None = None,
     ) -> None:
         self._endpoint = _normalize_endpoint(endpoint)
-        self._api_key = _safe_text(api_key, "api_key")
+        self._api_key = _safe_text(credential, "credential")
         self._model = _safe_text(model, "model")
         if reasoning_effort not in {"low", "medium", "high", "xhigh"}:
             raise ValueError("unsupported Responses reasoning effort")
@@ -680,16 +680,16 @@ class ResponsesStructuredModelClient:
                 "Responses structured output is invalid",
                 transient=False,
                 http_status=response.status_code,
-                request_id=safe_request_id(response.request_id, secret=self._api_key),
-                correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
+                request_id=safe_request_id(response.request_id, credential=self._api_key),
+                correlation_id=safe_request_id(response.correlation_id, credential=self._api_key),
             ) from error
         return StructuredModelResult(
             payload=output,
             duration_ms=_elapsed_ms(started),
             usage=_usage(provider),
             http_status=response.status_code,
-            request_id=safe_request_id(response.request_id, secret=self._api_key),
-            correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
+            request_id=safe_request_id(response.request_id, credential=self._api_key),
+            correlation_id=safe_request_id(response.correlation_id, credential=self._api_key),
         )
 
     def _round_trip(
@@ -770,8 +770,8 @@ class ResponsesStructuredModelClient:
                 + http_error_detail(response.body, self._api_key),
                 transient=transient,
                 http_status=response.status_code,
-                request_id=safe_request_id(response.request_id, secret=self._api_key),
-                correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
+                request_id=safe_request_id(response.request_id, credential=self._api_key),
+                correlation_id=safe_request_id(response.correlation_id, credential=self._api_key),
             )
         try:
             provider = responses_provider_payload(response.body)
@@ -781,8 +781,8 @@ class ResponsesStructuredModelClient:
                 "Responses structured provider ended the streamed response without output",
                 transient=True,
                 http_status=response.status_code,
-                request_id=safe_request_id(response.request_id, secret=self._api_key),
-                correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
+                request_id=safe_request_id(response.request_id, credential=self._api_key),
+                correlation_id=safe_request_id(response.correlation_id, credential=self._api_key),
             ) from error
         except (UnicodeError, json.JSONDecodeError, ValueError) as error:
             raise StructuredModelError(
@@ -790,8 +790,8 @@ class ResponsesStructuredModelClient:
                 "Responses structured output is invalid",
                 transient=False,
                 http_status=response.status_code,
-                request_id=safe_request_id(response.request_id, secret=self._api_key),
-                correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
+                request_id=safe_request_id(response.request_id, credential=self._api_key),
+                correlation_id=safe_request_id(response.correlation_id, credential=self._api_key),
             ) from error
         return provider, response
 

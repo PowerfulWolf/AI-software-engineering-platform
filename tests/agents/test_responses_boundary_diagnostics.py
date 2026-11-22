@@ -71,7 +71,7 @@ def _adapter(
     return ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1/responses",
-        api_key="private-provider-key",
+        credential="private-provider-key",
         model="fixture",
         agent=definition,
         prompt_builder=StaticPromptBuilder(),

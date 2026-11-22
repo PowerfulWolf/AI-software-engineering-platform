@@ -228,19 +228,19 @@ class CodexJsonEventObserver:
         if not classification.main_error:
             self._candidate = None
             return
-        secret = self._exact_secret
+        exact = self._exact_secret
         hidden = (
-            (self._secret_required and not secret)
+            (self._secret_required and not exact)
             or (
-                secret is not None
-                and any(character.isspace() or not character.isprintable() for character in secret)
+                exact is not None
+                and any(character.isspace() or not character.isprintable() for character in exact)
             )
             or (self._secret_required and "\\" in message)
         )
         cleaned = (
             None
             if hidden
-            else safe_diagnostic(message, limit=_EVENT_LINE_BYTES, exact_secret=secret)
+            else safe_diagnostic(message, limit=_EVENT_LINE_BYTES, exact_secret=exact)
         )
         self._candidate = CodexJsonFailure(
             event_type=event_type,

@@ -327,7 +327,7 @@ def test_responses_prepares_and_reuses_the_complete_initial_body(
     adapter = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://fixture.invalid/v1",
-        api_key="fixture-key",
+        credential="fixture-key",
         model="test",
         agent=definition,
         prompt_builder=builder,

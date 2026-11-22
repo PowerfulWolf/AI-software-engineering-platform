@@ -141,7 +141,7 @@ def _adapter(
     return ResponsesAgentAdapter(
         workspace_root=native.worktree.path,
         endpoint="https://example.invalid/responses",
-        api_key="fixture-key",
+        credential="fixture-key",
         model="fixture",
         agent=_definition(native.request),
         prompt_builder=StaticPromptBuilder(),
@@ -669,7 +669,7 @@ def test_first_turn_quota_refusal_hands_the_same_run_to_the_fallback_route(
         return ResponsesAgentAdapter(
             workspace_root=native.worktree.path,
             endpoint="https://example.invalid/responses",
-            api_key="fixture-key",
+            credential="fixture-key",
             model="fixture",
             agent=_definition(native.request),
             prompt_builder=StaticPromptBuilder(),

@@ -504,7 +504,7 @@ def test_responses_failure_keeps_http_cause_without_credentials() -> None:
 
     client = ResponsesStructuredModelClient(
         endpoint="https://example.invalid/v1/responses",
-        api_key="private-value",
+        credential="private-value",
         model="test",
         transport=Transport(),
     )
