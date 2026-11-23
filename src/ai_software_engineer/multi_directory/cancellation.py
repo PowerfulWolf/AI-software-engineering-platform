@@ -367,6 +367,16 @@ class RequirementCancellationService:
             }.get(original.task.status)
             for item in open_items:
                 disposition = item.wait_disposition
+                if item.status in {WorkItemStatus.READY, WorkItemStatus.RETRY_SCHEDULED}:
+                    # Queued but never claimed: the user may withdraw it before any Agent
+                    # starts. _require_no_lease and the queue's idle check still refuse a
+                    # live claim, so this never interrupts a running execution.
+                    if item.role is not expected_role or item.attempt != original.task.attempts:
+                        raise RequirementCancellationRejected(
+                            "排队中的工作与当前任务事实不一致, 暂不能关闭。"
+                        )
+                    waiting = True
+                    continue
                 if (
                     item.status
                     not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}

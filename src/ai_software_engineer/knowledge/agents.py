@@ -551,9 +551,11 @@ class KnowledgeAwareStructuredClient:
                 "execution."
             )
         try:
+            from ai_software_engineer.agents.context_compaction import compact_model_payload
+
             return self.client.complete(
                 instructions=instructions + continuation,
-                input_payload=cast(Mapping[str, object], payload),
+                input_payload=cast(Mapping[str, object], compact_model_payload(payload)),
                 output_schema=output_schema,
                 timeout_seconds=timeout_seconds,
                 input_images=input_images,

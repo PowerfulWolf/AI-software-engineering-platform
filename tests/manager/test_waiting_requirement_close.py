@@ -215,7 +215,6 @@ def test_waiting_close_partial_replay_keeps_receipt_and_single_event(
 @pytest.mark.parametrize(
     "status",
     [
-        WorkItemStatus.READY,
         WorkItemStatus.RETRY_SCHEDULED,
         WorkItemStatus.LEASED,
         WorkItemStatus.RUNNING,
@@ -241,6 +240,37 @@ def test_nonwaiting_delivery_cannot_be_closed(
     assert not (
         platform.project.requirements_root / checkpoint.delivery_id / "cancellations"
     ).exists()
+
+
+def test_queued_unclaimed_coder_can_be_withdrawn_before_any_agent_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform, checkpoint, _, queue, _ = _waiting(tmp_path, monkeypatch)
+    item = next(iter(queue.items.values()))
+    queue.items[item.id] = item.model_copy(
+        update={"status": WorkItemStatus.READY, "wait_disposition": None, "wait_reason": None}
+    )
+    closed = _close(platform, checkpoint)
+    assert closed.stage is JointStage.CLOSED
+    assert all(value.status is WorkItemStatus.CLOSED for value in queue.items.values())
+
+
+def test_queued_work_with_drifted_attempt_is_not_withdrawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform, checkpoint, _, queue, _ = _waiting(tmp_path, monkeypatch)
+    item = next(iter(queue.items.values()))
+    queue.items[item.id] = item.model_copy(
+        update={
+            "status": WorkItemStatus.READY,
+            "wait_disposition": None,
+            "wait_reason": None,
+            "attempt": item.attempt + 1,
+        }
+    )
+    with pytest.raises(RequirementDeletionRejected):
+        _close(platform, checkpoint)
+    assert platform.journal.current(checkpoint.delivery_id) == checkpoint
 
 
 @pytest.mark.parametrize(

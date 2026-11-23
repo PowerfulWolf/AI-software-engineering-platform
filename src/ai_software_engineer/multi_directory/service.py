@@ -547,7 +547,9 @@ class JointDeliveryService:
                 # itself the Requirement's only active operation. A design/plan that
                 # exhausted its budget must not leave the Requirement stuck forever.
                 return self._close_checkpoint(checkpoint)
-            if checkpoint.stage is JointStage.DELIVERING:
+            if checkpoint.stage in {JointStage.DELIVERING, JointStage.WAITING_HUMAN}:
+                # WAITING_HUMAN (e.g. an unanswered knowledge gap) owns no running
+                # execution; the same stop-verified guard decides whether it can close.
                 guard = close_guard
                 if not isinstance(guard, RequirementWaitingCloseGuard):
                     raise ValueError("未配置工程执行停止校验, 不能关闭正在交付的需求。")
