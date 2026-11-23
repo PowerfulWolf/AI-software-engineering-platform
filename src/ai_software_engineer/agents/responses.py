@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -363,7 +364,17 @@ class ResponsesAgentAdapter:
                 continuation_admitted=window.continuation_prompt is not None,
             )
             initial_inventory = capture_mutation_inventory(self._workspace_root)
-            result = self._execute(request, started, initial_head, initial_inventory, window)
+            from ai_software_engineer.agents.python_tooling import project_python_path
+
+            with project_python_path(self._workspace_root) as python_path:
+                result = self._execute(
+                    request,
+                    started,
+                    initial_head,
+                    initial_inventory,
+                    window,
+                    python_path=python_path,
+                )
         except ServicePauseRequested:
             result = self._failure_result(
                 request,
@@ -656,8 +667,14 @@ class ResponsesAgentAdapter:
         initial_head: str,
         initial_inventory: WorkspaceMutationInventory,
         window: _ExecutionWindow,
+        *,
+        python_path: str | None = None,
     ) -> AgentResult:
         from ai_software_engineer.service_pause import check_service_pause
+
+        environment = dict(os.environ)
+        if python_path is not None:
+            environment["PATH"] = python_path + os.pathsep + environment.get("PATH", os.defpath)
 
         registry = PolicyBoundToolRegistry(
             self._workspace_root,
@@ -667,6 +684,7 @@ class ResponsesAgentAdapter:
                 SubprocessCommandExecutor(
                     self._workspace_root,
                     self._agent.permissions,
+                    environment=environment,
                     execution_guard=self._execution_guard,
                     require_focused_tests=request.role in {AgentRole.QA, AgentRole.REVIEWER},
                 ),
