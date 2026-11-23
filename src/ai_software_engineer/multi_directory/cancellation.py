@@ -330,7 +330,9 @@ class RequirementCancellationService:
             JointStage.DELIVERING,
             JointStage.WAITING_HUMAN,
         }:
-            self._require_engineering_waits(receipt)
+            self._require_engineering_waits(
+                receipt, allow_human_waits=checkpoint.stage is JointStage.WAITING_HUMAN
+            )
         # Validate the complete scope before publishing a receipt or mutating any Task.
         for original in receipt.tasks:
             self._require_current(receipt, original)
@@ -355,7 +357,9 @@ class RequirementCancellationService:
             self.repository.mutation_fence = previous_fence
         return receipt
 
-    def _require_engineering_waits(self, receipt: RequirementCancellationReceipt) -> None:
+    def _require_engineering_waits(
+        self, receipt: RequirementCancellationReceipt, *, allow_human_waits: bool = False
+    ) -> None:
         waiting = False
         for original in receipt.tasks:
             open_items = tuple(
@@ -370,9 +374,17 @@ class RequirementCancellationService:
             }.get(original.task.status)
             for item in open_items:
                 disposition = item.wait_disposition
-                if item.status in {WorkItemStatus.READY, WorkItemStatus.RETRY_SCHEDULED}:
-                    # Queued but never claimed: the user may withdraw it before any Agent
-                    # starts. _require_no_lease and the queue's idle check still refuse a
+                non_engineering_wait = (
+                    allow_human_waits
+                    and item.status
+                    in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+                    and disposition is not None
+                    and disposition.responsibility is not DeliveryResponsibility.ENGINEERING
+                )
+                if item.status is WorkItemStatus.READY or non_engineering_wait:
+                    # Queued but never claimed, or (for a WAITING_HUMAN Requirement) parked
+                    # on a recorded human/knowledge answer: the user may withdraw it while no
+                    # Agent runs. _require_no_lease and the queue's idle check still refuse a
                     # live claim, so this never interrupts a running execution.
                     if item.role is not expected_role or item.attempt != original.task.attempts:
                         raise RequirementCancellationRejected(
