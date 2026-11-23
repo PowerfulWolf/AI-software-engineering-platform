@@ -171,7 +171,9 @@ class ClaudeCliStructuredModelClient:
         # Manager has no repository tools; run it outside any project so a
         # repository CLAUDE.md or settings file cannot steer the coordinator.
         with tempfile.TemporaryDirectory(prefix="ase-claude-") as scratch:
-            cwd = self._root if self._reads else Path(scratch)
+            # The CLI writes its working directory into its own system prompt; a fresh
+            # random directory per call would defeat prompt caching between calls.
+            cwd = self._root if self._reads else _isolated_working_directory()
             system_file = Path(scratch) / "system-prompt.txt"
             system_file.write_text(system_text, encoding="utf-8")
             try:
@@ -201,6 +203,25 @@ class ClaudeCliStructuredModelClient:
         return parse_claude_result(
             completed.returncode, completed.stdout, completed.stderr, started=started
         )
+
+
+def _isolated_working_directory() -> Path:
+    """One stable, empty, private directory for tool-less CLI calls.
+
+    No repository CLAUDE.md or settings file can reach it, and its constant path keeps
+    the CLI's own system prompt byte-identical across calls.
+    """
+    path = Path(tempfile.gettempdir()) / f"ase-claude-isolated-{os.getuid()}"
+    path.mkdir(mode=0o700, exist_ok=True)
+    if path.is_symlink() or not path.is_dir() or path.stat().st_uid != os.getuid():
+        raise RuntimeError("Claude CLI isolated working directory is not private")
+    for entry in path.iterdir():
+        # Nothing may steer the CLI from here; drop any stray file a previous run left.
+        if entry.is_file() and not entry.is_symlink():
+            entry.unlink()
+    if any(path.iterdir()):
+        raise RuntimeError("Claude CLI isolated working directory is not empty")
+    return path
 
 
 _SHARED_INPUT_KEYS = ("binding", "context", "task")

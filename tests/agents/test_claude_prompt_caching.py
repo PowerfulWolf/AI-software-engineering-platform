@@ -56,3 +56,12 @@ def test_system_prompt_file_is_passed_to_the_cli(tmp_path: Path) -> None:
     index = argv.index("--append-system-prompt-file")
     assert argv[index + 1] == str(target)
     assert "--append-system-prompt-file" not in client.argv({"type": "object"})
+
+
+def test_tool_less_calls_share_one_stable_private_working_directory() -> None:
+    from ai_software_engineer.agents.claude_cli import _isolated_working_directory
+
+    first = _isolated_working_directory()
+    second = _isolated_working_directory()
+    assert first == second
+    assert first.is_dir() and not any(first.iterdir())
