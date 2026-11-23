@@ -25,7 +25,7 @@ from ai_software_engineer.git.worktree import (
     GitWorkspaceError,
     GitWorktreeManager,
 )
-from ai_software_engineer.redaction import patch_secret_occurrences
+from ai_software_engineer.redaction import patch_added_secret_occurrences
 
 _EMPTY = hashlib.sha256(b"").hexdigest()
 _DIFF = (
@@ -193,7 +193,7 @@ class GitExecutionBaselineAdapter:
         if (
             len(patch) > MAX_CAPTURE_BYTES
             or b"GIT binary patch" in patch
-            or patch_secret_occurrences(text)
+            or patch_added_secret_occurrences(text)
         ):
             raise BaselineGitRejected("replayed draft must remain bounded nonsensitive text")
         manager.verify_mutations(dirty, permissions, denied_paths=denied_paths)

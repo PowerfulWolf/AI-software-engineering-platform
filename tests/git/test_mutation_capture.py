@@ -20,9 +20,13 @@ from tests.git.test_capture import git
 from tests.git.test_capture import workspace as workspace
 
 
-@pytest.mark.parametrize("literal", [False, True], ids=["runtime-reference", "literal-rejected"])
+@pytest.mark.parametrize(
+    "literal",
+    [False, "committed", "introduced"],
+    ids=["runtime-reference", "committed-literal-kept", "introduced-literal-rejected"],
+)
 def test_capture_preserves_complete_baseline_with_runtime_url_password(
-    tmp_path: Path, literal: bool
+    tmp_path: Path, literal: bool | str
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -36,7 +40,8 @@ def test_capture_preserves_complete_baseline_with_runtime_url_password(
         "    return Settings(password=unquote(parsed.password))\n\n"
         "VALUE = 1\n"
     )
-    if literal:
+    if literal == "committed":
+        # Already tracked content: role tools read it verbatim, so the capture keeps it.
         before = before.replace("unquote(parsed.password)", 'unquote("clear-text")')
     (repo / "src/app.py").write_text(before, encoding="utf-8")
     git(repo, "add", "src/app.py")
@@ -57,13 +62,15 @@ def test_capture_preserves_complete_baseline_with_runtime_url_password(
         network=NetworkAccess.NONE,
     )
     after = before.replace("VALUE = 1", "VALUE = 2")
+    if literal == "introduced":
+        after += 'LEAK = Settings(password=unquote("clear-text"))\n'
     source = ref.path / "src/app.py"
     source.write_text(after, encoding="utf-8")
     index = Path(git(ref.path, "rev-parse", "--path-format=absolute", "--git-path", "index"))
     before_status = git(ref.path, "status", "--porcelain")
     index_bytes = index.read_bytes()
 
-    if literal:
+    if literal == "introduced":
         with pytest.raises(WorktreeCaptureRejected, match="bounded regular text mutation bodies"):
             manager.capture_mutations(ref, permissions)
         assert source.read_text(encoding="utf-8") == after
@@ -79,7 +86,7 @@ def test_capture_preserves_complete_baseline_with_runtime_url_password(
     assert mutation.after is not None and mutation.after.text == after
     assert mutation.before.sha256 == hashlib.sha256(before.encode()).hexdigest()
     assert mutation.after.sha256 == hashlib.sha256(after.encode()).hexdigest()
-    assert b"password" not in capture.patch
+    assert b"password" not in capture.patch or literal == "committed"
     stored = CapturedMutations.from_capture(capture)
     assert CapturedMutations.model_validate(stored.to_wire()).to_capture() == capture
     manager.verify_mutations(capture, permissions)

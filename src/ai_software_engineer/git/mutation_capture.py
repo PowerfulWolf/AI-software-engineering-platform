@@ -30,12 +30,7 @@ class MutationTextBody:
 
     def __post_init__(self) -> None:
         payload = self.text.encode("utf-8")
-        if (
-            self.mode not in (0o644, 0o755)
-            or len(payload) > MAX_CAPTURE_BYTES
-            or b"\0" in payload
-            or source_secret_occurrences(self.text, source_path=self.source_path)
-        ):
+        if self.mode not in (0o644, 0o755) or len(payload) > MAX_CAPTURE_BYTES or b"\0" in payload:
             raise ValueError("mutation body must be bounded nonsensitive regular UTF-8 text")
 
     @property
@@ -56,6 +51,35 @@ class FileMutationCapture:
     def __post_init__(self) -> None:
         if (self.before is None and self.after is None) or self.before == self.after:
             raise ValueError("mutation must bind distinct before/after file facts")
+        require_no_introduced_secret(self.path, self.before, self.after)
+
+
+def introduced_text(before: MutationTextBody | None, after: MutationTextBody | None) -> str:
+    """Lines the after-image adds relative to the before-image (multiset)."""
+    if after is None:
+        return ""
+    if before is None:
+        return after.text
+    remaining: dict[str, int] = {}
+    for line in before.text.splitlines(keepends=True):
+        remaining[line] = remaining.get(line, 0) + 1
+    added: list[str] = []
+    for line in after.text.splitlines(keepends=True):
+        if remaining.get(line, 0):
+            remaining[line] -= 1
+        else:
+            added.append(line)
+    return "".join(added)
+
+
+def require_no_introduced_secret(
+    path: str, before: MutationTextBody | None, after: MutationTextBody | None
+) -> None:
+    """The pre-image and unchanged lines are already tracked repository content that
+    role tools read verbatim; only text this mutation introduces is inspected."""
+    added = introduced_text(before, after)
+    if added and source_secret_occurrences(added, source_path=path):
+        raise ValueError("mutation body must be bounded nonsensitive regular UTF-8 text")
 
 
 @dataclass(frozen=True, slots=True)

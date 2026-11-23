@@ -21,7 +21,7 @@ from ai_software_engineer.git.mutation_capture import (
 )
 from ai_software_engineer.git.ports import WorktreeRef
 from ai_software_engineer.recovery.models import AbsolutePath, FullCommit, RelativePath
-from ai_software_engineer.redaction import patch_secret_occurrences
+from ai_software_engineer.redaction import patch_added_secret_occurrences
 
 
 class CapturedMutationBody(DomainModel):
@@ -58,9 +58,13 @@ class CapturedMutation(DomainModel):
     def validate_mutation(self) -> Self:
         if (self.before is None and self.after is None) or self.before == self.after:
             raise ValueError("mutation must bind changed before/after file facts")
-        for body in (self.before, self.after):
-            if body is not None:
-                body.to_body(source_path=self.path)
+        from ai_software_engineer.git.mutation_capture import require_no_introduced_secret
+
+        bodies = tuple(
+            None if body is None else body.to_body(source_path=self.path)
+            for body in (self.before, self.after)
+        )
+        require_no_introduced_secret(self.path, bodies[0], bodies[1])
         return self
 
 
@@ -153,7 +157,7 @@ class CapturedMutations(DomainModel):
             len(self.patch.encode("utf-8")) > MAX_CAPTURE_BYTES
             or "\0" in self.patch
             or "GIT binary patch" in self.patch
-            or patch_secret_occurrences(self.patch)
+            or patch_added_secret_occurrences(self.patch)
             or sum(
                 body.size
                 for item in self.mutations

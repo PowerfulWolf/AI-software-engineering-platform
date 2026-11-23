@@ -1433,7 +1433,25 @@ def patch_secret_occurrences(content: str) -> tuple[RedactionOccurrence, ...]:
     return result
 
 
-def _inspect_patch(content: str) -> tuple[RedactionOccurrence, ...]:
+def patch_added_secret_occurrences(content: str) -> tuple[RedactionOccurrence, ...]:
+    """Inspect only what a patch introduces: its added lines and its headers.
+
+    Removed and context lines are the repository's existing tracked content,
+    which role tools already read verbatim; recording them again exposes
+    nothing new. Any newly written secret-looking line is still found.
+    """
+    cache = _SOURCE_INSPECTION_CACHE.get()
+    key: _SourceInspectionKey = ("patch-added", None, content)
+    if cache is not None and (found := cache.facts.get(key)) is not None:
+        return found
+    with _source_scan(cache):
+        result = _inspect_patch(content, added_only=True)
+    if cache is not None:
+        cache.remember(key, result)
+    return result
+
+
+def _inspect_patch(content: str, *, added_only: bool = False) -> tuple[RedactionOccurrence, ...]:
     """Inspect code hunk sides separately; headers and unknown patches stay generic.
 
     Never infer a language from arbitrary leading +/- characters. Only explicit
@@ -1503,10 +1521,14 @@ def _inspect_patch(content: str) -> tuple[RedactionOccurrence, ...]:
                 )
                 if min(remaining) < 0:
                     invalid = True
-            if line[0] != "+":
-                old_lines.append(line[1:])
-            if line[0] != "-":
-                new_lines.append(line[1:])
+            if added_only:
+                if line[0] == "+":
+                    new_lines.append(line[1:])
+            else:
+                if line[0] != "+":
+                    old_lines.append(line[1:])
+                if line[0] != "-":
+                    new_lines.append(line[1:])
         elif in_hunk and line.startswith("\\ No newline at end of file"):
             pass
         else:
@@ -1515,6 +1537,13 @@ def _inspect_patch(content: str) -> tuple[RedactionOccurrence, ...]:
             metadata.append(line)
     flush()
     if invalid:
+        if added_only:
+            added = "".join(
+                line[1:]
+                for line in content.splitlines(keepends=True)
+                if line.startswith("+") and not line.startswith("+++")
+            )
+            return redact_text(added + "".join(metadata)).occurrences
         return redact_text(content).occurrences
     occurrences.extend(redact_text("".join(metadata)).occurrences)
     return tuple(occurrences)
@@ -1523,6 +1552,7 @@ def _inspect_patch(content: str) -> tuple[RedactionOccurrence, ...]:
 __all__ = [
     "RedactedText",
     "RedactionOccurrence",
+    "patch_added_secret_occurrences",
     "patch_secret_occurrences",
     "redact_text",
     "source_secret_occurrences",

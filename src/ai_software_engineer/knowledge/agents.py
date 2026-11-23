@@ -203,12 +203,16 @@ class KnowledgeConsultationService:
             with model_call_phase(
                 "knowledge_intent" if phase == "intent" else "knowledge_assessment"
             ):
+                from ai_software_engineer.agents.context_compaction import (
+                    compact_model_payload,
+                )
+
                 result = self.invocation_journal.call(
                     binding,
                     phase,
                     client=self.client,
                     instructions=instructions,
-                    input_payload=input_payload,
+                    input_payload=cast(Mapping[str, object], compact_model_payload(input_payload)),
                     output_schema=output_schema,
                     timeout_seconds=timeout_seconds,
                 )

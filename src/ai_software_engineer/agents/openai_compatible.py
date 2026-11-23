@@ -531,6 +531,11 @@ class ContextPromptBuilder:
             raise OpenAICompatibleConfigurationError(
                 "ContextBundle must contain one policy section"
             )
+        from ai_software_engineer.agents.context_compaction import (
+            COMPACTION_GUIDANCE,
+            compact_prompt_sections,
+        )
+
         system = (
             f"You are the {request.role.value} in ai-software-engineer v0.1. "
             "The following machine policy has highest priority. "
@@ -545,8 +550,10 @@ class ContextPromptBuilder:
             "retains complete READ evidence and chunk text while omitting only chunk.terms, "
             "the verified lexical index deterministically derived from that text. "
             "Section SHA-256 and source_content_sha256 identify the original sealed Context "
-            "bytes, not the reading projection. Neither format changes authority or evidence.\n"
-            f"MACHINE_POLICY={policy_sections[0]}"
+            "bytes, not the reading projection. Neither format changes authority or evidence."
+            + COMPACTION_GUIDANCE
+            + "\n"
+            + f"MACHINE_POLICY={policy_sections[0]}"
             + _progress_output_guidance(request)
             + _coder_slice_output_guidance(request)
             + _coder_verification_guidance(request)
@@ -597,7 +604,7 @@ class ContextPromptBuilder:
                 "source_revision": request.source_revision,
                 "context_manifest_id": request.context_manifest_id,
             },
-            "sections": cast(JsonValue, sections),
+            "sections": cast(JsonValue, compact_prompt_sections(sections)),
             "input_artifact_ids": cast(JsonValue, list(request.input_artifact_ids)),
             "output_schema": request.output_schema,
             "output_contract": _output_contract(request),

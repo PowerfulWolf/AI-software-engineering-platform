@@ -95,10 +95,10 @@ def count_scans(monkeypatch: pytest.MonkeyPatch) -> Scans:
             scans.source += 1
         return original(content, source_path=source_path)
 
-    def patch(content: str) -> tuple[redaction.RedactionOccurrence, ...]:
+    def patch(content: str, **options: bool) -> tuple[redaction.RedactionOccurrence, ...]:
         if content == PATCH:
             scans.patch += 1
-        return original_patch(content)
+        return original_patch(content, **options)
 
     monkeypatch.setattr(redaction, "_inspect_source", source)
     monkeypatch.setattr(redaction, "_inspect_patch", patch)

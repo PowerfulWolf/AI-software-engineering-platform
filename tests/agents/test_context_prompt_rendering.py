@@ -157,12 +157,15 @@ def test_knowledge_read_projection_keeps_complete_chunks_and_all_original_bindin
         for item in json.loads(payload.messages[1].content)["sections"]
         if item["name"] == "knowledge.reads"
     )
-    assert section["content_format"] == "knowledge-read-v1"
+    assert section["content_format"] == "knowledge-read-v2"
     assert section["omitted_derived_fields"] == ["chunk.terms"]
     assert section["source_content_sha256"] == original.sha256
-    assert len(section["content"]) == len(reads)
-    for projected, full in zip(section["content"], reads, strict=True):
-        assert projected == {
+    shared = section["content"]["binding"]
+    projected_reads = section["content"]["reads"]
+    assert len(projected_reads) == len(reads)
+    for projected, full in zip(projected_reads, reads, strict=True):
+        assert full["binding"] == shared
+        assert {**projected, "binding": shared} == {
             **full,
             "chunk": {k: v for k, v in cast(WirePayload, full["chunk"]).items() if k != "terms"},
         }
@@ -277,7 +280,7 @@ def test_complete_native_input_and_schema_fit_without_dropping_required_patch_or
     patch_section = next(item for item in user["sections"] if item["uri"] == "fixture://full-patch")
     assert patch_section["content"]["complete_patch"] == patch
     knowledge = next(item for item in user["sections"] if item["name"] == "knowledge.reads")
-    assert [item["chunk"]["content"] for item in knowledge["content"]] == [
+    assert [item["chunk"]["content"] for item in knowledge["content"]["reads"]] == [
         cast(WirePayload, item["chunk"])["content"] for item in reads
     ]
     assert prepared.schema_content and prepared.schema_path.read_text() == prepared.schema_content

@@ -13,7 +13,11 @@ from ai_software_engineer.domain.artifact import CommitSha
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.git.mutation import is_execution_cache_path
-from ai_software_engineer.git.mutation_capture import MutationTextBody, read_mutation_body
+from ai_software_engineer.git.mutation_capture import (
+    MutationTextBody,
+    read_mutation_body,
+    require_no_introduced_secret,
+)
 from ai_software_engineer.git.policy import WorkspacePolicy, WorkspacePolicyError
 
 
@@ -234,7 +238,10 @@ class GitCandidateCommitSkill:
 
     def _retained_body(self, path: str) -> MutationTextBody:
         try:
-            return read_mutation_body(self._root, path)
+            body = read_mutation_body(self._root, path)
+            # A retained source is untracked: all of it is newly introduced text.
+            require_no_introduced_secret(path, None, body)
+            return body
         except (OSError, UnicodeError, ValueError) as error:
             raise CandidateCommitRejected(
                 "retained source must be safe bounded regular text"

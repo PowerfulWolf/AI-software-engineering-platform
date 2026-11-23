@@ -18,8 +18,6 @@ def test_actual_platform_before_body_is_complete_and_capture_stays_read_only(
 ) -> None:
     package = Path(__file__).parents[2] / "src/ai_software_engineer"
     before = (package / relative).read_text() + "\nCAPTURE_VALUE = 1\n"
-    if unsafe:
-        before += 'other = "password=must-remain-sensitive"\n'
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "--initial-branch=main")
@@ -42,6 +40,9 @@ def test_actual_platform_before_body_is_complete_and_capture_stays_read_only(
         read_paths=("src/**",), write_paths=("src/**",), commands=(), network=NetworkAccess.NONE
     )
     after = before.replace("CAPTURE_VALUE = 1", "CAPTURE_VALUE = 2")
+    if unsafe:
+        # Newly written secret-looking text is still refused.
+        after += 'other = "password=must-remain-sensitive"\n'
     source = ref.path / "src/runtime.py"
     source.write_text(after)
     index = Path(git(ref.path, "rev-parse", "--path-format=absolute", "--git-path", "index"))

@@ -42,7 +42,7 @@ from ai_software_engineer.git.policy import is_protected_rule_path
 from ai_software_engineer.git.ports import AttemptNumber, WorktreeRef
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.recovery.workspace_records import RecoveryWorkspaceSnapshot
-from ai_software_engineer.redaction import patch_secret_occurrences, redact_text
+from ai_software_engineer.redaction import patch_added_secret_occurrences, redact_text
 
 
 class RecoveryRejected(RuntimeError):
@@ -206,7 +206,7 @@ class CapturedChanges(DomainModel):
             or "GIT binary patch" in self.patch
         ):
             raise ValueError("recovery patch must be bounded UTF-8 text")
-        if patch_secret_occurrences(self.patch):
+        if patch_added_secret_occurrences(self.patch):
             raise ValueError("recovery patch contains sensitive content")
         if self.to_capture().capture_sha256 != self.capture_sha256:
             raise ValueError("capture digest does not match content")
@@ -581,7 +581,7 @@ class ContextCapacityRecoveryInput(DomainModel):
             or hashlib.sha256(body).hexdigest() != self.retained_patch.sha256
             or "\0" in self.patch
             or "GIT binary patch" in self.patch
-            or patch_secret_occurrences(self.patch)
+            or patch_added_secret_occurrences(self.patch)
         ):
             raise ValueError("capacity recovery must retain the complete safe baseline patch")
         return self
@@ -615,7 +615,7 @@ class InheritedReapplyInput(DomainModel):
             or self.patch_sha256 != hashlib.sha256(body).hexdigest()
             or "\0" in self.patch
             or "GIT binary patch" in self.patch
-            or patch_secret_occurrences(self.patch)
+            or patch_added_secret_occurrences(self.patch)
         ):
             raise ValueError("inherited reapply input must bind one complete safe original patch")
         return self
