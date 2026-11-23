@@ -159,7 +159,7 @@ class ProductionRequirementDeletionGuard:
             with self._verification_resources(checkpoint, targets):
                 pass  # Refuse already-running independent verification before settlement.
             if action == "CLOSE_REQUIREMENT":
-                if checkpoint.stage is JointStage.DELIVERING and (
+                if checkpoint.stage in {JointStage.DELIVERING, JointStage.WAITING_HUMAN} and (
                     not targets or not isinstance(self.queue, RequirementCancellationQueue)
                 ):
                     raise RequirementDeletionRejected("未配置完整工程执行停止校验, 暂不能关闭。")
@@ -318,7 +318,7 @@ class ProductionRequirementDeletionGuard:
         }:
             raise RequirementDeletionRejected("需求删除取消记录没有对应的停止历史。")
         if receipt.human_action.action == "CLOSE_REQUIREMENT" and (
-            bound.stage not in {JointStage.DELIVERING, JointStage.BLOCKED}
+            bound.stage not in {JointStage.DELIVERING, JointStage.BLOCKED, JointStage.WAITING_HUMAN}
             or not any(
                 value.stage is JointStage.CLOSED
                 and value.previous_checkpoint_sha256 == bound.checkpoint_sha256

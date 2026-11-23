@@ -293,7 +293,7 @@ class RequirementCancellationService:
         action: RequirementCancellationAction,
     ) -> RequirementCancellationReceipt:
         allowed = (
-            {JointStage.DELIVERING, JointStage.BLOCKED}
+            {JointStage.DELIVERING, JointStage.BLOCKED, JointStage.WAITING_HUMAN}
             if action == "CLOSE_REQUIREMENT"
             else {JointStage.BLOCKED, JointStage.CLOSED, JointStage.DONE}
         )
@@ -326,7 +326,10 @@ class RequirementCancellationService:
         self._require_scope(receipt, checkpoint, targets)
         if receipt.human_action.action != action:
             raise RequirementCancellationRejected("需求取消记录的用户操作不一致。")
-        if action == "CLOSE_REQUIREMENT" and checkpoint.stage is JointStage.DELIVERING:
+        if action == "CLOSE_REQUIREMENT" and checkpoint.stage in {
+            JointStage.DELIVERING,
+            JointStage.WAITING_HUMAN,
+        }:
             self._require_engineering_waits(receipt)
         # Validate the complete scope before publishing a receipt or mutating any Task.
         for original in receipt.tasks:
