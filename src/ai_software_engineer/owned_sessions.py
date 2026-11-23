@@ -13,12 +13,13 @@ import json
 import os
 import platform
 import signal
+import struct
 import subprocess
 import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Literal, Protocol, Self
+from typing import Annotated, Final, Literal, Protocol, Self
 from uuid import UUID
 
 from pydantic import AwareDatetime, Field, StrictInt, model_validator
@@ -176,6 +177,18 @@ class _BsdInfo(ctypes.Structure):
     ]
 
 
+# Darwin kinfo_proc (sys/sysctl.h) on 64-bit: extern_proc.p_starttime at 0
+# (timeval: int64 sec, int32 usec), p_stat at 36, p_pid at 40; eproc.e_pgid at 564.
+_CTL_KERN: Final = 1
+_KERN_PROC: Final = 14
+_KERN_PROC_PID: Final = 1
+_KINFO_PROC_SIZE: Final = 648
+_KP_STAT_OFFSET: Final = 36
+_KP_PID_OFFSET: Final = 40
+_KP_PGID_OFFSET: Final = 564
+_SZOMB: Final = 5
+
+
 class _DarwinInspector:
     def __init__(self) -> None:
         self._libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
@@ -198,6 +211,15 @@ class _DarwinInspector:
             ctypes.c_size_t,
         ]
         self._libc.sysctlbyname.restype = ctypes.c_int
+        self._libc.sysctl.argtypes = [
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.c_uint,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+        ]
+        self._libc.sysctl.restype = ctypes.c_int
 
     def boot_identity(self) -> str:
         # kern.boottime is derived from adjustable wall time, including its
@@ -263,26 +285,20 @@ class _DarwinInspector:
     def exited_leader(self, pid: int) -> OwnedProcessIdentity | None:
         """Birth facts of a spawned session leader that already exited (unreaped).
 
-        Darwin hides zombies from getsid, but the BSD record still binds the PID's
-        process group and birth time. Popen(start_new_session=True) only returns
-        after setsid succeeded, so a leader whose group is its own PID led the SID.
+        Darwin hides zombies from getsid and from proc_pidinfo (ESRCH), but
+        ``sysctl kern.proc.pid.<pid>`` still returns the kinfo_proc record while the
+        unreaped zombie pins the PID. Popen(start_new_session=True) only returns after
+        setsid succeeded, so a zombie whose process group is its own PID led that SID.
+        Its start time is the same kernel field proc_pidinfo reports for live processes.
         """
-        value = _BsdInfo()
-        count = self._libproc.proc_pidinfo(pid, 3, 0, ctypes.byref(value), ctypes.sizeof(value))
-        if (
-            count != ctypes.sizeof(value)
-            or value.pid != pid
-            or value.pgid != pid
-            or not value.start_sec
-            or value.start_usec >= 1_000_000
-        ):
+        mib = (ctypes.c_int * 4)(_CTL_KERN, _KERN_PROC, _KERN_PROC_PID, pid)
+        record = ctypes.create_string_buffer(_KINFO_PROC_SIZE)
+        size = ctypes.c_size_t(_KINFO_PROC_SIZE)
+        if self._libc.sysctl(mib, 4, record, ctypes.byref(size), None, 0) != 0:
             return None
-        return OwnedProcessIdentity(
-            process_id=pid,
-            group_id=pid,
-            session_id=pid,
-            birth_identity=f"darwin-time:{value.start_sec}:{value.start_usec}",
-        )
+        if size.value != _KINFO_PROC_SIZE:
+            return None
+        return _zombie_leader_identity(pid, record.raw)
 
     def members(self, sid: int) -> tuple[OwnedProcessIdentity, ...]:
         deadline = time.monotonic() + _SCAN_SECONDS
@@ -568,3 +584,27 @@ class OwnedSessionController:
             observations_sha256=self._digest.hexdigest(),
             observed_at=datetime.now(UTC),
         )
+
+
+def _zombie_leader_identity(pid: int, raw: bytes) -> OwnedProcessIdentity | None:
+    """Parse one Darwin kinfo_proc record of an unreaped session-leader zombie."""
+    if len(raw) != _KINFO_PROC_SIZE:
+        return None
+    start_sec, start_usec = struct.unpack_from("<qi", raw, 0)
+    state = raw[_KP_STAT_OFFSET]
+    (record_pid,) = struct.unpack_from("<i", raw, _KP_PID_OFFSET)
+    (group,) = struct.unpack_from("<i", raw, _KP_PGID_OFFSET)
+    if (
+        state != _SZOMB
+        or record_pid != pid
+        or group != pid
+        or start_sec <= 0
+        or not 0 <= start_usec < 1_000_000
+    ):
+        return None
+    return OwnedProcessIdentity(
+        process_id=pid,
+        group_id=pid,
+        session_id=pid,
+        birth_identity=f"darwin-time:{start_sec}:{start_usec}",
+    )
