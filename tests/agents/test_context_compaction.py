@@ -127,3 +127,18 @@ def test_raw_context_payload_is_compacted_with_guidance() -> None:
     assert "reading_projection" in compacted
     assert len(compacted["context"]["sections"]) == 4
     assert compact_model_payload({"task": 1}) == {"task": 1}
+
+
+def test_knowledge_consultation_payload_nested_under_task_is_compacted() -> None:
+    sections = _sections()
+    sections[3] = {**sections[3], "content": json.dumps(sections[3]["content"])}
+    consultation = {"task": {"id": "t"}, "context": {"context_id": "c", "sections": sections}}
+    payload = {"binding": {"run_id": "r"}, "task": consultation, "available_documents": []}
+    compacted = compact_model_payload(payload)
+    assert isinstance(compacted, dict)
+    assert compacted["binding"] == {"run_id": "r"}
+    assert compacted["available_documents"] == []
+    assert len(compacted["task"]["context"]["sections"]) == 4
+    assert "reading_projection" in compacted["task"]
+    unchanged = {"binding": {}, "task": {"id": "t"}}
+    assert compact_model_payload(unchanged) is unchanged

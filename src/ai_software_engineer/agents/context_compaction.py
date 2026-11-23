@@ -92,6 +92,13 @@ def compact_model_payload(payload: object) -> object:
     """
     if not isinstance(payload, dict):
         return payload
+    task = payload.get("task")
+    if "context" not in payload and isinstance(task, dict) and "context" in task:
+        # Knowledge intent/assessment wrap the consultation payload under ``task``.
+        compacted_task = compact_model_payload(task)
+        if compacted_task is task:
+            return payload
+        return {**payload, "task": compacted_task}
     context = payload.get("context")
     if not isinstance(context, dict) or not isinstance(context.get("sections"), list):
         return payload
