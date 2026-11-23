@@ -18,6 +18,8 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
+import jsonschema
+
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.models import AgentErrorCode, AgentUsage
 from ai_software_engineer.agents.openai_compatible import HttpResponse
@@ -88,7 +90,11 @@ class ClaudeCliStructuredModelClient:
             self._environment["PATH"] = f"{local_bin}:{path}"
 
     def argv(
-        self, schema: Mapping[str, object], *, system_prompt_file: Path | None = None
+        self,
+        schema: Mapping[str, object],
+        *,
+        system_prompt_file: Path | None = None,
+        replace_system_prompt: bool = False,
     ) -> tuple[str, ...]:
         from ai_software_engineer.agents.model_diagnostics import current_call_phase
 
@@ -119,8 +125,16 @@ class ClaudeCliStructuredModelClient:
             _MAX_TURNS if reads else _MAX_TURNS_WITHOUT_TOOLS,
             # The stable part of every call rides in the (cached) system prompt so a
             # repeated turn or the next knowledge phase re-reads it from prompt cache.
+            # Tool-less calls replace the CLI's own system prompt: it embeds the working
+            # directory and its git status, which change between rounds and would void
+            # every cache entry behind them. Calls with read tools keep it and append.
             *(
-                ("--append-system-prompt-file", str(system_prompt_file))
+                (
+                    "--system-prompt-file"
+                    if replace_system_prompt
+                    else "--append-system-prompt-file",
+                    str(system_prompt_file),
+                )
                 if system_prompt_file is not None
                 else ()
             ),
@@ -164,21 +178,76 @@ class ClaudeCliStructuredModelClient:
             "SHARED_INPUT is part of INPUT (same keys, shown first for prompt caching).\n"
             f"SHARED_INPUT={json.dumps(shared, ensure_ascii=False, sort_keys=True)}"
         )
+        # The CLI turns --json-schema into a tool definition that precedes the system
+        # prompt in the cache key. Tool-less calls therefore pass one fixed generic schema
+        # (so e.g. knowledge intent and assessment share the cached prefix), state the real
+        # schema after the cached part, and validate the answer strictly here.
+        from ai_software_engineer.agents.model_diagnostics import current_call_phase
+
+        uses_tools = self._reads and current_call_phase() == "stage_reply"
+        cli_schema: Mapping[str, object] = output_schema if uses_tools else _GENERIC_OBJECT
         prompt = (
             f"INSTRUCTIONS={instructions}\n"
             f"INPUT={json.dumps(rest, ensure_ascii=False, sort_keys=True)}"
         )
+        if not uses_tools:
+            prompt += (
+                "\nThe JSON object you return MUST validate against OUTPUT_SCHEMA.\n"
+                f"OUTPUT_SCHEMA={json.dumps(output_schema, ensure_ascii=False, sort_keys=True)}"
+            )
+        result = self._run_once(system_text, prompt, cli_schema, uses_tools, timeout_seconds)
+        if uses_tools:
+            return result
+        problem = _schema_problem(output_schema, result.payload)
+        if problem is not None:
+            remaining = timeout_seconds - (time.monotonic() - started)
+            if remaining > 30:
+                # One repair round on the cached prefix before failing the call.
+                result = self._run_once(
+                    system_text,
+                    prompt
+                    + "\n\nYOUR PREVIOUS REPLY WAS REJECTED: "
+                    + problem
+                    + "\nReply again with a JSON object that validates against OUTPUT_SCHEMA.",
+                    cli_schema,
+                    uses_tools,
+                    int(remaining),
+                )
+                problem = _schema_problem(output_schema, result.payload)
+        if problem is not None:
+            raise StructuredModelError(
+                AgentErrorCode.PROVIDER_ERROR,
+                "Claude CLI structured output does not match the requested schema: " + problem,
+                transient=True,
+            )
+        return result
+
+    def _run_once(
+        self,
+        system_text: str,
+        prompt: str,
+        cli_schema: Mapping[str, object],
+        uses_tools: bool,
+        timeout_seconds: int,
+    ) -> StructuredModelResult:
+        started = time.monotonic()
         # Manager has no repository tools; run it outside any project so a
         # repository CLAUDE.md or settings file cannot steer the coordinator.
         with tempfile.TemporaryDirectory(prefix="ase-claude-") as scratch:
             # The CLI writes its working directory into its own system prompt; a fresh
             # random directory per call would defeat prompt caching between calls.
-            cwd = self._root if self._reads else _isolated_working_directory()
+            # Tool-less calls never need the repository; running them there lets the CLI
+            # inject repository-dependent context that voids the cached prefix.
+            cwd = self._root if uses_tools else _isolated_working_directory()
             system_file = Path(scratch) / "system-prompt.txt"
             system_file.write_text(system_text, encoding="utf-8")
             try:
                 completed = run_structured_command(
-                    self.argv(output_schema, system_prompt_file=system_file),
+                    self.argv(
+                        cli_schema,
+                        system_prompt_file=system_file,
+                        replace_system_prompt=not uses_tools,
+                    ),
                     cwd=cwd,
                     env=self._environment,
                     input=prompt,
@@ -203,6 +272,18 @@ class ClaudeCliStructuredModelClient:
         return parse_claude_result(
             completed.returncode, completed.stdout, completed.stderr, started=started
         )
+
+
+_GENERIC_OBJECT: Mapping[str, object] = {"type": "object"}
+
+
+def _schema_problem(schema: Mapping[str, object], payload: object) -> str | None:
+    validator_type = jsonschema.validators.validator_for(schema)
+    error = jsonschema.exceptions.best_match(validator_type(schema).iter_errors(payload))
+    if error is None:
+        return None
+    location = "/".join(str(part) for part in error.absolute_path) or "<root>"
+    return f"output does not match OUTPUT_SCHEMA at {location}: {error.message[:300]}"
 
 
 def _isolated_working_directory() -> Path:
@@ -443,6 +524,39 @@ def render_responses_turn(request: Mapping[str, object]) -> tuple[str, dict[str,
     return static + "\n\n" + dynamic, schema
 
 
+def _final_schema_of(request: Mapping[str, object]) -> Mapping[str, object] | None:
+    text = request.get("text")
+    text_format = text.get("format") if isinstance(text, Mapping) else None
+    schema = text_format.get("schema") if isinstance(text_format, Mapping) else None
+    return schema if isinstance(schema, Mapping) else None
+
+
+def _final_problem(
+    payload: Mapping[str, object], final_schema: Mapping[str, object] | None
+) -> str | None:
+    """Why a turn reply cannot be handed to the platform, or None when it can."""
+    calls = payload.get("tool_calls")
+    if payload.get("action") == "call_tools":
+        if isinstance(calls, list) and calls:
+            return None
+        return "action call_tools requires at least one tool call"
+    raw = payload.get("final_json")
+    if not isinstance(raw, str) or not raw.strip():
+        return "action final requires final_json to be a non-empty JSON string"
+    try:
+        final = json.loads(raw)
+    except ValueError as error:
+        return f"final_json is not valid JSON ({error.msg} at position {error.pos})"
+    if final_schema is None:
+        return None
+    validator_type = jsonschema.validators.validator_for(final_schema)
+    error = jsonschema.exceptions.best_match(validator_type(final_schema).iter_errors(final))
+    if error is None:
+        return None
+    location = "/".join(str(part) for part in error.absolute_path) or "<root>"
+    return f"final_json does not match FINAL_SCHEMA at {location}: {error.message[:300]}"
+
+
 class ClaudeCliResponsesTransport:
     """Serve the Responses agent loop from the local Claude CLI.
 
@@ -476,28 +590,24 @@ class ClaudeCliResponsesTransport:
         del url, headers
         request = json.loads(body)
         static, prompt, schema = render_responses_turn_parts(request)
+        final_schema = _final_schema_of(request)
         started = time.monotonic()
-        from ai_software_engineer.owned_processes import run_owned_subprocess
-
-        with tempfile.TemporaryDirectory(prefix="ase-claude-turn-") as scratch:
-            system_file = Path(scratch) / "system-prompt.txt"
-            system_file.write_text(static, encoding="utf-8")
-            try:
-                # Engineering runs must own and confirm the stop of every child
-                # process; an untracked CLI would leave the execution unconfirmable.
-                completed = run_owned_subprocess(
-                    self._client.argv(schema, system_prompt_file=system_file),
-                    cwd=Path(scratch),
-                    env=self._client._environment,
-                    input=prompt,
-                    timeout=max(1, int(timeout_seconds)),
-                )
-            except subprocess.TimeoutExpired as error:
-                raise TimeoutError("Claude CLI turn timed out") from error
+        deadline = started + max(1.0, timeout_seconds)
         try:
-            result = parse_claude_result(
-                completed.returncode, completed.stdout, completed.stderr, started=started
-            )
+            result = self._turn(static, prompt, schema, deadline)
+            problem = _final_problem(result.payload, final_schema)
+            if problem is not None and deadline - time.monotonic() > 30:
+                # One in-place repair: the cached prefix makes this round cheap, and a
+                # malformed final otherwise fails the whole run with changes left behind.
+                result = self._turn(
+                    static,
+                    prompt
+                    + "\n\nYOUR PREVIOUS REPLY WAS REJECTED: "
+                    + problem
+                    + "\nReply again with a corrected JSON object.",
+                    schema,
+                    deadline,
+                )
         except StructuredModelError as error:
             status = {
                 AgentErrorCode.AUTHENTICATION_ERROR: 401,
@@ -532,3 +642,33 @@ class ClaudeCliResponsesTransport:
         if result.usage is not None:
             response["usage"] = result.usage.to_wire()
         return HttpResponse(status_code=200, body=json.dumps(response, ensure_ascii=False).encode())
+
+    def _turn(
+        self, static: str, prompt: str, schema: Mapping[str, object], deadline: float
+    ) -> StructuredModelResult:
+        from ai_software_engineer.owned_processes import run_owned_subprocess
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Claude CLI turn timed out")
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory(prefix="ase-claude-turn-") as scratch:
+            system_file = Path(scratch) / "system-prompt.txt"
+            system_file.write_text(static, encoding="utf-8")
+            try:
+                # Engineering runs must own and confirm the stop of every child
+                # process; an untracked CLI would leave the execution unconfirmable.
+                completed = run_owned_subprocess(
+                    self._client.argv(
+                        schema, system_prompt_file=system_file, replace_system_prompt=True
+                    ),
+                    cwd=_isolated_working_directory(),
+                    env=self._client._environment,
+                    input=prompt,
+                    timeout=max(1, int(remaining)),
+                )
+            except subprocess.TimeoutExpired as error:
+                raise TimeoutError("Claude CLI turn timed out") from error
+        return parse_claude_result(
+            completed.returncode, completed.stdout, completed.stderr, started=started
+        )
