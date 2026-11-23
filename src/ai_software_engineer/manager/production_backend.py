@@ -3548,6 +3548,9 @@ def _task_commands(profile: RepositoryProfile) -> tuple[str, ...]:
         "git rev-parse",
         "git ls-files",
         "git show",
+        # Read-only history and search; models reach for them constantly.
+        "git grep",
+        "git log",
     }
     build_commands = {
         BuildSystem.PYTHON: ("python", "python3", "pytest", "uv", "ruff", "mypy"),

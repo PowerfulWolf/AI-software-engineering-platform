@@ -184,8 +184,9 @@ def _is_shell_like(token: str, *, allow_whitespace: bool = False) -> bool:
             ord(character) < 32 and not (allow_whitespace and character in "\n\t")
             for character in token
         )
-        or "$(" in token
-        or "`" in token
+        # Inside an argument of a shell-free argv, `...` and $(...) are plain text
+        # (for example Python source); only the executable token must be clean.
+        or (not allow_whitespace and ("$(" in token or "`" in token))
     )
 
 

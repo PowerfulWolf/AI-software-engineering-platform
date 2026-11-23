@@ -246,8 +246,8 @@ def test_verifier_command_policy_handles_uv_pytest_wrapper(tmp_path: Path) -> No
     (
         ("pytest", ";", "git", "push"),
         ("pytest", "&&", "git", "push"),
-        ("pytest", "$(git", "push)"),
-        ("pytest", "`git", "push`"),
+        ("$(git", "push)"),
+        ("`git", "push`"),
         ("pytest\nwhoami", "tests/unit"),
         ("pytest", "tests/unit\x00whoami"),
     ),
@@ -289,7 +289,7 @@ def test_path_policy_rejects_symlink_escape_from_bound_worktree(tmp_path: Path) 
 def test_multiline_argument_is_data_without_a_shell(tmp_path: Path) -> None:
     permissions = _permissions().model_copy(update={"commands": ("python3",)})
     policy = WorkspacePolicy(tmp_path, permissions)
-    code = "import json\nprint(json.dumps({'ok': True}))\n"
+    code = "import json\n# `quoted` and $(not a shell)\nprint(json.dumps({'ok': True}))\n"
     assert policy.authorize_command(("python3", "-c", code)) == ("python3", "-c", code)
     focused = WorkspacePolicy(
         tmp_path,
