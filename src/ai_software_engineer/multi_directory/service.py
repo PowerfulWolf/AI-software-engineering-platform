@@ -28,6 +28,7 @@ from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
+from ai_software_engineer.git.policy import NATIVE_RULE_PROPOSAL_GUIDANCE
 from ai_software_engineer.knowledge.stages import StageWorkflowGate, repeated_child_failure
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery import (
@@ -1254,7 +1255,9 @@ class JointDeliveryService:
                 "product for the user's entire requirement. Clarify only genuinely "
                 "missing decisions. "
                 "You have all prepared profiles and selected module scopes. Do not ask "
-                "for a project hierarchy. " + BRANCH_NAMING_INSTRUCTIONS,
+                "for a project hierarchy. "
+                + BRANCH_NAMING_INSTRUCTIONS
+                + NATIVE_RULE_PROPOSAL_GUIDANCE,
             )
             if draft.action == "clarify":
                 return self._save(
@@ -1331,7 +1334,8 @@ class JointDeliveryService:
                 "within selected_paths. "
                 "Use canonical paths such as src/config.py or src/**, not ./src/config.py, "
                 "src/, '.', absolute paths, backslashes, .git or '..' segments. "
-                "Read-only inputs need no artificial code change. This is not a generic DAG.",
+                "Read-only inputs need no artificial code change. This is not a generic DAG."
+                + NATIVE_RULE_PROPOSAL_GUIDANCE,
             )
             assert checkpoint.product_spec is not None
             try:
@@ -1425,7 +1429,8 @@ class JointDeliveryService:
                 "write unit requires a complete work_graph; omission is rejected. At most 16 units "
                 "and "
                 "4 independent repository Tasks may be ready; every Task keeps serial roles. "
-                "Never include concrete Agent, provider, model, Assignment or Lease.",
+                "Never include concrete Agent, provider, model, Assignment or Lease."
+                + NATIVE_RULE_PROPOSAL_GUIDANCE,
             )
             assert checkpoint.product_spec is not None and checkpoint.design is not None
             try:

@@ -49,6 +49,7 @@ from ai_software_engineer.domain.project_delivery import (
     PlanWorkGraph,
 )
 from ai_software_engineer.domain.task import AcceptanceCriterionId
+from ai_software_engineer.git.policy import NATIVE_RULE_PROPOSAL_GUIDANCE
 from ai_software_engineer.planning import (
     PlannerAgentAdapter,
     PlannerAgentFailure,
@@ -270,6 +271,7 @@ class StructuredProductAgentAdapter(ProductAgentAdapter):
                     "If so return clarify; otherwise produce measurable requirements and "
                     "acceptance criteria. Do not design the implementation. "
                     + BRANCH_NAMING_INSTRUCTIONS
+                    + NATIVE_RULE_PROPOSAL_GUIDANCE
                 ),
                 input_payload=cast(dict[str, object], request.context.to_wire()),
                 output_schema=ProductDraft.model_json_schema(),
@@ -339,6 +341,7 @@ class StructuredDesignerAgentAdapter(DesignerAgentAdapter):
                     "or typed verification_inspection with exact paths and canonical test_levels. "
                     "Do not claim an executor exists. Unit/integration/e2e need executable tests. "
                     "Declare planned new tests; never select a full test directory or inline code."
+                    + NATIVE_RULE_PROPOSAL_GUIDANCE
                 ),
                 input_payload=cast(dict[str, object], request.context.to_wire()),
                 output_schema=TechnicalDesignDraft.model_json_schema(),
@@ -394,6 +397,7 @@ class StructuredPlannerAgentAdapter(PlannerAgentAdapter):
                     "Use max_parallelism=1 within one repository; parallelism is only between "
                     "independently isolated repository Tasks. Preserve every approved acceptance "
                     "criterion. Never route or override the Manager planning gate."
+                    + NATIVE_RULE_PROPOSAL_GUIDANCE
                 ),
                 input_payload=cast(dict[str, object], request.context.to_wire()),
                 output_schema=ExecutionPlanDraft.model_json_schema(),

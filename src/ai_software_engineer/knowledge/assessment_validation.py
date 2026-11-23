@@ -8,6 +8,7 @@ from pydantic import Field, model_validator
 from ai_software_engineer.agents.verification_output import StaticQaMissingEntry
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.git.policy import NATIVE_RULE_PROPOSAL_ASSESSMENT
 from ai_software_engineer.knowledge.gaps import KnowledgeClaim
 from ai_software_engineer.knowledge.models import (
     BoundedText,
@@ -187,5 +188,5 @@ KNOWLEDGE_ASSESSMENT_INSTRUCTIONS = (
     "ider health or waive genuine external capability prerequisites. Use HUMAN only for a "
     "genuinely unresolved product decision, external fact or scope conflict; reuse approve"
     "d answers instead of reopening them. 人工确认问题必须使用简体中文。"
-    "问题需要表达缺少的事实和需要确认的事项。"
+    "问题需要表达缺少的事实和需要确认的事项。" + NATIVE_RULE_PROPOSAL_ASSESSMENT
 )

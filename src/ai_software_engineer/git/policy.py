@@ -42,6 +42,22 @@ def is_protected_rule_path(path: str | PurePosixPath) -> bool:
     return any(part.casefold() == ".trellis" for part in PurePosixPath(path).parts)
 
 
+NATIVE_RULE_PROPOSAL_GUIDANCE: Final = (
+    " Native rules under .trellis/ are organization-owned and read-only for every delivery "
+    "role; no grant makes them writable. When the user asks to update such a rule or spec "
+    "document, do not make that edit a requirement, design component, plan step or "
+    "acceptance criterion of this delivery. Record it once in non_goals as "
+    "'Native rule change proposal (human approval after delivery): <path>: <change>' and keep "
+    "all code, test and non-.trellis documentation work in scope."
+)
+NATIVE_RULE_PROPOSAL_ASSESSMENT: Final = (
+    " A requested edit of a .trellis/ native rule is a native rule change proposal handled "
+    "by humans after delivery, never part of this candidate: do not return GAP about who "
+    "owns, authorizes or commits it; assess only the remaining in-scope work and mention "
+    "the proposal in the summary."
+)
+
+
 def delivery_write_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     """Remove explicit native-rule paths; broad globs still face the runtime gate."""
     return tuple(path for path in paths if not is_protected_rule_path(path))
