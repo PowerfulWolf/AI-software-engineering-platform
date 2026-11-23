@@ -8,6 +8,7 @@ tools; Manager gets no tools at all.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -198,6 +199,7 @@ class ClaudeCliStructuredModelClient:
         result = self._run_once(system_text, prompt, cli_schema, uses_tools, timeout_seconds)
         if uses_tools:
             return result
+        result = _normalized(output_schema, result)
         problem = _schema_problem(output_schema, result.payload)
         if problem is not None:
             remaining = timeout_seconds - (time.monotonic() - started)
@@ -213,6 +215,7 @@ class ClaudeCliStructuredModelClient:
                     uses_tools,
                     int(remaining),
                 )
+                result = _normalized(output_schema, result)
                 problem = _schema_problem(output_schema, result.payload)
         if problem is not None:
             raise StructuredModelError(
@@ -284,6 +287,55 @@ def _schema_problem(schema: Mapping[str, object], payload: object) -> str | None
         return None
     location = "/".join(str(part) for part in error.absolute_path) or "<root>"
     return f"output does not match OUTPUT_SCHEMA at {location}: {error.message[:300]}"
+
+
+def _normalized(
+    schema: Mapping[str, object], result: StructuredModelResult
+) -> StructuredModelResult:
+    payload = _decode_stringified_containers(schema, result.payload)
+    if payload == result.payload:
+        return result
+    return dataclasses.replace(result, payload=payload)
+
+
+def _decode_stringified_containers(
+    schema: Mapping[str, object], payload: Mapping[str, object]
+) -> Mapping[str, object]:
+    """Undo one known CLI artefact under the generic schema: arrays/objects sent as JSON text.
+
+    Only a value the real schema requires to be an array or object, that arrives as a
+    string holding exactly such JSON, is decoded; genuine string fields are untouched.
+    """
+    validator = jsonschema.validators.validator_for(schema)(schema)
+    current: object = json.loads(json.dumps(payload))
+    for _ in range(64):
+        fixed = False
+        for error in validator.iter_errors(current):
+            expected = error.validator_value if error.validator == "type" else None
+            wanted = {expected} if isinstance(expected, str) else set(expected or ())
+            if not isinstance(error.instance, str) or not wanted & {"array", "object"}:
+                continue
+            try:
+                decoded = json.loads(error.instance)
+            except ValueError:
+                continue
+            if not (
+                ("array" in wanted and isinstance(decoded, list))
+                or ("object" in wanted and isinstance(decoded, dict))
+            ):
+                continue
+            path = list(error.absolute_path)
+            if not path:
+                continue
+            parent: object = current
+            for part in path[:-1]:
+                parent = parent[part]  # type: ignore[index]
+            parent[path[-1]] = decoded  # type: ignore[index]
+            fixed = True
+            break
+        if not fixed:
+            break
+    return current if isinstance(current, dict) else payload
 
 
 def _isolated_working_directory() -> Path:

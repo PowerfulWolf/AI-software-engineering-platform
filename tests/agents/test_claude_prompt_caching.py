@@ -185,3 +185,23 @@ def test_tool_less_structured_calls_replace_the_cli_system_prompt(
     argv = seen["argv"]
     assert isinstance(argv, tuple)
     assert "--system-prompt-file" in argv and "--append-system-prompt-file" not in argv
+
+
+def test_stringified_array_is_decoded_only_where_the_schema_demands_a_container(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "queries": {"type": "array", "items": {"type": "string"}},
+            "note": {"type": "string"},
+        },
+        "required": ["queries", "note"],
+    }
+    answer = {"queries": '["retry policy", "window"]', "note": '["kept as text"]'}
+    result, seen = _complete_with(tmp_path, monkeypatch, answer, schema)
+    assert result.payload == {
+        "queries": ["retry policy", "window"],
+        "note": '["kept as text"]',
+    }
+    assert "YOUR PREVIOUS REPLY WAS REJECTED" not in str(seen["input"])
