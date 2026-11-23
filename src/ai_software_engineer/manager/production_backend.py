@@ -3343,6 +3343,11 @@ class ProductionProjectDeliveryBackend:
                 f"技术设计已安全停止（DesignerOutputRejected）：{reason}",  # noqa: RUF001
             ) from error
         except Exception as error:
+            from ai_software_engineer.work_queue.worker import _log_uncertain_chain
+
+            # The stage view shows only the type; keep the exact refusing check
+            # (message and frames, no payloads) in the service log for engineers.
+            _log_uncertain_chain(f"{label} stage", error)
             raise DeliveryBackendFailure(
                 DeliveryFailureCode.INVARIANT_VIOLATION,
                 f"{label} stopped safely ({type(error).__name__})",

@@ -706,5 +706,5 @@ def _log_uncertain_chain(task_id: str, error: BaseException) -> None:
         links.append(f"{type(current).__name__}({str(current)[:160]}) at {where}")
         current = current.__cause__ or current.__context__
     logging.getLogger(__name__).warning(
-        "Task %s execution uncertain: %s", task_id, " <- ".join(links)
+        "%s execution uncertain or rejected: %s", task_id, " <- ".join(links)
     )
