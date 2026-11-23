@@ -260,6 +260,30 @@ class _DarwinInspector:
             birth_identity=f"darwin-time:{value.start_sec}:{value.start_usec}",
         )
 
+    def exited_leader(self, pid: int) -> OwnedProcessIdentity | None:
+        """Birth facts of a spawned session leader that already exited (unreaped).
+
+        Darwin hides zombies from getsid, but the BSD record still binds the PID's
+        process group and birth time. Popen(start_new_session=True) only returns
+        after setsid succeeded, so a leader whose group is its own PID led the SID.
+        """
+        value = _BsdInfo()
+        count = self._libproc.proc_pidinfo(pid, 3, 0, ctypes.byref(value), ctypes.sizeof(value))
+        if (
+            count != ctypes.sizeof(value)
+            or value.pid != pid
+            or value.pgid != pid
+            or not value.start_sec
+            or value.start_usec >= 1_000_000
+        ):
+            return None
+        return OwnedProcessIdentity(
+            process_id=pid,
+            group_id=pid,
+            session_id=pid,
+            birth_identity=f"darwin-time:{value.start_sec}:{value.start_usec}",
+        )
+
     def members(self, sid: int) -> tuple[OwnedProcessIdentity, ...]:
         deadline = time.monotonic() + _SCAN_SECONDS
         pids = (ctypes.c_int * (_MAX_PROCESSES + 1))()
@@ -394,6 +418,10 @@ class OwnedSessionController:
         self._inspector = _inspector()
         self._boot = self._inspector.boot_identity()
         leader = self._inspector.identity(process.pid)
+        if leader is None:
+            # A command can finish before its owner inspects it. Its unreaped
+            # zombie still pins the PID; start_new_session made it a session leader.
+            leader = getattr(self._inspector, "exited_leader", lambda _pid: None)(process.pid)
         if leader is None or not leader.process_id == leader.group_id == leader.session_id:
             raise OwnedSessionUnknown("spawned leader does not own an isolated session")
         self._leader = leader

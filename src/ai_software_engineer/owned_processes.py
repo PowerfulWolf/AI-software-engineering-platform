@@ -270,10 +270,15 @@ class OwnedProcessObservation:
         self._capture_failed = False
         try:
             self._controller = OwnedSessionController(process)
-        except (OSError, ValueError, OwnedSessionUnknown):
+        except (OSError, ValueError, OwnedSessionUnknown) as error:
             # A raw exception would retain its traceback and interrupted caller
             # scope for the entire lifetime of this registry capability.
             self._capture_failed = True
+            import logging
+
+            # Log text only: a retained exception object would keep its frames alive.
+            detail = f"{type(error).__name__}: {str(error)[:200]}"
+            logging.getLogger(__name__).warning("owned process spawn capture failed: %s", detail)
             self.uncertain()
 
     def uncertain(self) -> None:
