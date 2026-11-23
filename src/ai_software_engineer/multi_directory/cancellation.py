@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import tempfile
 from collections.abc import Callable
@@ -43,6 +44,9 @@ from ai_software_engineer.work_queue.ports import (
 
 _MAX_RECEIPT_BYTES = 8_000_000
 RequirementCancellationAction = Literal["DELETE_REQUIREMENT", "CLOSE_REQUIREMENT"]
+
+
+_KNOWLEDGE_GAP_WAIT = re.compile(r"KNOWLEDGE_GAP:[0-9a-f]{64}:[0-9a-f]{64}")
 
 
 class RequirementCancellationRejected(ValueError):
@@ -381,7 +385,19 @@ class RequirementCancellationService:
                     and disposition is not None
                     and disposition.responsibility is not DeliveryResponsibility.ENGINEERING
                 )
-                if item.status is WorkItemStatus.READY or non_engineering_wait:
+                # A knowledge-gap parking (knowledge/queue.py) carries no disposition; its
+                # platform-written reason names the gap and routing digest instead.
+                knowledge_gap_wait = (
+                    allow_human_waits
+                    and item.status is WorkItemStatus.WAITING_HUMAN
+                    and disposition is None
+                    and _KNOWLEDGE_GAP_WAIT.fullmatch(item.wait_reason or "") is not None
+                )
+                if (
+                    item.status is WorkItemStatus.READY
+                    or non_engineering_wait
+                    or knowledge_gap_wait
+                ):
                     # Queued but never claimed, or (for a WAITING_HUMAN Requirement) parked
                     # on a recorded human/knowledge answer: the user may withdraw it while no
                     # Agent runs. _require_no_lease and the queue's idle check still refuse a

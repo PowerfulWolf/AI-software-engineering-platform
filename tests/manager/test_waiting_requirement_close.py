@@ -255,6 +255,48 @@ def test_queued_unclaimed_coder_can_be_withdrawn_before_any_agent_starts(
     assert all(value.status is WorkItemStatus.CLOSED for value in queue.items.values())
 
 
+def test_knowledge_gap_parking_closes_only_for_a_waiting_human_requirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform, checkpoint, _, queue, _ = _waiting(tmp_path, monkeypatch)
+    item = next(iter(queue.items.values()))
+    queue.items[item.id] = item.model_copy(
+        update={
+            "status": WorkItemStatus.WAITING_HUMAN,
+            "wait_disposition": None,
+            "wait_reason": "KNOWLEDGE_GAP:" + "a" * 64 + ":" + "b" * 64,
+        }
+    )
+    # While the Requirement itself is DELIVERING the undisposed wait still fails closed.
+    with pytest.raises(RequirementDeletionRejected):
+        _close(platform, checkpoint)
+    waiting = platform._save(
+        platform.journal.current(checkpoint.delivery_id) or checkpoint,
+        stage=JointStage.WAITING_HUMAN,
+        next_action="Answer the knowledge gap",
+    )
+    closed = _close(platform, waiting)
+    assert closed.stage is JointStage.CLOSED
+    assert all(value.status is WorkItemStatus.CLOSED for value in queue.items.values())
+
+
+def test_unrecognised_undisposed_wait_stays_closed_for_waiting_human_requirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform, checkpoint, _, queue, _ = _waiting(tmp_path, monkeypatch)
+    item = next(iter(queue.items.values()))
+    queue.items[item.id] = item.model_copy(
+        update={
+            "status": WorkItemStatus.WAITING_HUMAN,
+            "wait_disposition": None,
+            "wait_reason": "SOMETHING_ELSE",
+        }
+    )
+    waiting = platform._save(checkpoint, stage=JointStage.WAITING_HUMAN, next_action="x")
+    with pytest.raises(RequirementDeletionRejected):
+        _close(platform, waiting)
+
+
 def test_queued_work_with_drifted_attempt_is_not_withdrawn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
