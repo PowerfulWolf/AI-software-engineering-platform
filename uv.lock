@@ -11,6 +11,7 @@ name = "ai-software-engineer"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pymysql" },
     { name = "pypdf" },
@@ -33,6 +34,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "jsonschema", specifier = ">=4,<5" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "pymysql", specifier = ">=1.1,<2" },
     { name = "pypdf", specifier = ">=5,<7" },
