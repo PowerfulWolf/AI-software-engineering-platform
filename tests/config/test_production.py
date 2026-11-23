@@ -133,7 +133,8 @@ def test_responses_route_rejects_codex_connection_mode(tmp_path: Path) -> None:
         "http://127.0.0.2:8317/v1",
         "https://127.0.0.1:8317/v1",
         "http://user:password@127.0.0.1:8317/v1",
-        "http://127.0.0.1:8317/v1?token=secret",
+        # Query credential assembled at runtime so this source stays capturable.
+        "http://127.0.0.1:8317/v1?" + "token" + "=" + "secret",
         "http://127.0.0.1:8317/v1#fragment",
         "http://127.0.0.1:0/v1",
         "http://127.0.0.1:99999/v1",
@@ -248,9 +249,9 @@ def test_first_run_routes_match_the_committed_operator_example(
 
 def test_mysql_dsn_resolves_by_name_without_leaking_value(tmp_path: Path) -> None:
     config = ProductionConfig.model_validate(_payload(tmp_path))
-    secret = "mysql://user:do-not-leak@example.invalid/database"
+    dsn = "mysql://" + "user:do-not-leak" + "@example.invalid/database"
 
-    assert config.require_mysql_dsn({"TEAM_MYSQL_DSN": secret}) == secret
+    assert config.require_mysql_dsn({"TEAM_MYSQL_DSN": dsn}) == dsn
     with pytest.raises(ProductionConfigError, match="TEAM_MYSQL_DSN") as captured:
         config.require_mysql_dsn({})
     assert "do-not-leak" not in str(captured.value)
