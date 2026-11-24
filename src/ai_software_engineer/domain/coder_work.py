@@ -11,7 +11,7 @@ from ai_software_engineer.domain.artifact import (
     ImplementationReportArtifact,
     PlanArtifact,
 )
-from ai_software_engineer.domain.execution_window import CoderWorkSlice
+from ai_software_engineer.domain.execution_window import CoderWorkSlice, PlanExecutionWindow
 from ai_software_engineer.domain.task import Task
 
 
@@ -77,16 +77,7 @@ def select_coder_work_slice(
     # Keep at most one future work attempt for independent QA/Review rework.
     # Sixteen packages with three work attempts become two aggregated slices,
     # not sixteen executions. If only one work slot remains, it covers all pending work.
-    slots = max(1, work_remaining - window.reserve_rework_attempts)
-    count = ceil(len(pending) / slots)
-    cap = window.max_steps_per_run
-    if cap is not None and ceil(len(pending) / cap) <= slots:
-        # A bounded window fills each invocation up to the steps that fit its
-        # time budget, so small plans finish in one run and keep budget for
-        # rework. When the remaining slots cannot cover all pending work at
-        # that cap (for example rework after QA FAIL on the last slot), the
-        # legacy aggregation keeps every step reachable instead of stranding it.
-        count = min(len(pending), cap)
+    count = _slice_step_count(len(pending), work_remaining, window)
     return CoderWorkSlice(
         task_id=task.id,
         attempt=attempt,
@@ -147,6 +138,23 @@ def validate_coder_slice_output(work: CoderWorkSlice, artifact: Artifact) -> Non
         )
 
 
+def _slice_step_count(pending: int, work_remaining: int, window: PlanExecutionWindow) -> int:
+    # Keep at most one future work attempt for independent QA/Review rework.
+    # Sixteen packages with three work attempts become two aggregated slices,
+    # not sixteen executions. If only one work slot remains, it covers all pending work.
+    slots = max(1, work_remaining - window.reserve_rework_attempts)
+    count = ceil(pending / slots)
+    cap = window.max_steps_per_run
+    if cap is not None and ceil(pending / cap) <= slots:
+        # A bounded window fills each invocation up to the steps that fit its
+        # time budget, so small plans finish in one run and keep budget for
+        # rework. When the remaining slots cannot cover all pending work at
+        # that cap (for example rework after QA FAIL on the last slot), the
+        # legacy aggregation keeps every step reachable instead of stranding it.
+        count = min(pending, cap)
+    return count
+
+
 def successor_coder_work_slice(work: CoderWorkSlice, *, consume_work: bool) -> CoderWorkSlice:
     """Recompute the exact next bounded partition from a sealed interrupted slice.
 
@@ -158,8 +166,9 @@ def successor_coder_work_slice(work: CoderWorkSlice, *, consume_work: bool) -> C
     if remaining < 1:
         raise CoderSliceRejected("interrupted work slice has no authorized successor")
     pending = (*work.selected_step_ids, *work.later_step_ids)
-    slots = max(1, remaining - work.window.reserve_rework_attempts)
-    count = ceil(len(pending) / slots)
+    # Same partition rule as select_coder_work_slice, so an interrupted slice's
+    # successor equals what fresh selection would dispatch for the same facts.
+    count = _slice_step_count(len(pending), remaining, work.window)
     return CoderWorkSlice.model_validate(
         {
             **work.to_wire(),

@@ -95,3 +95,38 @@ def test_slice_cannot_expand_or_erase_authority_on_replacement(
         }
     )
     assert not same_continuation_inputs(new, old, cause="local_execution_limit")
+
+
+@pytest.mark.parametrize("consume", [False, True])
+def test_capped_window_successor_matches_fresh_selection(consume: bool) -> None:
+    """Regression: a 3-step plan in a 3-step window was split 1+2 on continuation.
+
+    Fresh selection fills the run up to the window cap, so the interrupted slice's
+    successor must select the same steps or every continuation is rejected.
+    """
+    window = PlanExecutionWindow.model_validate(
+        {
+            "kind": "serial_coder_window_v1",
+            "hard_seconds": 1800,
+            "finalization_reserve_seconds": 300,
+            "max_coder_runs": 10,
+            "max_steps_per_run": 3,
+            "reserve_rework_attempts": 1,
+        }
+    )
+    work = CoderWorkSlice(
+        task_id="task_capped",
+        attempt=1,
+        source_revision="a" * 40,
+        plan_artifact_id="art_plan_capped",
+        plan_sha256="b" * 64,
+        window=window,
+        authorized_work_remaining=10,
+        completed_step_ids=(),
+        selected_step_ids=("policy", "window", "docs"),
+        later_step_ids=(),
+    )
+    successor = successor_coder_work_slice(work, consume_work=consume)
+    assert successor.selected_step_ids == ("policy", "window", "docs")
+    assert successor.later_step_ids == ()
+    assert successor.authorized_work_remaining == (9 if consume else 10)
