@@ -603,3 +603,85 @@ def test_responses_unsupported_version_preserves_draft_without_candidate(tmp_pat
     assert _git(root, "rev-parse", "HEAD") == base
     assert _git(root, "diff", "--cached", "--name-only") == ""
     assert (root / "src/change.py").read_text() == "VALUE = 1\n"
+
+
+class _CorrectingTransport:
+    """Inject one platform-rejected reply, then delegate to the normal Coder script."""
+
+    def __init__(self, inner: _CoderTransport, mode: str) -> None:
+        self.inner = inner
+        self.mode = mode
+        self.calls: list[Mapping[str, object]] = []
+        self.injected = False
+
+    def post(
+        self, url: str, headers: Mapping[str, str], body: bytes, timeout_seconds: float
+    ) -> HttpResponse:
+        self.calls.append(json.loads(body))
+        if self.mode == "tool" and not self.injected:
+            self.injected = True
+            reply = {
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_bad",
+                        "name": "read_everything",
+                        "arguments": "{}",
+                    }
+                ]
+            }
+            return HttpResponse(status_code=200, body=json.dumps(reply).encode())
+        response = self.inner.post(url, headers, body, timeout_seconds)
+        if self.mode == "final" and not self.injected and b"output_text" in response.body:
+            self.injected = True
+            bad = {"output_text": json.dumps({"artifact": {"kind": "implementation-report"}})}
+            return HttpResponse(status_code=200, body=json.dumps(bad).encode())
+        return response
+
+
+@pytest.mark.parametrize("mode", ["tool", "final"])
+def test_platform_rejected_reply_is_reported_back_and_corrected(tmp_path: Path, mode: str) -> None:
+    root, base = _repository(tmp_path)
+    request, definition = _request(base)
+    transport = _CorrectingTransport(_CoderTransport(root, request), mode)
+    result = ResponsesAgentAdapter(
+        workspace_root=root,
+        endpoint="https://example.invalid/v1/responses",
+        credential="test-key",
+        model="model",
+        agent=definition,
+        prompt_builder=StaticPromptBuilder(),
+        transport=transport,
+    ).run(request)
+    assert result.status is AgentRunStatus.SUCCEEDED
+    second = json.dumps(transport.calls[1]["input"], ensure_ascii=False)
+    if mode == "tool":
+        assert "INVALID_TOOL_ARGUMENTS" in second and "unknown function" in second
+    else:
+        assert "The platform rejected your final output" in json.dumps(
+            transport.calls[-1]["input"], ensure_ascii=False
+        )
+
+
+def test_repeated_rejected_replies_still_fail_as_invalid_output(tmp_path: Path) -> None:
+    root, base = _repository(tmp_path)
+    request, definition = _request(base)
+
+    class AlwaysBad:
+        def post(
+            self, url: str, headers: Mapping[str, str], body: bytes, timeout_seconds: float
+        ) -> HttpResponse:
+            bad = {"output_text": json.dumps({"artifact": {"kind": "implementation-report"}})}
+            return HttpResponse(status_code=200, body=json.dumps(bad).encode())
+
+    result = ResponsesAgentAdapter(
+        workspace_root=root,
+        endpoint="https://example.invalid/v1/responses",
+        credential="test-key",
+        model="model",
+        agent=definition,
+        prompt_builder=StaticPromptBuilder(),
+        transport=AlwaysBad(),
+    ).run(request)
+    assert result.status is AgentRunStatus.FAILED
+    assert result.error is not None and result.error.code is AgentErrorCode.INVALID_OUTPUT

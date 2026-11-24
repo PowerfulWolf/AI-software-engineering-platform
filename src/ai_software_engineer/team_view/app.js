@@ -9512,11 +9512,16 @@ function effectiveModelConnectionMode(route, config = settingsDraft) {
 }
 function modelRouteLabel(route, config = settingsDraft) {
   const kind = route.route_kind || route.kind;
+  if (kind === "claude_cli") return CLAUDE_CLI_LABEL;
   return kind === "codex_cli"
     ? `Codex CLI · ${effectiveModelConnectionMode(route, config) === "proxy" ? "CLIProxyAPI" : "普通 CLI"}`
     : "Responses API";
 }
+// The Claude route runs the local `claude -p` CLI with the machine's own login;
+// it has no endpoint or API key of its own.
+const CLAUDE_CLI_LABEL = "Claude CLI（本机登录）";
 function recordedModelConnectionLabel(route) {
+  if ((route.route_kind || route.kind) === "claude_cli") return CLAUDE_CLI_LABEL;
   if ((route.route_kind || route.kind) === "responses") return "Responses API";
   if (route.connection_mode === "proxy") return "CLIProxyAPI";
   if (route.connection_mode === "direct") return "普通 CLI";
@@ -10407,13 +10412,14 @@ function renderModelSettings(form) {
         selectInput(
           [
             ["codex_cli", "Codex CLI"],
+            ["claude_cli", CLAUDE_CLI_LABEL],
             ["responses", "Responses API"],
           ],
           route.kind,
           (value) => {
             updateModelRouteIdentity(route, "kind", value);
             route.image_input = null;
-            if (value === "codex_cli") {
+            if (value === "codex_cli" || value === "claude_cli") {
               route.endpoint = null;
               route.api_key_env = null;
             }
@@ -10505,7 +10511,7 @@ function renderModelSettings(form) {
       settingsRouteField(
         "支持图片输入",
         imageInput,
-        "Codex CLI 默认支持；Responses 服务需确认兼容图片输入格式后开启。",
+        "Codex CLI 默认支持；Claude CLI 线路不接收图片；Responses 服务需确认兼容图片输入格式后开启。",
       ),
     );
     const enabled = el("input");
@@ -11366,8 +11372,8 @@ function modelCallDiagnostics(operation) {
       const phases = {stage_reply: "阶段回复", knowledge_intent: "知识检索意图", knowledge_assessment: "知识充分性评估"};
       content.replaceChildren(...calls.map(call => {
         const card = el("div", undefined, "model-call-card");
-        const isCli = call.route_kind === "codex_cli";
-        const connection = `${isCli ? "Codex CLI · " : ""}${recordedModelConnectionLabel(call)}`;
+        const isCli = call.route_kind === "codex_cli" || call.route_kind === "claude_cli";
+        const connection = `${call.route_kind === "codex_cli" ? "Codex CLI · " : ""}${recordedModelConnectionLabel(call)}`;
         const httpStatus = isCli ? "" : ` · ${call.http_status != null ? `HTTP ${call.http_status}` : "未收到 HTTP 响应"}`;
         card.append(
           el("strong", `${call.route_index === 1 ? "主模型" : `备用 ${call.route_index - 1}`} · ${call.provider} / ${call.model} · ${call.reasoning_effort} · ${connection}`),

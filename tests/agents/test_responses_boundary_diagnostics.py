@@ -460,6 +460,10 @@ def test_denied_command_is_reported_to_the_model_which_can_continue(tmp_path: Pa
     provider = Recovering()
     result = _adapter(root, definition, provider).run(request)
 
-    assert provider.calls == 2
+    # One tool round, the invalid final "{}", then the bounded correction rounds.
+    from ai_software_engineer.agents.responses import _MAX_OUTPUT_CORRECTIONS
+
+    assert provider.calls == 2 + _MAX_OUTPUT_CORRECTIONS
+    assert result.error is not None and result.error.code is AgentErrorCode.INVALID_OUTPUT
     assert any("COMMAND_DENIED" in str(item["output"]) for item in provider.seen)
     assert not (result.error is not None and "tool request rejected" in result.error.message)

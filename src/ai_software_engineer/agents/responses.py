@@ -133,6 +133,11 @@ _SAFE_TOOL_REJECTION_CODES = frozenset(
 
 
 _MAX_COMMAND_DENIALS = 3
+# A model may return a tool call or final artifact the platform's own contract rejects
+# (beyond what the transport schema can express). Report the exact rejection back and
+# let it correct itself this many times per run before failing as invalid output.
+_MAX_OUTPUT_CORRECTIONS = 2
+_CORRECTABLE_OUTPUT_ERRORS = (ValueError, KeyError, TypeError, json.JSONDecodeError)
 
 
 class _ToolRequestRejected(WorkspacePolicyError):
@@ -699,6 +704,7 @@ class ResponsesAgentAdapter:
         )
         tool_calls = 0
         command_denials = 0
+        output_corrections = 0
         latest_usage: AgentUsage | None = None
         if self._interruption_control is not None:
             window.before = self._interruption_control.started(request, self._workspace_root)
@@ -786,12 +792,35 @@ class ResponsesAgentAdapter:
                     if tool_calls > self._max_tool_calls:
                         raise _LocalExecutionLimit("Responses tool-call budget exceeded")
                     window.remaining()
-                    tool_request = _tool_request(
-                        request,
-                        name,
-                        arguments,
-                        operation_id=f"tool.responses.{turn:02d}.{tool_calls:03d}",
-                    )
+                    try:
+                        tool_request = _tool_request(
+                            request,
+                            name,
+                            arguments,
+                            operation_id=f"tool.responses.{turn:02d}.{tool_calls:03d}",
+                        )
+                    except _CORRECTABLE_OUTPUT_ERRORS as error:
+                        # Nothing ran; tell the model exactly why the call was refused.
+                        output_corrections += 1
+                        _log_output_correction(request, "tool_arguments", error)
+                        if output_corrections > _MAX_OUTPUT_CORRECTIONS:
+                            raise
+                        outputs.append(
+                            {
+                                "type": "function_call_output",
+                                "call_id": call_id,
+                                "output": json.dumps(
+                                    {
+                                        "status": "REJECTED",
+                                        "error_code": "INVALID_TOOL_ARGUMENTS",
+                                        "error_message": _correction_text(error),
+                                    },
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                ),
+                            }
+                        )
+                        continue
                     if self._execution_guard is not None:
                         self._execution_guard.check()
                     if name == "write_file":
@@ -851,10 +880,43 @@ class ResponsesAgentAdapter:
             content = _output_text(payload)
             window.output_present = True
             window.remaining()
-            artifact = _decode_artifact_output(content)
-            if artifact.kind not in ROLE_OUTPUTS[request.role]:
-                raise ValueError("provider Artifact is outside the role contract")
-            artifact = _normalize_producer(artifact, request, self._agent)
+            try:
+                artifact = _decode_artifact_output(content)
+                if artifact.kind not in ROLE_OUTPUTS[request.role]:
+                    raise ValueError("provider Artifact is outside the role contract")
+                artifact = _normalize_producer(artifact, request, self._agent)
+            except _CORRECTABLE_OUTPUT_ERRORS as error:
+                # The artifact was never accepted; ask for a corrected final answer.
+                output_corrections += 1
+                _log_output_correction(request, "final_artifact", error)
+                if output_corrections > _MAX_OUTPUT_CORRECTIONS:
+                    raise
+                window.output_present = False
+                input_items = [
+                    *input_items,
+                    {
+                        "role": "assistant",
+                        "content": cast(
+                            JsonValue, [{"type": "output_text", "text": content[:20000]}]
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": cast(
+                            JsonValue,
+                            [
+                                {
+                                    "type": "input_text",
+                                    "text": "The platform rejected your final output: "
+                                    + _correction_text(error)
+                                    + "\nReturn a corrected final JSON object that satisfies "
+                                    "the output contract. You may use tools first if needed.",
+                                }
+                            ],
+                        ),
+                    },
+                ]
+                continue
             window.remaining()
             if self._interruption_control is not None and window.before is not None:
                 self._interruption_control.finished(
@@ -992,6 +1054,22 @@ def _tool_definitions(role: AgentRole) -> list[WirePayload]:
             }
         )
     return [cast(WirePayload, strict_output_schema(definition)) for definition in definitions]
+
+
+def _correction_text(error: BaseException) -> str:
+    text = str(error).strip() or type(error).__name__
+    return f"{type(error).__name__}: {text[:1500]}"
+
+
+def _log_output_correction(request: AgentRequest, kind: str, error: BaseException) -> None:
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "Run %s %s output rejected for correction: %s",
+        request.run_id,
+        kind,
+        _correction_text(error)[:400].replace("\n", " "),
+    )
 
 
 def _tool_request(

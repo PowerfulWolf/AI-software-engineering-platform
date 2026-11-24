@@ -1677,6 +1677,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.equal(vm.runInContext("modelRouteValidationMessage(settingsDraft)", context), null);
   assert.equal(vm.runInContext("recordedModelConnectionLabel({route_kind: 'codex_cli'})", context), "连接方式未记录");
   assert.equal(vm.runInContext("recordedModelConnectionLabel({kind: 'responses'})", context), "Responses API");
+  // The local Claude CLI route is never presented as an API route.
+  assert.equal(vm.runInContext("recordedModelConnectionLabel({route_kind: 'claude_cli'})", context), "Claude CLI（本机登录）");
+  assert.equal(vm.runInContext("modelRouteLabel({kind: 'claude_cli'})", context), "Claude CLI（本机登录）");
   vm.runInContext("settingsDraft.model_routes.pop(); settingsDraft.codex_cli_proxy_base_url = null; render();", context);
   assert.doesNotMatch(text(get("content")), /密钥状态/);
   assert.match(text(get("content")), /Agent 模型分配/);
