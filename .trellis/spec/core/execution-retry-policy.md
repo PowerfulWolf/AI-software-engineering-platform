@@ -192,6 +192,12 @@ in 1..100. QA/Reviewer have no configurable verdict retry: findings return to Co
 new verification approval. Manager defaults to 2 artifact/correction calls per input and 3 distinct
 coordination inputs per stable Requirement/stage episode. Its typed model failures are not verdicts.
 
+`coder_max_steps_per_run` (strict integer 1..16, default 3; bools and floats rejected) caps the
+approved plan steps one Coder run receives in a newly assembled capacity window. It affects only
+the windows of new Plans; frozen windows keep their value, and a saved change takes effect after
+restart. It is not an unconditional hard limit: the aggregation exception in
+`plan-work-capacity.md` (for example the last QA rework slot) still applies.
+
 Scope: Console/`ase request` joint upstream and newly dispatched production Tasks. Native legacy
 `ase project` upstream records retain their original protocol; do not apply new counter meanings to
 their hashed journals. Hand-created Tasks without a policy keep the compatibility runner. Integration

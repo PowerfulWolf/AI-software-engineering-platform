@@ -16,14 +16,17 @@ PlanExecutionWindow.max_steps_per_run: int | None   # 1..16，None 时不出现�
 PlanExecutionWindow.max_coder_runs: int | None      # 1..20，与上项同时出现或同时缺省
 PlanExecutionWindow.step_capacity -> int | None     # steps_per_run × (runs − reserve_rework)
 PlanExecutionWindow.validate_step_count(n) -> None  # 超出时抛 PlanExceedsWorkCapacity(ValueError)
-bounded_coder_window(seconds, *, max_work_attempts) -> PlanExecutionWindow
+bounded_coder_window(seconds, *, max_work_attempts,
+                     max_steps_per_run=DEFAULT_CODER_STEPS_PER_RUN) -> PlanExecutionWindow
 DEFAULT_CODER_STEPS_PER_RUN = 3
 ```
 
 ## Contracts
 
 1. 旧窗口不含容量字段，wire、digest 与切片语义完全不变；冻结的旧 Plan/Requirement 不追溯获得容量。
-2. 新生产 Requirement/Plan 由可信组装写入容量（`bounded_coder_window`）；模型不能修改窗口。
+2. 新生产 Requirement/Plan 由可信组装写入容量（`bounded_coder_window`）；模型不能修改窗口。生产组装（`production_host.py`、
+   `production_backend.py`）传入 `ExecutionRetryPolicy.coder_max_steps_per_run`；
+   `DEFAULT_CODER_STEPS_PER_RUN` 只作为默认值保留。
 3. 规划接纳：`PlannerStageService` 与联合路径 `compile_joint_plan` 都在接纳计划前校验每个 Task 的
    已批准步骤数；超出容量时拒绝并给出中文“需求过大，请拆分”原因，不启动 Coder。
 4. 联合设计阶段在窗口有容量时告知 Designer 每个写入单元的步骤上限；放不下时提出 blocking_issue，
