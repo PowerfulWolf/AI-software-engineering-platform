@@ -83,11 +83,20 @@ draft. Smaller slices keep interruptions cheap and plans honest about size.
 """
 
 
-def bounded_coder_window(seconds: int, *, max_work_attempts: int) -> PlanExecutionWindow:
-    """Trusted composition of a capacity-bounded window for new production plans."""
+def bounded_coder_window(
+    seconds: int,
+    *,
+    max_work_attempts: int,
+    max_steps_per_run: int = DEFAULT_CODER_STEPS_PER_RUN,
+) -> PlanExecutionWindow:
+    """Trusted composition of a capacity-bounded window for new production plans.
+
+    ``max_steps_per_run`` comes from the operator ExecutionRetryPolicy; the
+    constant remains only the default. Frozen windows are never recomputed.
+    """
     return PlanExecutionWindow.for_seconds(
         seconds,
-        max_steps_per_run=DEFAULT_CODER_STEPS_PER_RUN,
+        max_steps_per_run=max_steps_per_run,
         max_coder_runs=max(2, max_work_attempts),
     )
 

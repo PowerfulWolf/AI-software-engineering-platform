@@ -5,6 +5,11 @@ from typing import Annotated, Literal, Self, get_args
 from pydantic import Field, StrictInt, model_validator
 
 from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.execution_window import (
+    DEFAULT_CODER_STEPS_PER_RUN,
+    PlanExecutionWindow,
+    bounded_coder_window,
+)
 from ai_software_engineer.domain.identity import RunId
 from ai_software_engineer.domain.model import DomainModel
 
@@ -93,6 +98,17 @@ class ExecutionRetryPolicy(DomainModel):
     coder: StageRetryPolicy = StageRetryPolicy()
     qa: TransientRetryPolicy = TransientRetryPolicy()
     reviewer: TransientRetryPolicy = TransientRetryPolicy()
+    # Approved plan steps one Coder invocation may take on in a new plan window.
+    # Narrower than the 1..100 counts: it must fit PlanExecutionWindow (1..16).
+    coder_max_steps_per_run: Annotated[StrictInt, Field(ge=1, le=16)] = DEFAULT_CODER_STEPS_PER_RUN
+
+    def coder_execution_window(self, seconds: int) -> PlanExecutionWindow:
+        """Trusted production composition of a new plan's bounded Coder window."""
+        return bounded_coder_window(
+            seconds,
+            max_work_attempts=self.delivery_policy().max_work_attempts,
+            max_steps_per_run=self.coder_max_steps_per_run,
+        )
 
     def delivery_policy(self) -> DeliveryRetryPolicy:
         return DeliveryRetryPolicy(

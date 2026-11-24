@@ -228,6 +228,36 @@ def test_execution_retry_schema_accepts_canonical_config() -> None:
     _assert_valid(ProductionConfig.default().to_wire(), "production-config.schema.json")
 
 
+def test_production_config_schema_declares_coder_max_steps_per_run() -> None:
+    from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy
+
+    definitions = cast(
+        dict[str, dict[str, object]], SCHEMAS["production-config.schema.json"]["$defs"]
+    )
+    policy = definitions["ExecutionRetryPolicy"]
+    properties = cast(dict[str, object], policy["properties"])
+    assert policy["additionalProperties"] is False
+    assert properties["coder_max_steps_per_run"] == {
+        "default": 3,
+        "maximum": 16,
+        "minimum": 1,
+        "title": "Coder Max Steps Per Run",
+        "type": "integer",
+    }
+    pydantic_schema = ExecutionRetryPolicy.model_json_schema()["properties"]
+    assert properties["coder_max_steps_per_run"] == pydantic_schema["coder_max_steps_per_run"]
+    _assert_valid(ProductionConfig.default().to_wire(), "production-config.schema.json")
+    for accepted in (1, 16):
+        payload = ProductionConfig.default().to_wire()
+        payload["execution_retry_policy"] = {"coder_max_steps_per_run": accepted}
+        _assert_valid(payload, "production-config.schema.json")
+    rejected: tuple[JsonValue, ...] = (0, 17, True, "3", 3.5)
+    for value in rejected:
+        payload = ProductionConfig.default().to_wire()
+        payload["execution_retry_policy"] = {"coder_max_steps_per_run": value}
+        _assert_invalid(payload, "production-config.schema.json")
+
+
 def test_maximum_execution_policy_task_and_nested_schemas() -> None:
     from ai_software_engineer.domain import Task
     from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy, TransientRetryPolicy

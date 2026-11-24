@@ -119,6 +119,13 @@
           "default": {
             "max_transient_failures": 5
           }
+        },
+        "coder_max_steps_per_run": {
+          "default": 3,
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Coder Max Steps Per Run",
+          "type": "integer"
         }
       },
       "title": "ExecutionRetryPolicy",

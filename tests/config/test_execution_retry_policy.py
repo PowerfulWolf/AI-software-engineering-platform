@@ -49,3 +49,44 @@ def test_conflicting_legacy_and_canonical_policy_is_rejected() -> None:
 def test_no_operator_policy_can_retry_valid_verdicts(role: str) -> None:
     with pytest.raises(ValidationError):
         ExecutionRetryPolicy.model_validate({role: {"max_attempts": 8}})
+
+
+def test_coder_max_steps_per_run_defaults_to_3() -> None:
+    assert ExecutionRetryPolicy().coder_max_steps_per_run == 3
+    config = ProductionConfig.default()
+    assert config.execution_retry_policy.coder_max_steps_per_run == 3
+
+
+def test_legacy_config_without_field_uses_default() -> None:
+    payload = ProductionConfig.default().to_wire()
+    policy = payload["execution_retry_policy"]
+    assert isinstance(policy, dict)
+    policy.pop("coder_max_steps_per_run", None)
+    config = ProductionConfig.model_validate(payload)
+    assert config.execution_retry_policy.coder_max_steps_per_run == 3
+
+
+@pytest.mark.parametrize("value", [1, 16])
+def test_coder_max_steps_per_run_accepts_bounds(value: int) -> None:
+    policy = ExecutionRetryPolicy.model_validate({"coder_max_steps_per_run": value})
+    assert policy.coder_max_steps_per_run == value
+    payload = ProductionConfig.default().to_wire()
+    payload["execution_retry_policy"] = {"coder_max_steps_per_run": value}
+    config = ProductionConfig.model_validate(payload)
+    assert config.execution_retry_policy.coder_max_steps_per_run == value
+    assert config.to_wire()["execution_retry_policy"]["coder_max_steps_per_run"] == value
+
+
+@pytest.mark.parametrize("value", [0, 17, -1, 3.0, "3", True])
+def test_coder_max_steps_per_run_rejects_invalid(value: object) -> None:
+    with pytest.raises(ValidationError) as direct:
+        ExecutionRetryPolicy.model_validate({"coder_max_steps_per_run": value})
+    assert any("coder_max_steps_per_run" in error["loc"] for error in direct.value.errors())
+    payload = ProductionConfig.default().to_wire()
+    payload["execution_retry_policy"] = {"coder_max_steps_per_run": value}
+    with pytest.raises(ValidationError) as nested:
+        ProductionConfig.model_validate(payload)
+    assert any(
+        "execution_retry_policy" in error["loc"] and "coder_max_steps_per_run" in error["loc"]
+        for error in nested.value.errors()
+    )

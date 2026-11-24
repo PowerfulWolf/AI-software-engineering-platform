@@ -58,6 +58,11 @@ Reviewer 中断且终态事件或精确的独立验证入场/制品证明已封�
 [执行与重试策略](../../.trellis/spec/core/execution-retry-policy.md)与
 [Design 恢复契约](../../.trellis/spec/core/design-retry-budget.md)。
 
+`execution_retry_policy.coder_max_steps_per_run` 是严格整数 1–16（默认 3，与
+`PlanExecutionWindow.max_steps_per_run` 一致，而非其它计数的 1–100），表示单次 Coder 最多承接的
+批准步骤数。生产组装只通过 `ExecutionRetryPolicy.coder_execution_window(seconds)` 写入新计划窗口；
+已冻结的窗口、Task 与 journal 不重算，`schemas/production-config.schema.json` 与 Pydantic 同步约束。
+
 `execution_retry_policy.execution_time.{manager,product,designer,planner}` 配置初始秒数、
 最长秒数与本地触顶次数；时间范围 1–86400 秒，次数 1–100，最长不能小于初始。
 `execution_retry_policy.manager` 分别限制每个精确输入的方案尝试、同一需求/阶段的服务故障和

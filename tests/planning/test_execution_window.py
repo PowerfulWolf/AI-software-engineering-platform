@@ -370,3 +370,79 @@ def test_production_composition_uses_the_bounded_default() -> None:
     assert bounded_coder_window(1800, max_work_attempts=1).step_capacity == (
         DEFAULT_CODER_STEPS_PER_RUN
     )
+
+
+def test_bounded_coder_window_uses_configured_steps() -> None:
+    from ai_software_engineer.domain.execution_window import bounded_coder_window
+
+    window = bounded_coder_window(1800, max_work_attempts=3, max_steps_per_run=2)
+    assert window.max_steps_per_run == 2
+    assert window.max_coder_runs == 3
+    assert window.step_capacity == 4
+
+
+def test_production_plan_window_records_configured_steps() -> None:
+    from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy
+
+    policy = ExecutionRetryPolicy(coder_max_steps_per_run=2)
+    window = policy.coder_execution_window(1800)
+    assert window.max_steps_per_run == 2
+    assert window.max_coder_runs == max(2, policy.delivery_policy().max_work_attempts)
+    assert window.step_capacity == 2 * (window.max_coder_runs - window.reserve_rework_attempts)
+    assert PlanExecutionWindow.model_validate(window.to_wire()) == window
+
+
+def test_default_window_behavior_unchanged() -> None:
+    from ai_software_engineer.domain.execution_window import (
+        DEFAULT_CODER_STEPS_PER_RUN,
+        bounded_coder_window,
+    )
+    from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy
+
+    assert DEFAULT_CODER_STEPS_PER_RUN == 3
+    legacy_call = bounded_coder_window(1800, max_work_attempts=3)
+    from_policy = ExecutionRetryPolicy().coder_execution_window(1800)
+    assert legacy_call == from_policy
+    assert from_policy.max_steps_per_run == 3
+    assert (
+        from_policy.to_wire()
+        == PlanExecutionWindow.for_seconds(1800, max_steps_per_run=3, max_coder_runs=3).to_wire()
+    )
+
+
+def test_plan_capacity_error_reflects_configured_steps() -> None:
+    from ai_software_engineer.domain.execution_window import PlanExceedsWorkCapacity
+    from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy
+
+    window = ExecutionRetryPolicy(coder_max_steps_per_run=2).coder_execution_window(1800)
+    assert window.max_coder_runs is not None
+    runs = window.max_coder_runs - window.reserve_rework_attempts
+    capacity = 2 * runs
+    assert window.step_capacity == capacity
+    window.validate_step_count(capacity)
+    with pytest.raises(PlanExceedsWorkCapacity) as raised:
+        window.validate_step_count(capacity + 1)
+    assert "每次 Coder 最多 2 步" in str(raised.value)
+    assert raised.value.capacity == capacity
+    assert raised.value.step_count == capacity + 1
+
+
+def test_frozen_window_not_recomputed() -> None:
+    from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy
+
+    frozen = PlanExecutionWindow.for_seconds(1800, max_steps_per_run=3, max_coder_runs=3)
+    plan = make_plan_artifact()
+    plan = plan.model_copy(
+        update={"content": plan.content.model_copy(update={"execution_window": frozen})}
+    )
+    wire = plan.to_wire()
+    digest = artifact_digest(plan)
+    # A later operator change must not alter an already frozen plan window.
+    changed = ExecutionRetryPolicy(coder_max_steps_per_run=2).coder_execution_window(1800)
+    assert changed != frozen
+    reloaded = PlanArtifact.model_validate_json(plan.model_dump_json())
+    assert reloaded.to_wire() == wire
+    assert artifact_digest(reloaded) == digest
+    assert reloaded.content.execution_window == frozen
+    assert reloaded.content.execution_window is not None
+    assert reloaded.content.execution_window.max_steps_per_run == 3

@@ -179,7 +179,8 @@ Team、Project 和 Repository sidecar 目录只在显式的 Host 初始化、Pro
     "planner": {"max_attempts": 3, "max_transient_failures": 5},
     "coder": {"max_attempts": 3, "max_transient_failures": 5},
     "qa": {"max_transient_failures": 5},
-    "reviewer": {"max_transient_failures": 5}
+    "reviewer": {"max_transient_failures": 5},
+    "coder_max_steps_per_run": 3
   }
 }
 ```
@@ -188,6 +189,13 @@ Team、Project 和 Repository sidecar 目录只在显式的 Host 初始化、Pro
 包含产物修正，Coder 包含实现、未完成续跑与 QA/Review 退回修复。临时故障上限指可记录的失败数，
 达到上限便停止（配置 1 表示首次临时失败后停止）。只有 typed retryable 的超时、504/服务不可用、
 限流与额度故障计入独立额度，包括角色调用前的知识咨询；未知中断不退款。
+
+`coder_max_steps_per_run` 是单次 Coder 执行最多承接的已批准计划步骤数，取值为严格整数 1–16
+（与其它字段的 1–100 不同，和 `PlanExecutionWindow.max_steps_per_run` 一致），默认 3。0、17、负数、
+布尔值、字符串和浮点数（含 `3.0`）会在写入配置文件、修改 Settings 或重建 Host 之前被拒绝，错误指向该字段。
+它只影响保存并应用配置重启后新建的计划执行窗口，窗口容量为该值 ×（Coder 运行次数 − 预留返工次数）；
+已冻结在 Task、Plan、checkpoint 或 journal 中的窗口及其哈希不重算，剩余运行次数不足时最后一次运行
+聚合全部剩余步骤的例外保持不变。设置页暂无独立输入框，保存时原样保留配置中的该值。
 
 QA/Reviewer 的有效否定结论不在本角色重跑，而是交给 Coder；候选复核仍要求新计划及人工批准。
 Manager 当前为确定性调度，没有模型额度。联合上游调用失败会结束当前操作，操作者可检查原因后

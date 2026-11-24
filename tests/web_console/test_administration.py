@@ -7,6 +7,7 @@ import stat
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from ai_software_engineer.config import LocalRuntimeEnvironmentStore, ProductionConfig
 from ai_software_engineer.spec_documents import CreateSpecDocument
@@ -639,3 +640,24 @@ def test_knowledge_tick_isolates_team_and_project_failures(
     administration.tick_knowledge_indexes()
     jobs = administration.knowledge_index("project_healthy").jobs
     assert next(job for job in jobs if job.job_id == healthy.job_id).status == "READY"
+
+
+@pytest.mark.parametrize("value", [0, 17])
+def test_settings_rejects_invalid_coder_max_steps_without_mutation(
+    tmp_path: Path, value: int
+) -> None:
+    administration = _administration(tmp_path)
+    before = administration.config_path.read_bytes()
+    payload = administration.runtime_config.to_wire()
+    policy = payload["execution_retry_policy"]
+    assert isinstance(policy, dict)
+    policy["coder_max_steps_per_run"] = value
+
+    with pytest.raises(ValidationError) as caught:
+        administration.update_settings(UpdateSettingsRequest.model_validate({"config": payload}))
+
+    assert "coder_max_steps_per_run" in str(caught.value)
+    assert any("coder_max_steps_per_run" in error["loc"] for error in caught.value.errors())
+    assert administration.config_path.read_bytes() == before
+    assert administration.settings().restart_required is False
+    assert administration.settings().config.execution_retry_policy.coder_max_steps_per_run == 3

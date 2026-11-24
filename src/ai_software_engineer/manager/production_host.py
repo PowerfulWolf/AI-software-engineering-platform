@@ -36,7 +36,6 @@ from ai_software_engineer.domain.execution_baseline import (
     BaselineContinuationMode,
     ExecutionBaselineBinding,
 )
-from ai_software_engineer.domain.execution_window import bounded_coder_window
 from ai_software_engineer.domain.identity import ProjectId
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import GitWorktreeManager
@@ -1246,9 +1245,8 @@ class TeamHost:
                 project, self._work_queue, self._config.require_mysql_dsn(self._environment)
             ),
             execution_retry_policy=self._config.execution_retry_policy,
-            execution_window=bounded_coder_window(
-                _delivery_timeout_seconds(AgentRole.CODER),
-                max_work_attempts=self._config.execution_retry_policy.delivery_policy().max_work_attempts,
+            execution_window=self._config.execution_retry_policy.coder_execution_window(
+                _delivery_timeout_seconds(AgentRole.CODER)
             ),
             coordinator=ProductionStageCoordinator(
                 self._config,
