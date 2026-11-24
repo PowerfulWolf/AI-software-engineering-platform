@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import model_validator
 
+from ai_software_engineer.agents.context_compaction import compact_model_payload
 from ai_software_engineer.agents.execution import current_execution_guard, execution_scope
 from ai_software_engineer.agents.models import AgentErrorCode
 from ai_software_engineer.agents.structured import StructuredModelError
@@ -453,28 +455,38 @@ def _require_requests(
         else ""
     )
     snapshot = records.get("snapshots", binding.snapshot_sha256, KnowledgeSnapshot)
-    intent_request_sha = structured_request_digest(
-        instructions=KNOWLEDGE_INTENT_INSTRUCTIONS + scope_instructions,
-        input_payload={
-            "binding": binding.to_wire(),
-            "task": payload,
-            "available_documents": [
-                {"id": doc.document_id, "scope": doc.scope, "title": doc.title}
-                for doc in snapshot.documents
-                if not doc.roles or binding.role in doc.roles
-            ],
-        },
-        output_schema=KnowledgeIntent.model_json_schema(),
-        timeout_seconds=intent_outcome.intent.timeout_seconds,
-    )
+
+    # Model calls hash the payload they actually send. Since the prompt-only reading
+    # projection (agents/context_compaction.py) that is the compacted form; calls
+    # recorded before it hashed the original. Accept exactly those two derivations.
+    def _forms(input_payload: dict[str, object]) -> tuple[Mapping[str, object], ...]:
+        compacted = compact_model_payload(input_payload)
+        assert isinstance(compacted, Mapping)
+        return (input_payload, compacted)
+
+    intent_request_shas = {
+        structured_request_digest(
+            instructions=KNOWLEDGE_INTENT_INSTRUCTIONS + scope_instructions,
+            input_payload=form,
+            output_schema=KnowledgeIntent.model_json_schema(),
+            timeout_seconds=intent_outcome.intent.timeout_seconds,
+        )
+        for form in _forms(
+            {
+                "binding": binding.to_wire(),
+                "task": payload,
+                "available_documents": [
+                    {"id": doc.document_id, "scope": doc.scope, "title": doc.title}
+                    for doc in snapshot.documents
+                    if not doc.roles or binding.role in doc.roles
+                ],
+            }
+        )
+    }
     assessment_request_shas = {
         structured_request_digest(
             instructions=KNOWLEDGE_ASSESSMENT_INSTRUCTIONS + scope_instructions,
-            input_payload={
-                "binding": binding.to_wire(),
-                "task": payload,
-                "knowledge_evidence": [item.to_wire() for item in evidence],
-            },
+            input_payload=form,
             output_schema=schema,
             timeout_seconds=assessment_outcome.intent.timeout_seconds,
         )
@@ -482,9 +494,16 @@ def _require_requests(
             KnowledgeAssessment.model_json_schema(),
             assessment_output_schema(manifest.citations),
         )
+        for form in _forms(
+            {
+                "binding": binding.to_wire(),
+                "task": payload,
+                "knowledge_evidence": [item.to_wire() for item in evidence],
+            }
+        )
     }
     if (
-        intent_request_sha != intent_outcome.intent.request_sha256
+        intent_outcome.intent.request_sha256 not in intent_request_shas
         or assessment_outcome.intent.request_sha256 not in assessment_request_shas
     ):
         raise KnowledgeError("ASSESSMENT_REJECTION_REQUEST_CHANGED")

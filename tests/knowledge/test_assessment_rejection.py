@@ -1136,3 +1136,22 @@ def test_both_exact_request_formats_preserve_rejected_output_and_historical_read
         == case.observation
     )
     assert _bytes(case.root) == original
+
+
+def test_rejection_recovery_accepts_requests_sent_through_the_reading_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: calls hash the compacted payload they send; recovery must agree."""
+    from ai_software_engineer.agents import context_compaction
+    from ai_software_engineer.knowledge import assessment_rejection
+
+    def projection(payload: object) -> object:
+        # Stand-in for a real compaction that changes the wire payload.
+        if isinstance(payload, dict) and "task" in payload:
+            return {**payload, "reading_projection": "compacted"}
+        return payload
+
+    monkeypatch.setattr(context_compaction, "compact_model_payload", projection)
+    monkeypatch.setattr(assessment_rejection, "compact_model_payload", projection)
+    case = _rejection(tmp_path)
+    assert derive_rejected_assessment(case.records.root, case.bound) == case.observation
