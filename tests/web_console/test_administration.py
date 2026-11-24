@@ -637,7 +637,10 @@ def test_knowledge_tick_isolates_team_and_project_failures(
         return tick(self, limit=limit)
 
     monkeypatch.setattr(KnowledgeIndexer, "tick", isolated_tick)
-    administration.tick_knowledge_indexes()
+    # A failing scope must not starve the others, yet the tick still reports the
+    # failure so a service drain never claims every index record was saved.
+    with pytest.raises(AdministrationError, match="知识索引记录尚未可靠保存"):
+        administration.tick_knowledge_indexes()
     jobs = administration.knowledge_index("project_healthy").jobs
     assert next(job for job in jobs if job.job_id == healthy.job_id).status == "READY"
 
