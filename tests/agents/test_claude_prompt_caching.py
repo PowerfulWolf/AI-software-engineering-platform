@@ -205,3 +205,80 @@ def test_stringified_array_is_decoded_only_where_the_schema_demands_a_container(
         "note": '["kept as text"]',
     }
     assert "YOUR PREVIOUS REPLY WAS REJECTED" not in str(seen["input"])
+
+
+def test_each_tool_round_is_its_own_stable_content_block() -> None:
+    from ai_software_engineer.agents.claude_cli import render_responses_turn_blocks
+
+    static_two, two, _ = render_responses_turn_blocks(_request(2))
+    static_three, three, _ = render_responses_turn_blocks(_request(3))
+    # Earlier rounds are byte-identical blocks, so the next call re-reads them from cache.
+    assert static_two == static_three
+    assert three[: len(two)] == two
+    assert len(three) == 3
+    assert all(block.count("TOOL RESULT") == 1 for block in three)
+    # No fixed trailing cue after the last round: it would break the cached prefix.
+    assert "Now reply" not in three[-1]
+    assert "next JSON object" in static_three
+
+
+def test_parallel_tool_calls_of_one_round_share_a_block() -> None:
+    from ai_software_engineer.agents.claude_cli import render_responses_turn_blocks
+
+    request = _request(0)
+    items = request["input"]
+    assert isinstance(items, list)
+    items += [
+        {"type": "function_call", "call_id": "a", "name": "read", "arguments": "{}"},
+        {"type": "function_call", "call_id": "b", "name": "read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "a", "output": "x"},
+        {"type": "function_call_output", "call_id": "b", "output": "y"},
+        {"role": "user", "content": "correction"},
+    ]
+    _, blocks, _ = render_responses_turn_blocks(request)
+    assert len(blocks) == 2
+    assert blocks[0].count("TOOL CALL") == 2 and blocks[0].count("TOOL RESULT") == 2
+    assert blocks[1] == "USER:\ncorrection"
+
+
+def test_transport_streams_round_blocks_and_reads_the_result_event(
+    monkeypatch: object,
+) -> None:
+    import json
+    import subprocess
+
+    import pytest
+
+    from ai_software_engineer import owned_processes
+    from ai_software_engineer.agents.claude_cli import ClaudeCliResponsesTransport
+
+    assert isinstance(monkeypatch, pytest.MonkeyPatch)
+    seen: dict[str, object] = {}
+    reply = {"action": "final", "tool_calls": [], "final_json": "{}"}
+    stdout = "\n".join(
+        (
+            json.dumps({"type": "system", "subtype": "init"}),
+            json.dumps({"type": "assistant", "message": {}}),
+            json.dumps({"type": "result", "is_error": False, "structured_output": reply}),
+        )
+    )
+
+    def fake_run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen["argv"], seen["input"] = argv, kwargs["input"]
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+    monkeypatch.setattr(owned_processes, "run_owned_subprocess", fake_run)
+    response = ClaudeCliResponsesTransport(model="claude-opus-5-5").post(
+        "u", {}, json.dumps(_request(2)).encode(), 600
+    )
+    assert response.status_code == 200
+    argv = seen["argv"]
+    assert isinstance(argv, tuple)
+    assert argv[argv.index("--input-format") + 1] == "stream-json"
+    assert argv[argv.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in argv
+    message = json.loads(str(seen["input"]))
+    assert message["type"] == "user"
+    content = message["message"]["content"]
+    assert [part["type"] for part in content] == ["text", "text"]
+    assert "TOOL RESULT [c1]" in content[1]["text"]
