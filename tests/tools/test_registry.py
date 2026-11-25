@@ -556,3 +556,40 @@ def test_real_command_uncertain_stop_is_not_converted_to_tool_rejection(
             )
         )
     assert observed
+
+
+def test_read_file_returns_only_the_requested_line_range(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/app.py").write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+    registry = PolicyBoundToolRegistry(
+        tmp_path,
+        _agent(AgentRole.CODER),
+        run_id="run_tool_registry_001",
+        command_executor=FakeCommandExecutor(),
+    )
+
+    def read(start: int, end: int) -> ReadFileResult:
+        result = registry.execute(_read().model_copy(update={"start_line": start, "end_line": end}))
+        assert isinstance(result, ReadFileResult)
+        return result
+
+    middle = read(2, 3)
+    assert middle.content == "two\nthree\n"
+    assert middle.content_sha256 == hashlib.sha256(b"two\nthree\n").hexdigest()
+    assert not middle.truncated
+    assert read(3, 0).content == "three\nfour\n"
+    assert read(0, 1).content == "one\n"
+    assert read(0, 0).content == "one\ntwo\nthree\nfour\n"
+    assert read(9, 12).content == ""
+
+
+def test_read_file_rejects_a_reversed_line_range() -> None:
+    with pytest.raises(ValueError, match="end_line must not precede start_line"):
+        ReadFileRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.CODER,
+            operation_id="tool.read",
+            path="src/app.py",
+            start_line=5,
+            end_line=2,
+        )

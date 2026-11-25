@@ -9,7 +9,7 @@ decision instead of quietly expanding an Agent prompt.
 
 from typing import Annotated, Final, Literal
 
-from pydantic import Field, StrictBool, StrictInt, StringConstraints, TypeAdapter
+from pydantic import Field, StrictBool, StrictInt, StringConstraints, TypeAdapter, model_validator
 
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.identity import OperationId, RunId
@@ -35,6 +35,15 @@ class ReadFileRequest(ToolRequestBase):
     tool: Literal["read_file"] = "read_file"
     path: ToolPath
     max_bytes: StrictInt = Field(default=1_000_000, ge=1, le=10_000_000)
+    # 1-based inclusive line range; 0 means "from the first line" / "to the last line".
+    start_line: StrictInt = Field(default=0, ge=0, le=10_000_000)
+    end_line: StrictInt = Field(default=0, ge=0, le=10_000_000)
+
+    @model_validator(mode="after")
+    def ordered_range(self) -> "ReadFileRequest":
+        if self.start_line and self.end_line and self.end_line < self.start_line:
+            raise ValueError("end_line must not precede start_line")
+        return self
 
 
 class WriteFileRequest(ToolRequestBase):

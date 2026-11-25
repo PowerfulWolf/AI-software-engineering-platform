@@ -119,8 +119,14 @@ class PolicyBoundToolRegistry:
         try:
             path = self._policy.authorize_read(request.path)
             absolute = self._absolute(path)
+            ranged = bool(request.start_line or request.end_line)
+            limit = self._max_read_bytes if ranged else min(request.max_bytes, self._max_read_bytes)
             with absolute.open("rb") as stream:
-                payload = stream.read(min(request.max_bytes, self._max_read_bytes) + 1)
+                payload = stream.read(limit + 1)
+            file_truncated = False
+            if ranged:
+                file_truncated = len(payload) > limit
+                payload = _line_range(payload[:limit], request.start_line, request.end_line)
         except WorkspacePolicyError as error:
             return self._rejected(request, "PATH_DENIED", str(error))
         except FileNotFoundError:
@@ -129,7 +135,7 @@ class PolicyBoundToolRegistry:
             return self._rejected(request, "NOT_A_FILE", "requested path is a directory")
         except OSError:
             return self._rejected(request, "FILE_READ_FAILED", "requested file could not be read")
-        truncated = len(payload) > min(request.max_bytes, self._max_read_bytes)
+        truncated = file_truncated or len(payload) > min(request.max_bytes, self._max_read_bytes)
         if truncated:
             payload = payload[: min(request.max_bytes, self._max_read_bytes)]
         try:
@@ -354,3 +360,11 @@ __all__ = [
     "ToolProtocolError",
     "ToolRequestIdentityMismatch",
 ]
+
+
+def _line_range(payload: bytes, start_line: int, end_line: int) -> bytes:
+    """Select a 1-based inclusive line range; 0 leaves that side of the range open."""
+    lines = payload.splitlines(keepends=True)
+    first = max(start_line, 1) - 1
+    last = end_line if end_line else len(lines)
+    return b"".join(lines[first:last])

@@ -995,13 +995,20 @@ def _tool_definitions(role: AgentRole) -> list[WirePayload]:
         {
             "type": "function",
             "name": "read_file",
-            "description": "Read one UTF-8 repository-relative file.",
+            "description": (
+                "Read one UTF-8 repository-relative file, optionally only a 1-based "
+                "inclusive line range. Use start_line=0 and end_line=0 for the whole "
+                "file; locate lines first with ['git', 'grep', '-n', ...] and then read "
+                "just that range instead of the whole file."
+            ),
             "strict": True,
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
                     "max_bytes": {"type": "integer", "minimum": 1, "maximum": 1000000},
+                    "start_line": {"type": "integer", "minimum": 0},
+                    "end_line": {"type": "integer", "minimum": 0},
                 },
                 "required": ["path"],
                 "additionalProperties": False,
