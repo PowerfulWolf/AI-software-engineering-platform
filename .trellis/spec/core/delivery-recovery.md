@@ -361,7 +361,10 @@ Task, Artifact, event or queue history.
 ## Bounded Coder capture across several tracked files (2026-10-26)
 
 `GitWorktreeManager.capture_changes()` and `capture_legacy_changes()` both allow
-the **sum of changed current file contents** to reach 2,000,000 bytes. Recovery
+the **sum of changed current file contents** to reach 8,000,000 bytes (raised from
+2,000,000 on 2026-11-25 with human approval: this repository has several 0.4-0.7 MB
+tracked files, so an ordinary 23-file change of 3.29 MB was rejected while its patch
+was only about 0.2 MB). Recovery
 reuses a historical capture in `seed_changes()`, which calls ordinary
 `verify_capture()` three times and observes the seeded target with ordinary
 `capture_changes()`; differing aggregate bounds would reject a draft only after
@@ -376,7 +379,8 @@ approvals.
 | Observed source | Normal capture | Historical capture |
 | --- | --- | --- |
 | Three changed regular tracked files totaling 1.6 MB; bounded patch | Capture, verify and seed on a clean successor | Capture twice and reverify exact bytes |
-| Changed current contents total 2,000,001 bytes | Reject | Reject before returning a capture |
+| Four changed regular tracked files totaling 3.2 MB; bounded patch | Capture, verify and seed on a clean successor | Capture twice and reverify exact bytes |
+| Changed current contents total 8,000,001 bytes | Reject | Reject before returning a capture |
 | Any one file or patch exceeds 1 MB; binary, secret or path violation | Reject | Reject |
 
 `tests/git/test_capture.py` runs these cases with real Git worktrees. Existing

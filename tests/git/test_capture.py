@@ -215,13 +215,18 @@ def test_capture_does_not_double_count_the_committed_base_blob(tmp_path: Path) -
     ("sizes", "allowed"),
     [
         ((600_000, 600_000, 400_000), True),
-        ((800_000, 800_000, 400_001), False),
+        ((800_000, 800_000, 800_000, 800_000), True),
+        ((1_000_000,) * 8 + (1,), False),
     ],
 )
 def test_capture_and_seed_share_bounded_aggregate_content_limit(
-    tmp_path: Path, sizes: tuple[int, int, int], allowed: bool
+    tmp_path: Path, sizes: tuple[int, ...], allowed: bool
 ) -> None:
-    assert sum(sizes) == (1_600_000 if allowed else MAX_CAPTURE_CONTENT_BYTES + 1)
+    assert (
+        sum(sizes) <= MAX_CAPTURE_CONTENT_BYTES
+        if allowed
+        else (sum(sizes) == MAX_CAPTURE_CONTENT_BYTES + 1)
+    )
     repo = tmp_path / "large-legacy-repo"
     repo.mkdir()
     git(repo, "init", "--initial-branch=main")
@@ -263,7 +268,7 @@ def test_capture_and_seed_share_bounded_aggregate_content_limit(
     manager.verify_capture(ordinary, permissions)
     historical = manager.capture_legacy_changes(ref, permissions)
     assert ordinary == historical
-    assert len(historical.file_sha256s) == 3
+    assert len(historical.file_sha256s) == len(sizes)
     assert len(historical.patch) < MAX_CAPTURE_BYTES
     manager.verify_legacy_capture(historical, permissions)
     target = manager.create(
