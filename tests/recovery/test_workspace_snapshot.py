@@ -1475,3 +1475,102 @@ def test_actual_run_source_and_approved_baseline_base_can_be_distinct(native: Fi
     assert snapshot.source_revision == native.request.source_revision
     assert snapshot.effective_capture_base == execution_base
     assert snapshot.source_revision != snapshot.effective_capture_base
+
+
+def _completed_provider_failure(
+    native: Fixture,
+    *,
+    route_kind: str = "claude_cli",
+    code: AgentErrorCode = AgentErrorCode.QUOTA_EXHAUSTED,
+    transient: bool = True,
+    inherited: bool = True,
+) -> AuditFixture:
+    audit = _audit(native, inherited=inherited, environment=False)
+    result = audit.facts.invocation_outcome.result.model_copy(
+        update={
+            "error": AgentFailure(
+                code=code,
+                message="Responses provider returned HTTP 429; Claude 订阅用量额度已用完",
+                transient=transient,
+            )
+        }
+    )
+    outcome = audit.facts.invocation_outcome.model_copy(update={"result": result})
+    outcome = outcome.model_copy(
+        update={
+            "outcome_sha256": digest(outcome.model_dump(mode="json", exclude={"outcome_sha256"}))
+        }
+    )
+    route = ModelRouteAttempt.create(
+        request=native.request,
+        route_index=1,
+        provider="claude",
+        model="claude-opus-5-5",
+        route_kind=route_kind,
+        started_at=NOW,
+        completed_at=NOW + timedelta(seconds=1),
+        result=result,
+        fallback=False,
+    )
+    return replace(
+        audit, facts=replace(audit.facts, stop=None, invocation_outcome=outcome, routes=(route,))
+    )
+
+
+@pytest.mark.parametrize("route_kind", ["claude_cli", "responses"])
+@pytest.mark.parametrize(
+    "code",
+    [
+        AgentErrorCode.QUOTA_EXHAUSTED,
+        AgentErrorCode.RATE_LIMITED,
+        AgentErrorCode.PROVIDER_UNAVAILABLE,
+    ],
+)
+def test_untouched_provider_failure_preserves_prior_legal_draft(
+    native: Fixture, route_kind: str, code: AgentErrorCode
+) -> None:
+    audit = _completed_provider_failure(native, route_kind=route_kind, code=code)
+    assert audit.facts.start.inventory_before == audit.observation.inventory_after
+    assert audit.capture.files and audit.capture.patch
+    snapshot = audit.validate()
+    assert snapshot.schema_version == "v5"
+    assert snapshot.completion_kind == "responses_provider_failure"
+    assert snapshot.capture_stop_sha256 is None
+    assert snapshot.synchronous_completion_sha256 == audit.facts.routes[-1].attempt_sha256
+    assert not snapshot.excluded_paths
+
+
+def test_provider_failure_rejects_post_start_mutation(native: Fixture) -> None:
+    audit = _completed_provider_failure(native)
+    (native.worktree.path / "src/app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    with pytest.raises(RecoveryRejected):
+        replace(
+            audit,
+            observation=replace(
+                audit.observation,
+                inventory_after=capture_mutation_inventory(native.worktree.path),
+            ),
+        ).validate()
+
+
+@pytest.mark.parametrize(
+    ("route_kind", "code", "transient"),
+    [
+        ("claude_cli", AgentErrorCode.QUOTA_EXHAUSTED, False),
+        ("claude_cli", AgentErrorCode.PROVIDER_ERROR, True),
+        ("codex_cli", AgentErrorCode.QUOTA_EXHAUSTED, True),
+    ],
+)
+def test_provider_failure_requires_transient_refusal_on_a_synchronous_route(
+    native: Fixture, route_kind: str, code: AgentErrorCode, transient: bool
+) -> None:
+    audit = _completed_provider_failure(
+        native, route_kind=route_kind, code=code, transient=transient
+    )
+    with pytest.raises(RecoveryRejected):
+        audit.validate()
+
+
+def test_provider_failure_without_a_prior_draft_is_not_recoverable_here(native: Fixture) -> None:
+    with pytest.raises(RecoveryRejected):
+        _completed_provider_failure(native, inherited=False).validate()

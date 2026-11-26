@@ -723,6 +723,7 @@ class RecoveryPlan(DomainModel):
                                         "enum": [
                                             "responses_workspace_policy_failure",
                                             "responses_write_path_refusal",
+                                            "responses_provider_failure",
                                         ]
                                     }
                                 },
@@ -860,11 +861,16 @@ class RecoveryPlan(DomainModel):
         if snapshot.completion_kind in {
             "responses_workspace_policy_failure",
             "responses_write_path_refusal",
+            "responses_provider_failure",
         } and (not self.capture.patch or not self.capture.files):
             raise ValueError("completed Responses workspace failure requires its lawful patch")
         if (
             snapshot.completion_kind
-            in {"responses_workspace_policy_failure", "responses_write_path_refusal"}
+            in {
+                "responses_workspace_policy_failure",
+                "responses_write_path_refusal",
+                "responses_provider_failure",
+            }
             or (
                 snapshot.completion_kind == "responses_tool_refusal"
                 and self.inherited_reapply_inputs

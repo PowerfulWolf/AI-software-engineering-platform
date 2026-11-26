@@ -971,7 +971,8 @@
                   "completion_kind": {
                     "enum": [
                       "responses_workspace_policy_failure",
-                      "responses_write_path_refusal"
+                      "responses_write_path_refusal",
+                      "responses_provider_failure"
                     ]
                   }
                 },
@@ -1912,6 +1913,37 @@
           }
         },
         {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "v5"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "completion_kind": {
+                "const": "responses_provider_failure"
+              },
+              "capture_stop_sha256": {
+                "type": "null"
+              },
+              "excluded_paths": {
+                "maxItems": 0,
+                "type": "array"
+              }
+            },
+            "required": [
+              "schema_version",
+              "completion_kind",
+              "synchronous_completion_sha256"
+            ]
+          }
+        },
+        {
           "else": {
             "properties": {
               "completion_kind": {
@@ -1931,7 +1963,8 @@
                 "enum": [
                   "v2",
                   "v3",
-                  "v4"
+                  "v4",
+                  "v5"
                 ]
               }
             },
@@ -1955,7 +1988,8 @@
             "v1",
             "v2",
             "v3",
-            "v4"
+            "v4",
+            "v5"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -1966,7 +2000,8 @@
             "native_capture_stop",
             "responses_tool_refusal",
             "responses_workspace_policy_failure",
-            "responses_write_path_refusal"
+            "responses_write_path_refusal",
+            "responses_provider_failure"
           ],
           "title": "Completion Kind",
           "type": "string"

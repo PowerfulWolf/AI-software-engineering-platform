@@ -154,7 +154,25 @@ class RecoveryWorkspaceSnapshot(DomainModel):
                 {
                     "if": {
                         "required": ["schema_version"],
-                        "properties": {"schema_version": {"enum": ["v2", "v3", "v4"]}},
+                        "properties": {"schema_version": {"const": "v5"}},
+                    },
+                    "then": {
+                        "required": [
+                            "schema_version",
+                            "completion_kind",
+                            "synchronous_completion_sha256",
+                        ],
+                        "properties": {
+                            "completion_kind": {"const": "responses_provider_failure"},
+                            "capture_stop_sha256": {"type": "null"},
+                            "excluded_paths": {"type": "array", "maxItems": 0},
+                        },
+                    },
+                },
+                {
+                    "if": {
+                        "required": ["schema_version"],
+                        "properties": {"schema_version": {"enum": ["v2", "v3", "v4", "v5"]}},
                     },
                     "else": {
                         "required": ["capture_stop_sha256"],
@@ -169,12 +187,13 @@ class RecoveryWorkspaceSnapshot(DomainModel):
     )
 
     kind: Literal["recovery_workspace_snapshot"] = "recovery_workspace_snapshot"
-    schema_version: Literal["v1", "v2", "v3", "v4"] = "v1"
+    schema_version: Literal["v1", "v2", "v3", "v4", "v5"] = "v1"
     completion_kind: Literal[
         "native_capture_stop",
         "responses_tool_refusal",
         "responses_workspace_policy_failure",
         "responses_write_path_refusal",
+        "responses_provider_failure",
     ] = Field(
         default="native_capture_stop", exclude_if=lambda value: value == "native_capture_stop"
     )
@@ -266,6 +285,19 @@ class RecoveryWorkspaceSnapshot(DomainModel):
                 self.schema_version == "v4"
                 and (
                     self.completion_kind != "responses_write_path_refusal"
+                    or self.capture_stop_sha256 is not None
+                    or self.synchronous_completion_sha256 is None
+                    or self.excluded_paths
+                    or self.inventory_before_sha256 != self.inventory_after_sha256
+                )
+            )
+            or (
+                # A synchronous route stopped by a transient provider failure (quota,
+                # rate limit, outage, timeout) before it changed anything: the prior
+                # lawful draft is intact and is reapplied like a write-path refusal.
+                self.schema_version == "v5"
+                and (
+                    self.completion_kind != "responses_provider_failure"
                     or self.capture_stop_sha256 is not None
                     or self.synchronous_completion_sha256 is None
                     or self.excluded_paths

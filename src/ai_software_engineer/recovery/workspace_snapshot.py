@@ -105,6 +105,12 @@ if TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
+# Transient provider refusals that end a synchronous route without touching the
+# workspace; recovery keeps the prior lawful draft exactly as after a write refusal.
+# Timeouts are excluded: a timed-out route may have stopped mid-work.
+_SYNCHRONOUS_PROVIDER_FAILURES = frozenset(
+    {"QUOTA_EXHAUSTED", "RATE_LIMITED", "PROVIDER_UNAVAILABLE"}
+)
 
 
 @dataclass(frozen=True)
@@ -244,16 +250,32 @@ def validate_terminal_workspace_snapshot(
             "provider_diagnostic=Responses workspace policy validation rejected"
         ):
             completion_kind = "responses_workspace_policy_failure"
+        elif (
+            error is not None
+            and error.transient
+            and error.code.value in _SYNCHRONOUS_PROVIDER_FAILURES
+        ):
+            completion_kind = "responses_provider_failure"
+        provider_failure = completion_kind == "responses_provider_failure"
         _require(
             len(facts.routes) == 1
             and final_route is not None
-            and final_route.route_kind == "responses"
+            and (
+                final_route.route_kind == "responses"
+                # The local Claude CLI route runs the same synchronous Responses loop.
+                or (provider_failure and final_route.route_kind == "claude_cli")
+            )
             and final_route.outcome is RouteAttemptOutcome.FAILED
             and final_route.result.status is AgentRunStatus.FAILED
             and final_route.result.error is not None
-            and final_route.result.error.code.value == "POLICY_VIOLATION"
+            and (
+                final_route.result.error.code.value == "POLICY_VIOLATION"
+                and not final_route.result.error.transient
+                if not provider_failure
+                else final_route.result.error.transient
+                and final_route.result.error.code.value in _SYNCHRONOUS_PROVIDER_FAILURES
+            )
             and completion_kind != "native_capture_stop"
-            and not final_route.result.error.transient
             and final_route.result == outcome.result
             and (
                 (
@@ -274,6 +296,13 @@ def validate_terminal_workspace_snapshot(
                     and start.inventory_before != observation.inventory_after
                     and bool(capture.patch)
                     and bool(capture.files)
+                )
+                or (
+                    provider_failure
+                    and start.inventory_before == observation.inventory_after
+                    and bool(capture.patch)
+                    and bool(capture.files)
+                    and not observation.ignored_paths
                 )
             )
         )
@@ -498,6 +527,8 @@ def validate_terminal_workspace_snapshot(
             if completion_kind == "responses_workspace_policy_failure"
             else "v4"
             if completion_kind == "responses_write_path_refusal"
+            else "v5"
+            if completion_kind == "responses_provider_failure"
             else "v2"
             if synchronous_completion
             else "v1"
