@@ -705,6 +705,7 @@ class RecoveryPlan(DomainModel):
                                         "enum": [
                                             "responses_tool_refusal",
                                             "responses_provider_failure",
+                                            "responses_invalid_output",
                                         ]
                                     }
                                 },
@@ -729,6 +730,7 @@ class RecoveryPlan(DomainModel):
                                             "responses_workspace_policy_failure",
                                             "responses_write_path_refusal",
                                             "responses_provider_failure",
+                                            "responses_invalid_output",
                                         ]
                                     }
                                 },
@@ -884,6 +886,7 @@ class RecoveryPlan(DomainModel):
             "responses_workspace_policy_failure",
             "responses_write_path_refusal",
             "responses_provider_failure",
+            "responses_invalid_output",
         } and (not self.capture.patch or not self.capture.files):
             raise ValueError("completed Responses workspace failure requires its lawful patch")
         if (
@@ -892,7 +895,12 @@ class RecoveryPlan(DomainModel):
             or (
                 # Tool refusals and untouched provider failures keep a wholly lawful
                 # draft: it is seeded as-is unless older inherited inputs need reapply.
-                snapshot.completion_kind in {"responses_tool_refusal", "responses_provider_failure"}
+                snapshot.completion_kind
+                in {
+                    "responses_tool_refusal",
+                    "responses_provider_failure",
+                    "responses_invalid_output",
+                }
                 and self.inherited_reapply_inputs
             )
         ) and self.input_mode != "coder_reapply":

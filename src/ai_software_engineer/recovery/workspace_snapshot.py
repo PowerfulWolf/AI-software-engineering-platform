@@ -250,6 +250,11 @@ def validate_terminal_workspace_snapshot(
             "provider_diagnostic=Responses workspace policy validation rejected"
         ):
             completion_kind = "responses_workspace_policy_failure"
+        elif error is not None and error.message == (
+            "failed provider route left repository changes; "
+            "provider_diagnostic=Responses provider returned invalid structured output"
+        ):
+            completion_kind = "responses_invalid_output"
         elif (
             error is not None
             and error.transient
@@ -257,13 +262,16 @@ def validate_terminal_workspace_snapshot(
         ):
             completion_kind = "responses_provider_failure"
         provider_failure = completion_kind == "responses_provider_failure"
+        # The local Claude CLI route runs the same synchronous Responses loop.
+        claude_route_kinds = {"responses_provider_failure", "responses_invalid_output"}
         _require(
             len(facts.routes) == 1
             and final_route is not None
             and (
                 final_route.route_kind == "responses"
-                # The local Claude CLI route runs the same synchronous Responses loop.
-                or (provider_failure and final_route.route_kind == "claude_cli")
+                or (
+                    completion_kind in claude_route_kinds and final_route.route_kind == "claude_cli"
+                )
             )
             and final_route.outcome is RouteAttemptOutcome.FAILED
             and final_route.result.status is AgentRunStatus.FAILED
@@ -293,6 +301,12 @@ def validate_terminal_workspace_snapshot(
                 )
                 or (
                     completion_kind == "responses_workspace_policy_failure"
+                    and start.inventory_before != observation.inventory_after
+                    and bool(capture.patch)
+                    and bool(capture.files)
+                )
+                or (
+                    completion_kind == "responses_invalid_output"
                     and start.inventory_before != observation.inventory_after
                     and bool(capture.patch)
                     and bool(capture.files)
@@ -529,6 +543,8 @@ def validate_terminal_workspace_snapshot(
             if completion_kind == "responses_write_path_refusal"
             else "v5"
             if completion_kind == "responses_provider_failure"
+            else "v6"
+            if completion_kind == "responses_invalid_output"
             else "v2"
             if synchronous_completion
             else "v1"

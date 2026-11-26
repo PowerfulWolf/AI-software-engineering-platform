@@ -621,7 +621,11 @@ class NativeRecoveryEntry:
             in {"responses_workspace_policy_failure", "responses_write_path_refusal"}
             or (
                 workspace_snapshot.completion_kind
-                in {"responses_tool_refusal", "responses_provider_failure"}
+                in {
+                    "responses_tool_refusal",
+                    "responses_provider_failure",
+                    "responses_invalid_output",
+                }
                 and inherited_inputs
             )
         ):

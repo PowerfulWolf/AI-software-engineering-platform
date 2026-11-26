@@ -937,7 +937,8 @@
                   "completion_kind": {
                     "enum": [
                       "responses_tool_refusal",
-                      "responses_provider_failure"
+                      "responses_provider_failure",
+                      "responses_invalid_output"
                     ]
                   }
                 },
@@ -975,7 +976,8 @@
                     "enum": [
                       "responses_workspace_policy_failure",
                       "responses_write_path_refusal",
-                      "responses_provider_failure"
+                      "responses_provider_failure",
+                      "responses_invalid_output"
                     ]
                   }
                 },
@@ -1965,6 +1967,33 @@
           }
         },
         {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "v6"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "completion_kind": {
+                "const": "responses_invalid_output"
+              },
+              "capture_stop_sha256": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "schema_version",
+              "completion_kind",
+              "synchronous_completion_sha256"
+            ]
+          }
+        },
+        {
           "else": {
             "properties": {
               "completion_kind": {
@@ -1985,7 +2014,8 @@
                   "v2",
                   "v3",
                   "v4",
-                  "v5"
+                  "v5",
+                  "v6"
                 ]
               }
             },
@@ -2010,7 +2040,8 @@
             "v2",
             "v3",
             "v4",
-            "v5"
+            "v5",
+            "v6"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -2022,7 +2053,8 @@
             "responses_tool_refusal",
             "responses_workspace_policy_failure",
             "responses_write_path_refusal",
-            "responses_provider_failure"
+            "responses_provider_failure",
+            "responses_invalid_output"
           ],
           "title": "Completion Kind",
           "type": "string"

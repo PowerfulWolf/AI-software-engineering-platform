@@ -410,3 +410,49 @@ def test_untouched_provider_failure_seeds_its_lawful_draft_and_needs_a_patch(
                 "inventory_after_sha256": WorkspaceMutationInventory(files=()).sha256,
             }
         )
+
+
+def test_invalid_output_after_lawful_edits_seeds_its_draft(tmp_path: Path) -> None:
+    old = make_plan(tmp_path / "project")
+    capture = CapturedChanges.from_capture(
+        replace(
+            old.capture.to_capture(),
+            patch=b"diff --git a/src/example.py b/src/example.py\n",
+            file_sha256s=(("src/example.py", "b" * 64),),
+        )
+    )
+    after = WorkspaceMutationInventory(
+        files=(
+            MutationFile(path="src/example.py", kind="file", sha256="b" * 64, mode=0o644, size=1),
+        )
+    )
+    snapshot = RecoveryWorkspaceSnapshot.create(
+        **{
+            **snapshot_for(old).to_wire(),
+            "schema_version": "v6",
+            "completion_kind": "responses_invalid_output",
+            "capture_stop_sha256": None,
+            "synchronous_completion_sha256": "8" * 64,
+            "capture_sha256": capture.capture_sha256,
+            "inventory_after": after,
+            "inventory_after_sha256": after.sha256,
+        }
+    )
+    assert snapshot.inventory_before_sha256 != snapshot.inventory_after_sha256
+    plan = RecoveryPlan.create(
+        **{**old.to_wire(), "capture": capture, "workspace_snapshot": snapshot}
+    )
+    assert plan.input_mode is None
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/delivery-recovery.schema.json").read_text()
+    )
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    assert not list(validator.iter_errors(plan.to_wire()))
+    with pytest.raises(ValueError):
+        RecoveryWorkspaceSnapshot.create(
+            **{
+                **snapshot.to_wire(),
+                "inventory_after": snapshot_for(old).inventory_after,
+                "inventory_after_sha256": snapshot_for(old).inventory_after_sha256,
+            }
+        )

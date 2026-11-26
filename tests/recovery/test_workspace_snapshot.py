@@ -1574,3 +1574,74 @@ def test_provider_failure_requires_transient_refusal_on_a_synchronous_route(
 def test_provider_failure_without_a_prior_draft_is_not_recoverable_here(native: Fixture) -> None:
     with pytest.raises(RecoveryRejected):
         _completed_provider_failure(native, inherited=False).validate()
+
+
+def _completed_invalid_output(native: Fixture, *, route_kind: str = "claude_cli") -> AuditFixture:
+    audit = _completed_responses_workspace_failure(native)
+    result = audit.facts.invocation_outcome.result.model_copy(
+        update={
+            "error": AgentFailure(
+                code=AgentErrorCode.POLICY_VIOLATION,
+                message=(
+                    "failed provider route left repository changes; "
+                    "provider_diagnostic=Responses provider returned invalid structured output"
+                ),
+                transient=False,
+            )
+        }
+    )
+    outcome = audit.facts.invocation_outcome.model_copy(update={"result": result})
+    outcome = outcome.model_copy(
+        update={
+            "outcome_sha256": digest(outcome.model_dump(mode="json", exclude={"outcome_sha256"}))
+        }
+    )
+    route = ModelRouteAttempt.create(
+        request=native.request,
+        route_index=1,
+        provider="claude",
+        model="claude-opus-5-5",
+        route_kind=route_kind,
+        started_at=NOW,
+        completed_at=NOW + timedelta(seconds=1),
+        result=result,
+        fallback=False,
+    )
+    return replace(audit, facts=replace(audit.facts, invocation_outcome=outcome, routes=(route,)))
+
+
+@pytest.mark.parametrize("route_kind", ["claude_cli", "responses"])
+def test_invalid_final_output_keeps_the_lawful_edits_of_the_run(
+    native: Fixture, route_kind: str
+) -> None:
+    audit = _completed_invalid_output(native, route_kind=route_kind)
+    assert audit.facts.start.inventory_before != audit.observation.inventory_after
+    snapshot = audit.validate()
+    assert snapshot.schema_version == "v6"
+    assert snapshot.completion_kind == "responses_invalid_output"
+    assert snapshot.capture_stop_sha256 is None
+    assert snapshot.synchronous_completion_sha256 == audit.facts.routes[-1].attempt_sha256
+    assert "VALUE = 2" in audit.capture.patch
+
+
+def test_invalid_final_output_requires_a_known_synchronous_route(native: Fixture) -> None:
+    with pytest.raises(RecoveryRejected):
+        _completed_invalid_output(native, route_kind="codex_cli").validate()
+
+
+def test_workspace_policy_failure_still_requires_the_responses_route(native: Fixture) -> None:
+    audit = _completed_responses_workspace_failure(native)
+    route = audit.facts.routes[0]
+    claude = ModelRouteAttempt.create(
+        request=native.request,
+        route_index=1,
+        provider="claude",
+        model="claude-opus-5-5",
+        route_kind="claude_cli",
+        started_at=NOW,
+        completed_at=NOW + timedelta(seconds=1),
+        result=route.result,
+        fallback=False,
+    )
+    with pytest.raises(RecoveryRejected):
+        replace(audit, facts=replace(audit.facts, routes=(claude,))).validate()
