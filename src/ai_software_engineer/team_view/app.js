@@ -1761,6 +1761,11 @@ function matchingRejectedWorkspaceAdmissionEvidence(request, step, proof) {
   if (task.repository_id && evidence.scope.repository_id !== task.repository_id) return null;
   return evidence;
 }
+function quotaExhaustedReason(detail) {
+  const reset = String(detail).match(/resets? (?:at )?([0-9][0-9:]*\s?[ap]m(?: \([A-Za-z_/]{1,40}\))?)/i);
+  const when = reset ? `（预计 ${reset[1]} 恢复）` : "";
+  return `模型订阅额度已用完${when}，平台不会自动切换模型；请决定：在“设置 → 模型路由”把该角色的备用模型移到首位并应用后点击“继续交付”，或等额度恢复后直接点击“继续交付”`;
+}
 function rejectedCoderOutputLines(evidence) {
   if (!evidence || evidence.rejection_code !== "PROGRESS_SEQUENCE_MISMATCH" ||
       evidence.budget_source !== "frozen_work_attempt" ||
@@ -5321,6 +5326,8 @@ function humanizeBlockingText(value) {
               ? "Responses 模型服务返回 HTTP 409，当前模型调用未完成"
               : detail.includes("AUTHENTICATION_ERROR")
                 ? "模型服务认证失败，当前阶段未完成"
+                : detail.includes("QUOTA_EXHAUSTED") || detail.includes("insufficient_quota")
+                ? quotaExhaustedReason(detail)
                 : detail.includes("RATE_LIMITED")
                   ? "模型服务触发限流，当前阶段未完成"
                   : detail.includes("TIMEOUT") || detail.toLowerCase().includes("provider timeout")

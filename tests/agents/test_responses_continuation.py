@@ -658,7 +658,7 @@ class _Refuse:
         return HttpResponse(status_code=self.status, body=self.body)
 
 
-def test_first_turn_quota_refusal_hands_the_same_run_to_the_fallback_route(
+def test_first_turn_rate_limit_refusal_hands_the_same_run_to_the_fallback_route(
     native: V2Fixture,
 ) -> None:
     from ai_software_engineer.agents.openai_compatible import HttpTransport
@@ -678,7 +678,8 @@ def test_first_turn_quota_refusal_hands_the_same_run_to_the_fallback_route(
             interruption_control=control,
         )
 
-    quota = _Refuse(403, b'{"error":{"message":"Insufficient user quota"}}')
+    # Exhausted quota stops for the operator's decision; rate limits still hand over.
+    quota = _Refuse(429, b'{"error":{"message":"slow down"}}')
     second = _Refuse(400, b'{"error":{"message":"bad request"}}')
     fallback = FallbackAgentAdapter(
         (
@@ -689,4 +690,4 @@ def test_first_turn_quota_refusal_hands_the_same_run_to_the_fallback_route(
     )
     outcome = fallback.run(native.request)
     assert quota.calls == 1 and second.calls == 1
-    assert outcome.error is not None and outcome.error.code is not AgentErrorCode.QUOTA_EXHAUSTED
+    assert outcome.error is not None and outcome.error.code is not AgentErrorCode.RATE_LIMITED

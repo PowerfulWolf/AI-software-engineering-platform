@@ -386,7 +386,8 @@ def test_exact_initial_dirty_seed_preserves_unchanged_failure(tmp_path: Path) ->
 @pytest.mark.parametrize(
     ("stderr", "stderr_truncated", "expected_code", "eligible"),
     [
-        ("usage limit reached", False, AgentErrorCode.QUOTA_EXHAUSTED, True),
+        # Exhausted quota is the operator's switch decision: never a silent fallback.
+        ("usage limit reached", False, AgentErrorCode.QUOTA_EXHAUSTED, False),
         (
             "ERROR: stream disconnected before completion: HTTP 503 Service Unavailable\n"
             "2026-10-12T00:00:00Z ERROR rmcp::transport: 401 Unauthorized; login required",
@@ -501,7 +502,9 @@ def test_real_fallback_uses_preserved_progress_only_when_primary_left_it_unchang
         assert capture_mutation_inventory(root) == before
     else:
         assert result.error is not None and result.error.code is expected_code
-        assert result.error.transient is False and result.artifact is None
+        # Quota stays transient for retry accounting; it only stops the route switch.
+        assert result.error.transient is (expected_code is AgentErrorCode.QUOTA_EXHAUSTED)
+        assert result.artifact is None
         assert capture_mutation_inventory(root) == before
     assert FallbackAgentAdapter(routes, attempt_store=store).run(request) == result
     assert primary_runner.calls == 1 and backup_runner.calls == (1 if should_fallback else 0)

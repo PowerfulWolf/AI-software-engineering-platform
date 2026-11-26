@@ -40,6 +40,13 @@ _TRANSIENT = re.compile(
     re.IGNORECASE,
 )
 _AUTH = re.compile(r"login|log in|auth|401|403|credential|not signed", re.IGNORECASE)
+# Subscription usage windows ("You've hit your 5-hour limit · resets 5:30am"): the
+# route has no quota left until the reset; retrying or a silent route switch is a
+# human decision, not an outage.
+_USAGE_LIMIT = re.compile(
+    r"hit your [^.]{0,40}limit|usage limit|limit reached|out of (?:extra )?usage",
+    re.IGNORECASE,
+)
 _MAX_TURNS = "40"
 # Without tools only the structured answer remains (it may take a repair turn).
 _MAX_TURNS_WITHOUT_TOOLS = "4"
@@ -435,6 +442,12 @@ def parse_claude_result(
 def _failure(detail: str, returncode: int, api_status: object = None) -> StructuredModelError:
     status = api_status if isinstance(api_status, int) else None
     text = detail.replace("\n", " ")
+    if _USAGE_LIMIT.search(text):
+        return StructuredModelError(
+            AgentErrorCode.QUOTA_EXHAUSTED,
+            f"Claude 订阅用量额度已用完 (QUOTA_EXHAUSTED): {text[:200]}",
+            transient=True,
+        )
     if status in {401, 403} or (
         status is None and _AUTH.search(text) and not _TRANSIENT.search(text)
     ):
@@ -707,11 +720,15 @@ class ClaudeCliResponsesTransport:
         except StructuredModelError as error:
             status = {
                 AgentErrorCode.AUTHENTICATION_ERROR: 401,
+                AgentErrorCode.QUOTA_EXHAUSTED: 429,
                 AgentErrorCode.PROVIDER_UNAVAILABLE: 503,
                 AgentErrorCode.TIMEOUT: 408,
                 AgentErrorCode.INVALID_OUTPUT: 502,
             }.get(error.code, 400)
-            message = json.dumps({"error": {"message": error.safe_message}}, ensure_ascii=False)
+            body: dict[str, object] = {"message": error.safe_message}
+            if error.code is AgentErrorCode.QUOTA_EXHAUSTED:
+                body["code"] = "insufficient_quota"
+            message = json.dumps({"error": body}, ensure_ascii=False)
             return HttpResponse(status_code=status, body=message.encode())
         payload = result.payload
         calls = payload.get("tool_calls")

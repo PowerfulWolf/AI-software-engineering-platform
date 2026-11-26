@@ -73,15 +73,17 @@ def _success(request: AgentRequest) -> AgentResult:
     )
 
 
-def test_quota_exhaustion_falls_back_and_persists_both_routes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("transient", [True, False])
+def test_quota_exhaustion_never_switches_routes_silently(tmp_path: Path, transient: bool) -> None:
+    # The operator decides between the backup model and waiting for the reset.
     request = _coder_request()
-    primary = _ResultAdapter(_failed(request, AgentErrorCode.QUOTA_EXHAUSTED, transient=True))
-    qwen = _ResultAdapter(_success(request))
+    primary = _ResultAdapter(_failed(request, AgentErrorCode.QUOTA_EXHAUSTED, transient=transient))
+    backup = _ResultAdapter(_success(request))
     store = FileModelRouteAttemptStore(tmp_path / "routes")
     adapter = FallbackAgentAdapter(
         (
-            ProviderAgentRoute("codex", "gpt-5.5", primary),
-            ProviderAgentRoute("qwen", "qwen3.8-max", qwen),
+            ProviderAgentRoute("claude", "claude-opus-5-5", primary),
+            ProviderAgentRoute("codex", "gpt-6.2-sol", backup),
         ),
         attempt_store=store,
         clock=_Clock(),
@@ -89,12 +91,12 @@ def test_quota_exhaustion_falls_back_and_persists_both_routes(tmp_path: Path) ->
 
     result = adapter.run(request)
 
-    assert result.status is AgentRunStatus.SUCCEEDED
+    assert result.status is AgentRunStatus.FAILED
+    assert result.error is not None and result.error.code is AgentErrorCode.QUOTA_EXHAUSTED
     attempts = store.list_for_run(request.run_id)
-    assert tuple(item.provider for item in attempts) == ("codex", "qwen")
-    assert attempts[0].outcome is RouteAttemptOutcome.FALLBACK
-    assert attempts[0].error_code is AgentErrorCode.QUOTA_EXHAUSTED
-    assert attempts[1].outcome is RouteAttemptOutcome.SUCCEEDED
+    assert tuple(item.provider for item in attempts) == ("claude",)
+    assert attempts[0].outcome is RouteAttemptOutcome.FAILED
+    assert backup.requests == []
 
 
 def test_same_model_with_distinct_reasoning_efforts_are_distinct_routes(

@@ -98,6 +98,15 @@ def test_result_text_json_is_accepted_when_structured_field_is_absent() -> None:
             False,
         ),
         ({"is_error": True, "subtype": "error_max_turns"}, "PROVIDER_ERROR", False),
+        (
+            {
+                "is_error": True,
+                "api_error_status": 429,
+                "result": "You've hit your 5-hour limit · resets 5:30am (America/Los_Angeles)",
+            },
+            "QUOTA_EXHAUSTED",
+            True,
+        ),
     ],
 )
 def test_failures_are_classified(document: dict[str, object], code: str, transient: bool) -> None:
@@ -238,7 +247,9 @@ def test_agent_route_failures_fall_back_but_work_failures_do_not() -> None:
             error=AgentFailure(code=code, message="x", transient=transient),
         )
 
-    assert _allows_fallback(failed(AgentErrorCode.QUOTA_EXHAUSTED, False))
+    # Quota exhaustion is the operator's switch decision, never a silent fallback.
+    assert not _allows_fallback(failed(AgentErrorCode.QUOTA_EXHAUSTED, False))
+    assert not _allows_fallback(failed(AgentErrorCode.QUOTA_EXHAUSTED, True))
     assert _allows_fallback(failed(AgentErrorCode.RATE_LIMITED, False))
     assert not _allows_fallback(failed(AgentErrorCode.AUTHENTICATION_ERROR, False))
     assert not _allows_fallback(failed(AgentErrorCode.INVALID_OUTPUT, False))
@@ -304,3 +315,21 @@ def test_transport_runs_a_real_tracked_process(tmp_path: Path) -> None:
     response = transport.post("u", {}, json.dumps(TURN).encode(), 30)
     assert response.status_code == 200
     assert json.loads(response.body)["output"][0]["content"][0]["text"] == '{"ok": true}'
+
+
+def test_usage_limit_reaches_the_responses_adapter_as_quota_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_software_engineer.agents.responses import _http_failure
+
+    document = {
+        "is_error": True,
+        "result": "You've hit your 5-hour limit · resets 5:30am (America/Los_Angeles)",
+    }
+    transport, _ = _transport(monkeypatch, json.dumps(document), code=1)
+    response = transport.post("u", {}, json.dumps(TURN).encode(), 60)
+    assert response.status_code == 429
+    body = json.loads(response.body)
+    assert body["error"]["code"] == "insufficient_quota"
+    assert "QUOTA_EXHAUSTED" in body["error"]["message"]
+    assert _http_failure(response)[1] is AgentErrorCode.QUOTA_EXHAUSTED

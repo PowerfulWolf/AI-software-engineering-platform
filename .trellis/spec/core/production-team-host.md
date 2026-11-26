@@ -301,8 +301,11 @@ Base：旧单路由配置继续继承原全局连接语义。Bad：用当前 Set
   Artifact/task/run/context/source revision/verdict guard。
 - 默认配置优先级为 GPT → DeepSeek → Qianwen（provider key 为 `qwen`）；
   `enabled_routes()` 保留配置数组顺序并跳过禁用项，不按供应商品牌硬编码重排。
-- route 顺序在 Run 开始前冻结。只有 quota/rate-limit/timeout/temporary provider unavailable 允许切换；
-  auth、invalid output、policy violation、产品/规范冲突不允许换模型掩盖。
+- route 顺序在 Run 开始前冻结。只有 rate-limit/timeout/temporary provider unavailable 允许切换；
+  auth、invalid output、policy violation、产品/规范冲突不允许换模型掩盖。quota 耗尽（含 Claude
+  订阅 5 小时用量窗口 "hit your … limit"，分类为 `QUOTA_EXHAUSTED`）同样不自动切换（2026-11-25
+  人工决策）：阻塞文案写明额度已用完和预计恢复时间，由用户决定在“设置 → 模型路由”把该角色的
+  备用模型移到首位后“继续交付”（经新的已批准 Recovery Task 使用新首选路线），或等待额度恢复。
 - delivery route 的每次尝试必须先形成 `ModelRouteAttempt`，写入
   `<project-sidecar>/runs/model-routes/<run-id>/`（通过 `model_route_root` 定位）。exact replay 复用已持久化 result，slot/body
   冲突或 hash 损坏 fail closed。每条 attempt 必须保存完整 canonical `AgentRequest` 的 SHA-256；进程
@@ -726,7 +729,8 @@ StructuredModelClient.complete(..., input_images: tuple[Path, ...] = ())
 ### 5. Good / Base / Bad Cases
 
 - Good: Product uses a vision-capable model while Coder and Reviewer use different preferred brains;
-  quota fallback stays within each Agent's explicitly selected and ordered list.
+  rate-limit fallback stays within each Agent's explicitly selected and ordered list; quota
+  exhaustion never switches silently and waits for the operator's route decision.
 - Base: one enabled Codex route serves all seven members with primary-only policies.
 - Bad: encode the model into Agent identity, silently send a screenshot to a text-only endpoint, or
   copy every enabled catalog route into fallbacks after an explicit role policy exists.
@@ -894,7 +898,8 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 | stale event status/revision 或 changed replay | locked append transaction | rollback；`InvalidStateEvent`/`EventIdempotencyConflict` |
 | stale workforce snapshot / capacity/Lease 冲突 | MySQL dispatch lock | rollback；不发布 partial dispatch |
 | Codex 未登录、HTTP auth 失败 | provider adapter | non-transient failure，无 fallback、无 Artifact |
-| HTTP 429/quota/timeout/5xx | adapter + fallback policy | append attempt evidence；最多尝试下一 enabled route |
+| HTTP 429 rate-limit/timeout/5xx | adapter + fallback policy | append attempt evidence；最多尝试下一 enabled route |
+| quota 耗尽（`QUOTA_EXHAUSTED`） | adapter + fallback policy | append attempt evidence；不切换 route，阻塞并提示用户选择备用模型或等待恢复 |
 | provider JSON/Artifact 不合法 | Pydantic/artifact guard | `INVALID_OUTPUT`，不 fallback、不生成 verdict |
 | Product 缺关键决策 | Product Agent | `WAITING_PRODUCT_REPLY`，要求 exact checkpoint reply |
 | ProductSpec 未获 exact human approval | Product gate | `WAITING_PRODUCT_APPROVAL`，不运行 Designer |

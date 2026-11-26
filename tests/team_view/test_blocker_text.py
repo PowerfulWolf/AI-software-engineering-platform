@@ -664,3 +664,44 @@ def test_stopped_engineering_work_is_not_described_as_product_approval() -> None
     assert "工程团队" in localized
     assert "等待精确恢复审批" not in localized
     assert "WORK_INTERRUPTED" not in localized
+
+
+_QUOTA_FAILURE = (
+    "TRANSIENT_INFRA: Coder failed at attempt 13: coder run run_4b4bd591 failed: "
+    "Responses provider returned HTTP 429; Claude 订阅用量额度已用完 (QUOTA_EXHAUSTED): "
+    "You've hit your 5-hour limit · resets 5:30am (America/Los_Angeles)"
+)
+
+
+def test_quota_exhaustion_names_the_reset_and_leaves_the_switch_to_the_operator() -> None:
+    localized = localize_blocking_text(_QUOTA_FAILURE)
+    assert localized is not None
+    assert localized.startswith("Coder 第 13 次执行失败：模型订阅额度已用完（预计 5:30am")
+    assert "不会自动切换模型" in localized
+    assert "设置 → 模型路由" in localized and "继续交付" in localized
+    assert "run_4b4bd591" in localized
+
+
+def test_browser_and_reader_agree_on_quota_exhaustion() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for the browser/reader wording contract")
+    app = Path(__file__).parents[2] / "src/ai_software_engineer/team_view/app.js"
+    script = r"""
+const fs = require("node:fs");
+const vm = require("node:vm");
+const context = vm.createContext({document: {getElementById: () => ({addEventListener() {}})}});
+const source = fs.readFileSync(process.argv[1], "utf8");
+vm.runInContext(source.slice(0, source.indexOf('for (const target of ["team"')), context);
+context.messages = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(vm.runInContext("messages.map(humanizeBlockingText)", context)));
+"""
+    result = subprocess.run(
+        (node, "-e", script, str(app)),
+        input=json.dumps([_QUOTA_FAILURE]),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    assert json.loads(result.stdout) == [localize_blocking_text(_QUOTA_FAILURE)]

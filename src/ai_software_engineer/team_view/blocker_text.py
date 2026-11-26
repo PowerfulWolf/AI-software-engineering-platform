@@ -155,6 +155,19 @@ def _coder_output_diagnostic(detail: str) -> str | None:
     return reasons.get(rule[1] if rule else "", "开发报告不符合本轮步骤约定，平台未接纳报告")
 
 
+_QUOTA_RESET = re.compile(r"resets? (?:at )?([0-9][0-9:]*\s?[ap]m(?: \([A-Za-z_/]{1,40}\))?)", re.I)
+
+
+def quota_exhausted_reason(detail: str) -> str:
+    """Name the exhausted quota and leave the route decision to the operator."""
+    reset = _QUOTA_RESET.search(detail)
+    when = f"（预计 {reset.group(1)} 恢复）" if reset else ""
+    return (
+        f"模型订阅额度已用完{when}，平台不会自动切换模型；请决定：在“设置 → 模型路由”"
+        "把该角色的备用模型移到首位并应用后点击“继续交付”，或等额度恢复后直接点击“继续交付”"
+    )
+
+
 def _native_provider_failure_detail(detail: str) -> tuple[str, str | None]:
     metadata, marker, encoded = detail.partition("; main_error=")
     if not marker or _NATIVE_PROVIDER_FAILURE.fullmatch(metadata) is None:
@@ -200,6 +213,8 @@ def _role_failure(text: str) -> str | None:
         reason = f"{role} 执行被中断，改动已保留，但未产出可接纳的报告，等待精确恢复审批"
     elif "AUTHENTICATION_ERROR" in detail:
         reason = "模型服务认证失败，当前阶段未完成"
+    elif "QUOTA_EXHAUSTED" in detail or "insufficient_quota" in detail:
+        reason = quota_exhausted_reason(detail)
     elif "RATE_LIMITED" in detail:
         reason = "模型服务触发限流，当前阶段未完成"
     elif "Codex CLI left changes after an interrupted execution; cause=TIMEOUT" in detail:
