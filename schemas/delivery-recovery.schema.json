@@ -935,7 +935,10 @@
               "workspace_snapshot": {
                 "properties": {
                   "completion_kind": {
-                    "const": "responses_tool_refusal"
+                    "enum": [
+                      "responses_tool_refusal",
+                      "responses_provider_failure"
+                    ]
                   }
                 },
                 "required": [
@@ -986,10 +989,21 @@
             ]
           },
           "then": {
+            "if": {
+              "properties": {
+                "workspace_snapshot": {
+                  "properties": {
+                    "completion_kind": {
+                      "enum": [
+                        "responses_workspace_policy_failure",
+                        "responses_write_path_refusal"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
             "properties": {
-              "input_mode": {
-                "const": "coder_reapply"
-              },
               "capture": {
                 "properties": {
                   "patch": {
@@ -1003,9 +1017,16 @@
                 }
               }
             },
-            "required": [
-              "input_mode"
-            ]
+            "then": {
+              "properties": {
+                "input_mode": {
+                  "const": "coder_reapply"
+                }
+              },
+              "required": [
+                "input_mode"
+              ]
+            }
           }
         }
       ]

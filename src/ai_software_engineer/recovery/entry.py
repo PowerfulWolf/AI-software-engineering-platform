@@ -618,16 +618,18 @@ class NativeRecoveryEntry:
         inherited_inputs = self._inherited_inputs(original)
         if workspace_snapshot is not None and (
             workspace_snapshot.completion_kind
-            in {
-                "responses_workspace_policy_failure",
-                "responses_write_path_refusal",
-                "responses_provider_failure",
-            }
-            or (workspace_snapshot.completion_kind == "responses_tool_refusal" and inherited_inputs)
+            in {"responses_workspace_policy_failure", "responses_write_path_refusal"}
+            or (
+                workspace_snapshot.completion_kind
+                in {"responses_tool_refusal", "responses_provider_failure"}
+                and inherited_inputs
+            )
         ):
             # Synchronous Responses failure has no native stop. Keep its exact
             # lawful current patch and any inherited patch as reapply inputs;
-            # never seed the old worktree's ignored environment.
+            # never seed the old worktree's ignored environment. An untouched
+            # provider failure (quota, rate limit, outage) keeps a wholly lawful
+            # draft and is seeded as-is when nothing older needs reapply.
             input_mode = "coder_reapply"
         plan = RecoveryPlan.create(
             input_mode=input_mode,

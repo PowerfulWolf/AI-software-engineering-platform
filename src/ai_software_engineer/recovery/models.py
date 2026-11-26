@@ -701,7 +701,12 @@ class RecoveryPlan(DomainModel):
                             "workspace_snapshot": {
                                 "required": ["completion_kind"],
                                 "properties": {
-                                    "completion_kind": {"const": "responses_tool_refusal"}
+                                    "completion_kind": {
+                                        "enum": [
+                                            "responses_tool_refusal",
+                                            "responses_provider_failure",
+                                        ]
+                                    }
                                 },
                             },
                             "inherited_reapply_inputs": {"type": "array", "minItems": 1},
@@ -731,15 +736,32 @@ class RecoveryPlan(DomainModel):
                         },
                     },
                     "then": {
-                        "required": ["input_mode"],
                         "properties": {
-                            "input_mode": {"const": "coder_reapply"},
                             "capture": {
                                 "properties": {
                                     "patch": {"type": "string", "minLength": 1},
                                     "files": {"type": "array", "minItems": 1},
                                 }
                             },
+                        },
+                        # An untouched provider failure may seed its lawful draft as-is.
+                        "if": {
+                            "properties": {
+                                "workspace_snapshot": {
+                                    "properties": {
+                                        "completion_kind": {
+                                            "enum": [
+                                                "responses_workspace_policy_failure",
+                                                "responses_write_path_refusal",
+                                            ]
+                                        }
+                                    },
+                                },
+                            },
+                        },
+                        "then": {
+                            "required": ["input_mode"],
+                            "properties": {"input_mode": {"const": "coder_reapply"}},
                         },
                     },
                 },
@@ -866,13 +888,11 @@ class RecoveryPlan(DomainModel):
             raise ValueError("completed Responses workspace failure requires its lawful patch")
         if (
             snapshot.completion_kind
-            in {
-                "responses_workspace_policy_failure",
-                "responses_write_path_refusal",
-                "responses_provider_failure",
-            }
+            in {"responses_workspace_policy_failure", "responses_write_path_refusal"}
             or (
-                snapshot.completion_kind == "responses_tool_refusal"
+                # Tool refusals and untouched provider failures keep a wholly lawful
+                # draft: it is seeded as-is unless older inherited inputs need reapply.
+                snapshot.completion_kind in {"responses_tool_refusal", "responses_provider_failure"}
                 and self.inherited_reapply_inputs
             )
         ) and self.input_mode != "coder_reapply":

@@ -343,3 +343,70 @@ def test_tampered_snapshot_digest_is_rejected_before_plan_approval(tmp_path: Pat
     snapshot = snapshot_for(old).model_copy(update={"snapshot_sha256": "f" * 64})
     with pytest.raises(ValidationError, match="workspace snapshot"):
         RecoveryPlan.create(**{**old.to_wire(), "workspace_snapshot": snapshot})
+
+
+def test_untouched_provider_failure_seeds_its_lawful_draft_and_needs_a_patch(
+    tmp_path: Path,
+) -> None:
+    old = make_plan(tmp_path / "project")
+    capture = CapturedChanges.from_capture(
+        replace(
+            old.capture.to_capture(),
+            patch=b"diff --git a/src/example.py b/src/example.py\n",
+            file_sha256s=(("src/example.py", "b" * 64),),
+        )
+    )
+    inventory = WorkspaceMutationInventory(
+        files=(
+            MutationFile(path="src/example.py", kind="file", sha256="b" * 64, mode=0o644, size=1),
+        )
+    )
+    snapshot = RecoveryWorkspaceSnapshot.create(
+        **{
+            **snapshot_for(old).to_wire(),
+            "schema_version": "v5",
+            "completion_kind": "responses_provider_failure",
+            "capture_stop_sha256": None,
+            "synchronous_completion_sha256": "8" * 64,
+            "capture_sha256": capture.capture_sha256,
+            "inventory_before_sha256": inventory.sha256,
+            "inventory_after": inventory,
+            "inventory_after_sha256": inventory.sha256,
+        }
+    )
+    # No inherited inputs: the wholly lawful draft is seeded as-is (no input_mode).
+    plan = RecoveryPlan.create(
+        **{**old.to_wire(), "capture": capture, "workspace_snapshot": snapshot}
+    )
+    assert plan.input_mode is None
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/delivery-recovery.schema.json").read_text()
+    )
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    assert not list(validator.iter_errors(plan.to_wire()))
+    assert RecoveryPlan.model_validate(plan.to_wire()) == plan
+    # The lawful draft is mandatory: an empty capture cannot claim this completion.
+    with pytest.raises(ValidationError, match="lawful patch"):
+        RecoveryPlan.create(
+            **{
+                **old.to_wire(),
+                "workspace_snapshot": RecoveryWorkspaceSnapshot.create(
+                    **{
+                        **snapshot.to_wire(),
+                        "capture_sha256": old.capture.capture_sha256,
+                    }
+                ),
+            }
+        )
+    empty = plan.to_wire()
+    empty["capture"]["patch"] = ""
+    assert list(validator.iter_errors(empty))
+    # A changed workspace can never be described as an untouched provider failure.
+    with pytest.raises(ValueError):
+        RecoveryWorkspaceSnapshot.create(
+            **{
+                **snapshot.to_wire(),
+                "inventory_after": WorkspaceMutationInventory(files=()),
+                "inventory_after_sha256": WorkspaceMutationInventory(files=()).sha256,
+            }
+        )
