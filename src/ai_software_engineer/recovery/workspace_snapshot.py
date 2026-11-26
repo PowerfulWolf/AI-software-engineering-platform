@@ -9,8 +9,10 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import stat
+import sys
 from asyncio import current_task
 from collections.abc import Iterator, Mapping
 from contextlib import closing, contextmanager
@@ -102,6 +104,9 @@ if TYPE_CHECKING:
     from ai_software_engineer.recovery.native import NativeRecoverySource
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class TerminalWorkspaceFacts:
     scope: RecoveryWorkspaceScope
@@ -139,6 +144,14 @@ class _TerminalWorkspaceRead:
 
 def _require(condition: bool) -> None:
     if not condition:
+        # The public reason stays generic; the operator log names the exact failed check.
+        caller = sys._getframe(1)
+        _LOGGER.warning(
+            "terminal workspace check failed at %s:%d (%s)",
+            Path(caller.f_code.co_filename).name,
+            caller.f_lineno,
+            caller.f_code.co_name,
+        )
         raise RecoveryRejected("终态开发现场的完整记录不一致; 原任务、文件和审计历史均已保留")
 
 
