@@ -333,3 +333,32 @@ def test_usage_limit_reaches_the_responses_adapter_as_quota_exhaustion(
     assert body["error"]["code"] == "insufficient_quota"
     assert "QUOTA_EXHAUSTED" in body["error"]["message"]
     assert _http_failure(response)[1] is AgentErrorCode.QUOTA_EXHAUSTED
+
+
+def test_stray_trailing_closers_after_a_complete_final_are_settled() -> None:
+    from ai_software_engineer.agents.claude_cli import _final_problem, _settled_final_json
+
+    complete = '{"summary": "done", "files": [{"path": "a.py"}]}'
+    assert _settled_final_json(complete) == complete
+    assert json.loads(_settled_final_json(complete + "}")) == json.loads(complete)
+    assert json.loads(_settled_final_json(complete + "\n ]}")) == json.loads(complete)
+    for trailing in ('{"again": 1}', " and that is all", "}x"):
+        assert _settled_final_json(complete + trailing) == complete + trailing
+    payload = {"action": "final", "tool_calls": [], "final_json": complete + "}"}
+    assert _final_problem(payload, None) is None
+    problem = _final_problem({**payload, "final_json": complete + '{"again": 1}'}, None)
+    assert problem is not None
+    assert f"ends at position {len(complete)}" in problem and "again" in problem
+
+
+def test_transport_hands_over_the_settled_final(monkeypatch: pytest.MonkeyPatch) -> None:
+    final = '{"ok": true}}'
+    document = {
+        "is_error": False,
+        "structured_output": {"action": "final", "tool_calls": [], "final_json": final},
+    }
+    transport, _ = _transport(monkeypatch, json.dumps(document), code=0)
+    response = transport.post("u", {}, json.dumps(TURN).encode(), 60)
+    assert response.status_code == 200
+    text = json.loads(response.body)["output"][0]["content"][0]["text"]
+    assert json.loads(text) == {"ok": True}

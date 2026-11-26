@@ -638,6 +638,36 @@ def _final_schema_of(request: Mapping[str, object]) -> Mapping[str, object] | No
     return schema if isinstance(schema, Mapping) else None
 
 
+_STRAY_CLOSERS = frozenset("}] \t\r\n")
+
+
+def _settled_final_json(raw: str) -> str:
+    """Drop stray closing brackets after one complete JSON value, else return raw.
+
+    Long artifacts embedded as a JSON string often end with one surplus ``}`` or
+    ``]``: the value before it is complete and the surplus carries no data. Any other
+    trailing text (a second value, prose) stays a rejection.
+    """
+    try:
+        json.loads(raw)
+        return raw
+    except ValueError:
+        pass
+    start = len(raw) - len(raw.lstrip())
+    try:
+        value, end = json.JSONDecoder().raw_decode(raw, start)
+    except ValueError:
+        return raw
+    rest = raw[end:]
+    if not rest.strip() or not set(rest) <= _STRAY_CLOSERS:
+        return raw
+    _LOGGER.warning(
+        "claude final_json: dropped %d stray trailing closer(s) after a complete value",
+        len(rest.strip()),
+    )
+    return json.dumps(value, ensure_ascii=False)
+
+
 def _final_problem(
     payload: Mapping[str, object], final_schema: Mapping[str, object] | None
 ) -> str | None:
@@ -651,8 +681,16 @@ def _final_problem(
     if not isinstance(raw, str) or not raw.strip():
         return "action final requires final_json to be a non-empty JSON string"
     try:
-        final = json.loads(raw)
+        final = json.loads(_settled_final_json(raw))
     except ValueError as error:
+        if error.msg == "Extra data":
+            tail = raw[error.pos : error.pos + 40]
+            _LOGGER.warning("claude final_json: extra data after position %d", error.pos)
+            return (
+                f"final_json holds one complete JSON value that ends at position {error.pos}, "
+                f"followed by extra text {tail!r}; return exactly one JSON value with "
+                "balanced braces and nothing after it"
+            )
         return f"final_json is not valid JSON ({error.msg} at position {error.pos})"
     if final_schema is None:
         return None
@@ -748,7 +786,12 @@ class ClaudeCliResponsesTransport:
                 {
                     "type": "message",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": str(payload.get("final_json"))}],
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": _settled_final_json(str(payload.get("final_json"))),
+                        }
+                    ],
                 }
             ]
         response: dict[str, object] = {"output": output}
