@@ -83,6 +83,15 @@ journal。当前用户已授权协作者代为核对和批准计划，实际动�
 代码回滚可撤销本次提交；一旦写入新的 restart plan/dispatch，旧版本不能解释该 kind，
 不要让旧服务继续推进这些 Task。保留新兼容读取器并前向修复，不删除新记录或重写旧哈希。
 
+## 同步路线 Coder 输出被拒后保留改动续做
+
+适用：Coder 走 Responses 或本地 Claude CLI 路线，工具循环已返回，最终产出被拒——无法解析的结构化输出
+（`POLICY_VIOLATION`，诊断为 invalid structured output），或已解析但不符合当前输出契约的产出
+（非临时 `INVALID_OUTPUT`，例如 checkpoint_sequence 与本次 attempt 不一致）——且本轮已留下受策略约束的改动。
+这类路线没有原生进程停止记录，平台以已封存的路线完成记录作为同步结束证明（快照 v6，
+`responses_invalid_output`），把本轮合规改动作为续做草稿保留，经“恢复”计划批准后续做；
+Codex CLI 路线仍按原生停止记录恢复。临时性的 `INVALID_OUTPUT` 或没有留下改动的失败不走此路径。
+
 ## QA/Reviewer 输出被拒后只重跑审查角色
 
 适用：QA 或 Reviewer 已停止，等待原因是 `INVALID_OUTPUT`（非临时、无产物），Coder 候选未变。

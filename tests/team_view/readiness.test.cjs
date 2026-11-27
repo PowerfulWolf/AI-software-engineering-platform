@@ -55,6 +55,20 @@ const matchesSelector = (node, selector) => selector.split(",").some((part) => {
   return value !== undefined && (expected === undefined || value === expected);
 });
 const settled = () => new Promise(setImmediate);
+// A busy Team read is retried after 1s, 2s and 4s before it is reported. The
+// fixture timers never fire on their own, so busy reads must drain them.
+const drainBusyRetries = async (ui) => {
+  for (const delay of [1000, 2000, 4000]) {
+    for (let turn = 0; turn < 5 && ![...ui.timers.values()].some(t => t.delay === delay); turn++)
+      await settled();
+    if ([...ui.timers.values()].some(t => t.delay === delay)) await ui.runTimer(delay);
+  }
+  await settled();
+};
+const busyTick = async (ui) => { const tick = ui.tick(); await drainBusyRetries(ui); await tick; };
+const busyTimer = async (ui, delay, name) => {
+  const run = ui.runTimer(delay, name); await drainBusyRetries(ui); await run;
+};
 const deferred = () => {
   let resolve, reject;
   const promise = new Promise((resolvePromise, rejectPromise) => {
@@ -647,6 +661,7 @@ test("Team busy is a read-in-progress message, not a database failure", async ()
       ? response({error: {code: "TEAM_READ_IN_PROGRESS", message: "untrusted provider detail"}}, false)
       : response(team),
   });
+  await drainBusyRetries(ui);
   assert.match(text(ui.get("connection")), /上一轮.*读取.*未完成/);
   assert.match(ui.content(), /团队数据.*读取中/);
   assert.doesNotMatch(text(ui.get("connection")) + ui.content(), /MySQL|untrusted provider/);
@@ -655,7 +670,7 @@ test("Team busy is a read-in-progress message, not a database failure", async ()
   assert.match(text(ui.get("connection")), /已连接/);
   const snapshotBefore = vm.runInContext("snapshot", ui.context);
   busy = true;
-  await ui.tick();
+  await busyTick(ui);
   assert.equal(vm.runInContext("snapshot", ui.context), snapshotBefore);
   assert.match(text(ui.get("connection")), /旧数据/);
   assert.doesNotMatch(text(ui.get("connection")), /MySQL|刷新失败/);
@@ -690,6 +705,7 @@ for (const failure of ["busy", "unavailable", "timeout"]) {
       await settled();
       await ui.runTimer(40000);
     }
+    if (failure === "busy") await drainBusyRetries(ui);
     await polling;
     assert.equal(vm.runInContext("snapshot", ui.context), original);
     assert.equal(vm.runInContext("operationsAvailable && consoleDeliveryReady", ui.context), true);
@@ -729,7 +745,7 @@ test("a failed Team branch revokes old controls before an independent Operations
   options.teamRead = (_url, _request, _team, response) =>
     response({error: {code: "TEAM_READ_IN_PROGRESS"}}, false);
   const polling = ui.tick();
-  await settled();
+  await drainBusyRetries(ui);
   const controlWhileHeld = vm.runInContext("canControlCurrentTeam()", ui.context);
   const issueWhileHeld = vm.runInContext("teamReadIssue", ui.context);
   const disabledWhileHeld = submit.disabled;
@@ -1104,11 +1120,11 @@ test("busy automatic Team reads back off to thirty seconds and success resets fi
   const ui = await browser(options);
   options.teamRead = async (_url, _request, _team, response) =>
     response({error: {code: "TEAM_READ_IN_PROGRESS"}}, false);
-  await ui.tick();
+  await busyTick(ui);
   for (const delay of [10000, 20000, 30000, 30000]) {
     assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [delay]);
     assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), false);
-    await ui.runTimer(delay, "pollTeamSnapshot");
+    await busyTimer(ui, delay, "pollTeamSnapshot");
   }
   options.teamRead = async (_url, _request, team, response) => response(team);
   await ui.runTimer(30000, "pollTeamSnapshot");
@@ -1147,7 +1163,7 @@ test("manual status refresh bypasses automatic backoff and leaves only one new t
   const ui = await browser(options);
   options.teamRead = async (_url, _request, _team, response) =>
     response({error: {code: "TEAM_READ_IN_PROGRESS"}}, false);
-  await ui.tick();
+  await busyTick(ui);
   assert.deepEqual(teamPollTimers(ui).map(timer => timer.delay), [10000]);
   options.teamRead = async (_url, _request, team, response) => response(team);
   await ui.navigate("status");
@@ -1162,7 +1178,7 @@ test("independent preparation ticks do not issue Team reads during automatic bac
   const ui = await browser(options);
   options.teamRead = async (_url, _request, _team, response) =>
     response({error: {code: "TEAM_READ_IN_PROGRESS"}}, false);
-  await ui.tick();
+  await busyTick(ui);
   const before = ui.requests.filter(item => item.url.startsWith("/api/v1/team")).length;
   vm.runInContext("globalThis.preparationReads = 0; refreshRecoveryPreparationProgress = async () => {preparationReads++;}", ui.context);
   await ui.preparationTick(); await ui.preparationTick();

@@ -188,7 +188,7 @@ def execute_python_mysql_verification(
                 )
             private.chmod(0o500)
             argv = python_mysql_sandbox_command(cap, source, scratch, private)
-            environment = python_mysql_sandbox_environment()
+            environment = python_mysql_sandbox_environment(scratch)
             executor = executor_factory(
                 source,
                 AgentPermissions(

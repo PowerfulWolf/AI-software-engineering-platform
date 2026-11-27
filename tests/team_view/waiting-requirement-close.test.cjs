@@ -52,8 +52,17 @@ test("blocked and idle product drafts offer close while active engineering stage
     h.run(`snapshot.requests[0].stage = ${JSON.stringify(stage)}`);
     assert.equal(h.run('canCloseRequirement(snapshot.requests[0])'), true);
   }
-  for (const stage of ["DESIGNING", "PLANNING", "DONE", "CLOSED"]) {
+  for (const stage of ["DONE", "CLOSED"]) {
     h.run(`snapshot.requests[0].stage = ${JSON.stringify(stage)}`);
+    assert.equal(h.run('canCloseRequirement(snapshot.requests[0])'), false);
+  }
+  // A stuck design/planning stage owns no engineering execution and can be withdrawn,
+  // but not once it has dispatched Tasks.
+  for (const stage of ["DESIGNING", "PLANNING"]) {
+    h.run(`snapshot.requests[0].stage = ${JSON.stringify(stage)}; snapshot.tasks = []`);
+    assert.equal(h.run('canCloseRequirement(snapshot.requests[0])'), true);
+    h.run(`snapshot.tasks = [{id: "t", task_id: "task_t", request_id: "requirement",
+      status: "IMPLEMENTING", terminal: false, role_queue: []}]`);
     assert.equal(h.run('canCloseRequirement(snapshot.requests[0])'), false);
   }
 });

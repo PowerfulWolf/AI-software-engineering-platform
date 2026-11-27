@@ -1576,20 +1576,34 @@ def test_provider_failure_without_a_prior_draft_is_not_recoverable_here(native: 
         _completed_provider_failure(native, inherited=False).validate()
 
 
-def _completed_invalid_output(native: Fixture, *, route_kind: str = "claude_cli") -> AuditFixture:
+def _completed_invalid_output(
+    native: Fixture,
+    *,
+    route_kind: str = "claude_cli",
+    contract_rejected: bool = False,
+    transient: bool = False,
+) -> AuditFixture:
     audit = _completed_responses_workspace_failure(native)
-    result = audit.facts.invocation_outcome.result.model_copy(
-        update={
-            "error": AgentFailure(
-                code=AgentErrorCode.POLICY_VIOLATION,
-                message=(
-                    "failed provider route left repository changes; "
-                    "provider_diagnostic=Responses provider returned invalid structured output"
-                ),
-                transient=False,
-            )
-        }
+    failure = (
+        AgentFailure(
+            code=AgentErrorCode.INVALID_OUTPUT,
+            message=(
+                "开发检查点 checkpoint_sequence 必须等于本次执行 attempt; "
+                "产出未被接纳, 开发文件保留。"
+            ),
+            transient=transient,
+        )
+        if contract_rejected
+        else AgentFailure(
+            code=AgentErrorCode.POLICY_VIOLATION,
+            message=(
+                "failed provider route left repository changes; "
+                "provider_diagnostic=Responses provider returned invalid structured output"
+            ),
+            transient=False,
+        )
     )
+    result = audit.facts.invocation_outcome.result.model_copy(update={"error": failure})
     outcome = audit.facts.invocation_outcome.model_copy(update={"result": result})
     outcome = outcome.model_copy(
         update={
@@ -1622,6 +1636,33 @@ def test_invalid_final_output_keeps_the_lawful_edits_of_the_run(
     assert snapshot.capture_stop_sha256 is None
     assert snapshot.synchronous_completion_sha256 == audit.facts.routes[-1].attempt_sha256
     assert "VALUE = 2" in audit.capture.patch
+
+
+@pytest.mark.parametrize("route_kind", ["claude_cli", "responses"])
+def test_contract_rejected_final_output_keeps_the_lawful_edits_of_the_run(
+    native: Fixture, route_kind: str
+) -> None:
+    audit = _completed_invalid_output(native, route_kind=route_kind, contract_rejected=True)
+    snapshot = audit.validate()
+    assert snapshot.schema_version == "v6"
+    assert snapshot.completion_kind == "responses_invalid_output"
+    assert snapshot.capture_stop_sha256 is None
+    assert "VALUE = 2" in audit.capture.patch
+
+
+@pytest.mark.parametrize("route_kind", ["codex_cli", "responses"])
+def test_contract_rejected_output_needs_a_synchronous_nontransient_failure(
+    native: Fixture, route_kind: str
+) -> None:
+    # codex_cli has its own native stop; a transient failure is a provider failure.
+    audit = _completed_invalid_output(
+        native,
+        route_kind=route_kind,
+        contract_rejected=True,
+        transient=route_kind == "responses",
+    )
+    with pytest.raises(RecoveryRejected):
+        audit.validate()
 
 
 def test_invalid_final_output_requires_a_known_synchronous_route(native: Fixture) -> None:

@@ -29,6 +29,7 @@ from ai_software_engineer.git.capture import (
     read_capture_file,
     without_hunk_labels,
 )
+from ai_software_engineer.git.executable import trusted_git_executable
 from ai_software_engineer.git.mutation import is_execution_cache_path
 from ai_software_engineer.git.mutation_capture import (
     MAX_MUTATION_BODY_BYTES,
@@ -163,7 +164,7 @@ class GitWorktreeManager:
         names = [name for name in self._branch_names.values() if name is not None]
         if len(set(names)) != len(names):
             raise ValueError("different Tasks cannot own the same semantic branch")
-        self._git = shutil.which("git", path=os.defpath)
+        self._git = trusted_git_executable()
 
     def create(self, spec: WorktreeSpec) -> WorktreeRef:
         """Create one new role worktree at a fully resolved commit."""

@@ -255,6 +255,11 @@ def validate_terminal_workspace_snapshot(
             "provider_diagnostic=Responses provider returned invalid structured output"
         ):
             completion_kind = "responses_invalid_output"
+        elif error is not None and error.code.value == "INVALID_OUTPUT" and not error.transient:
+            # A parsed final output the current output contract rejected (for
+            # example a wrong checkpoint_sequence). The route already returned;
+            # its lawful edits are kept exactly like an unparseable final output.
+            completion_kind = "responses_invalid_output"
         elif (
             error is not None
             and error.transient
@@ -277,7 +282,12 @@ def validate_terminal_workspace_snapshot(
             and final_route.result.status is AgentRunStatus.FAILED
             and final_route.result.error is not None
             and (
-                final_route.result.error.code.value == "POLICY_VIOLATION"
+                final_route.result.error.code.value
+                in (
+                    {"POLICY_VIOLATION", "INVALID_OUTPUT"}
+                    if completion_kind == "responses_invalid_output"
+                    else {"POLICY_VIOLATION"}
+                )
                 and not final_route.result.error.transient
                 if not provider_failure
                 else final_route.result.error.transient
