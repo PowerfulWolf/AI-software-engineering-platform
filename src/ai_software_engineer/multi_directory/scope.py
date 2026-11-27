@@ -11,6 +11,7 @@ from typing import Annotated
 from pydantic import Field, StringConstraints
 
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.git.executable import trusted_git_executable
 from ai_software_engineer.multi_directory.errors import RequirementGitBaselineRequired
 
 Digest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
@@ -46,7 +47,14 @@ class DirectoryScope(DomainModel):
 def git_read(root: Path, *args: str) -> str | None:
     """No hooks, shell, inherited Git overrides, or interactive credentials."""
     result = subprocess.run(
-        ("git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args),
+        (
+            trusted_git_executable() or "git",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            *args,
+        ),
         cwd=root,
         env={
             "PATH": os.defpath,

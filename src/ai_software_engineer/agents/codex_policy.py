@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
+from ai_software_engineer.git.executable import trusted_git_executable
 from ai_software_engineer.redaction import redact_text
 
 
@@ -55,7 +56,14 @@ def candidate_read_snapshot(
     budget overflow fails closed; it must not silently remove review context.
     """
     result = subprocess.run(
-        ("git", "-c", "core.fsmonitor=false", "ls-tree", "-rz", revision),
+        (
+            trusted_git_executable() or "git",
+            "-c",
+            "core.fsmonitor=false",
+            "ls-tree",
+            "-rz",
+            revision,
+        ),
         cwd=root,
         capture_output=True,
         check=True,
@@ -79,7 +87,7 @@ def candidate_read_snapshot(
         if kind != "blob" or mode not in {"100644", "100755"}:
             files.append({"path": path, "omitted": "non-regular candidate entry"})
             continue
-        command = ("git", "-c", "core.fsmonitor=false", "cat-file")
+        command = (trusted_git_executable() or "git", "-c", "core.fsmonitor=false", "cat-file")
         byte_count = subprocess.run(
             (*command, "-s", object_id),
             cwd=root,
