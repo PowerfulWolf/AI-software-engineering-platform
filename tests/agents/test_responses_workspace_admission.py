@@ -111,5 +111,7 @@ def test_seed_drift_is_rejected_before_provider(tmp_path: Path) -> None:
     )
     seed.write_text("unapproved = True\n")
     result = adapter.run(request)
-    assert result.error is not None and result.error.code is AgentErrorCode.POLICY_VIOLATION
+    # Admission refusal is the shared WORK_INTERRUPTED recovery contract
+    # (see tests/manager/test_workspace_admission_contract.py), not a policy breach.
+    assert result.error is not None and result.error.code is AgentErrorCode.WORK_INTERRUPTED
     assert provider.calls == 0 and seed.read_text() == "unapproved = True\n"

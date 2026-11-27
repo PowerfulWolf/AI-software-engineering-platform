@@ -1986,6 +1986,31 @@ class ProductionProjectDeliveryBackend:
 
         def claimed_context() -> ContextSource:
             claim = knowledge_claim()
+            verifier_context: dict[str, object] = {}
+            if claim.work_item.role in {AgentRole.QA, AgentRole.REVIEWER}:
+                verifier_rerun = queue.rejected_verifier_retry(claim.work_item.id)
+                if verifier_rerun is not None:
+                    from ai_software_engineer.manager.rejected_verifier_output import (
+                        verify_rejected_verifier_rerun_claim,
+                    )
+
+                    verify_rejected_verifier_rerun_claim(
+                        evidence=verifier_rerun,
+                        claim=claim,
+                        task=current_task(),
+                        accepted=queue.accepted(claim.work_item.task_id),
+                    )
+                    verifier_context = {
+                        "rejected_verifier_output": {
+                            "previous_run_id": verifier_rerun.previous_run_id,
+                            "candidate_revision": verifier_rerun.candidate_revision,
+                            "instruction": (
+                                "原审查执行的输出未通过平台契约, 未被接纳。"
+                                "本次为经工程授权的同一候选重新审查; "
+                                "旧输出不是本次结论或任何验收通过的证明。"
+                            ),
+                        }
+                    }
             rejected = queue.rejected_output_retry(claim.work_item.id)
             rejected_context = (
                 {
@@ -2022,6 +2047,7 @@ class ProductionProjectDeliveryBackend:
                         "attempt": claim.work_item.attempt,
                         "checkpoint_sequence": claim.work_item.checkpoint_sequence,
                         **rejected_context,
+                        **verifier_context,
                     },
                     sort_keys=True,
                     separators=(",", ":"),

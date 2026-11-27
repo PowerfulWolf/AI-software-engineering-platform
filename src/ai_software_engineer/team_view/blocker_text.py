@@ -55,6 +55,7 @@ _EXACT: dict[str, str] = {
         "no automatic retry."
     ): "BUDGET_EXHAUSTED：所需上下文超过配置的输入上限，不能自动重试。",
     "Coder requested continuation after the configured run budget": "Coder 已用完本轮连续执行次数，但实现尚未完成，需要创建恢复任务后继续。",
+    "Coder made no plan progress in 3 consecutive runs; stopped before spending the remaining run budget": "Coder 连续 3 轮没有完成任何新步骤，平台已提前停止以免空耗额度；请查看最新进度记录里的阻塞说明（常见是需要补充文件范围），处理后创建恢复任务继续。",
     "QA verification could not complete in the current environment": "QA 未能在当前环境完成验证；候选代码已保留，继续交付时只会重新执行 QA/Review。",
     "Candidate verification stopped before a sealed result was produced.": "候选验证在封存结果生成前停止。",
     "Candidate verification passed; continue the delivery acceptance policy.": "候选验证已通过，请继续执行交付验收策略。",

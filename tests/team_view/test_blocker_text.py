@@ -698,10 +698,28 @@ process.stdout.write(JSON.stringify(vm.runInContext("messages.map(humanizeBlocki
 """
     result = subprocess.run(
         (node, "-e", script, str(app)),
-        input=json.dumps([_QUOTA_FAILURE]),
+        input=json.dumps([_QUOTA_FAILURE, _STALL_FAILURE]),
         capture_output=True,
         text=True,
         check=True,
         timeout=10,
     )
-    assert json.loads(result.stdout) == [localize_blocking_text(_QUOTA_FAILURE)]
+    assert json.loads(result.stdout) == [
+        localize_blocking_text(_QUOTA_FAILURE),
+        localize_blocking_text(_STALL_FAILURE),
+    ]
+
+
+_STALL_FAILURE = (
+    "Coder made no plan progress in 3 consecutive runs; "
+    "stopped before spending the remaining run budget"
+)
+
+
+def test_stalled_coder_block_points_to_the_scope_supplement() -> None:
+    from ai_software_engineer.orchestration.retry import CODER_STALL_REASON
+
+    assert CODER_STALL_REASON == _STALL_FAILURE
+    localized = localize_blocking_text(_STALL_FAILURE)
+    assert localized is not None and localized.startswith("Coder 连续 3 轮没有完成任何新步骤")
+    assert "补充文件范围" in localized

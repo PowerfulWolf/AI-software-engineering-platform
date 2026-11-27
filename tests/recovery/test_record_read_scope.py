@@ -31,7 +31,10 @@ from ai_software_engineer.manager.baseline_models import (
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
-from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
+from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryStage,
+    ProjectDeliveryCheckpoint,
+)
 from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
 from ai_software_engineer.manager.production_backend import ProductionProjectDeliveryBackend
 from ai_software_engineer.read_record_scope import (
@@ -431,7 +434,8 @@ def test_public_approval_real_builder_fresh_fences_and_clear_before_execution(
     monkeypatch.setattr(entry, "resume_execution", execute)
     expected = DeliveryResumeResult.model_construct()
     monkeypatch.setattr(controller, "_finish_coder_recovery", lambda _: expected)
-    checkpoint = ProjectDeliveryCheckpoint.model_construct()
+    # Not a BLOCKED route-transition checkpoint: no settlement lookup applies.
+    checkpoint = ProjectDeliveryCheckpoint.model_construct(stage=DeliveryStage.DELIVERING)
     command = ResumeProjectDelivery(
         delivery_id=plan.source.scope.delivery_id,
         approved_plan_sha256=plan.plan_sha256,

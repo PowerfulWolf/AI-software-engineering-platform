@@ -1396,3 +1396,113 @@ def test_capacity_history_keeps_original_code_and_separates_pause_from_execution
     assert all(entry.task_id == task.id for entry in history)
     assert before == _bytes(sidecar)
     assert workspace_before == _bytes(fixture.worktree.path)
+
+
+def _verifier_rerun_proof(task: Task) -> DeliveryWaitInvestigation:
+    from ai_software_engineer.domain.delivery_resolution import RejectedVerifierOutputEvidence
+
+    candidate = "c" * 40
+    base = _proof(task)
+    disposition = decide_delivery_disposition(
+        DeliveryFailureFacts(
+            task_id=task.id,
+            work_item_id=base.work_item_id,
+            role=AgentRole.QA,
+            classification="INVALID_OUTPUT",
+            source_revision=candidate,
+            task_intent_sha256=task_intent_sha256(task),
+            checkpoint_sequence=base.checkpoint_sequence,
+            budget_available=True,
+        )
+    )
+    evidence = RejectedVerifierOutputEvidence.model_validate(
+        {
+            "task_id": task.id,
+            "work_item_id": base.work_item_id,
+            "role": "qa",
+            "candidate_revision": candidate,
+            "plan_artifact_id": "art_plan_frozen",
+            "plan_artifact_sha256": "1" * 64,
+            "implementation_artifact_id": "art_implementation_candidate",
+            "implementation_artifact_sha256": "2" * 64,
+            "original_lease_id": "lease_previous_qa",
+            "original_claim_sha256": "3" * 64,
+            "original_attempt": 1,
+            "original_dispatch_sequence": 0,
+            "checkpoint_sequence": base.checkpoint_sequence,
+            "previous_run_id": "run_previous_qa",
+            "previous_context_manifest_id": "ctx_" + "4" * 64,
+            "invocation_start_sha256": "5" * 64,
+            "invocation_outcome_sha256": "6" * 64,
+            "execution_stop_sha256": "7" * 64,
+        }
+    )
+    proof = DeliveryWaitInvestigation.model_validate(
+        {
+            **base.to_wire(),
+            "disposition": disposition.to_wire(),
+            "disposition_sha256": disposition.disposition_sha256,
+            "source_revision": candidate,
+            "retry_cause": None,
+            "original_run_id": "run_previous_qa",
+            "invocation_start_sha256": "5" * 64,
+            "invocation_outcome_sha256": "6" * 64,
+            "process_stop_sha256": "7" * 64,
+            "permitted_resolutions": ["RETRY_REJECTED_VERIFIER_OUTPUT"],
+            "rejected_verifier_output": evidence.to_wire(),
+        }
+    )
+    return proof.model_copy(update={"proof_sha256": proof.recompute_sha256()})
+
+
+def _verifier_rerun_decision(proof: DeliveryWaitInvestigation) -> DeliveryResolution:
+    assert proof.rejected_verifier_output is not None
+    value = DeliveryResolution(
+        task_id=proof.task_id,
+        work_item_id=proof.work_item_id,
+        expected_disposition_sha256=proof.disposition_sha256,
+        expected_task_intent_sha256=proof.task_intent_sha256,
+        expected_source_revision=proof.source_revision,
+        expected_checkpoint_sequence=proof.checkpoint_sequence,
+        task_revision=proof.task_revision,
+        task_snapshot_sha256=proof.task_snapshot_sha256,
+        step_sha256=proof.step_sha256,
+        resolution_kind=DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT,
+        proof_sha256=proof.proof_sha256,
+        operator_principal=LocalOperatorPrincipal.trusted_local(),
+        rejected_verifier_output=proof.rejected_verifier_output,
+        submitted_at=proof.inspected_at + timedelta(seconds=1),
+        resolution_sha256="0" * 64,
+    )
+    return value.model_copy(update={"resolution_sha256": value.recompute_sha256()})
+
+
+def test_engineering_history_verifier_rerun_resolution(tmp_path: Path) -> None:
+    task = make_task().model_copy(update={"status": TaskStatus.QA, "attempts": 1})
+    proof = _verifier_rerun_proof(task)
+    decision = _verifier_rerun_decision(proof)
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, decision, _handling(proof, decision))
+    before = _bytes(sidecar)
+    history = engineering_history(sidecar, task, _scope(task), "delivery_history")
+    resolutions = [entry for entry in history if entry.id.startswith("resolution_")]
+    assert len(resolutions) == 1
+    details = resolutions[0].details
+    assert details["resolution_kind"] == "RETRY_REJECTED_VERIFIER_OUTPUT"
+    assert details["verifier_rerun_role"] == "qa"
+    assert details["verifier_rerun_previous_run_id"] == "run_previous_qa"
+    assert _bytes(sidecar) == before
+    changed = DeliveryResolution.model_validate(
+        {
+            **decision.to_wire(),
+            "rejected_verifier_output": {
+                **decision.to_wire()["rejected_verifier_output"],
+                "execution_stop_sha256": "8" * 64,
+            },
+        }
+    )
+    changed = changed.model_copy(update={"resolution_sha256": changed.recompute_sha256()})
+    other = tmp_path / "other"
+    _publish(other, proof, changed, _handling(proof, decision))
+    with pytest.raises((ValueError, KnowledgeError)):
+        engineering_history(other, task, _scope(task), "delivery_history")

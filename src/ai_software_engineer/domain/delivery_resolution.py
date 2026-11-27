@@ -58,6 +58,7 @@ class DeliveryResolutionKind(StrEnum):
     RETRY_REJECTED_STATIC_QA_OUTPUT = "RETRY_REJECTED_STATIC_QA_OUTPUT"
     STATIC_QA_MISSING_ENTRY = "STATIC_QA_MISSING_ENTRY"
     SCHEDULE_RECOVERY_INPUT = "SCHEDULE_RECOVERY_INPUT"
+    RETRY_REJECTED_VERIFIER_OUTPUT = "RETRY_REJECTED_VERIFIER_OUTPUT"
 
 
 class DeliveryProofMissing(StrEnum):
@@ -238,6 +239,50 @@ class RejectedStaticQaOutputEvidence(DomainModel):
             self.missing_criterion_ids
         ) != set(self.all_criterion_ids) - set(self.reported_criterion_ids):
             raise ValueError("rejected static QA report must have one exact coverage gap")
+        return self
+
+
+class RejectedVerifierOutputEvidence(DomainModel):
+    """A stopped QA/Reviewer run whose output the platform contract rejected.
+
+    It binds the unchanged candidate, frozen Plan and accepted inputs. It is never a
+    verdict, never refunds work and never makes the rejected output acceptable.
+    """
+
+    task_id: TaskId
+    work_item_id: NonEmptyStr
+    role: Literal[AgentRole.QA, AgentRole.REVIEWER]
+    candidate_revision: FullGitRevision
+    plan_artifact_id: ArtifactId
+    plan_artifact_sha256: DispositionSha256
+    implementation_artifact_id: ArtifactId
+    implementation_artifact_sha256: DispositionSha256
+    accepted_qa_artifact_id: ArtifactId | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    accepted_qa_artifact_sha256: DispositionSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    original_lease_id: NonEmptyStr
+    original_claim_sha256: DispositionSha256
+    original_attempt: Annotated[StrictInt, Field(ge=1)]
+    original_dispatch_sequence: Annotated[StrictInt, Field(ge=0)]
+    checkpoint_sequence: Annotated[StrictInt, Field(ge=0)]
+    previous_run_id: RunId
+    previous_context_manifest_id: ContextId
+    invocation_start_sha256: DispositionSha256
+    invocation_outcome_sha256: DispositionSha256
+    execution_stop_sha256: DispositionSha256
+    error_code: Literal["INVALID_OUTPUT"] = "INVALID_OUTPUT"
+    budget_source: Literal["frozen_work_attempt"] = "frozen_work_attempt"
+
+    @model_validator(mode="after")
+    def validate_role_inputs(self) -> Self:
+        reviewer = self.role is AgentRole.REVIEWER
+        if (self.accepted_qa_artifact_id is not None) != reviewer or (
+            self.accepted_qa_artifact_sha256 is not None
+        ) != reviewer:
+            raise ValueError("verifier rerun binds an accepted QA PASS only for a Reviewer")
         return self
 
 
@@ -561,6 +606,9 @@ class DeliveryWaitInvestigation(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     rejected_workspace_admission: RejectedWorkspaceAdmissionEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    rejected_verifier_output: RejectedVerifierOutputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     retry_cause: ContinuationCause | None = None
@@ -920,6 +968,46 @@ class DeliveryWaitInvestigation(DomainModel):
             or self.rejected_output is not None
         ):
             raise ValueError("rejected static QA proof changed its exact failed admission")
+        verifier = self.rejected_verifier_output
+        if (
+            DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT in self.permitted_resolutions
+            and verifier is None
+        ):
+            raise ValueError("verifier rerun requires its exact rejected-output proof")
+        if verifier is not None and (
+            facts.role is not verifier.role
+            or facts.classification != "INVALID_OUTPUT"
+            or verifier.task_id != self.task_id
+            or verifier.work_item_id != self.work_item_id
+            or verifier.candidate_revision != self.source_revision
+            or verifier.checkpoint_sequence != self.checkpoint_sequence
+            or verifier.previous_run_id != self.original_run_id
+            or verifier.invocation_start_sha256 != self.invocation_start_sha256
+            or verifier.invocation_outcome_sha256 != self.invocation_outcome_sha256
+            or verifier.execution_stop_sha256 != self.process_stop_sha256
+            or self.permitted_resolutions
+            not in ((), (DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT,))
+            or any(
+                value is not None
+                for value in (
+                    self.retry_cause,
+                    self.interruption_receipt_sha256,
+                    self.original_authority,
+                    self.verifier_pause,
+                    self.verification_retry,
+                    self.verifier_preparation,
+                    self.static_qa_missing_entry,
+                    self.rejected_static_qa_output,
+                    self.pre_context_recovery_input,
+                    self.knowledge_preparation,
+                    self.knowledge_pause,
+                    self.rejected_output,
+                    self.rejected_knowledge,
+                    self.rejected_workspace_admission,
+                )
+            )
+        ):
+            raise ValueError("verifier rerun proof changed its exact stopped rejected output")
         return self
 
     def recompute_sha256(self) -> str:
@@ -1006,6 +1094,9 @@ class DeliveryResolution(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     rejected_workspace_admission: RejectedWorkspaceAdmissionEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    rejected_verifier_output: RejectedVerifierOutputEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
 
@@ -1213,6 +1304,40 @@ class DeliveryResolution(DomainModel):
             or self.static_qa_missing_entry is not None
         ):
             raise ValueError("rejected static QA retry changed authority or budget")
+        verifier = self.rejected_verifier_output
+        if (self.resolution_kind is DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT) != (
+            verifier is not None
+        ):
+            raise ValueError("only verifier rerun uses its rejected-output proof")
+        if verifier is not None and (
+            self.authorization_source != "engineering_operator_decision"
+            or self.operator_principal is None
+            or self.engineering_admission is not None
+            or verifier.task_id != self.task_id
+            or verifier.work_item_id != self.work_item_id
+            or verifier.candidate_revision != self.expected_source_revision
+            or verifier.checkpoint_sequence != self.expected_checkpoint_sequence
+            or any(
+                value is not None
+                for value in (
+                    self.retry_failure,
+                    self.retry_cause,
+                    self.original_authority,
+                    self.verifier_pause,
+                    self.verification_retry,
+                    self.verifier_preparation,
+                    self.static_qa_missing_entry,
+                    self.rejected_static_qa_output,
+                    self.pre_context_recovery_input,
+                    self.knowledge_preparation,
+                    self.knowledge_pause,
+                    self.rejected_output,
+                    self.rejected_knowledge,
+                    self.rejected_workspace_admission,
+                )
+            )
+        ):
+            raise ValueError("verifier rerun decision changed its authority, budget or candidate")
         return self
 
     def recompute_sha256(self) -> str:
@@ -1334,6 +1459,7 @@ class DeliveryWaitHandling(DomainModel):
                 or decision.rejected_knowledge != proof.rejected_knowledge
                 or decision.knowledge_pause != proof.knowledge_pause
                 or decision.rejected_workspace_admission != proof.rejected_workspace_admission
+                or decision.rejected_verifier_output != proof.rejected_verifier_output
                 or (
                     decision.task_id,
                     decision.work_item_id,

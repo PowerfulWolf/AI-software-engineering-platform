@@ -1,8 +1,13 @@
 """Pydantic and published JSON Schema agree on exact engineering proof boundaries."""
 
 import json
+import os
+import subprocess
+import sys
+from copy import deepcopy
 from datetime import timedelta
 from pathlib import Path
+from shutil import copy2, copytree
 from typing import Any
 
 import pytest
@@ -348,3 +353,180 @@ def test_legacy_verifier_evidence_omits_capacity_fields_and_keeps_digest() -> No
     assert record.recompute_sha256() == digest(
         {key: value for key, value in wire.items() if key != "resolution_sha256"}
     )
+
+
+VERIFIER_SCHEMAS = (
+    "engineering-wait-resolution.schema.json",
+    "console-operation.schema.json",
+    "console-deletion-cleanup.schema.json",
+)
+
+
+def _verifier_decision(role: str = "qa") -> dict[str, Any]:
+    wire = _wire("RESUME_UNINVOKED")
+    wire["resolution_kind"] = "RETRY_REJECTED_VERIFIER_OUTPUT"
+    evidence: dict[str, Any] = {
+        "task_id": "task_schema",
+        "work_item_id": "work_schema",
+        "role": role,
+        "candidate_revision": "c" * 40,
+        "plan_artifact_id": "art_plan_schema",
+        "plan_artifact_sha256": "a" * 64,
+        "implementation_artifact_id": "art_impl_schema",
+        "implementation_artifact_sha256": "b" * 64,
+        "original_lease_id": "lease_schema",
+        "original_claim_sha256": "c" * 64,
+        "original_attempt": 2,
+        "original_dispatch_sequence": 1,
+        "checkpoint_sequence": 4,
+        "previous_run_id": "run_schema",
+        "previous_context_manifest_id": "ctx_" + "d" * 64,
+        "invocation_start_sha256": "e" * 64,
+        "invocation_outcome_sha256": "f" * 64,
+        "execution_stop_sha256": "0" * 64,
+    }
+    if role == "reviewer":
+        evidence["accepted_qa_artifact_id"] = "art_qa_schema"
+        evidence["accepted_qa_artifact_sha256"] = "1" * 64
+    wire["rejected_verifier_output"] = evidence
+    return dict(DeliveryResolution.model_validate(wire).to_wire())
+
+
+def _resolution_validator(filename: str) -> Draft202012Validator:
+    schema = json.loads((SCHEMAS / filename).read_text(encoding="utf-8"))
+    return Draft202012Validator(
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": schema["$defs"],
+            "$ref": "#/$defs/DeliveryResolution",
+        }
+    )
+
+
+@pytest.mark.parametrize("filename", VERIFIER_SCHEMAS)
+@pytest.mark.parametrize("role", ("qa", "reviewer"))
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "none",
+        "missing_evidence",
+        "other_kind",
+        "policy",
+        "role_inputs",
+        "retry_cause",
+        "wrong_error",
+    ),
+)
+def test_verifier_rerun_resolution_model_and_schema_agree(
+    filename: str, role: str, mutation: str
+) -> None:
+    validator = _resolution_validator(filename)
+    wire = _verifier_decision(role)
+    validator.validate(wire)
+    DeliveryResolution.model_validate(wire)
+    if mutation == "none":
+        return
+    changed = deepcopy(wire)
+    evidence = changed["rejected_verifier_output"]
+    if mutation == "missing_evidence":
+        changed.pop("rejected_verifier_output")
+    elif mutation == "other_kind":
+        changed["resolution_kind"] = "RETRY_REJECTED_CODER_OUTPUT"
+    elif mutation == "policy":
+        changed["authorization_source"] = "organization_engineering_policy"
+    elif mutation == "role_inputs":
+        if role == "qa":
+            evidence["accepted_qa_artifact_id"] = "art_qa_schema"
+            evidence["accepted_qa_artifact_sha256"] = "1" * 64
+        else:
+            evidence.pop("accepted_qa_artifact_id")
+            evidence.pop("accepted_qa_artifact_sha256")
+    elif mutation == "retry_cause":
+        changed["retry_cause"] = "provider_transient"
+    else:
+        evidence["error_code"] = "POLICY_VIOLATION"
+    with pytest.raises(ValidationError):
+        DeliveryResolution.model_validate(changed)
+    with pytest.raises(SchemaValidationError):
+        validator.validate(changed)
+
+
+def test_verifier_rerun_rejects_coder_role() -> None:
+    wire = _verifier_decision()
+    wire["rejected_verifier_output"]["role"] = "coder"
+    with pytest.raises(ValidationError):
+        DeliveryResolution.model_validate(wire)
+    with pytest.raises(SchemaValidationError):
+        _resolution_validator(VERIFIER_SCHEMAS[0]).validate(wire)
+
+
+def test_engineering_wait_resolution_schema_parity(tmp_path: Path) -> None:
+    """Regeneration reproduces the published bytes and a second run is byte-stable."""
+    root = tmp_path / "regeneration"
+    copytree(SCHEMAS, root / "schemas")
+    (root / "scripts").mkdir()
+    for name in (
+        "sync-engineering-authority-schemas.py",
+        "sync-contained-unknown-contracts.py",
+    ):
+        copy2(SCHEMAS.parent / "scripts" / name, root / "scripts" / name)
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(SCHEMAS.parent / "src")
+    published = {path.name: path.read_bytes() for path in SCHEMAS.glob("*.schema.json")}
+    for _ in range(2):
+        subprocess.run(
+            (
+                sys.executable,
+                str(root / "scripts/sync-engineering-authority-schemas.py"),
+                "--wait-only",
+            ),
+            check=True,
+            env=environment,
+        )
+        regenerated = {
+            path.name: path.read_bytes() for path in (root / "schemas").glob("*.schema.json")
+        }
+        assert regenerated == published
+    for filename in (
+        *VERIFIER_SCHEMAS,
+        "stopped-failure-budget-settlement.schema.json",
+        "stopped-unknown-budget-settlement.schema.json",
+    ):
+        definitions = json.loads(published[filename])["$defs"]
+        assert "RETRY_REJECTED_VERIFIER_OUTPUT" in definitions["DeliveryResolutionKind"]["enum"]
+        assert "RejectedVerifierOutputEvidence" in definitions
+        guards = json.dumps(definitions["DeliveryWaitInvestigation"]["allOf"])
+        assert "RETRY_REJECTED_VERIFIER_OUTPUT" in guards
+
+
+@pytest.mark.parametrize(
+    "kind", ("RESUME_UNINVOKED", "REVERIFY_CANDIDATE", "RETRY_VERIFIER_PREPARATION")
+)
+def test_existing_recovery_paths_unchanged(kind: str) -> None:
+    """Old decisions omit the new field, keep their digest and cannot borrow the new proof."""
+    wire = _wire(kind)
+    assert "rejected_verifier_output" not in wire
+    record = DeliveryResolution.model_validate(wire)
+    assert record.to_wire() == wire
+    assert record.recompute_sha256() == digest(
+        {key: value for key, value in wire.items() if key != "resolution_sha256"}
+    )
+    for filename in VERIFIER_SCHEMAS:
+        validator = _resolution_validator(filename)
+        validator.validate(wire)
+        borrowed = {
+            **wire,
+            "rejected_verifier_output": _verifier_decision()["rejected_verifier_output"],
+        }
+        with pytest.raises(SchemaValidationError):
+            validator.validate(borrowed)
+    with pytest.raises(ValidationError):
+        DeliveryResolution.model_validate(
+            {
+                **wire,
+                "rejected_verifier_output": _verifier_decision()["rejected_verifier_output"],
+            }
+        )
+    legacy = _proof(make_task())
+    assert "rejected_verifier_output" not in legacy.to_wire()
+    DeliveryWaitInvestigation.model_validate(legacy.to_wire()).validate_integrity()

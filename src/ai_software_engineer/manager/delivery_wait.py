@@ -42,6 +42,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     RejectedCoderOutputEvidence,
     RejectedKnowledgePreparationEvidence,
     RejectedStaticQaOutputEvidence,
+    RejectedVerifierOutputEvidence,
     RejectedWorkspaceAdmissionEvidence,
     ResolveDeliveryWait,
     StaticQaMissingEntryEvidence,
@@ -123,6 +124,12 @@ from ai_software_engineer.manager.rejected_knowledge_preparation import (
 from ai_software_engineer.manager.rejected_output_checkpoint import (
     read_rejected_checkpoint,
     verify_rejected_workspace,
+)
+from ai_software_engineer.manager.rejected_verifier_output import (
+    VerifierStopReader,
+    VerifierStopUncertain,
+    rejected_verifier_output_candidate,
+    rejected_verifier_output_evidence,
 )
 from ai_software_engineer.manager.rejected_workspace_admission import (
     rejected_workspace_admission_evidence,
@@ -528,6 +535,7 @@ class DeliveryWaitService:
         engineering_authority: EngineeringAuthority | None = None,
         fact_collector: WaitFactCollector | None = None,
         stop_observer: WaitStopObserver | None = None,
+        verifier_stop_reader: VerifierStopReader | None = None,
         knowledge_requirement_id: str | None = None,
         knowledge_retry: Callable[[str], KnowledgePreparationRetryEvidence | None] | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -543,6 +551,7 @@ class DeliveryWaitService:
         self.artifacts = artifacts
         self.engineering_authority, self.fact_collector = engineering_authority, fact_collector
         self.stop_observer = stop_observer
+        self.verifier_stop_reader = verifier_stop_reader
         self.knowledge_requirement_id, self.knowledge_retry = (
             knowledge_requirement_id,
             knowledge_retry,
@@ -815,6 +824,7 @@ class DeliveryWaitService:
             not in {
                 (DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,),
                 (DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT,),
+                (DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT,),
             }
         ):
             try:
@@ -1134,6 +1144,7 @@ class DeliveryWaitService:
         if automatic and command.resolution_kind in {
             DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,
             DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT,
+            DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT,
             DeliveryResolutionKind.SCHEDULE_RECOVERY_INPUT,
         }:
             raise DeliveryWaitRejected("此恢复必须由工程责任人作精确决定")
@@ -1364,6 +1375,12 @@ class DeliveryWaitService:
                         proof.rejected_static_qa_output
                         if command.resolution_kind
                         is DeliveryResolutionKind.RETRY_REJECTED_STATIC_QA_OUTPUT
+                        else None
+                    ),
+                    rejected_verifier_output=(
+                        proof.rejected_verifier_output
+                        if command.resolution_kind
+                        is DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT
                         else None
                     ),
                 )
@@ -1676,6 +1693,63 @@ class DeliveryWaitService:
                 missing=tuple(missing),
                 permitted=permitted if not missing else (),
             )
+        if (
+            self.verifier_stop_reader is not None
+            and guard is not None
+            and self.artifacts is not None
+            and receipt is None
+            and start is not None
+            and outcome is not None
+            and rejected_verifier_output_candidate(item, task, start, outcome)
+        ):
+            # QA/Reviewer INVALID_OUTPUT: an exact engineering decision may rerun only
+            # the rejected verifier. Incomplete or ineligible facts keep old routing.
+            try:
+                verifier_rerun = rejected_verifier_output_evidence(
+                    item=item,
+                    step=step,
+                    task=task,
+                    start=start,
+                    outcome=outcome,
+                    queue=self.queue,
+                    artifacts=self.artifacts,
+                    events=self.repository.list_events(task.id),
+                    stop=self.verifier_stop_reader(task, step, start, guard),
+                )
+            except VerifierStopUncertain:
+                return self._proof(
+                    item,
+                    step,
+                    task,
+                    start=start,
+                    outcome=outcome,
+                    missing=(DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN,),
+                )
+            except (
+                ContinuationRejected,
+                ArtifactStoreError,
+                ValueError,
+                OSError,
+                QueueError,
+                KnowledgeError,
+            ):
+                verifier_rerun = None
+            if verifier_rerun is not None:
+                exhausted = task.work_budget_exhausted or task.attempts >= task.max_attempts
+                return self._proof(
+                    item,
+                    step,
+                    task,
+                    start=start,
+                    outcome=outcome,
+                    missing=(DeliveryProofMissing.BUDGET_EXHAUSTED,) if exhausted else (),
+                    permitted=(
+                        ()
+                        if exhausted
+                        else (DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT,)
+                    ),
+                    rejected_verifier_output=verifier_rerun,
+                )
         workspace = self._workspace_admission_evidence(item, step, task, start, outcome, receipt)
         if workspace is not None:
             workspace.validate_integrity()
@@ -2832,6 +2906,7 @@ class DeliveryWaitService:
         rejected_workspace_admission: RejectedWorkspaceAdmissionEvidence | None = None,
         rejected_output: RejectedCoderOutputEvidence | None = None,
         rejected_static_qa_output: RejectedStaticQaOutputEvidence | None = None,
+        rejected_verifier_output: RejectedVerifierOutputEvidence | None = None,
         observed_stop: ExecutionCaptureStop | None = None,
         local_stop_confirmation_available: bool = False,
     ) -> DeliveryWaitInvestigation:
@@ -2888,7 +2963,9 @@ class DeliveryWaitService:
             provider_failure_code=provider_failure_code,
             interruption_receipt_sha256=receipt.receipt_sha256 if receipt else None,
             process_stop_sha256=(
-                receipt.process_stop_sha256
+                rejected_verifier_output.execution_stop_sha256
+                if rejected_verifier_output
+                else receipt.process_stop_sha256
                 if receipt
                 else observed_stop.process_stop.stop_sha256
                 if observed_stop
@@ -2923,6 +3000,7 @@ class DeliveryWaitService:
             rejected_workspace_admission=rejected_workspace_admission,
             rejected_output=rejected_output,
             rejected_static_qa_output=rejected_static_qa_output,
+            rejected_verifier_output=rejected_verifier_output,
             verifier_pause=outcome.service_pause
             if outcome and item.role in {AgentRole.QA, AgentRole.REVIEWER}
             else None,
@@ -2939,6 +3017,10 @@ class DeliveryWaitService:
             next_action=(
                 _static_qa_next_action(static_qa_observation)
                 if permitted == (DeliveryResolutionKind.STATIC_QA_MISSING_ENTRY,)
+                else "已核验原独立验收的输出被平台契约拒绝, 执行已停止, 没有被接纳的产物, "
+                "Coder 候选与冻结计划未变。工程负责人可决定只重跑被拒的 QA/Review: "
+                "不改动 Coder 候选, 消耗一次普通工作额度; 原失败记录全部保留。"
+                if permitted == (DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT,)
                 else "已核验原 Coder 输入超限发生在 Context 封存前, 原模型未启动, "
                 "批准的三份完整历史补丁可按独立工程决定逐轮送入同一 Task; "
                 "原计划、工作额度、工作区和审计历史保持不变。"

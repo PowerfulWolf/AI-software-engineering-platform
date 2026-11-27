@@ -86,6 +86,8 @@ class ReadFileResult(ToolResultBase):
     content_sha256: Sha256
     bytes_read: StrictInt = Field(ge=0)
     truncated: StrictBool = False
+    # Lines in the whole file when it was read completely; absent when unknown.
+    total_lines: StrictInt | None = Field(default=None, ge=0)
 
 
 class WriteFileResult(ToolResultBase):

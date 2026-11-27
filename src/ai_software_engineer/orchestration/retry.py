@@ -280,6 +280,20 @@ class RetryingOrchestrator(SerialOrchestrator):
                         (active_progress.artifact_id,),
                         source_revision=active_progress.source_revision,
                     )
+                if coder_progress_stalled(
+                    self._artifacts_for_task(task.id), coder_source.superseded_artifact_ids
+                ):
+                    # Stop before the remaining allowance is spent on a step the Coder
+                    # cannot finish (for example a file outside its write scope).
+                    return self._blocked(
+                        task,
+                        RetryClassification.BUDGET_EXHAUSTED,
+                        CODER_STALL_REASON,
+                        task.attempts,
+                        event_ids,
+                        (active_progress.artifact_id,),
+                        source_revision=active_progress.source_revision,
+                    )
                 task, event_id = self._transition(
                     task,
                     TaskStatus.QUEUED,
@@ -1199,6 +1213,36 @@ def _implementation_for_feedback(
         ),
         None,
     )
+
+
+# Consecutive continuation runs that completed no new plan step before ASE stops
+# early. Recovery treats this block like an exhausted run budget.
+CODER_STALL_RUNS = 3
+CODER_STALL_REASON = (
+    f"Coder made no plan progress in {CODER_STALL_RUNS} consecutive runs; "
+    "stopped before spending the remaining run budget"
+)
+
+
+def coder_progress_stalled(
+    artifacts: tuple[Artifact, ...], superseded_artifact_ids: frozenset[str] = frozenset()
+) -> bool:
+    """True when the last CODER_STALL_RUNS checkpoints added no completed plan step."""
+    by_sequence: dict[int, CoderProgressArtifact] = {}
+    for artifact in artifacts:
+        if (
+            isinstance(artifact, CoderProgressArtifact)
+            and artifact.artifact_id not in superseded_artifact_ids
+        ):
+            by_sequence[artifact.content.checkpoint_sequence] = artifact
+    sequences = sorted(by_sequence)
+    if len(sequences) < CODER_STALL_RUNS + 1:
+        return False
+    window = sequences[-(CODER_STALL_RUNS + 1) :]
+    if window != list(range(window[0], window[0] + len(window))):
+        return False  # a gap means another run decided the checkpoint in between
+    completed = {frozenset(by_sequence[item].content.completed_step_ids) for item in window}
+    return len(completed) == 1
 
 
 def _active_progress(

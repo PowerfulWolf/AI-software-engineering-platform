@@ -512,3 +512,53 @@ def test_restart_recovers_t009_qa_checkpoint_and_continues(tmp_path: Path) -> No
         assert result.task.attempts == 2
         assert adapter.requests[0].role is AgentRole.CODER
         assert adapter.requests[0].attempt == 2
+
+
+def test_coder_without_plan_progress_stops_before_spending_the_remaining_budget(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.orchestration.retry import (
+        CODER_STALL_REASON,
+        CODER_STALL_RUNS,
+        RetryClassification,
+    )
+
+    # Every scripted checkpoint reports the same completed steps: the Coder is stuck.
+    adapter = ScriptedAdapter(coder_progress=tuple(range(1, 9)))
+    task, repository, runner = _runner(tmp_path, adapter, max_attempts=8)
+    try:
+        result = runner.run_task(task.id)
+
+        assert isinstance(result, BlockedResult)
+        assert result.classification is RetryClassification.BUDGET_EXHAUSTED
+        assert result.reason == CODER_STALL_REASON
+        coder_runs = [item for item in adapter.requests if item.role is AgentRole.CODER]
+        # One checkpoint that progressed, then CODER_STALL_RUNS runs without progress.
+        assert len(coder_runs) == CODER_STALL_RUNS + 1
+        assert result.task.attempts < 8
+        assert not result.task.work_budget_exhausted
+    finally:
+        repository.close()
+
+
+def test_coder_progress_stall_needs_consecutive_identical_checkpoints() -> None:
+    from ai_software_engineer.orchestration.retry import coder_progress_stalled
+
+    template = make_coder_progress_artifact()
+
+    def progress(sequence: int, completed: tuple[str, ...]) -> CoderProgressArtifact:
+        return template.model_copy(
+            update={
+                "artifact_id": f"art_progress_{sequence:03d}",
+                "content": template.content.model_copy(
+                    update={"checkpoint_sequence": sequence, "completed_step_ids": completed}
+                ),
+            }
+        )
+
+    same = tuple(progress(item, ("step_a",)) for item in (1, 2, 3, 4))
+    assert coder_progress_stalled(same)
+    assert not coder_progress_stalled(same[1:])
+    assert not coder_progress_stalled((*same[:3], progress(4, ("step_a", "step_b"))))
+    assert not coder_progress_stalled((same[0], same[1], same[2], progress(5, ("step_a",))))
+    assert not coder_progress_stalled(same, frozenset({"art_progress_002"}))

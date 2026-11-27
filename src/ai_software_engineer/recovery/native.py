@@ -63,6 +63,7 @@ from ai_software_engineer.multi_directory.retirement import (
     RequirementRetirementStore,
 )
 from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.orchestration.retry import CODER_STALL_REASON
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.project_workspace import ProjectWorkspace
@@ -155,7 +156,11 @@ def _is_recoverable_terminal_coder_route(
         route.outcome is RouteAttemptOutcome.SUCCEEDED
         and isinstance(artifact, CoderProgressArtifact)
         and artifact.content.checkpoint_sequence == task.attempts
-        and task.work_budget_exhausted
+        and (
+            task.work_budget_exhausted
+            # ASE stopped a Coder that kept requesting continuation without progress.
+            or checkpoint.failure_summary == CODER_STALL_REASON
+        )
         and checkpoint.failure_code is DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
     )
 

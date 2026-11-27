@@ -91,7 +91,13 @@ def count_scans(monkeypatch: pytest.MonkeyPatch) -> Scans:
     def source(
         content: str, *, source_path: str | None
     ) -> tuple[redaction.RedactionOccurrence, ...]:
-        if content == SOURCE and source_path == "src/app.py":
+        # Count complete-source scans only; patch hunks are inspected (and
+        # cached) under their own key and are already counted as ``patch``.
+        if (
+            content == SOURCE
+            and source_path == "src/app.py"
+            and not redaction._PATCH_SOURCE_INSPECTION.get()
+        ):
             scans.source += 1
         return original(content, source_path=source_path)
 

@@ -165,6 +165,9 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PendingFixture:
     execution = Mock()
     monkeypatch.setattr(recovery, "open_plan", lambda _: (store, plan))
     monkeypatch.setattr(recovery, "_execute", execution)
+    # The fixture authorizes without sealing a Task record, so Continue replays
+    # the saved approval to seal it. Sealing has its own tests; keep it offline.
+    monkeypatch.setattr(recovery, "approve", Mock())
     monkeypatch.setattr(recovery, "_dispatch_for", lambda *_: dispatch)
     monkeypatch.setattr(recovery, "latest_delivery", lambda _: (store, plan, path))
     monkeypatch.setattr(recovery, "require_current_plan", lambda _: plan)

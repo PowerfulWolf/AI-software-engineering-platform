@@ -2791,3 +2791,88 @@ test("workspace refusal rejects stale retained controls, missing proof and verif
       "修复工作区准入后继续原开发"), undefined, role);
   }
 });
+
+function rejectedVerifierOutput(h, role = "qa") {
+  const proof = investigation(h);
+  h.step.role = h.step.wait_disposition.facts.role = role;
+  h.step.status = "WAITING_HUMAN";
+  h.step.wait_disposition.facts.classification = "INVALID_OUTPUT";
+  h.step.wait_disposition.facts.evidence_ids = [];
+  h.task.status = role === "reviewer" ? "REVIEW" : "QA";
+  h.task.attempts = 4;
+  h.task.max_attempts = 10;
+  proof.permitted_resolutions = ["RETRY_REJECTED_VERIFIER_OUTPUT"];
+  proof.original_run_id = "run_previous_verifier";
+  proof.invocation_start_sha256 = digest("1");
+  proof.invocation_outcome_sha256 = digest("2");
+  proof.process_stop_sha256 = digest("3");
+  proof.rejected_verifier_output = {
+    task_id: proof.task_id, work_item_id: proof.work_item_id, role,
+    candidate_revision: proof.source_revision,
+    plan_artifact_id: "art_plan_frozen", plan_artifact_sha256: digest("4"),
+    implementation_artifact_id: "art_implementation_candidate", implementation_artifact_sha256: digest("5"),
+    ...(role === "reviewer" ? {accepted_qa_artifact_id: "art_qa_pass", accepted_qa_artifact_sha256: digest("6")} : {}),
+    original_lease_id: "lease_previous_verifier", original_claim_sha256: digest("7"),
+    original_attempt: 4, original_dispatch_sequence: 0, checkpoint_sequence: 4,
+    previous_run_id: proof.original_run_id, previous_context_manifest_id: "ctx_" + digest("8"),
+    invocation_start_sha256: proof.invocation_start_sha256,
+    invocation_outcome_sha256: proof.invocation_outcome_sha256,
+    execution_stop_sha256: proof.process_stop_sha256,
+    error_code: "INVALID_OUTPUT", budget_source: "frozen_work_attempt",
+  };
+  return proof;
+}
+const verifierRerunLabel = "只重跑被拒的 QA/Review（不改动 Coder 候选）";
+
+for (const role of ["qa", "reviewer"]) {
+  test(`verifier-invalid-output-rerun: ${role} exposes a proof-bound rerun decision with remaining budget`, async () => {
+    const h = harness();
+    const proof = rejectedVerifierOutput(h, role);
+    const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    const decide = control(box, verifierRerunLabel);
+    assert.ok(decide);
+    const facts = JSON.parse(h.run("JSON.stringify(engineeringWaitCurrentFacts(data.request, data.step, proof, null, null, null))"));
+    assert.match(facts.happened, /未通过平台契约/);
+    assert.match(facts.platform, /不改动 Coder 候选/);
+    assert.match(facts.platform, /消耗 1 次普通工作额度（当前剩余 6 次）/);
+    assert.match(text(box), role === "reviewer" ? /原已接纳的 QA PASS/ : /不调度 Coder，也不调度 Review/);
+    await decide.events.click();
+    const intent = JSON.parse(h.run("JSON.stringify(submitted[0])"));
+    assert.equal(intent.action, "RESOLVE_DELIVERY_WAIT");
+    assert.equal(intent.resolution_kind, "RETRY_REJECTED_VERIFIER_OUTPUT");
+    assert.equal(intent.proof_sha256, proof.proof_sha256);
+    assert.equal(Object.hasOwn(intent, "rejected_verifier_output"), false);
+  });
+}
+
+test("verifier-invalid-output-rerun hides submit for exhausted budget, stale proof or wrong role", () => {
+  for (const mutation of [
+    "data.task.attempts = data.task.max_attempts",
+    "proof.rejected_verifier_output.execution_stop_sha256 = 'bad'",
+    "proof.process_stop_sha256 = null",
+    "proof.rejected_verifier_output.previous_run_id = 'run_other'",
+    "proof.rejected_verifier_output.accepted_qa_artifact_id = 'art_qa_pass'",
+    "data.step.wait_disposition.facts.classification = 'POLICY_VIOLATION'",
+    "data.task.status = 'REVIEW'",
+    "data.step.role = data.step.wait_disposition.facts.role = 'coder'",
+    "proof.missing = ['BUDGET_EXHAUSTED']",
+  ]) {
+    const h = harness();
+    rejectedVerifierOutput(h, "qa");
+    const before = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.notEqual(control(before, verifierRerunLabel), undefined, mutation);
+    h.run(mutation);
+    const after = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+    assert.equal(control(after, verifierRerunLabel), undefined, mutation);
+  }
+});
+
+test("verifier-invalid-output-rerun retained control refuses after authority loss", async () => {
+  const h = harness();
+  rejectedVerifierOutput(h, "qa");
+  const box = h.run("engineeringWaitBox(data.request, data.task, data.step)");
+  const decide = control(box, verifierRerunLabel);
+  h.run("consoleSupportedActions = consoleSupportedActions.filter(item => item !== 'RESOLVE_DELIVERY_WAIT')");
+  await decide.events.click();
+  assert.equal(h.run("submitted.length"), 0);
+});

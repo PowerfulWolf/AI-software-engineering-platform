@@ -61,6 +61,10 @@ class SeedQueue(MySqlRoleQueue):
         assert task_id == self.service.dispatch.task_id
         return frozenset()
 
+    def rejected_static_qa_artifact_ids(self, task_id: str) -> frozenset[str]:
+        assert task_id == self.service.dispatch.task_id
+        return frozenset()
+
 
 class SeedGuard(WorkerExecutionGuard):
     def __init__(self, queue: SeedQueue) -> None:

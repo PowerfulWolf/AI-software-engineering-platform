@@ -6,8 +6,18 @@ from typing import Literal, Self
 from pydantic import AwareDatetime, Field, model_validator
 
 from ai_software_engineer.agents.continuation import ContinuationExecutionUncertain
-from ai_software_engineer.agents.execution import PausedInvocationProof
-from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentResult
+from ai_software_engineer.agents.execution import (
+    ExecutionStop,
+    NativeProcessStop,
+    PausedInvocationProof,
+    SynchronousToolLoopStop,
+)
+from ai_software_engineer.agents.models import (
+    AgentErrorCode,
+    AgentRequest,
+    AgentResult,
+    AgentRunStatus,
+)
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import StageSha256
 from ai_software_engineer.knowledge.models import digest
@@ -30,12 +40,31 @@ class DeliveryInvocationStart(DomainModel):
             raise ValueError("invocation start integrity mismatch")
 
 
+def verifier_stop_applies(result: AgentResult) -> bool:
+    """Only a nontransient contract-rejected QA/Reviewer output keeps its stop."""
+    from ai_software_engineer.agents.verifier_stop import VERIFIER_ROLES
+
+    return (
+        result.role in VERIFIER_ROLES
+        and result.status is AgentRunStatus.FAILED
+        and result.artifact is None
+        and result.error is not None
+        and result.error.code is AgentErrorCode.INVALID_OUTPUT
+        and not result.error.transient
+    )
+
+
 class DeliveryInvocationOutcome(DomainModel):
     kind: Literal["delivery_invocation_outcome"] = "delivery_invocation_outcome"
     start: DeliveryInvocationStart
     result: AgentResult
     outcome_sha256: StageSha256
     service_pause: PausedInvocationProof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    # The adapter's own observed stop of a QA/Reviewer execution whose output the
+    # platform contract rejected. Absent for every other outcome (old digests hold).
+    verifier_stop: ExecutionStop | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
 
@@ -67,6 +96,17 @@ class DeliveryInvocationOutcome(DomainModel):
                 or result.error.code is not AgentErrorCode.SERVICE_PAUSED
             ):
                 raise ValueError("pause proof belongs to another exact invocation or outcome")
+        if self.verifier_stop is not None:
+            if not verifier_stop_applies(result):
+                raise ValueError("verifier stop requires a rejected QA/Reviewer output")
+            stop = self.verifier_stop
+            stop.validate_integrity()
+            if isinstance(stop, SynchronousToolLoopStop):
+                stop.require_request(request)
+            elif not isinstance(stop, NativeProcessStop) or stop.session_proof is None:
+                raise ValueError("verifier stop requires a complete owned-session proof")
+            if stop.stopped_at < self.start.started_at:
+                raise ValueError("verifier stop predates its original invocation")
         return self
 
     def validate_integrity(self) -> None:
@@ -157,8 +197,17 @@ class DurableInvocationControl:
 
         scope = current_service_pause()
         pause = scope.control.invocation_stop(request) if scope is not None else None
+        from ai_software_engineer.agents.verifier_stop import current_verifier_stop
+
+        stop = current_verifier_stop(request) if verifier_stop_applies(result) else None
+        if stop is not None and stop.stopped_at < start.started_at:
+            stop = None
         outcome = DeliveryInvocationOutcome(
-            start=start, result=result, service_pause=pause, outcome_sha256="0" * 64
+            start=start,
+            result=result,
+            service_pause=pause,
+            verifier_stop=stop,
+            outcome_sha256="0" * 64,
         )
         outcome = outcome.model_copy(
             update={
@@ -169,3 +218,16 @@ class DurableInvocationControl:
         )
         with self.guard.write_scope():
             self.records.put("invocation-outcomes", key, outcome)
+
+
+def sealed_verifier_stop(
+    records: KnowledgeRecordStore, start: DeliveryInvocationStart
+) -> ExecutionStop | None:
+    """Read only the stop sealed in the original exact outcome; never infer one."""
+    outcome = records.find("invocation-outcomes", start.work_item_id, DeliveryInvocationOutcome)
+    if outcome is None:
+        return None
+    outcome.validate_integrity()
+    if outcome.start != start:
+        return None
+    return outcome.verifier_stop

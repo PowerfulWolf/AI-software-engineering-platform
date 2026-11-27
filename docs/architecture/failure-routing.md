@@ -53,6 +53,20 @@
 `WAITING_HUMAN` route；后续 composition 必须持久化并使用它们。只有人类决定终止，或等待超过
 明确治理期限并按 policy 关闭交付时，Task 才进入 `BLOCKED`。
 
+### QA/Reviewer 输出被拒后的受控重跑
+
+QA 或 Reviewer 的执行被平台契约拒绝（`INVALID_OUTPUT`、`transient=false`、无产物）且已停止时，
+WorkItem 进入工程调查等待，不回 Coder，也不自动重试。核查等待在全部事实满足时返回
+`NEEDS_AUTHORIZATION`，只广告 `RETRY_REJECTED_VERIFIER_OUTPUT`：原执行已停止（无 ACTIVE claim、
+无存活进程、有真实 stop 或 HTTP 同步完成收据）、原 Run 无已接纳产物或采纳它的 StateEvent、
+候选 SHA/implementation/冻结计划/Task 意图未漂移、普通工作额度至少剩一次。额度耗尽时报告
+`BUDGET_EXHAUSTED` 并按现有规则终局，不暴露必然失败的操作；临时故障额度不能替代工作额度。
+
+只有可信 ENGINEERING 操作者以 `engineering_operator_decision` 提交才可消费；自动工程准入一律拒绝。
+消费扣一次普通工作额度，建立同角色后继（新 WorkItem/claim/Run/Context），只重跑被拒角色；
+Reviewer 沿用已接纳 QA PASS。重跑产出的 QA FAIL/Review REJECT 仍按上表回 Coder。
+有效否定结论、`POLICY_VIOLATION`、临时故障与 Coder 失败不进入此路径。
+
 ## 4. 升级内容
 
 `manager/delivery.py::_blocked_failure_code(BlockedResult) -> DeliveryFailureCode` 不得把所有

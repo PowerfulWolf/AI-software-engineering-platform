@@ -75,6 +75,7 @@ from ai_software_engineer.agents.verification_output import (
     validate_static_qa_missing_entry_output,
     validate_verification_output,
 )
+from ai_software_engineer.agents.verifier_stop import VERIFIER_ROLES, record_verifier_stop
 from ai_software_engineer.agents.workspace_admission import (
     InitialWorkspaceAdmission as InitialWorkspaceAdmission,
 )
@@ -1017,6 +1018,14 @@ class CodexCliAgentAdapter:
                     "Native execution authority could not be confirmed",
                     execution_abort_reason=invocation.execution_abort_reason,
                 )
+            if (
+                request.role in VERIFIER_ROLES
+                and invocation.process_stop is not None
+                and invocation.process_stop.kind in {"completed", "failed"}
+            ):
+                # The runner's own owned-session stop; kept only if the output is
+                # later rejected by the platform contract.
+                record_verifier_stop(request, invocation.process_stop)
             if (
                 invocation.process_stop is not None
                 and invocation.process_stop.kind == "service_pause"

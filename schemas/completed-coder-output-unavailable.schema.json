@@ -1089,6 +1089,21 @@
             }
           ],
           "default": null
+        },
+        "verifier_stop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeProcessStop"
+            },
+            {
+              "$ref": "#/$defs/SynchronousToolLoopStop"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verifier Stop"
         }
       },
       "required": [

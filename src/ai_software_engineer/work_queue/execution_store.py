@@ -29,6 +29,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     KnowledgePreparationRetryEvidence,
     RejectedCoderOutputEvidence,
     RejectedKnowledgePreparationEvidence,
+    RejectedVerifierOutputEvidence,
     rejected_knowledge_wait_matches,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringCapability
@@ -1492,6 +1493,49 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
             raise QueueCorruption("知识拒绝续跑改变了原源码、普通工作额度或精确工程决定")
         return evidence
 
+    def rejected_verifier_retry(self, work_item_id: str) -> RejectedVerifierOutputEvidence | None:
+        """Return the exact consumed verifier rerun decision for this successor, if any."""
+        current = self.get(work_item_id)
+        matches = tuple(
+            decision
+            for decision in self._rejected_wait_decisions(
+                current.task_id, DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT
+            )
+            if current.id == "work_" + decision.resolution_sha256
+        )
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise QueueCorruption("审查角色重跑缺少唯一已消费的精确决定")
+        decision = matches[0]
+        evidence = decision.rejected_verifier_output
+        if evidence is None:
+            raise QueueCorruption("审查角色重跑缺少已消费的完整证明")
+        parent = self.get(evidence.work_item_id)
+        step, parent_step = self.step(current.id), self.step(parent.id)
+        if (
+            decision.authorization_source != "engineering_operator_decision"
+            or decision.operator_principal is None
+            or decision.engineering_admission is not None
+            or current.parent_work_item_id != parent.id
+            or current.task_id != evidence.task_id
+            or parent.task_id != evidence.task_id
+            or current.repository_id != parent.repository_id
+            or current.repository_scopes != parent.repository_scopes
+            or current.role is not evidence.role
+            or parent.role is not evidence.role
+            or parent.status is not WorkItemStatus.CLOSED
+            or parent.attempt != evidence.original_attempt
+            or current.attempt != evidence.original_attempt + 1
+            or current.checkpoint_sequence != evidence.checkpoint_sequence
+            or parent.checkpoint_sequence != evidence.checkpoint_sequence
+            or step.boundary.source_revision != evidence.candidate_revision
+            or parent_step.boundary.source_revision != evidence.candidate_revision
+            or step.allocation_sha256 != parent_step.allocation_sha256
+        ):
+            raise QueueCorruption("审查角色重跑决定不属于当前工作项、原候选或原分配")
+        return evidence
+
     def rejected_output_artifact_ids(self, task_id: str) -> frozenset[str]:
         return frozenset(
             decision.rejected_output.rejected_artifact_id
@@ -2254,6 +2298,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 DeliveryResolutionKind.RETRY_REJECTED_CODER_OUTPUT,
                 DeliveryResolutionKind.RETRY_REJECTED_KNOWLEDGE_PREPARATION,
                 DeliveryResolutionKind.RETRY_REJECTED_WORKSPACE_ADMISSION,
+                DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT,
             }:
                 if current.role not in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER):
                     raise QueueConflict("wait does not belong to a delivery role")
@@ -2592,6 +2637,118 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     )
                     if cursor.fetchone() is not None:
                         raise QueueConflict("原开发结果已经完成推进, 不能作为被拒草稿重试")
+                    updated_task = Task.model_validate(
+                        {**task.to_wire(), "attempts": task.attempts + 1}
+                    )
+                elif (
+                    resolution.resolution_kind
+                    is DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT
+                ):
+                    verifier = resolution.rejected_verifier_output
+                    verifier_stage = {
+                        AgentRole.QA: TaskStatus.QA,
+                        AgentRole.REVIEWER: TaskStatus.REVIEW,
+                    }.get(current.role)
+                    if (
+                        verifier is None
+                        or verifier_stage is None
+                        or task.status is not verifier_stage
+                        or verifier.role is not current.role
+                        or disposition.facts.classification != "INVALID_OUTPUT"
+                        or resolution.authorization_source != "engineering_operator_decision"
+                        or resolution.operator_principal is None
+                        or resolution.engineering_admission is not None
+                        or verifier.task_id != task.id
+                        or verifier.work_item_id != current.id
+                        or verifier.original_attempt != task.attempts
+                        or verifier.original_attempt != current.attempt
+                        or verifier.original_dispatch_sequence != current.dispatch_sequence
+                        or verifier.checkpoint_sequence != current.checkpoint_sequence
+                        or verifier.candidate_revision != step.boundary.source_revision
+                        or task.work_budget_exhausted
+                        or task.attempts >= task.max_attempts
+                    ):
+                        raise QueueConflict("审查角色重跑缺少当前精确被拒输出或剩余普通工作额度")
+                    verifier_claim = self.original_claim(verifier.original_lease_id)
+                    if (
+                        digest(verifier_claim.to_wire()) != verifier.original_claim_sha256
+                        or verifier_claim.work_item.id != current.id
+                        or verifier_claim.work_item.role is not current.role
+                        or verifier_claim.work_item.attempt != verifier.original_attempt
+                        or verifier_claim.work_item.dispatch_sequence
+                        != verifier.original_dispatch_sequence
+                        or verifier_claim.work_item.checkpoint_sequence
+                        != verifier.checkpoint_sequence
+                    ):
+                        raise QueueConflict("审查角色重跑改变了原真实领取身份")
+                    cursor.execute(
+                        "SELECT lease_id FROM work_queue_claims WHERE task_id=%s "
+                        "AND state='ACTIVE' FOR UPDATE",
+                        (task.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("原任务仍有活跃领取, 不能重跑被拒审查角色")
+                    cursor.execute(
+                        "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+                        "WHERE task_id=%s FOR UPDATE",
+                        (task.id,),
+                    )
+                    verifier_publications = tuple(
+                        _decode(row, AcceptedRoleArtifact) for row in cursor.fetchall()
+                    )
+                    if any(
+                        publication.work_item_id == current.id
+                        or publication.run_id == verifier.previous_run_id
+                        for publication in verifier_publications
+                    ):
+                        raise QueueConflict("原审查执行已有接纳产物, 不能重跑")
+                    required_inputs: list[tuple[str, str]] = [
+                        (
+                            verifier.implementation_artifact_id,
+                            verifier.implementation_artifact_sha256,
+                        )
+                    ]
+                    if verifier.role is AgentRole.REVIEWER:
+                        if (
+                            verifier.accepted_qa_artifact_id is None
+                            or verifier.accepted_qa_artifact_sha256 is None
+                        ):
+                            raise QueueConflict("Reviewer 重跑缺少原已接纳 QA PASS")
+                        required_inputs.append(
+                            (
+                                verifier.accepted_qa_artifact_id,
+                                verifier.accepted_qa_artifact_sha256,
+                            )
+                        )
+                    for input_id, input_sha256 in required_inputs:
+                        if (
+                            sum(
+                                publication.receipt.artifact_id == input_id
+                                and publication.receipt.sha256 == input_sha256
+                                for publication in verifier_publications
+                            )
+                            != 1
+                        ):
+                            raise QueueConflict("审查角色重跑的候选或已接纳输入已变化")
+                    for adopted_id in (
+                        verifier.plan_artifact_id,
+                        *(input_id for input_id, _ in required_inputs),
+                    ):
+                        cursor.execute(
+                            "SELECT event_id FROM state_events WHERE task_id=%s AND "
+                            "JSON_CONTAINS(JSON_EXTRACT(payload_json,'$.artifact_ids'),"
+                            "JSON_QUOTE(%s)) LIMIT 1",
+                            (task.id, adopted_id),
+                        )
+                        if cursor.fetchone() is None:
+                            raise QueueConflict("审查角色重跑的冻结计划或已采纳输入已变化")
+                    cursor.execute(
+                        "SELECT sequence FROM work_queue_events WHERE work_item_id=%s "
+                        "AND event_type='COMPLETED' LIMIT 1",
+                        (current.id,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise QueueConflict("原审查工作项已完成推进, 不能重跑")
                     updated_task = Task.model_validate(
                         {**task.to_wire(), "attempts": task.attempts + 1}
                     )

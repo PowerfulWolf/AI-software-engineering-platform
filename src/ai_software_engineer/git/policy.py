@@ -35,6 +35,8 @@ _PYTEST_SELECTOR = re.compile(
     r"(?:\[[A-Za-z0-9_.-]+\])?$"
 )
 _PYTEST_EXECUTABLES: Final = frozenset({"pytest", "py.test", "pytest-3"})
+_PYTEST_REPORT_CHARS: Final = re.compile(r"^[fEsxXpPaAN]{1,10}$")
+_PYTEST_REPORT: Final = re.compile(r"^-r[fEsxXpPaAN]{1,10}$")
 
 
 def is_protected_rule_path(path: str | PurePosixPath) -> bool:
@@ -267,6 +269,28 @@ def _authorize_focused_pytest(arguments: tuple[str, ...]) -> None:
         if selector == "--" or selector in flags:
             index += 1
             continue
+        # Summary reporting only (-rs, -ra, -r fE): it never widens what runs.
+        if _PYTEST_REPORT.fullmatch(selector):
+            index += 1
+            continue
+        if selector == "-r":
+            if index + 1 >= len(selectors) or not _PYTEST_REPORT_CHARS.fullmatch(
+                selectors[index + 1]
+            ):
+                raise CommandPolicyViolation("pytest -r 只接受测试摘要字符")
+            index += 2
+            continue
+        # --deselect only narrows an explicit selection to fewer exact nodes.
+        deselect, equals, node = selector.partition("=")
+        if deselect == "--deselect":
+            if not equals:
+                node = selectors[index + 1] if index + 1 < len(selectors) else ""
+            if not _PYTEST_SELECTOR.fullmatch(node):
+                raise CommandPolicyViolation(
+                    "pytest --deselect 只接受 tests/ 下明确的测试文件或节点"
+                )
+            index += 1 if equals else 2
+            continue
         option, separator, value = selector.partition("=")
         if option in value_options:
             if separator:
@@ -284,7 +308,9 @@ def _authorize_focused_pytest(arguments: tuple[str, ...]) -> None:
         ):
             raise CommandPolicyViolation(
                 "pytest 执行被拒绝: 每个测试位置必须是 tests/ 下明确的文件或节点; "
-                "禁止附加目录、全量范围或未验证的配置选项"
+                "禁止附加目录、全量范围或未验证的配置选项。可用选项: -q -v -s -x "
+                "-r<摘要字符>(如 -rs) -k -m --deselect=<节点> --tb --maxfail --durations "
+                "--disable-warnings --no-header"
             )
         selected = True
         index += 1

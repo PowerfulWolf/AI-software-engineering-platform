@@ -16,7 +16,10 @@ from ai_software_engineer.config import ModelProviderKind, ProductionConfig, Pro
 from ai_software_engineer.domain import AgentRole, ProjectPreparation, TaskStatus
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.git.mutation import capture_mutation_inventory
-from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
+from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryStage,
+    ProjectDeliveryCheckpoint,
+)
 from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
     _delivery_role_permissions,
@@ -102,7 +105,17 @@ def proposal_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Proposa
     original = cast(
         NativeRecoverySource,
         SimpleNamespace(
-            **{**vars(historical), "permissions": permissions},
+            # Optional NativeRecoverySource inputs this terminal source does not carry.
+            **{
+                "accepted_progress": None,
+                "capacity_receipt": None,
+                "capacity_input": None,
+                "stopped_unknown_capture": None,
+                "contained_unknown_capture": None,
+                "route_transition_capture": None,
+                **vars(historical),
+                "permissions": permissions,
+            },
             task=task,
             product=SimpleNamespace(branch_name=branch),
             worktree_revision=worktree.head_revision,
@@ -175,6 +188,8 @@ def proposal_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Proposa
 
     monkeypatch.setattr(recovery._facts, "_inspect", inspect_facts)
     checkpoint = ProjectDeliveryCheckpoint.model_construct(
+        stage=DeliveryStage.BLOCKED,
+        task_id=None,
         repository_id=source.scope.repository_id,
         repository_root=source.scope.repository_root,
         delivery_id=source.scope.delivery_id,
@@ -187,24 +202,26 @@ def test_proposal_reuses_exact_full_text_but_repeats_fresh_capture_and_fact_read
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, discovery: bool
 ) -> None:
     f = proposal_fixture(tmp_path, monkeypatch)
-    # Admit the full source+path and no larger patch key; overflow must still scan.
-    limit = len(LARGE_SOURCE.encode()) + len("src/app.py")
+    # Admit the complete-source and patch-hunk-source facts (distinct keys: a hunk
+    # never borrows complete-body runtime-handle facts) but no larger patch key;
+    # overflow must still scan.
+    limit = 2 * (len(LARGE_SOURCE.encode()) + len("src/app.py"))
     monkeypatch.setattr(redaction, "_MAX_INSPECTION_BYTES", limit)
     with parsed_sources(monkeypatch) as calls:
         plan, path = f.propose(discovery=discovery)
         assert path.is_file()
         assert plan.capture.files[0].path == "src/app.py"
         assert "def value_119()" in plan.capture.patch
-        assert calls[LARGE_SOURCE] == 1
+        assert calls[LARGE_SOURCE] == 2, "one complete-source and one patch-hunk parse"
         assert f.reads.count("facts") == 4, "before/after admission each still double-read facts"
         assert f.reads.count("source") == 1
         assert f.cache_sizes and max(f.cache_sizes) <= limit
         assert redaction._SOURCE_INSPECTION_CACHE.get() is None
         f.propose(discovery=discovery)
-        assert calls[LARGE_SOURCE] == 2, "the next public proposal must own a fresh scope"
+        assert calls[LARGE_SOURCE] == 4, "the next public proposal must own a fresh scope"
         assert f.reads.count("facts") == 8
         assert not redaction.source_secret_occurrences(LARGE_SOURCE, source_path="src/app.py")
-        assert calls[LARGE_SOURCE] == 3, "a caller after return cannot borrow proposal scans"
+        assert calls[LARGE_SOURCE] == 5, "a caller after return cannot borrow proposal scans"
     assert f.body.read_text() == LARGE_SOURCE
 
 
@@ -227,14 +244,14 @@ def test_approval_reuses_pure_scans_across_authorization_and_offline_sealing(
     initial_reads = f.reads.count("facts")
     with parsed_sources(monkeypatch) as calls:
         f.recovery.approve(path, confirmed_plan=plan.plan_sha256, reference="exact plan")
-        assert calls[LARGE_SOURCE] == 1
+        assert calls[LARGE_SOURCE] == 2, "one complete-source and one patch-hunk parse"
         assert f.reads.count("facts") - initial_reads == 10
         assert sealed == [plan.plan_sha256]
         assert redaction._SOURCE_INSPECTION_CACHE.get() is None
         receipt = store.get_authorization(plan.plan_sha256)
         before_replay = calls[LARGE_SOURCE]
         f.recovery.approve(path, confirmed_plan=plan.plan_sha256, reference="exact plan")
-        assert calls[LARGE_SOURCE] == before_replay + 1, (
+        assert calls[LARGE_SOURCE] == before_replay + 2, (
             "approval replay owns a fresh synchronous scope"
         )
         assert store.get_authorization(plan.plan_sha256) == receipt
@@ -337,5 +354,5 @@ def test_terminal_audit_reuses_parsing_without_caching_facts_capture_or_inventor
         )
         assert snapshot == expected
         assert checks == {"source": 2, "facts": 2, "inventory": 2, "capture": 2}
-        assert calls[LARGE_SOURCE] == 1
+        assert calls[LARGE_SOURCE] == 2, "one complete-source and one patch-hunk parse"
         assert redaction._SOURCE_INSPECTION_CACHE.get() is None

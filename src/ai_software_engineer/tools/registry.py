@@ -123,10 +123,12 @@ class PolicyBoundToolRegistry:
             limit = self._max_read_bytes if ranged else min(request.max_bytes, self._max_read_bytes)
             with absolute.open("rb") as stream:
                 payload = stream.read(limit + 1)
-            file_truncated = False
+            file_truncated = len(payload) > limit
+            total_lines = None if file_truncated else _line_count(payload)
             if ranged:
-                file_truncated = len(payload) > limit
                 payload = _line_range(payload[:limit], request.start_line, request.end_line)
+            elif file_truncated:
+                file_truncated = False  # the unranged read reports truncation below
         except WorkspacePolicyError as error:
             return self._rejected(request, "PATH_DENIED", str(error))
         except FileNotFoundError:
@@ -151,6 +153,7 @@ class PolicyBoundToolRegistry:
             content_sha256=hashlib.sha256(payload).hexdigest(),
             bytes_read=len(payload),
             truncated=truncated,
+            total_lines=total_lines,
         )
 
     def _write_file(self, request: WriteFileRequest) -> ToolResult:
@@ -360,6 +363,11 @@ __all__ = [
     "ToolProtocolError",
     "ToolRequestIdentityMismatch",
 ]
+
+
+def _line_count(payload: bytes) -> int:
+    """Lines as a text editor counts them: a final line without newline still counts."""
+    return payload.count(b"\n") + (1 if payload and not payload.endswith(b"\n") else 0)
 
 
 def _line_range(payload: bytes, start_line: int, end_line: int) -> bytes:

@@ -83,6 +83,31 @@ journal。当前用户已授权协作者代为核对和批准计划，实际动�
 代码回滚可撤销本次提交；一旦写入新的 restart plan/dispatch，旧版本不能解释该 kind，
 不要让旧服务继续推进这些 Task。保留新兼容读取器并前向修复，不删除新记录或重写旧哈希。
 
+## QA/Reviewer 输出被拒后只重跑审查角色
+
+适用：QA 或 Reviewer 已停止，等待原因是 `INVALID_OUTPUT`（非临时、无产物），Coder 候选未变。
+
+1. 在工程等待界面点“核查等待”。结果为“需要授权”且只列出
+   `RETRY_REJECTED_VERIFIER_OUTPUT` 时，核对角色、候选 SHA、计划摘要和剩余工作额度。
+2. 由具备工程职责的操作者提交解决（`RESOLVE_DELIVERY_WAIT`，携带最新 `proof_sha256`）。
+   平台在 Task 锁和 MySQL fence 内复核，扣一次普通工作额度，只重跑被拒的 QA 或 Reviewer。
+3. 若提示候选/计划漂移、仍有存活进程或 ACTIVE claim、已有接纳产物或额度耗尽，不要重复点击；
+   保留需求/Operation ID 和时间交由排查。额度耗尽时不提供该操作。
+
+**停止证明来源**：只有执行该角色的适配器实际观测到的停止才算数，并随原调用结果
+（`invocation-outcomes`）一起封存在 `verifier_stop` 字段：Codex CLI 为带完整会话证明的
+`NativeProcessStop`（kind 为 completed/failed），Responses/Claude 路线为工具循环已同步返回的
+`SynchronousToolLoopStop`。只有非临时 `INVALID_OUTPUT` 且无产物的 QA/Reviewer 结果才保留它；
+租约过期、claim 释放、超时或模型文本都不会被当成停止证明。
+
+**存量数据处置**：无需改库或迁移。部署前已封存的 QA/Reviewer `INVALID_OUTPUT` 结果没有
+`verifier_stop`，核查会保持原有等待处理（fail closed），不会补写或推断停止证明；部署后新产生的
+同类失败可按上述“核查 → 提交解决”恢复。原失败、evidence、事件和等待历史不改写，
+被拒旧输出不会成为已接纳结果。
+
+**回滚**：新字段在为空时省略，旧 proof/resolution 摘要不变。已写入新决定或后继项后，旧二进制
+不认识该 kind，必须 fail closed 而不是重放；应保留兼容读取器并前向修复，不删除新事件或重写哈希。
+
 ## 子仓已完成而父需求未完成
 
 父需求阶段、角色队列、角色占用和候选验收是不同事实。先核实 child 的原生 journal、

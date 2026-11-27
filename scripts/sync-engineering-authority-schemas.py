@@ -1067,6 +1067,120 @@ resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"].append(
     recovery_input_investigation_guard
 )
 
+# QA/Reviewer INVALID_OUTPUT rerun: exact engineering decision, one ordinary work debit.
+# The evidence definition stays pure Pydantic so every nested copy regenerates equally;
+# the role/accepted-QA relation is expressed in the owning model guards instead.
+VERIFIER_KIND = "RETRY_REJECTED_VERIFIER_OUTPUT"
+verifier_evidence_shape = {
+    "type": "object",
+    "anyOf": [
+        {
+            "required": ["role", "accepted_qa_artifact_id", "accepted_qa_artifact_sha256"],
+            "properties": {
+                "role": {"const": "reviewer"},
+                "accepted_qa_artifact_id": {"type": "string"},
+                "accepted_qa_artifact_sha256": {"type": "string"},
+            },
+        },
+        {
+            "required": ["role"],
+            "properties": {
+                "role": {"const": "qa"},
+                "accepted_qa_artifact_id": {"type": "null"},
+                "accepted_qa_artifact_sha256": {"type": "null"},
+            },
+        },
+    ],
+}
+verifier_exclusive_fields = (
+    "retry_cause",
+    "original_authority",
+    "verifier_pause",
+    "verification_retry",
+    "verifier_preparation",
+    "static_qa_missing_entry",
+    "rejected_static_qa_output",
+    "pre_context_recovery_input",
+    "knowledge_preparation",
+    "knowledge_pause",
+    "rejected_output",
+    "rejected_knowledge",
+    "rejected_workspace_admission",
+)
+verifier_resolution_guard = {
+    "if": {
+        "required": ["resolution_kind"],
+        "properties": {"resolution_kind": {"const": VERIFIER_KIND}},
+    },
+    "then": {
+        "required": ["rejected_verifier_output", "operator_principal"],
+        "properties": {
+            "rejected_verifier_output": verifier_evidence_shape,
+            "authorization_source": {"const": "engineering_operator_decision"},
+            "operator_principal": {"type": "object"},
+            "engineering_admission": {"type": "null"},
+            "retry_failure": {"type": "null"},
+            **{name: {"type": "null"} for name in verifier_exclusive_fields},
+        },
+    },
+    "else": {"properties": {"rejected_verifier_output": {"type": "null"}}},
+}
+verifier_permitted_guard = {
+    "if": {
+        "required": ["permitted_resolutions"],
+        "properties": {"permitted_resolutions": {"contains": {"const": VERIFIER_KIND}}},
+    },
+    "then": {
+        "required": ["rejected_verifier_output"],
+        "properties": {"rejected_verifier_output": {"type": "object"}},
+    },
+}
+verifier_investigation_guard = {
+    "if": {
+        "required": ["rejected_verifier_output"],
+        "properties": {"rejected_verifier_output": {"type": "object"}},
+    },
+    "then": {
+        "required": [
+            "original_run_id",
+            "invocation_start_sha256",
+            "invocation_outcome_sha256",
+            "process_stop_sha256",
+        ],
+        "properties": {
+            "rejected_verifier_output": verifier_evidence_shape,
+            **{
+                name: {"type": "string"}
+                for name in (
+                    "original_run_id",
+                    "invocation_start_sha256",
+                    "invocation_outcome_sha256",
+                    "process_stop_sha256",
+                )
+            },
+            "interruption_receipt_sha256": {"type": "null"},
+            **{name: {"type": "null"} for name in verifier_exclusive_fields},
+            "permitted_resolutions": {"maxItems": 1, "items": {"const": VERIFIER_KIND}},
+            "disposition": {
+                "properties": {
+                    "facts": {
+                        "properties": {
+                            "role": {"enum": ["qa", "reviewer"]},
+                            "classification": {"const": "INVALID_OUTPUT"},
+                        }
+                    }
+                }
+            },
+        },
+    },
+    "else": {"properties": {"rejected_verifier_output": {"type": "null"}}},
+}
+resolution_schema["$defs"]["DeliveryResolution"]["allOf"].append(verifier_resolution_guard)
+resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] += [
+    verifier_permitted_guard,
+    verifier_investigation_guard,
+]
+
 if not wait_only:
     (
         Path(__file__).resolve().parents[1] / "schemas/engineering-wait-resolution.schema.json"
@@ -1124,9 +1238,11 @@ if wait_only:
         nested = json.loads(path.read_text(encoding="utf-8"))
         definitions = nested["$defs"]
         kind = definitions["DeliveryResolutionKind"]
+        canonical_enum = canonical["DeliveryResolutionKind"]["enum"]
+        before_verifier = [value for value in canonical_enum if value != VERIFIER_KIND]
         expected_previous = [
             value
-            for value in canonical["DeliveryResolutionKind"]["enum"]
+            for value in before_verifier
             if value
             not in {
                 "RETRY_REJECTED_STATIC_QA_OUTPUT",
@@ -1138,7 +1254,8 @@ if wait_only:
             expected_previous,
             [*expected_previous, "STATIC_QA_MISSING_ENTRY"],
             [*expected_previous, "STATIC_QA_MISSING_ENTRY", "SCHEDULE_RECOVERY_INPUT"],
-            canonical["DeliveryResolutionKind"]["enum"],
+            before_verifier,
+            canonical_enum,
         )
         if kind["enum"] not in allowed_enums:
             raise RuntimeError(f"{filename} has an unexpected resolution enum")
@@ -1148,6 +1265,7 @@ if wait_only:
         definitions["PreContextRecoveryInputEvidence"] = canonical[
             "PreContextRecoveryInputEvidence"
         ]
+        definitions["RejectedVerifierOutputEvidence"] = canonical["RejectedVerifierOutputEvidence"]
         for model_name in ("DeliveryResolution", "DeliveryWaitInvestigation"):
             if model_name not in definitions:
                 continue
@@ -1160,6 +1278,9 @@ if wait_only:
             ]
             model["properties"]["pre_context_recovery_input"] = canonical[model_name]["properties"][
                 "pre_context_recovery_input"
+            ]
+            model["properties"]["rejected_verifier_output"] = canonical[model_name]["properties"][
+                "rejected_verifier_output"
             ]
             guards = model.setdefault("allOf", [])
             if model_name == "DeliveryResolution":
@@ -1183,6 +1304,8 @@ if wait_only:
                     guards.append(rejected_static_guard)
                 if recovery_input_resolution_guard not in guards:
                     guards.append(recovery_input_resolution_guard)
+                if verifier_resolution_guard not in guards:
+                    guards.append(verifier_resolution_guard)
             else:
                 for guard in investigation_guards:
                     if guard not in guards:
@@ -1191,6 +1314,9 @@ if wait_only:
                     guards.append(rejected_static_investigation_guard)
                 if recovery_input_investigation_guard not in guards:
                     guards.append(recovery_input_investigation_guard)
+                for guard in (verifier_permitted_guard, verifier_investigation_guard):
+                    if guard not in guards:
+                        guards.append(guard)
                 if filename not in (
                     "stopped-failure-budget-settlement.schema.json",
                     "stopped-unknown-budget-settlement.schema.json",

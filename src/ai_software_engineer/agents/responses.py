@@ -8,6 +8,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -60,6 +61,7 @@ from ai_software_engineer.agents.ports import (
 from ai_software_engineer.agents.verification_output import (
     TrustedStaticQaMissingEntryOutputContract,
 )
+from ai_software_engineer.agents.verifier_stop import VERIFIER_ROLES, record_verifier_stop
 from ai_software_engineer.agents.workspace_admission import (
     InitialWorkspaceAdmission,
     WorkspaceAdmissionRejected,
@@ -484,6 +486,22 @@ class ResponsesAgentAdapter:
             )
         finally:
             self.discard_prepared_input(request)
+        if request.role in VERIFIER_ROLES:
+            # The whole tool loop ran synchronously in this call and has returned:
+            # record that real observation for a possibly rejected verifier output.
+            # An unrecordable observation leaves no proof (fail closed).
+            with suppress(ValueError):
+                record_verifier_stop(
+                    request,
+                    SynchronousToolLoopStop.create(
+                        task_id=request.task_id,
+                        run_id=request.run_id,
+                        request_sha256=digest(request.to_wire()),
+                        completed_operation_ids=tuple(window.completed_operations),
+                        kind="failed",
+                        stopped_at=datetime.now(UTC),
+                    ),
+                )
         self._requests[request.run_id] = request
         self._results[request.run_id] = result
         return result
@@ -999,7 +1017,8 @@ def _tool_definitions(role: AgentRole) -> list[WirePayload]:
                 "Read one UTF-8 repository-relative file, optionally only a 1-based "
                 "inclusive line range. Use start_line=0 and end_line=0 for the whole "
                 "file; locate lines first with ['git', 'grep', '-n', ...] and then read "
-                "just that range instead of the whole file."
+                "just that range instead of the whole file. The result reports the "
+                "file's total_lines, so no separate line-count command is needed."
             ),
             "strict": True,
             "parameters": {

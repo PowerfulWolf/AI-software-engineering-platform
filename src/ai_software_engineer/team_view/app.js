@@ -1632,6 +1632,7 @@ const engineeringResolutionLabels = {
   RETRY_VERIFIER_PREPARATION: "重试验证准备",
   STATIC_QA_MISSING_ENTRY: "交由独立 QA 确认测试入口缺失",
   RETRY_REJECTED_STATIC_QA_OUTPUT: "修复被拒 QA 产出并重新验收",
+  RETRY_REJECTED_VERIFIER_OUTPUT: "只重跑被拒的 QA/Review（不改动 Coder 候选）",
   RETRY_KNOWLEDGE_PREPARATION: "扩大知识准备窗口并继续",
   RETRY_REJECTED_KNOWLEDGE_PREPARATION: "重新进行知识准备并继续",
   RETRY_REJECTED_WORKSPACE_ADMISSION: "修复工作区准入后继续原开发",
@@ -1900,6 +1901,49 @@ function matchingRejectedStaticQaOutputEvidence(request, step, proof) {
       proof.process_stop_sha256 != null) return null;
   return evidence;
 }
+function verifierRerunRemainingBudget(task) {
+  const attempts = task?.attempts, max = task?.max_attempts;
+  return Number.isSafeInteger(attempts) && Number.isSafeInteger(max) ? Math.max(0, max - attempts) : null;
+}
+function rejectedVerifierOutputLines(evidence) {
+  if (!evidence) return [];
+  const role = evidence.role === "reviewer" ? "Review" : "QA";
+  return [
+    `原 ${role} 执行的输出未通过平台契约，未被接纳；原失败结果、停止记录和领取历史保持不变。`,
+    evidence.role === "reviewer"
+      ? "本次只重跑被拒的 Review：使用同一 Coder 候选和原已接纳的 QA PASS，不调度 Coder，也不重跑 QA。"
+      : "本次只重跑被拒的 QA：使用同一 Coder 候选，不调度 Coder，也不调度 Review。",
+    "将消耗 1 次普通工作额度；不退还临时故障额度，也不表示候选已通过，后续仍需独立验收与评审。",
+  ];
+}
+function matchingRejectedVerifierOutputEvidence(request, step, proof) {
+  const evidence = proof?.rejected_verifier_output;
+  const facts = step.wait_disposition?.facts;
+  const task = currentRequestTasks(request).find(item => item.task_id === proof?.task_id);
+  const sha = value => /^[a-f0-9]{64}$/.test(value || "");
+  const stage = {qa: "QA", reviewer: "REVIEW"}[step.role];
+  const reviewer = step.role === "reviewer";
+  if (!task || !stage || task.status !== stage || task.terminal || facts?.role !== step.role ||
+      facts.classification !== "INVALID_OUTPUT" || !evidence || evidence.role !== step.role ||
+      proof.permitted_resolutions?.length !== 1 ||
+      proof.permitted_resolutions[0] !== "RETRY_REJECTED_VERIFIER_OUTPUT" ||
+      evidence.task_id !== proof.task_id || evidence.work_item_id !== step.work_item_id ||
+      evidence.candidate_revision !== proof.source_revision ||
+      evidence.error_code !== "INVALID_OUTPUT" || evidence.budget_source !== "frozen_work_attempt" ||
+      !sha(evidence.plan_artifact_sha256) || !sha(evidence.implementation_artifact_sha256) ||
+      reviewer !== (evidence.accepted_qa_artifact_id != null) ||
+      reviewer !== sha(evidence.accepted_qa_artifact_sha256) ||
+      !sha(evidence.original_claim_sha256) || !sha(evidence.invocation_start_sha256) ||
+      !sha(evidence.invocation_outcome_sha256) || !sha(evidence.execution_stop_sha256) ||
+      !/^run_[a-z0-9][a-z0-9_-]{2,63}$/.test(evidence.previous_run_id || "") ||
+      proof.original_run_id !== evidence.previous_run_id ||
+      proof.invocation_start_sha256 !== evidence.invocation_start_sha256 ||
+      proof.invocation_outcome_sha256 !== evidence.invocation_outcome_sha256 ||
+      proof.process_stop_sha256 !== evidence.execution_stop_sha256 ||
+      proof.retry_cause != null || proof.interruption_receipt_sha256 != null ||
+      verifierRerunRemainingBudget(task) === 0) return null;
+  return evidence;
+}
 function engineeringWaitHandlingLabel(step) {
   const classification = step.wait_disposition?.facts.classification;
   if (classification === "INVALID_OUTPUT" && step.wait_disposition?.facts.evidence_ids?.some(value =>
@@ -2165,10 +2209,17 @@ function engineeringWaitDecision(request, step, proof) {
     sameEngineeringWaitProofFacts(
       {pre_context_recovery_input: decision.pre_context_recovery_input},
       {pre_context_recovery_input: proof.pre_context_recovery_input});
+  const matchesRejectedVerifier = decision => decision?.resolution_kind !== "RETRY_REJECTED_VERIFIER_OUTPUT" ||
+    decision.authorization_source === "engineering_operator_decision" &&
+    matchingRejectedVerifierOutputEvidence(request, step, proof) &&
+    sameEngineeringWaitProofFacts(
+      {rejected_verifier_output: decision.rejected_verifier_output},
+      {rejected_verifier_output: proof.rejected_verifier_output});
   if (handling?.status === "RESOLVED" && handling.resolution?.proof_sha256 === handling.investigation.proof_sha256 &&
       engineeringResolutionLabels[handling.resolution.resolution_kind] && matchesKnowledge(handling.resolution) &&
       matchesRejected(handling.resolution) && matchesRejectedKnowledge(handling.resolution) && matchesWorkspace(handling.resolution) &&
-      matchesStaticQa(handling.resolution) && matchesRejectedStaticQa(handling.resolution) && matchesRecoveryInput(handling.resolution)) return handling.resolution;
+      matchesStaticQa(handling.resolution) && matchesRejectedStaticQa(handling.resolution) && matchesRecoveryInput(handling.resolution) &&
+      matchesRejectedVerifier(handling.resolution)) return handling.resolution;
   const operation = operations.find(item => item.status === "SUCCEEDED" &&
     operationAction(item) === "RESOLVE_DELIVERY_WAIT" && sameEngineeringWaitIntent(item.intent, bound) &&
     operationResult(item)?.engineering_wait_resolution?.proof_sha256 === proof.proof_sha256 &&
@@ -2178,7 +2229,8 @@ function engineeringWaitDecision(request, step, proof) {
     matchesWorkspace(operationResult(item).engineering_wait_resolution) &&
     matchesStaticQa(operationResult(item).engineering_wait_resolution) &&
     matchesRejectedStaticQa(operationResult(item).engineering_wait_resolution) &&
-    matchesRecoveryInput(operationResult(item).engineering_wait_resolution));
+    matchesRecoveryInput(operationResult(item).engineering_wait_resolution) &&
+    matchesRejectedVerifier(operationResult(item).engineering_wait_resolution));
   return operationResult(operation)?.engineering_wait_resolution || null;
 }
 function engineeringWaitCanResolve(request, step, proof) {
@@ -2198,6 +2250,7 @@ function engineeringWaitCanResolve(request, step, proof) {
       (kind !== "RETRY_REJECTED_CODER_OUTPUT" || matchingRejectedCoderOutputEvidence(request, step, proof)) &&
       (kind !== "STATIC_QA_MISSING_ENTRY" || matchingStaticQaMissingEntryEvidence(request, step, proof)) &&
       (kind !== "RETRY_REJECTED_STATIC_QA_OUTPUT" || matchingRejectedStaticQaOutputEvidence(request, step, proof)) &&
+      (kind !== "RETRY_REJECTED_VERIFIER_OUTPUT" || matchingRejectedVerifierOutputEvidence(request, step, proof)) &&
       (kind !== "SCHEDULE_RECOVERY_INPUT" ||
         step.role === "coder" && step.wait_disposition?.facts?.classification === "CONTEXT_CAPACITY" &&
         /^[a-f0-9]{64}$/.test(proof.pre_context_recovery_input?.plan_sha256 || "") &&
@@ -2310,7 +2363,7 @@ function engineeringActiveOperationBox(request, operation) {
       : progress?.title || "平台正在处理当前操作，完成后会更新检查结果与可用操作。", "muted"));
   return panel;
 }
-function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, handling = null, legacyRescue = false, rescueFailure = null, controlUnavailable = null, rejectedOutputValid = false, rejectedKnowledgeValid = false, workspaceAdmissionValid = false, staticQaValid = false, rejectedStaticQaValid = false} = {}) {
+function appendEngineeringInvestigation(target, proof, {historical = false, collectionFailed = false, handling = null, legacyRescue = false, rescueFailure = null, controlUnavailable = null, rejectedOutputValid = false, rejectedKnowledgeValid = false, workspaceAdmissionValid = false, staticQaValid = false, rejectedStaticQaValid = false, rejectedVerifierValid = false} = {}) {
   const knowledgeWindow = !(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_KNOWLEDGE_PREPARATION")
     ? knowledgePreparationWindowLines(proof.knowledge_preparation) : [];
   const rejectedKnowledge = !(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_REJECTED_KNOWLEDGE_PREPARATION")
@@ -2321,6 +2374,8 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
     ? staticQaMissingEntryLines(proof.static_qa_missing_entry) : [];
   const rejectedStaticQaLines = !(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_REJECTED_STATIC_QA_OUTPUT") && rejectedStaticQaValid
     ? rejectedStaticQaOutputLines(proof.rejected_static_qa_output) : [];
+  const rejectedVerifierLines = !(proof.missing || []).length && proof.permitted_resolutions?.includes("RETRY_REJECTED_VERIFIER_OUTPUT") && rejectedVerifierValid
+    ? rejectedVerifierOutputLines(proof.rejected_verifier_output) : [];
   if (historical) {
     for (const line of workspaceLines) target.append(el("p", "当次工作区准入方案 · " + line));
     target.append(el("p", "当次调查 · " + humanizeBlockingText(proof.next_action || "调查结果未提供处理建议。")),
@@ -2333,6 +2388,7 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
       for (const line of rejectedCoderOutputLines(proof.rejected_output)) target.append(el("p", "当次保留进度方案 · " + line));
     for (const line of staticQaLines) target.append(el("p", "当次 QA 缺项方案 · " + line));
     for (const line of rejectedStaticQaLines) target.append(el("p", "当次 QA 产出恢复方案 · " + line));
+    for (const line of rejectedVerifierLines) target.append(el("p", "当次审查重跑方案 · " + line));
     return;
   }
   const missing = proof.missing || [];
@@ -2370,7 +2426,8 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
       (!proof.permitted_resolutions?.includes("RETRY_REJECTED_KNOWLEDGE_PREPARATION") || rejectedKnowledgeValid) &&
       (!proof.permitted_resolutions?.includes("RETRY_REJECTED_WORKSPACE_ADMISSION") || workspaceAdmissionValid) &&
       (!proof.permitted_resolutions?.includes("STATIC_QA_MISSING_ENTRY") || staticQaValid) &&
-      (!proof.permitted_resolutions?.includes("RETRY_REJECTED_STATIC_QA_OUTPUT") || rejectedStaticQaValid);
+      (!proof.permitted_resolutions?.includes("RETRY_REJECTED_STATIC_QA_OUTPUT") || rejectedStaticQaValid) &&
+      (!proof.permitted_resolutions?.includes("RETRY_REJECTED_VERIFIER_OUTPUT") || rejectedVerifierValid);
     target.append(el("p", permitted.length && known ? "检查已通过，可按以下方案继续 · " + permitted.join("、")
       : "当前没有可安全执行的继续方案，需平台维护者处理。"));
     for (const line of knowledgeWindow) target.append(el("p", line));
@@ -2380,6 +2437,7 @@ function appendEngineeringInvestigation(target, proof, {historical = false, coll
       for (const line of rejectedCoderOutputLines(proof.rejected_output)) target.append(el("p", line));
     if (known) for (const line of staticQaLines) target.append(el("p", line));
     if (known) for (const line of rejectedStaticQaLines) target.append(el("p", line));
+    if (known) for (const line of rejectedVerifierLines) target.append(el("p", line));
   }
 }
 function engineeringWaitCurrentFacts(request, step, proof, handling, decision, active) {
@@ -2411,6 +2469,7 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
   const rejected = matchingRejectedCoderOutputEvidence(request, step, proof);
   const staticQa = matchingStaticQaMissingEntryEvidence(request, step, proof);
   const rejectedStaticQa = matchingRejectedStaticQaOutputEvidence(request, step, proof);
+  const rejectedVerifier = matchingRejectedVerifierOutputEvidence(request, step, proof);
   if (rejected) {
     facts.happened = "本轮开发报告的进度序号不符合执行约定，报告未被接纳。";
     facts.preservation = "原执行已结束，完整开发文件已封存；原任务、分支和工作区保留。";
@@ -2442,6 +2501,16 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
     facts.platform = "可按精确工程决定创建新的独立 QA 工作项，重新报告全部准则；后续验收与评审仍需独立完成。";
     facts.user = "查看下方产出恢复方案；确认工程决定后，平台才能重新领取 QA。";
   }
+  if (rejectedVerifier) {
+    const role = rejectedVerifier.role === "reviewer" ? "Review" : "QA";
+    const verifierTask = currentRequestTasks(request).find(item => item.task_id === rejectedVerifier.task_id);
+    const remaining = verifierRerunRemainingBudget(verifierTask);
+    facts.happened = `原 ${role} 执行的输出未通过平台契约，未被接纳；原执行已停止。`;
+    facts.preservation = "Coder 候选、冻结计划、原失败结果、停止记录和领取历史保留；旧输出不会被重放或接纳。";
+    facts.platform = `可按精确工程决定只重跑被拒的 ${role}，不改动 Coder 候选，消耗 1 次普通工作额度` +
+      (remaining == null ? "。" : `（当前剩余 ${remaining} 次）。`);
+    facts.user = "查看下方审查重跑方案；工程授权者确认后，平台才会重新领取该审查角色。";
+  }
   if (!completedPlan && /^[a-f0-9]{64}$/.test(proof?.process_stop_sha256 || "") &&
       !missing.includes("STOP_UNRECORDED") && missing.includes("CHECKPOINT_UNAVAILABLE")) {
     facts.happened = proof.retry_cause === "local_execution_limit"
@@ -2465,7 +2534,7 @@ function engineeringWaitCurrentFacts(request, step, proof, handling, decision, a
       facts.user += " 平台问题修复后，点击“平台修复后重新处理”，由平台重新核验并尝试继续原需求。";
   } else if (proof?.missing?.length) {
     facts.user = "你无需判断内部执行记录。可以让平台尝试处理；若平台仍无法继续，会说明处理方和具体事项。";
-  } else if (!rejectedStaticQa && engineeringWaitCanResolve(request, step, proof)) {
+  } else if (!rejectedStaticQa && !rejectedVerifier && engineeringWaitCanResolve(request, step, proof)) {
     facts.platform = "已检查原执行和保留进度，现有规则要求工程授权者确认所列方案后继续。";
     facts.user = "需要工程授权者确认按页面所列方案继续；不需要手工核验内部记录。";
   }
@@ -2737,9 +2806,10 @@ function engineeringWaitBox(request, task, step) {
     const workspaceAdmissionValid = Boolean(matchingRejectedWorkspaceAdmissionEvidence(request, step, proof));
     const staticQaValid = Boolean(matchingStaticQaMissingEntryEvidence(request, step, proof));
     const rejectedStaticQaValid = Boolean(matchingRejectedStaticQaOutputEvidence(request, step, proof));
+    const rejectedVerifierValid = Boolean(matchingRejectedVerifierOutputEvidence(request, step, proof));
     const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof",
-      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, rejectedKnowledgeValid, workspaceAdmissionValid, staticQaValid, rejectedStaticQaValid, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || stoppedPlan?.plan_sha256 || failurePlan?.plan_sha256 || null]);
-    appendEngineeringInvestigation(result, proof, {historical: Boolean(completedPlan || providerPlan || stoppedPlan || failurePlan), collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, rejectedKnowledgeValid, workspaceAdmissionValid, staticQaValid, rejectedStaticQaValid});
+      [proof, collectionFailed, handling?.collection_failure || null, consoleSupportsOperation("HANDLE_DELIVERY_WAIT"), Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, rejectedKnowledgeValid, workspaceAdmissionValid, staticQaValid, rejectedStaticQaValid, rejectedVerifierValid, completedPlan?.plan_sha256 || providerPlan?.plan_sha256 || stoppedPlan?.plan_sha256 || failurePlan?.plan_sha256 || null]);
+    appendEngineeringInvestigation(result, proof, {historical: Boolean(completedPlan || providerPlan || stoppedPlan || failurePlan), collectionFailed, handling, legacyRescue: Boolean(rescue), rescueFailure, controlUnavailable, rejectedOutputValid, rejectedKnowledgeValid, workspaceAdmissionValid, staticQaValid, rejectedStaticQaValid, rejectedVerifierValid});
     management.append(result);
   }
   if (controlUnavailable) management.append(deliveryControlUnavailableNotice(controlUnavailable));
@@ -5282,6 +5352,8 @@ function humanizeBlockingText(value) {
     classificationText.includes("Coder requested continuation after the configured run budget")
   )
     return "Coder 已用完本轮连续执行次数，但实现尚未完成，需要创建恢复任务后继续。";
+  if (classificationText.includes("Coder made no plan progress in 3 consecutive runs"))
+    return "Coder 连续 3 轮没有完成任何新步骤，平台已提前停止以免空耗额度；请查看最新进度记录里的阻塞说明（常见是需要补充文件范围），处理后创建恢复任务继续。";
   if (
     classificationText.includes(
       "QA verification could not complete in the current environment",

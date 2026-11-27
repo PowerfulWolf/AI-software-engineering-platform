@@ -1227,6 +1227,38 @@ immutable. New output still needs normal candidate, independent QA and Review ga
 See [rejected-coder-output](../../.trellis/spec/core/rejected-coder-output.md) for exact
 signatures, error matrix, Schema contracts and existing-data rollout.
 
+### QA/Reviewer rejected output rerun (`RETRY_REJECTED_VERIFIER_OUTPUT`)
+
+`RejectedVerifierOutputEvidence` binds one stopped QA or Reviewer run whose result is
+`FAILED/INVALID_OUTPUT/transient=false/artifact=None`: Task, WorkItem, role, candidate SHA,
+frozen Plan and accepted implementation artifact IDs/digests, original lease/claim digest,
+attempt, dispatch and checkpoint sequence, previous Run/Context, invocation start/outcome,
+`execution_stop_sha256` (a real `NativeProcessStop` or the exact HTTP synchronous completion
+receipt), `error_code=INVALID_OUTPUT` and `budget_source=frozen_work_attempt`. A Reviewer
+proof additionally binds the accepted QA PASS (`accepted_qa_artifact_id/sha256`); a QA
+proof must omit them. `DeliveryWaitInvestigation.rejected_verifier_output` and
+`DeliveryResolution.rejected_verifier_output` are optional and omitted when `None`, so
+historical proof/resolution wire bytes and digests are unchanged.
+
+The investigation may advertise only `(RETRY_REJECTED_VERIFIER_OUTPUT,)` and must mirror
+the original run, start/outcome and stop digests; it excludes every other recovery proof.
+The decision requires a trusted ENGINEERING `operator_principal` with
+`authorization_source=engineering_operator_decision`; an organization-policy
+`EngineeringAdmission`, retry cause or transient failure fact is rejected by both the
+Pydantic model and the published Schema guards. Consumption under the Task lock and final
+MySQL fence debits one ordinary work attempt, closes the waiting item and creates one
+same-role `work_<resolution_sha256>` successor with `parent_work_item_id`; replay returns
+the same successor without a second debit. The rerun uses the same Coder candidate, never
+dispatches Coder, and a Reviewer rerun consumes the original accepted QA PASS. Original
+failure, stop, evidence, StateEvents and wait history are append-only and the rejected
+output never becomes an accepted artifact. Valid QA FAIL / Review REJECT, POLICY_VIOLATION,
+transient failures and existing recovery kinds keep their previous routes and guards.
+
+Schemas: `scripts/sync-engineering-authority-schemas.py --wait-only` adds the enum value,
+evidence definition and guards to `engineering-wait-resolution`, `console-operation`,
+`console-deletion-cleanup` and both stopped budget settlement schemas while preserving every
+handwritten guard; a second run changes no bytes (`test_engineering_wait_resolution_schema_parity`).
+
 ### Actual owned session stop (2026-10-11)
 
 `NativeProcessStop.session_proof` optionally carries a v1 `owned_session_empty` proof,

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from pymysql.cursors import DictCursor
 
+from ai_software_engineer.agents.execution import ExecutionStop
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource
@@ -116,6 +117,7 @@ from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.work_queue import DispatcherLoop
 from ai_software_engineer.work_queue.dispatcher import OwnerTokenFactory, RunDemandBuilder
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
+from ai_software_engineer.work_queue.invocation import DeliveryInvocationStart
 from ai_software_engineer.work_queue.models import LeaseWorkerId
 from ai_software_engineer.work_queue.ports import QueueConflict
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
@@ -1106,6 +1108,17 @@ class TeamHost:
                 raise ValueError("恢复 Plan/dispatch 与当前需求和 Task 不一致")
             return RecoveryInputPlanFacts(plan, authorization, sealed, dispatch, seed)
 
+        def verifier_stop_reader(
+            _task: Task, _step: QueuedRoleStep, start: DeliveryInvocationStart, _guard: object
+        ) -> ExecutionStop | None:
+            # Only the stop sealed in the original exact outcome; none is inferred.
+            from ai_software_engineer.work_queue.invocation import sealed_verifier_stop
+
+            root = workspace.directory("state") / "invocations"
+            if not root.exists():
+                return None
+            return sealed_verifier_stop(KnowledgeRecordStore(root, read_only=True), start)
+
         return DeliveryWaitService(
             repository=repository,
             queue=self._work_queue,
@@ -1118,6 +1131,7 @@ class TeamHost:
             engineering_authority=EngineeringAuthority(self._team.directory("work-items")),
             fact_collector=collect_wait_facts,
             stop_observer=observe_wait_stop,
+            verifier_stop_reader=verifier_stop_reader,
             knowledge_requirement_id=(
                 delivery_id if delivery_id.startswith("delivery_multi_") else task.id
             ),

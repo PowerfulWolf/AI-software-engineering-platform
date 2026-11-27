@@ -129,21 +129,23 @@ def test_real_allocator_keeps_all_reads_and_fences_but_decodes_ancestors_once(
         # This is the same owner boundary already used by NativeRecoveryEntry._execute.
         with recovery_record_read_scope() as owner:
             allocator.allocate(prepared.plan.plan_sha256)
-            assert capacity.sql.call_count == capacity.claims.call_count == 64
-            assert capacity.no_start.call_count == capacity.captures.call_count == 64
+            # The allocator reuses the draft that verified the sealed Task
+            # (require_current_draft), so it no longer builds facts twice.
+            assert capacity.sql.call_count == capacity.claims.call_count == 32
+            assert capacity.no_start.call_count == capacity.captures.call_count == 32
             assert prepared.reads == {
-                "facts": 32,
-                "capture": 8,
+                "facts": 16,
+                "capture": 4,
                 "snapshot": 1,
                 "fence_before": 1,
                 "fence_after": 1,
             }
             assert reads == {
-                path: 64 if path.parent.name == first.delivery_id else 96 for path in paths
-            }, "32 x two parent observations, plus retirement/replacement initial reads"
+                path: 32 if path.parent.name == first.delivery_id else 48 for path in paths
+            }, "16 x two parent observations, plus retirement/replacement initial reads"
             assert preflights == reads, "retain original independent complete regular-file reads"
             assert inventories == {
-                directory: 128 if directory.name == first.delivery_id else 192
+                directory: 64 if directory.name == first.delivery_id else 96
                 for directory in {path.parent for path in paths}
             }, "every observation keeps two independently enumerated inventories"
             assert decodes[ancestor] == 1, "all fenced observations share only immutable decoding"

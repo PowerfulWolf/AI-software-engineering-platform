@@ -401,6 +401,10 @@ def _coder_slice_output_guidance(request: AgentRequest) -> str:
         "Existing files or a recovered draft do not prove deferred steps complete. "
         "Report the complete retained dirty-file inventory, including earlier legal changes; "
         "step selection does not authorize dropping retained paths or expanding write permissions. "
+        "If a selected step needs a file outside your write permissions, do not retry it in "
+        "later runs: make the first content.next_actions entry exactly "
+        "'SCOPE_REQUEST: <repository-relative path>[, <path>...] - <reason>' so an operator can "
+        "approve that exact scope; ASE stops a Coder that repeats runs without plan progress. "
         "Keep progress at the exact input source revision and do not create a candidate commit."
     )
 

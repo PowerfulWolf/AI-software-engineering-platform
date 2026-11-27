@@ -144,6 +144,8 @@ def test_joint_resume_preserves_child_approval_after_parent_sync(
         backend=backend,
         status=lambda delivery_id: SimpleNamespace(checkpoint=current_parent),
         resume=resume_parent,
+        # The host first checks the journal for an unstarted design rejection.
+        journal=SimpleNamespace(current=lambda delivery_id: current_parent),
     )
     runtime = SimpleNamespace(requirements=requirements)
     controller = SimpleNamespace(resume=resume_child)

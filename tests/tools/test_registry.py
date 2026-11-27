@@ -593,3 +593,26 @@ def test_read_file_rejects_a_reversed_line_range() -> None:
             start_line=5,
             end_line=2,
         )
+
+
+def test_read_file_reports_total_lines_only_when_the_whole_file_was_seen(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/app.py").write_text("one\ntwo\nthree", encoding="utf-8")
+    registry = PolicyBoundToolRegistry(
+        tmp_path,
+        _agent(AgentRole.CODER),
+        run_id="run_tool_registry_001",
+        command_executor=FakeCommandExecutor(),
+    )
+
+    def read(**update: int) -> ReadFileResult:
+        result = registry.execute(_read().model_copy(update=update))
+        assert isinstance(result, ReadFileResult)
+        return result
+
+    assert read().total_lines == 3
+    ranged = read(start_line=2, end_line=2)
+    assert ranged.content == "two\n" and ranged.total_lines == 3
+    clipped = read(max_bytes=4)
+    assert clipped.truncated and clipped.total_lines is None
+    assert "total_lines" not in clipped.to_wire()

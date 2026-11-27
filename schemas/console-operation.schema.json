@@ -3611,6 +3611,17 @@
             }
           ],
           "default": null
+        },
+        "rejected_verifier_output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedVerifierOutputEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -4348,6 +4359,123 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "resolution_kind"
+            ],
+            "properties": {
+              "resolution_kind": {
+                "const": "RETRY_REJECTED_VERIFIER_OUTPUT"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "rejected_verifier_output",
+              "operator_principal"
+            ],
+            "properties": {
+              "rejected_verifier_output": {
+                "type": "object",
+                "anyOf": [
+                  {
+                    "required": [
+                      "role",
+                      "accepted_qa_artifact_id",
+                      "accepted_qa_artifact_sha256"
+                    ],
+                    "properties": {
+                      "role": {
+                        "const": "reviewer"
+                      },
+                      "accepted_qa_artifact_id": {
+                        "type": "string"
+                      },
+                      "accepted_qa_artifact_sha256": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "role"
+                    ],
+                    "properties": {
+                      "role": {
+                        "const": "qa"
+                      },
+                      "accepted_qa_artifact_id": {
+                        "type": "null"
+                      },
+                      "accepted_qa_artifact_sha256": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                ]
+              },
+              "authorization_source": {
+                "const": "engineering_operator_decision"
+              },
+              "operator_principal": {
+                "type": "object"
+              },
+              "engineering_admission": {
+                "type": "null"
+              },
+              "retry_failure": {
+                "type": "null"
+              },
+              "retry_cause": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "verifier_pause": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
+              },
+              "static_qa_missing_entry": {
+                "type": "null"
+              },
+              "rejected_static_qa_output": {
+                "type": "null"
+              },
+              "pre_context_recovery_input": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "knowledge_pause": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
+              },
+              "rejected_knowledge": {
+                "type": "null"
+              },
+              "rejected_workspace_admission": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "rejected_verifier_output": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
@@ -4364,7 +4492,8 @@
         "RETRY_REJECTED_WORKSPACE_ADMISSION",
         "RETRY_REJECTED_STATIC_QA_OUTPUT",
         "STATIC_QA_MISSING_ENTRY",
-        "SCHEDULE_RECOVERY_INPUT"
+        "SCHEDULE_RECOVERY_INPUT",
+        "RETRY_REJECTED_VERIFIER_OUTPUT"
       ],
       "title": "DeliveryResolutionKind",
       "type": "string"
@@ -5092,6 +5221,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/RejectedStaticQaOutputEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rejected_verifier_output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedVerifierOutputEvidence"
             },
             {
               "type": "null"
@@ -6125,6 +6265,175 @@
                     }
                   }
                 }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "permitted_resolutions"
+            ],
+            "properties": {
+              "permitted_resolutions": {
+                "contains": {
+                  "const": "RETRY_REJECTED_VERIFIER_OUTPUT"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "rejected_verifier_output"
+            ],
+            "properties": {
+              "rejected_verifier_output": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "rejected_verifier_output"
+            ],
+            "properties": {
+              "rejected_verifier_output": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "original_run_id",
+              "invocation_start_sha256",
+              "invocation_outcome_sha256",
+              "process_stop_sha256"
+            ],
+            "properties": {
+              "rejected_verifier_output": {
+                "type": "object",
+                "anyOf": [
+                  {
+                    "required": [
+                      "role",
+                      "accepted_qa_artifact_id",
+                      "accepted_qa_artifact_sha256"
+                    ],
+                    "properties": {
+                      "role": {
+                        "const": "reviewer"
+                      },
+                      "accepted_qa_artifact_id": {
+                        "type": "string"
+                      },
+                      "accepted_qa_artifact_sha256": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "role"
+                    ],
+                    "properties": {
+                      "role": {
+                        "const": "qa"
+                      },
+                      "accepted_qa_artifact_id": {
+                        "type": "null"
+                      },
+                      "accepted_qa_artifact_sha256": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                ]
+              },
+              "original_run_id": {
+                "type": "string"
+              },
+              "invocation_start_sha256": {
+                "type": "string"
+              },
+              "invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "process_stop_sha256": {
+                "type": "string"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "retry_cause": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "verifier_pause": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
+              },
+              "static_qa_missing_entry": {
+                "type": "null"
+              },
+              "rejected_static_qa_output": {
+                "type": "null"
+              },
+              "pre_context_recovery_input": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "knowledge_pause": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
+              },
+              "rejected_knowledge": {
+                "type": "null"
+              },
+              "rejected_workspace_admission": {
+                "type": "null"
+              },
+              "permitted_resolutions": {
+                "maxItems": 1,
+                "items": {
+                  "const": "RETRY_REJECTED_VERIFIER_OUTPUT"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "role": {
+                        "enum": [
+                          "qa",
+                          "reviewer"
+                        ]
+                      },
+                      "classification": {
+                        "const": "INVALID_OUTPUT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "rejected_verifier_output": {
+                "type": "null"
               }
             }
           }
@@ -11636,6 +11945,21 @@
             }
           ],
           "default": null
+        },
+        "verifier_stop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeProcessStop"
+            },
+            {
+              "$ref": "#/$defs/SynchronousToolLoopStop"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verifier Stop"
         }
       },
       "required": [
@@ -16826,6 +17150,165 @@
         "missing_criterion_ids"
       ],
       "title": "RejectedStaticQaOutputEvidence",
+      "type": "object"
+    },
+    "RejectedVerifierOutputEvidence": {
+      "additionalProperties": false,
+      "description": "A stopped QA/Reviewer run whose output the platform contract rejected.\n\nIt binds the unchanged candidate, frozen Plan and accepted inputs. It is never a\nverdict, never refunds work and never makes the rejected output acceptable.",
+      "properties": {
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "candidate_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Candidate Revision",
+          "type": "string"
+        },
+        "plan_artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Plan Artifact Id",
+          "type": "string"
+        },
+        "plan_artifact_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Artifact Sha256",
+          "type": "string"
+        },
+        "implementation_artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Implementation Artifact Id",
+          "type": "string"
+        },
+        "implementation_artifact_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Implementation Artifact Sha256",
+          "type": "string"
+        },
+        "accepted_qa_artifact_id": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accepted Qa Artifact Id"
+        },
+        "accepted_qa_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accepted Qa Artifact Sha256"
+        },
+        "original_lease_id": {
+          "minLength": 1,
+          "title": "Original Lease Id",
+          "type": "string"
+        },
+        "original_claim_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Original Claim Sha256",
+          "type": "string"
+        },
+        "original_attempt": {
+          "minimum": 1,
+          "title": "Original Attempt",
+          "type": "integer"
+        },
+        "original_dispatch_sequence": {
+          "minimum": 0,
+          "title": "Original Dispatch Sequence",
+          "type": "integer"
+        },
+        "checkpoint_sequence": {
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "previous_run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Previous Run Id",
+          "type": "string"
+        },
+        "previous_context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Previous Context Manifest Id",
+          "type": "string"
+        },
+        "invocation_start_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Start Sha256",
+          "type": "string"
+        },
+        "invocation_outcome_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Outcome Sha256",
+          "type": "string"
+        },
+        "execution_stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Execution Stop Sha256",
+          "type": "string"
+        },
+        "error_code": {
+          "const": "INVALID_OUTPUT",
+          "default": "INVALID_OUTPUT",
+          "title": "Error Code",
+          "type": "string"
+        },
+        "budget_source": {
+          "const": "frozen_work_attempt",
+          "default": "frozen_work_attempt",
+          "title": "Budget Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "work_item_id",
+        "role",
+        "candidate_revision",
+        "plan_artifact_id",
+        "plan_artifact_sha256",
+        "implementation_artifact_id",
+        "implementation_artifact_sha256",
+        "original_lease_id",
+        "original_claim_sha256",
+        "original_attempt",
+        "original_dispatch_sequence",
+        "checkpoint_sequence",
+        "previous_run_id",
+        "previous_context_manifest_id",
+        "invocation_start_sha256",
+        "invocation_outcome_sha256",
+        "execution_stop_sha256"
+      ],
+      "title": "RejectedVerifierOutputEvidence",
       "type": "object"
     }
   },

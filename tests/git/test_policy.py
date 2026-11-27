@@ -298,3 +298,32 @@ def test_multiline_argument_is_data_without_a_shell(tmp_path: Path) -> None:
     )
     with pytest.raises(CommandPolicyViolation):
         focused.authorize_command(("pytest", "tests/unit/test_a.py\ntests"))
+
+
+def test_focused_pytest_allows_skip_summaries_and_exact_deselects(tmp_path: Path) -> None:
+    permissions = _permissions().model_copy(update={"commands": ("pytest", "python3")})
+    policy = WorkspacePolicy(tmp_path, permissions, require_focused_tests=True)
+    for arguments in (
+        ("python3", "-m", "pytest", "-q", "-rs", "tests/unit/test_service.py::test_one"),
+        ("pytest", "-ra", "tests/unit/test_service.py", "tests/unit/test_other.py::test_two"),
+        ("pytest", "-r", "fE", "tests/unit/test_service.py"),
+        (
+            "pytest",
+            "tests/unit/test_service.py",
+            "--deselect",
+            "tests/unit/test_service.py::test_slow",
+        ),
+        ("pytest", "tests/unit", "--deselect=tests/unit/test_service.py::test_slow[case-1]"),
+    ):
+        assert policy.authorize_command(arguments) == arguments
+    for arguments in (
+        ("pytest", "-rs"),  # a summary flag is not a selection
+        ("pytest", "-r", "tests/unit/test_service.py"),
+        ("pytest", "-rz", "tests/unit/test_service.py"),
+        ("pytest", "tests/unit/test_service.py", "--deselect", "tests"),
+        ("pytest", "tests/unit/test_service.py", "--deselect=../secret.py"),
+        ("pytest", "tests/unit/test_service.py", "--deselect"),
+        ("pytest", "--deselect=tests/unit/test_service.py::test_one"),
+    ):
+        with pytest.raises(CommandPolicyViolation, match="pytest"):
+            policy.authorize_command(arguments)

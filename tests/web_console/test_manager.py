@@ -1135,3 +1135,97 @@ def test_verification_approval_explains_retained_qa_evidence(
     if joint:
         assert result.delivery_id == DELIVERY_ID
         assert result.checkpoint_sha256 == parent.checkpoint_sha256
+
+
+@pytest.mark.parametrize(
+    "outcome", ["resolved", "stale", "rejected", "authority_lost", "budget_exhausted"]
+)
+@pytest.mark.parametrize("role", ["qa", "reviewer"])
+def test_console_verifier_rerun_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, role: str
+) -> None:
+    """The Console submits the exact verifier rerun decision and fails closed otherwise."""
+    from ai_software_engineer.domain.delivery_resolution import (
+        DeliveryResolution,
+        DeliveryResolutionKind,
+        ResolveDeliveryWait,
+    )
+    from ai_software_engineer.manager.delivery_wait import DeliveryWaitRejected
+    from ai_software_engineer.manager.engineering_authority import (
+        EngineeringAuthorityRejected,
+        EngineeringRejectionKind,
+    )
+    from ai_software_engineer.web_console import ResolveDeliveryWaitIntent
+    from tests.domain.test_delivery_resolution_schema import _verifier_decision
+
+    adapter, host, entry = _adapter(tmp_path)
+    resolution = DeliveryResolution.model_validate(_verifier_decision(role))
+    assert resolution.rejected_verifier_output is not None
+    received: list[ResolveDeliveryWait] = []
+
+    def resolve(
+        command: ResolveDeliveryWait, *, project_id: str, delivery_id: str
+    ) -> DeliveryResolution:
+        assert project_id == PROJECT_ID and delivery_id == DELIVERY_ID
+        received.append(command)
+        if outcome == "rejected":
+            raise DeliveryWaitRejected("审查角色重跑证明已变化, 请重新核查等待")
+        if outcome == "authority_lost":
+            raise EngineeringAuthorityRejected(
+                EngineeringRejectionKind.CAPABILITY_UNAVAILABLE,
+                "当前操作者没有工程责任",
+            )
+        if outcome == "budget_exhausted":
+            raise EngineeringAuthorityRejected(
+                EngineeringRejectionKind.BUDGET_EXHAUSTED,
+                "普通工作额度已用完",
+            )
+        return resolution
+
+    monkeypatch.setattr(host, "resolve_delivery_wait", resolve, raising=False)
+    intent = ResolveDeliveryWaitIntent(
+        project_id=PROJECT_ID,
+        delivery_id=DELIVERY_ID,
+        expected_checkpoint_sha256=(
+            "f" * 64 if outcome == "stale" else entry.checkpoint.checkpoint_sha256
+        ),
+        work_item_id=resolution.work_item_id,
+        expected_disposition_sha256=resolution.expected_disposition_sha256,
+        expected_task_intent_sha256=resolution.expected_task_intent_sha256,
+        expected_source_revision=resolution.expected_source_revision,
+        expected_checkpoint_sequence=resolution.expected_checkpoint_sequence,
+        resolution_kind=DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT,
+        proof_sha256=resolution.proof_sha256,
+    )
+    payload = intent.model_dump(mode="json")
+    assert payload["action"] == "RESOLVE_DELIVERY_WAIT"
+    assert payload["resolution_kind"] == "RETRY_REJECTED_VERIFIER_OUTPUT"
+    assert payload["proof_sha256"] == resolution.proof_sha256
+
+    if outcome == "resolved":
+        result = adapter.execute(intent)
+        assert result.stage == "ENGINEERING_WAIT_RESOLVED"
+        assert result.engineering_wait_resolution == resolution
+        assert len(received) == 1
+        command = received[0]
+        assert command.resolution_kind is DeliveryResolutionKind.RETRY_REJECTED_VERIFIER_OUTPUT
+        assert command.proof_sha256 == resolution.proof_sha256
+        assert command.work_item_id == resolution.work_item_id
+        assert command.expected_checkpoint_sequence == resolution.expected_checkpoint_sequence
+        # Only SCHEDULE_RECOVERY_INPUT borrows an operation reference; a browser
+        # cannot supply authority for the verifier rerun decision.
+        assert command.authorization_reference is None
+        assert host.resume_commands == []
+        return
+    with pytest.raises(ConsoleCommandRejected) as captured:
+        adapter.execute(intent)
+    if outcome == "stale":
+        assert captured.value.code == "STALE_CHECKPOINT"
+        assert received == []
+    else:
+        # Rejection and lost engineering authority are stable, safe refusals; no
+        # resolution is returned and the delivery is not continued.
+        assert captured.value.code == "COMMAND_REJECTED"
+        assert captured.value.safe_summary
+        assert len(received) == 1
+    assert host.resume_commands == []

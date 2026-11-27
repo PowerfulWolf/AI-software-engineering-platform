@@ -20,6 +20,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     EngineeringDispositionRecord,
     KnowledgePreparationRetryEvidence,
     RejectedKnowledgePreparationEvidence,
+    RejectedVerifierOutputEvidence,
     RejectedWorkspaceAdmissionEvidence,
 )
 from ai_software_engineer.domain.engineering_authority import EngineeringAdmission, EngineeringScope
@@ -243,8 +244,21 @@ def _decision_matches_proof(decision: DeliveryResolution, proof: DeliveryWaitInv
         or decision.knowledge_preparation != proof.knowledge_preparation
         or decision.rejected_knowledge != proof.rejected_knowledge
         or decision.rejected_workspace_admission != proof.rejected_workspace_admission
+        or decision.rejected_verifier_output != proof.rejected_verifier_output
     ):
         raise ValueError("engineering decision has another exact investigation")
+
+
+def _verifier_rerun_details(
+    evidence: RejectedVerifierOutputEvidence | None,
+) -> dict[str, JsonValue]:
+    if evidence is None:
+        return {}
+    return {
+        "verifier_rerun_role": evidence.role.value,
+        "verifier_rerun_candidate_revision": evidence.candidate_revision,
+        "verifier_rerun_previous_run_id": evidence.previous_run_id,
+    }
 
 
 def _knowledge_details(evidence: KnowledgePreparationRetryEvidence | None) -> dict[str, JsonValue]:
@@ -498,6 +512,7 @@ def _engineering_history(
                         **_knowledge_details(decision.knowledge_preparation),
                         **_rejected_knowledge_details(decision.rejected_knowledge),
                         **_workspace_admission_details(decision.rejected_workspace_admission),
+                        **_verifier_rerun_details(decision.rejected_verifier_output),
                     },
                 )
             )
