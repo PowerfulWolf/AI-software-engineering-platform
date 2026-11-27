@@ -353,7 +353,8 @@ def _require_admission(
         admission.call.request_sha256 != intent.request_sha256
         or admission.call.role is not intent.binding.role
         or admission.call.phase != "knowledge_" + intent.phase
-        or admission.timeout_seconds != intent.timeout_seconds
+        # A same-call schema repair round runs within what is left of the original limit.
+        or not 0 < admission.timeout_seconds <= intent.timeout_seconds
         or admission.admitted_at < intent.created_at
     ):
         raise KnowledgeError("INVOCATION_ADMISSION_CHANGED")

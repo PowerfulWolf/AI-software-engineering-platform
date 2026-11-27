@@ -235,22 +235,13 @@ class ProjectConsole:
             )
         except Exception as error:
             # Correlate unknown failures without serializing payloads, secrets or traceback.
-            error_type = type(error).__name__
-            if not error_type.isascii() or not error_type.isidentifier():
-                error_type = "Exception"
-            error_type = error_type[:80]
-            locations = []
-            frame = error.__traceback__
-            while frame is not None:
-                module = frame.tb_frame.f_globals.get("__name__", "")
-                if isinstance(module, str) and module.startswith("ai_software_engineer."):
-                    locations.append(f"{module}:{frame.tb_lineno}")
-                frame = frame.tb_next
+            error_type = _safe_error_type(error)
             _LOGGER.error(
-                "Console operation %s failed with %s; locations=%s",
+                "Console operation %s failed with %s; locations=%s%s",
                 running.operation_id,
                 error_type,
-                ", ".join(locations[-4:]),
+                ", ".join(_platform_locations(error)[-4:]),
+                _cause_chain(error),
             )
             return self._store.fail(
                 running.operation_id,
@@ -455,3 +446,34 @@ __all__ = [
     "ManagerConsolePort",
     "ProjectConsole",
 ]
+
+
+def _safe_error_type(error: BaseException) -> str:
+    name = type(error).__name__
+    if not name.isascii() or not name.isidentifier():
+        name = "Exception"
+    return name[:80]
+
+
+def _platform_locations(error: BaseException) -> list[str]:
+    locations = []
+    frame = error.__traceback__
+    while frame is not None:
+        module = frame.tb_frame.f_globals.get("__name__", "")
+        if isinstance(module, str) and module.startswith("ai_software_engineer."):
+            locations.append(f"{module}:{frame.tb_lineno}")
+        frame = frame.tb_next
+    return locations
+
+
+def _cause_chain(error: BaseException) -> str:
+    """Types and platform frames of up to three underlying causes; never messages."""
+    parts: list[str] = []
+    seen = {id(error)}
+    current = error.__cause__ or error.__context__
+    while current is not None and id(current) not in seen and len(parts) < 3:
+        seen.add(id(current))
+        frames = ", ".join(_platform_locations(current)[-3:])
+        parts.append(f"{_safe_error_type(current)}" + (f" at {frames}" if frames else ""))
+        current = current.__cause__ or current.__context__
+    return "; caused by " + " <- ".join(parts) if parts else ""
