@@ -756,6 +756,10 @@ class ClaudeCliResponsesTransport:
                     deadline,
                 )
         except StructuredModelError as error:
+            # Operator diagnosis: the Responses layer only reports a generic failure.
+            _LOGGER.warning(
+                "claude responses turn failed: %s: %s", error.code.value, error.safe_message[:300]
+            )
             status = {
                 AgentErrorCode.AUTHENTICATION_ERROR: 401,
                 AgentErrorCode.QUOTA_EXHAUSTED: 429,

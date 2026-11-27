@@ -17,7 +17,7 @@ echo "$(cd "$(dirname "$0")/.." && pwd -P) $1" >> "$ASE_TEST_RESTART_LOG"
 """
 
 FAKE_UV = """#!/bin/sh
-[ "$1 $2 $3" = "sync --frozen --no-dev" ] || exit 9
+[ "$*" = "sync --frozen" ] || exit 9
 mkdir -p .venv/bin
 printf '#!/bin/sh\\n' > .venv/bin/ase-console
 chmod +x .venv/bin/ase-console

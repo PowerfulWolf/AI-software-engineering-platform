@@ -92,7 +92,10 @@ cmd_install() {
   (
     cd "$staging"
     git -c advice.detachedHead=false checkout --quiet "$tag"
-    uv sync --frozen --no-dev
+    # Include the locked dev group: the controlled Python/MySQL verification
+    # runner imports pytest (and the tests' httpx / jsonschema[format]) from this
+    # release's own site-packages, so a --no-dev release could never run QA.
+    uv sync --frozen
     # Compile once while writable; the read-only source then loads from cache.
     .venv/bin/python -m compileall -q src >/dev/null
   )

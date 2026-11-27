@@ -21,7 +21,7 @@ ASE 正在开发自己：开发检出（ai-workspace 中的仓库）同时是 AS
 
 ```bash
 ./scripts/ase-release.sh tag v0.1.4       # 干净 HEAD 打 tag
-./scripts/ase-release.sh install v0.1.4   # clone + uv sync --frozen --no-dev，src 只读
+./scripts/ase-release.sh install v0.1.4   # clone + uv sync --frozen（含已锁定的 dev 组，受控验证执行器要用其中的 pytest），src 只读
 ./scripts/ase-release.sh activate v0.1.4  # 受控重启到该版本
 ./scripts/ase-release.sh status
 ```
