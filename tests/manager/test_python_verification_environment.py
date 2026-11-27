@@ -36,10 +36,9 @@ def test_macos_prepends_the_real_git_directory_once(
     environment = module.python_mysql_sandbox_environment()
     assert environment["PATH"] == f"{tools}:/usr/bin:/bin"
     assert set(environment) == {"PATH", "LANG", "LC_ALL", "PYTHONDONTWRITEBYTECODE"}
-    scratch = tmp_path / "scratch"
-    with_cache = module.python_mysql_sandbox_environment(scratch)
-    assert with_cache["xcrun_db"] == str(scratch / "xcrun_db")
-    assert {key: value for key, value in with_cache.items() if key != "xcrun_db"} == environment
+    # Only executor-safe (upper-case) names; the runner sets the xcrun cache itself.
+    assert module.python_mysql_sandbox_environment(tmp_path) == environment
+    assert all(name == name.upper() for name in environment)
     assert calls == [(("/usr/bin/xcrun", "--find", "git"), calls[0][1])], "resolved once"
     assert calls[0][1] == {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
 
@@ -59,7 +58,7 @@ def test_unusable_resolution_keeps_the_fixed_path(
     _xcrun(monkeypatch, stdout=stdout, returncode=returncode)
     environment = module.python_mysql_sandbox_environment(Path("/scratch"))
     assert environment["PATH"] == "/usr/bin:/bin"
-    assert "xcrun_db" not in environment, "no cache override without a real developer directory"
+    assert "xcrun_db" not in environment
 
 
 def test_xcrun_failure_and_other_platforms_keep_the_fixed_path(

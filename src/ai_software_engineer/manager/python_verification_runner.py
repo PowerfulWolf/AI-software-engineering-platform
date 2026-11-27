@@ -284,6 +284,11 @@ def main(arguments: list[str]) -> int:
     os.environ.pop("PYTEST_PLUGINS", None)
     os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     os.environ["TMPDIR"] = str(scratch)
+    if sys.platform == "darwin":
+        # Candidate code may still run the /usr/bin xcrun shims (os.defpath git).
+        # Their lookup cache cannot be written in the sandbox's default places, so
+        # every call would re-run xcodebuild (seconds each); keep it in scratch.
+        os.environ["xcrun_db"] = str(scratch / "xcrun_db")  # noqa: SIM112 (xcrun reads it lower-case)
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     import pytest
 

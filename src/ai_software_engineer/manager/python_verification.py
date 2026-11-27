@@ -152,18 +152,13 @@ def python_mysql_sandbox_environment(scratch: Path | None = None) -> dict[str, s
     sets TMPDIR inside the sandbox, after the OS policy has been resolved.
     """
     tools = macos_developer_tool_directory()
-    environment = {
+    del scratch  # The runner places the xcrun cache in scratch inside the sandbox.
+    return {
         "PATH": ":".join((*((tools,) if tools else ()), "/usr/bin", "/bin")),
         "LANG": "C",
         "LC_ALL": "C",
         "PYTHONDONTWRITEBYTECODE": "1",
     }
-    if tools and scratch is not None:
-        # Candidate code may still run the /usr/bin xcrun shims (os.defpath git).
-        # Their lookup cache cannot be written in the sandbox's default places, so
-        # each call would re-run xcodebuild; keep the cache in writable scratch.
-        environment["xcrun_db"] = str(scratch / "xcrun_db")
-    return environment
 
 
 @lru_cache(maxsize=1)
