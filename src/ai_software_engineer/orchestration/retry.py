@@ -1285,7 +1285,14 @@ def _recoverable_candidate(
             implementation.parent_artifact_ids
         )
     if last_event.from_status in {TaskStatus.QA, TaskStatus.REVIEW}:
-        return implementation.supersedes is not None
+        # Only a newer candidate written after the rejection may skip the Coder. The
+        # rejected candidate itself (the event's source revision, a parent of the
+        # rejecting report) must go back to the Coder, or QA re-tests it in a loop.
+        return (
+            implementation.supersedes is not None
+            and implementation.content.commit_sha != last_event.source_revision
+            and implementation.artifact_id not in last_event.artifact_ids
+        )
     return False
 
 

@@ -562,3 +562,57 @@ def test_coder_progress_stall_needs_consecutive_identical_checkpoints() -> None:
     assert not coder_progress_stalled((*same[:3], progress(4, ("step_a", "step_b"))))
     assert not coder_progress_stalled((same[0], same[1], same[2], progress(5, ("step_a",))))
     assert not coder_progress_stalled(same, frozenset({"art_progress_002"}))
+
+
+class CrashAfterQaRejectionOrchestrator(RetryingOrchestrator):
+    """Stop right after a durable QA rejection routed a superseding candidate back."""
+
+    def _transition(self, *args: object, **kwargs: object) -> tuple[Task, str]:
+        task, event_id = super()._transition(*args, **kwargs)  # type: ignore[arg-type]
+        if kwargs.get("reason") == "qa_failed_route_to_coder" and kwargs.get("attempt") == 3:
+            raise RuntimeError("simulated stop after the second QA rejection")
+        return task, event_id
+
+
+def test_restart_after_rejecting_a_superseding_candidate_runs_the_coder_again(
+    tmp_path: Path,
+) -> None:
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root)
+    artifacts = FileArtifactStore(tmp_path / "artifacts")
+    with SqliteTaskRepository(tmp_path / "state.sqlite3") as repository:
+        repository.create(task)
+        first = CrashAfterQaRejectionOrchestrator(
+            repository=repository,
+            artifact_store=artifacts,
+            context_builder=FileRunContextBuilder(repository_root),
+            agent_adapter=ScriptedAdapter(qa_failures=(1, 2)),
+            agent_definitions=_definitions(),
+            identities=AttemptIdentityFactory(),
+            clock=_clock,
+        )
+        with pytest.raises(RuntimeError, match="second QA rejection"):
+            first.run_task(task.id)
+        rejected = repository.list_events(task.id)[-1]
+        assert rejected.reason == "qa_failed_route_to_coder"
+        assert rejected.source_revision == "c" * 40
+
+        adapter = ScriptedAdapter()
+        result = RetryingOrchestrator(
+            repository=repository,
+            artifact_store=artifacts,
+            context_builder=FileRunContextBuilder(repository_root),
+            agent_adapter=adapter,
+            agent_definitions=_definitions(),
+            identities=AttemptIdentityFactory(),
+            clock=_clock,
+        ).run_task(task.id)
+
+        # The rejected superseding candidate is not "recovered" straight back into QA.
+        assert adapter.requests[0].role is AgentRole.CODER
+        assert adapter.requests[0].attempt == 3
+        assert "candidate_recovered" not in {
+            event.reason for event in repository.list_events(task.id)
+        }
+        del result
