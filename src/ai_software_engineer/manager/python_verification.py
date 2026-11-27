@@ -7,6 +7,9 @@ defines the approval contract and a pure command encoding for receipt verificati
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+from functools import lru_cache
 from itertools import combinations
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, Self
@@ -148,12 +151,49 @@ def python_mysql_sandbox_environment() -> dict[str, str]:
     here would deny that same explicitly writable scratch. The hash-bound runner
     sets TMPDIR inside the sandbox, after the OS policy has been resolved.
     """
+    tools = macos_developer_tool_directory()
     return {
-        "PATH": "/usr/bin:/bin",
+        "PATH": ":".join((*((tools,) if tools else ()), "/usr/bin", "/bin")),
         "LANG": "C",
         "LC_ALL": "C",
         "PYTHONDONTWRITEBYTECODE": "1",
     }
+
+
+@lru_cache(maxsize=1)
+def macos_developer_tool_directory() -> str | None:
+    """The real developer-tool directory behind macOS ``/usr/bin`` xcrun shims.
+
+    Inside the verification sandbox xcrun cannot write its lookup cache, so every
+    ``/usr/bin/git`` call re-runs ``xcodebuild`` (seconds each); a test that calls
+    git a few hundred times then exceeds the command window. The directory is
+    resolved once on the host, outside the sandbox, and only prepended to PATH:
+    it grants no file, network or socket access the sandbox policy does not.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        found = subprocess.run(
+            ("/usr/bin/xcrun", "--find", "git"),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    git = Path(found.stdout.strip())
+    if (
+        found.returncode != 0
+        or not git.is_absolute()
+        or git.name != "git"
+        or git.parent == Path("/usr/bin")
+        or ":" in str(git.parent)
+        or not git.is_file()
+    ):
+        return None
+    return str(git.parent)
 
 
 def python_mysql_sandbox_command(
