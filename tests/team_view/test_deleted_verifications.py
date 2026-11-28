@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-from contextlib import closing
+import io
+import socketserver
+from collections.abc import Callable
 from datetime import UTC, datetime
-from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
 
 import pytest
 from pymysql.cursors import DictCursor
@@ -48,13 +49,65 @@ from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationPlan,
 )
 from ai_software_engineer.store.mysql_repository import open_mysql_connection
+from ai_software_engineer.team_view import server as team_server
 from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
 from ai_software_engineer.team_view.reader import ProductionTeamReader
-from ai_software_engineer.team_view.server import create_team_server
 from ai_software_engineer.team_workspace import TeamWorkspace
 from tests.e2e.test_joint_delivery import setup_host
 from tests.manager.test_production_backend import _ScriptedClientFactory, _ScriptedDeliveryFactory
 from tests.orchestration.test_runner import _definitions
+
+_SOCKETLESS_PORT = 8765
+
+
+class _UnboundTeamServer(ThreadingHTTPServer):
+    """The real Team HTTP handler stack without creating or binding any TCP socket.
+
+    The controlled Python/MySQL verification sandbox disables networking, including
+    loopback binds. Only transport construction is replaced; routing, Host/Origin checks,
+    the reader gate, status codes and response bodies are the production handler's.
+    """
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler: Callable[..., socketserver.BaseRequestHandler],
+    ) -> None:
+        socketserver.BaseServer.__init__(self, server_address, handler)
+        self.server_name = server_address[0]
+        self.server_port = _SOCKETLESS_PORT
+
+
+class _InProcessConnection:
+    """Minimal stream-socket surface used by StreamRequestHandler."""
+
+    def __init__(self, request: bytes) -> None:
+        self._request = request
+        self.response = bytearray()
+
+    def settimeout(self, timeout: float | None) -> None:
+        pass
+
+    def makefile(self, mode: str, buffering: int = -1) -> io.BytesIO:
+        assert mode == "rb"
+        return io.BytesIO(self._request)
+
+    def sendall(self, data: bytes) -> None:
+        self.response.extend(data)
+
+
+def _get_team(server: ThreadingHTTPServer, project_id: str) -> tuple[int, bytes]:
+    host = f"127.0.0.1:{server.server_port}"
+    connection = _InProcessConnection(
+        (
+            f"GET /api/v1/team?project_id={project_id} HTTP/1.1\r\n"
+            f"Host: {host}\r\nConnection: close\r\n\r\n"
+        ).encode()
+    )
+    server.RequestHandlerClass(connection, ("127.0.0.1", 0), server)
+    head, separator, body = bytes(connection.response).partition(b"\r\n\r\n")
+    assert separator, bytes(connection.response)
+    return int(head.split(b" ", 2)[1]), body
 
 
 def _completed(host: TeamHost, root: Path, name: str) -> ProjectDeliveryCheckpoint:
@@ -371,7 +424,7 @@ def test_retired_and_visible_deliveries_cannot_share_a_global_task_id(
 
 @pytest.mark.mysql
 def test_public_team_read_after_delete_filters_all_history_and_its_verifications(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, environment, _, roots = setup_host(tmp_path)
     host = TeamHost(
@@ -451,54 +504,45 @@ def test_public_team_read_after_delete_filters_all_history_and_its_verifications
     assert _reservation_row(dsn, kept_reservation.plan_sha256) == kept_row_before
     files_before = _files(Path(config.platform_root))
     reader = ProductionTeamReader(config, environment)
-    with create_team_server(reader, port=0) as server:
-        thread = Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            with closing(HTTPConnection("127.0.0.1", server.server_port, timeout=5)) as client:
-                client.request("GET", f"/api/v1/team?project_id={parent.project_id}")
-                response = client.getresponse()
-                payload = response.read()
-                assert response.status == 200, payload
-            snapshot = TeamSnapshot.model_validate_json(payload)
-            assert {request.id for request in snapshot.requests} == {kept.delivery_id}
-            assert {task.task_id for task in snapshot.tasks} == {
-                kept.task_id,
-                kept_reservation.task_id,
-            }
-            assert snapshot.projects[0].requirement_count == 0
-            hidden = {
-                old.delivery_id,
-                current.delivery_id,
-                parent.delivery_id,
-                *[f"verification_{plan.plan_sha256[:32]}" for plan, _ in finished],
-            }
-            assert all(
-                not hidden.intersection(
-                    (
-                        *agent.assigned_delivery_ids,
-                        *agent.current_stage_delivery_ids,
-                        *agent.history_delivery_ids,
-                    )
-                )
-                for agent in snapshot.agents
+    # The verification sandbox forbids even loopback TCP binds, so the production handler
+    # is exercised in process; only the socket transport is substituted.
+    monkeypatch.setattr(team_server, "ThreadingHTTPServer", _UnboundTeamServer)
+    server = team_server.create_team_server(reader, port=0)
+    assert isinstance(server, _UnboundTeamServer)
+    status, payload = _get_team(server, parent.project_id)
+    assert status == 200, payload
+    snapshot = TeamSnapshot.model_validate_json(payload)
+    assert {request.id for request in snapshot.requests} == {kept.delivery_id}
+    assert {task.task_id for task in snapshot.tasks} == {
+        kept.task_id,
+        kept_reservation.task_id,
+    }
+    assert snapshot.projects[0].requirement_count == 0
+    hidden = {
+        old.delivery_id,
+        current.delivery_id,
+        parent.delivery_id,
+        *[f"verification_{plan.plan_sha256[:32]}" for plan, _ in finished],
+    }
+    assert all(
+        not hidden.intersection(
+            (
+                *agent.assigned_delivery_ids,
+                *agent.current_stage_delivery_ids,
+                *agent.history_delivery_ids,
             )
-            assert _files(Path(config.platform_root)) == files_before
-            # A non-retired missing source is still corruption, even in this same repository.
-            bad = kept_reservation.model_copy(
-                update={"source_task_id": "task_missing_active_source"}
-            )
-            with open_mysql_connection(dsn) as connection, connection.cursor(DictCursor) as cursor:
-                cursor.execute(
-                    "UPDATE verification_reservations SET payload_json=%s WHERE plan_sha256=%s",
-                    (bad.model_dump_json(), bad.plan_sha256),
-                )
-                connection.commit()
-            with closing(HTTPConnection("127.0.0.1", server.server_port, timeout=5)) as client:
-                client.request("GET", f"/api/v1/team?project_id={parent.project_id}")
-                response = client.getresponse()
-                assert response.status == 503
-                assert b"source_task_id" not in response.read()
-        finally:
-            server.shutdown()
-            thread.join(timeout=5)
+        )
+        for agent in snapshot.agents
+    )
+    assert _files(Path(config.platform_root)) == files_before
+    # A non-retired missing source is still corruption, even in this same repository.
+    bad = kept_reservation.model_copy(update={"source_task_id": "task_missing_active_source"})
+    with open_mysql_connection(dsn) as connection, connection.cursor(DictCursor) as cursor:
+        cursor.execute(
+            "UPDATE verification_reservations SET payload_json=%s WHERE plan_sha256=%s",
+            (bad.model_dump_json(), bad.plan_sha256),
+        )
+        connection.commit()
+    status, body = _get_team(server, parent.project_id)
+    assert status == 503
+    assert b"source_task_id" not in body
