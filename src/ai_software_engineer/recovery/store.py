@@ -193,11 +193,20 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
+# Search-only directory descriptors where the OS has them (Darwin); else read.
+_SEARCH = getattr(os, "O_SEARCH", os.O_RDONLY)
+
+
 def _open_directory(path: Path) -> int:
-    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    # Ancestors only need lookup. A sandbox may deny reading them (macOS seatbelt
+    # rejects O_RDONLY on /private) while still allowing search; the no-follow chain
+    # is unchanged. Only the target itself is opened for reading.
+    parts = path.parts[1:]
+    descriptor = os.open("/", (_SEARCH if parts else os.O_RDONLY) | os.O_DIRECTORY)
     try:
-        for part in path.parts[1:]:
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+        for index, part in enumerate(parts):
+            mode = _SEARCH if index + 1 < len(parts) else os.O_RDONLY
+            child = os.open(part, mode | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
         return descriptor
