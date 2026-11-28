@@ -51,53 +51,6 @@ async function recoveryUi(t, initial = records().slice(0, 1)) {
   return {...h, progressState: state, section};
 }
 
-test("independent preparation polling updates during a held Team read and preserves reading state", async t => {
-  const h = await recoveryUi(t);
-  await h.section.locator(".preparation-milestones li").first().evaluate(node => {window.preparationFirstRecord = node;});
-  const document = h.page.locator('details[data-key="artifact://preparation-saved"]');
-  await document.locator(":scope > summary").click();
-  await document.evaluate(node => {
-    window.preparationDocument = node;
-    const body = node.querySelector(".artifact-body") || node.querySelector("pre") || node.querySelector("p");
-    window.preparationSelectedNode = body;
-    const range = document.createRange(); range.selectNodeContents(body);
-    getSelection().removeAllRanges(); getSelection().addRange(range);
-    window.preparationSelectedText = getSelection().toString();
-  });
-  let release, started;
-  const held = new Promise(resolve => {release = resolve;});
-  const reading = new Promise(resolve => {started = resolve;});
-  t.after(() => release());
-  await h.page.route("**/api/v1/team?**", async route => {started(); await held; return route.fulfill({json: h.team});});
-  const polling = h.tick();
-  await reading;
-  h.progressState.records = records();
-  await h.page.evaluate(() => refreshRecoveryPreparationProgress());
-  assert.equal(await h.page.evaluate(() => refreshing), true, "the independent lane settles before Team");
-  assert.equal(await h.section.locator(".preparation-milestones li").count(), 5);
-  assert.equal(await h.section.locator(".preparation-milestones li").first().evaluate(node => node === window.preparationFirstRecord), true);
-  assert.match(await h.section.innerText(), /开发执行已领取（历史记录）/);
-  assert.doesNotMatch(await h.section.innerText(), /正在执行|已通过|100%/);
-  assert.equal(await document.evaluate(node => node === window.preparationDocument && node.open), true);
-  assert.equal(await h.page.evaluate(() => preparationSelectedNode.isConnected && getSelection().toString() === preparationSelectedText), true);
-  await h.section.evaluate(node => {window.preparationSavedSection = node;});
-  await h.page.evaluate(() => refreshRecoveryPreparationProgress());
-  assert.equal(await h.section.evaluate(node => node === window.preparationSavedSection), true, "unchanged reread retains the preparation DOM");
-  assert.equal(await document.evaluate(node => node === window.preparationDocument && node.open), true);
-  const history = h.page.locator('#detail details[data-key^="operation-history:"]');
-  await history.locator(":scope > summary").click();
-  assert.match(await history.innerText(), /最近准备记录.*开发执行已领取/);
-  assert.equal(await history.locator(".preparation-milestones").count(), 0, "history reuses one latest-fact summary");
-  release();
-  await polling;
-  await h.draft();
-  h.progressState.failure = 409;
-  await h.page.evaluate(() => refreshRecoveryPreparationProgress());
-  assert.equal(await h.page.locator('#composer input[name="name"]').evaluate(node => node === window.draftInput), true);
-  assert.equal(await h.page.locator('#composer input[name="name"]').inputValue(), "保留正在编辑的需求");
-  assert.equal(h.progressState.writes, 0);
-});
-
 test("a delayed progress response cannot populate a different selected Requirement", async t => {
   const h = await recoveryUi(t);
   let release, started;

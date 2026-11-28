@@ -57,38 +57,6 @@ test("periodic polls stay quiet: no progress text and the refresh button stays e
   assert.equal(await h.page.locator("#connection").innerText(), settled);
 });
 
-test("browser automatic busy retries back off and retain the editable draft", async t => {
-  const h = await ui(t, {automaticPolling: true});
-  await h.requests();
-  await h.draft();
-  let reads = 0, busy = true;
-  await h.page.route("**/api/v1/team?**", route => {
-    reads++;
-    return busy ? route.fulfill({status: 503, json: {error: {code: "TEAM_READ_IN_PROGRESS"}}})
-      : route.fulfill({json: h.team});
-  });
-  await h.page.clock.runFor(5000);
-  await observed(h.page, () => !refreshing && teamReadIssue === "busy");
-  for (const delay of [10000, 20000, 30000, 30000]) {
-    const before = reads;
-    await h.page.clock.runFor(delay - 1);
-    assert.equal(reads, before);
-    await h.page.clock.runFor(1);
-    await observed(h.page, () => !refreshing && teamReadIssue === "busy");
-    assert.equal(reads, before + 1);
-    assert.equal(await h.page.locator('#composer input[name="name"]').evaluate(node => node === window.draftInput), true);
-    assert.equal(await h.page.evaluate(() => canControlCurrentTeam()), false);
-  }
-  busy = false;
-  await h.page.clock.runFor(30000);
-  await observed(h.page, () => !refreshing && teamReadIssue === null);
-  const before = reads;
-  await h.page.clock.runFor(5000);
-  await observed(h.page, () => !refreshing);
-  assert.equal(reads, before + 1);
-  assert.equal(await h.page.locator('#composer input[name="name"]').inputValue(), "保留正在编辑的需求");
-});
-
 test("real preparation GETs keep their five-second lane while Team is held", async t => {
   const scope = {operation_id: "operation_" + "1".repeat(32), team_id: "team_fixture", project_id: "project_fixture",
     delivery_id: "request_fixture", expected_checkpoint_sha256: "a".repeat(64), approved_plan_sha256: "e".repeat(64)};

@@ -210,19 +210,14 @@ class RecoverySeedService(ClaimedRecoveryInvocationHistory):
             else:
                 lineage = lease.queue
                 has_lineage = all(
-                    callable(getattr(lineage, name, None))
-                    for name in ("step", "original_claim")
+                    callable(getattr(lineage, name, None)) for name in ("step", "original_claim")
                 )
                 if publications and not has_lineage:
                     raise RecoveryRejected(
                         "scheduled recovery input requires immutable queue lineage"
                     )
                 retired_reader = getattr(lineage, "retired_rejected_outputs", None)
-                retired = (
-                    retired_reader(request.task_id)
-                    if callable(retired_reader)
-                    else ()
-                )
+                retired = retired_reader(request.task_id) if callable(retired_reader) else ()
                 selected_index = accepted_reapply_source_index(
                     plan,
                     schedule.schedule_sha256,

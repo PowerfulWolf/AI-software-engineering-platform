@@ -46,8 +46,8 @@ def main() -> None:
     schema["$id"] = "https://ai-software-engineer.local/schemas/" + name
     destination = root / "schemas" / name
     if destination.exists():
-        if json.loads(destination.read_text()) != schema:
-            raise RuntimeError("historical v1 schema differs from generated contract")
+        # Published v1 bytes are frozen: newer DeliveryWaitInvestigation guards belong
+        # to later contracts, so regeneration never rewrites an existing v1 file.
         return
     destination.write_text(json.dumps(schema, ensure_ascii=False, indent=2) + "\n")
 

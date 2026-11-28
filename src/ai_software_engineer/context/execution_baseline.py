@@ -243,9 +243,7 @@ def execution_baseline_from_context(
         if hashlib.sha256(schedule.content.encode()).hexdigest() != schedule.sha256:
             raise ValueError("分轮重应用清单摘要不一致")
         manifest = RecoveryInputManifest.model_validate_json(schedule.content)
-        current_refs = tuple(
-            ref for ref in manifest.sources if ref.source_id == "recovery.patch"
-        )
+        current_refs = tuple(ref for ref in manifest.sources if ref.source_id == "recovery.patch")
         if (
             manifest.decision_sha256 != value.schedule_sha256
             or len(current_refs) != 1

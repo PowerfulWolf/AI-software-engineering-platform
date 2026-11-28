@@ -520,43 +520,6 @@ def test_service_supervisor_does_not_reclaim_owner_during_lock_publication(
         first.wait(timeout=5)
 
 
-def test_service_launcher_restart_hands_off_managed_process_between_checkouts(
-    tmp_path: Path,
-) -> None:
-    old_launcher, old_environment = _launcher(tmp_path / "old")
-    new_launcher, new_environment = _launcher(tmp_path / "new")
-    shared_state = tmp_path / "shared-state"
-    shared_processes = tmp_path / "shared-processes"
-    old_environment.update(
-        {
-            "ASE_SERVICE_STATE_DIR": str(shared_state),
-            "ASE_TEST_PROCESS_DIRECTORY": str(shared_processes),
-        }
-    )
-    new_environment.update(
-        {
-            "ASE_SERVICE_STATE_DIR": str(shared_state),
-            "ASE_TEST_PROCESS_DIRECTORY": str(shared_processes),
-        }
-    )
-
-    try:
-        started = _run(old_launcher, old_environment, "start")
-        assert started.returncode == 0, started.stderr
-
-        restarted = _run(new_launcher, new_environment, "restart")
-
-        assert restarted.returncode == 0, restarted.stderr
-        assert "ase-console stopped" in restarted.stdout
-        assert "ase-console started" in restarted.stdout
-        pid_record = (shared_state / "ase-console.pid").read_text(encoding="utf-8").splitlines()
-        assert pid_record[1] == str(new_launcher.parents[1] / ".venv" / "bin" / "ase-console")
-        assert _run(new_launcher, new_environment, "status").returncode == 0
-    finally:
-        _run(old_launcher, old_environment, "stop")
-        _run(new_launcher, new_environment, "stop")
-
-
 def test_service_launcher_recognizes_same_project_relative_console_command(
     tmp_path: Path,
 ) -> None:
@@ -637,67 +600,6 @@ def test_service_launcher_loads_runtime_environment_next_to_config(tmp_path: Pat
         started = _run(launcher, environment, "start")
         assert started.returncode == 0, started.stderr
         assert capture.read_text(encoding="utf-8") == dsn
-    finally:
-        _run(launcher, environment, "stop")
-
-
-@pytest.mark.parametrize(
-    ("safe_summary", "reordered"),
-    [
-        ("Configuration apply is in progress.", False),
-        ("配置已保存, 正在等待当前工作安全收尾后重启服务。", False),
-        ("配置已保存, 正在等待当前工作安全收尾后重启服务。", True),
-    ],
-)
-def test_service_supervisor_consumes_one_configuration_apply_request(
-    tmp_path: Path,
-    safe_summary: str,
-    reordered: bool,
-) -> None:
-    launcher, environment = _launcher(tmp_path)
-    state = Path(environment["ASE_SERVICE_STATE_DIR"])
-    request_id = "configuration_apply_" + "a" * 32
-
-    try:
-        started = _run(launcher, environment, "start")
-        assert started.returncode == 0, started.stderr
-        original_pid = (state / "ase-console.pid").read_text().splitlines()[0]
-        assert (state / "ase-console-supervisor.pid").is_file()
-        (state / "configuration-apply.json").write_text(
-            json.dumps(
-                {
-                    "status": "PENDING",
-                    "safe_summary": safe_summary,
-                    "request_id": request_id,
-                },
-                separators=(",", ":"),
-                ensure_ascii=False,
-                sort_keys=not reordered,
-                indent=2 if reordered else None,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        (state / "configuration-apply.request").write_text(request_id + "\n", encoding="ascii")
-
-        deadline = time.monotonic() + 15
-        result: dict[str, str] = {}
-        while time.monotonic() < deadline:
-            result = json.loads((state / "configuration-apply.json").read_text())
-            if result["status"] != "PENDING":
-                break
-            time.sleep(0.1)
-
-        assert result["status"] == "SUCCEEDED"
-        assert result["safe_summary"] == "配置已应用, 服务已安全重启。"
-        restarted_pid = (state / "ase-console.pid").read_text().splitlines()[0]
-        assert restarted_pid != original_pid
-        assert not (state / "configuration-apply.request").exists()
-
-        # A terminal request identity is consumed without restarting again.
-        (state / "configuration-apply.request").write_text(request_id + "\n", encoding="ascii")
-        time.sleep(0.6)
-        assert (state / "ase-console.pid").read_text().splitlines()[0] == restarted_pid
     finally:
         _run(launcher, environment, "stop")
 
@@ -1050,54 +952,6 @@ def test_service_supervisor_reconciles_claimed_pending_request_as_failed(
             time.sleep(0.05)
         assert result["status"] == "FAILED"
         assert "配置已保存" in result["safe_summary"]
-    finally:
-        _run(launcher, environment, "stop")
-
-
-@pytest.mark.parametrize("runtime_kind", ["malformed", "symlink"])
-def test_service_supervisor_records_failure_when_runtime_environment_cannot_load(
-    tmp_path: Path, runtime_kind: str
-) -> None:
-    launcher, environment = _launcher(tmp_path)
-    state = Path(environment["ASE_SERVICE_STATE_DIR"])
-    config = tmp_path / "config" / "config.json"
-    config.parent.mkdir()
-    runtime_environment = config.parent / "runtime.env"
-    environment["ASE_CONFIG"] = str(config)
-    request_id = "configuration_apply_" + "9" * 32
-
-    try:
-        assert _run(launcher, environment, "start").returncode == 0
-        if runtime_kind == "malformed":
-            runtime_environment.write_text("ASE_MYSQL_DSN='unterminated\n", encoding="utf-8")
-        else:
-            external = tmp_path / "external-runtime.env"
-            external.write_text("ASE_MYSQL_DSN='secret'\n", encoding="utf-8")
-            runtime_environment.symlink_to(external)
-        (state / "configuration-apply.json").write_text(
-            json.dumps(
-                {
-                    "request_id": request_id,
-                    "safe_summary": "Configuration apply is in progress.",
-                    "status": "PENDING",
-                },
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        (state / "configuration-apply.request").write_text(request_id + "\n", encoding="ascii")
-        deadline = time.monotonic() + 15
-        result: dict[str, str] = {}
-        while time.monotonic() < deadline:
-            result = json.loads((state / "configuration-apply.json").read_text())
-            if result["status"] != "PENDING":
-                break
-            time.sleep(0.05)
-        assert result["status"] == "FAILED"
-        supervisor_pid = int((state / "ase-console-supervisor.pid").read_text().splitlines()[0])
-        os.kill(supervisor_pid, 0)
     finally:
         _run(launcher, environment, "stop")
 

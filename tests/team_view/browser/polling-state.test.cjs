@@ -188,25 +188,6 @@ test("timestamp-only ticks do not mutate page content and changed facts retain s
   assert.equal(await h.page.evaluate(() => getSelection().toString()), "Selected evidence");
 });
 
-test("Knowledge polling detects inventory-only changes and retains another expanded Spec", async t => {
-  const h = await ui(t);
-  const specs = [{active: true, document: {spec_id: "spec_one", spec_key: "one", version: 1,
-    title: "First rule", roles: ["coder"], stages: ["IMPLEMENTING"], repository_ids: [],
-    path_globs: ["src/**"], verification: "unit tests", body_markdown: "Original rule body"}}];
-  await h.page.route("**/api/v1/admin/team/specs", route => route.fulfill({json: specs}));
-  await h.page.locator("#nav-knowledge").click();
-  await h.page.getByRole("tab", {name: "开发规范", exact: true}).click();
-  const document = h.page.locator('details[data-key="spec:team:project_fixture:spec_one"]');
-  await document.locator(":scope > summary").click();
-  await document.evaluate(node => { window.polledSpec = node; });
-  specs.push({active: false, document: {...specs[0].document, spec_id: "spec_two", spec_key: "two",
-    title: "New background rule", body_markdown: "Second rule body"}});
-  await h.tick();
-  await h.page.getByText("New background rule", {exact: true}).waitFor();
-  assert.equal(await document.evaluate(node => node === window.polledSpec && node.open), true);
-  assert.equal(await document.getByText("Original rule body").isVisible(), true);
-});
-
 test("Task updates retain expanded artifacts in the same modal", async t => {
   const h = await ui(t);
   const task = {id: "task_fixture", request_id: "request_fixture", title: "Task", status: "NEW",

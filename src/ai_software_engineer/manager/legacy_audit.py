@@ -44,7 +44,9 @@ def contained_unknown_human_event(
         evidence_uri=(
             records.root
             / records._name("contained-unknown-budget-settlements", settlement.settlement_sha256)
-        ).absolute().as_uri(),
+        )
+        .absolute()
+        .as_uri(),
         note=(
             "工程主体根据用户精确答复 "
             + confirmation.reference
@@ -249,12 +251,15 @@ class EngineeringHumanActionRecorder:
                 occurred_at=schedule.decided_at,
                 action=HumanAction.SUPPLY_EVIDENCE,
                 evidence_uri=(
-                    records.root
-                    / records._name("recovery-input-schedules", schedule.plan_sha256)
-                ).absolute().as_uri(),
+                    records.root / records._name("recovery-input-schedules", schedule.plan_sha256)
+                )
+                .absolute()
+                .as_uri(),
                 note=(
-                    "ENGINEERING 主体 " + schedule.engineering_actor.operator_id
-                    + " 通过真实 Console Operation " + schedule.authorization_reference
+                    "ENGINEERING 主体 "
+                    + schedule.engineering_actor.operator_id
+                    + " 通过真实 Console Operation "
+                    + schedule.authorization_reference
                     + " 批准完整旧补丁按独立 Coder Run 分轮输入; 原等待与历史保留。"
                 ),
             )

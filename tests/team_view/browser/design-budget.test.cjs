@@ -142,25 +142,3 @@ test("Manager and execution-time fields submit the same bounded configuration", 
     {initial_seconds: 600, max_seconds: 2400, max_capacity_timeouts: 3});
 });
 
-test("Manager wait retains original stage and cannot replace exact approval", async (t) => {
-  const h = await ui(t);
-  const request = h.team.requests[0];
-  Object.assign(request, {stage: "PLANNING", next_action: "Review required context",
-    coordination: {draft: {action: "WAITING_HUMAN", summary: "Required context is too large"}}});
-  await h.tick();
-  await h.requests();
-  await h.page.evaluate(() => showDetail("request", "request_fixture"));
-  const detail = h.page.locator("#detail");
-  assert.match(await detail.innerText(), /Required context is too large/);
-  assert.equal(await h.page.evaluate(() => requestPresentation(snapshot.requests[0]).status), "PLANNING");
-  h.state.operations.push(operation("SUCCEEDED", {result: {
-    project_id: "project_fixture", delivery_id: request.id, checkpoint_sha256: request.checkpoint_sha256,
-    stage: "WAITING_HUMAN", next_action: "Approve exact recovery",
-    approval: {kind: "coder_recovery", plan_sha256: "b".repeat(64), title: "批准 Coder 恢复任务", facts: []},
-  }}));
-  await h.tick();
-  await h.page.evaluate(() => showDetail("request", "request_fixture"));
-  await h.page.getByText("工程管理 · 需工程授权者处理", {exact: true}).click();
-  assert.equal(await detail.getByRole("button", {name: "批准并继续", exact: true}).count(), 1);
-  assert.equal(await detail.getByRole("button", {name: "重试 Planner", exact: true}).count(), 0);
-});

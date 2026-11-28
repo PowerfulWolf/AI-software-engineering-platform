@@ -1037,6 +1037,39 @@
           ],
           "default": null
         },
+        "static_qa_missing_entry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StaticQaMissingEntryEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rejected_static_qa_output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedStaticQaOutputEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pre_context_recovery_input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PreContextRecoveryInputEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "knowledge_preparation": {
           "anyOf": [
             {
@@ -1092,6 +1125,17 @@
           ],
           "default": null
         },
+        "rejected_verifier_output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RejectedVerifierOutputEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "retry_cause": {
           "anyOf": [
             {
@@ -1136,6 +1180,11 @@
           "title": "Missing",
           "type": "array"
         },
+        "local_stop_confirmation_available": {
+          "default": false,
+          "title": "Local Stop Confirmation Available",
+          "type": "boolean"
+        },
         "next_action": {
           "minLength": 1,
           "title": "Next Action",
@@ -1150,55 +1199,6 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Proof Sha256",
           "type": "string"
-        },
-        "static_qa_missing_entry": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StaticQaMissingEntryEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "pre_context_recovery_input": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PreContextRecoveryInputEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "local_stop_confirmation_available": {
-          "default": false,
-          "title": "Local Stop Confirmation Available",
-          "type": "boolean"
-        },
-        "rejected_static_qa_output": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RejectedStaticQaOutputEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "rejected_verifier_output": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RejectedVerifierOutputEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         }
       },
       "required": [
@@ -1367,6 +1367,52 @@
             "properties": {
               "permitted_resolutions": {
                 "contains": {
+                  "const": "RETRY_REJECTED_STATIC_QA_OUTPUT"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "rejected_static_qa_output",
+              "original_run_id"
+            ],
+            "properties": {
+              "rejected_static_qa_output": {
+                "type": "object"
+              },
+              "permitted_resolutions": {
+                "minItems": 1,
+                "maxItems": 1,
+                "items": {
+                  "const": "RETRY_REJECTED_STATIC_QA_OUTPUT"
+                }
+              },
+              "disposition": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "role": {
+                        "const": "qa"
+                      },
+                      "classification": {
+                        "const": "PLATFORM_BUG"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "permitted_resolutions"
+            ],
+            "properties": {
+              "permitted_resolutions": {
+                "contains": {
                   "const": "STATIC_QA_MISSING_ENTRY"
                 }
               }
@@ -1409,27 +1455,6 @@
               "original_run_id"
             ],
             "properties": {
-              "invocation_start_sha256": {
-                "type": "null"
-              },
-              "invocation_outcome_sha256": {
-                "type": "null"
-              },
-              "process_stop_sha256": {
-                "type": "null"
-              },
-              "retry_cause": {
-                "type": "null"
-              },
-              "original_authority": {
-                "type": "null"
-              },
-              "knowledge_preparation": {
-                "type": "null"
-              },
-              "verification_retry": {
-                "type": "null"
-              },
               "verifier_preparation": {
                 "type": "object",
                 "properties": {
@@ -1438,12 +1463,36 @@
                   }
                 }
               },
+              "invocation_start_sha256": {
+                "type": "null"
+              },
+              "invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
+              },
+              "retry_cause": {
+                "type": "null"
+              },
+              "process_stop_sha256": {
+                "type": "null"
+              },
               "permitted_resolutions": {
+                "minItems": 1,
                 "maxItems": 1,
                 "items": {
                   "const": "STATIC_QA_MISSING_ENTRY"
-                },
-                "minItems": 1
+                }
               },
               "disposition": {
                 "properties": {
@@ -1468,9 +1517,6 @@
                     }
                   }
                 }
-              },
-              "rejected_output": {
-                "type": "null"
               }
             }
           },
@@ -1496,14 +1542,14 @@
             }
           },
           "then": {
+            "required": [
+              "rejected_output"
+            ],
             "properties": {
               "rejected_output": {
                 "type": "object"
               }
-            },
-            "required": [
-              "rejected_output"
-            ]
+            }
           }
         },
         {
@@ -1526,14 +1572,38 @@
               "workspace_inventory_sha256"
             ],
             "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
               "invocation_start_sha256": {
                 "type": "string"
               },
               "invocation_outcome_sha256": {
                 "type": "string"
               },
-              "original_run_id": {
+              "process_stop_sha256": {
                 "type": "string"
+              },
+              "workspace_inventory_sha256": {
+                "type": "string"
+              },
+              "retry_cause": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
               },
               "permitted_resolutions": {
                 "maxItems": 1,
@@ -1557,30 +1627,6 @@
                     }
                   }
                 }
-              },
-              "workspace_inventory_sha256": {
-                "type": "string"
-              },
-              "retry_cause": {
-                "type": "null"
-              },
-              "interruption_receipt_sha256": {
-                "type": "null"
-              },
-              "process_stop_sha256": {
-                "type": "string"
-              },
-              "original_authority": {
-                "type": "null"
-              },
-              "knowledge_preparation": {
-                "type": "null"
-              },
-              "verification_retry": {
-                "type": "null"
-              },
-              "verifier_preparation": {
-                "type": "null"
               }
             }
           }
@@ -1599,14 +1645,14 @@
             }
           },
           "then": {
+            "required": [
+              "rejected_knowledge"
+            ],
             "properties": {
               "rejected_knowledge": {
                 "type": "object"
               }
-            },
-            "required": [
-              "rejected_knowledge"
-            ]
+            }
           }
         },
         {
@@ -1626,14 +1672,41 @@
               "workspace_inventory_sha256"
             ],
             "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "workspace_inventory_sha256": {
+                "type": "string"
+              },
               "invocation_start_sha256": {
                 "type": "null"
               },
               "invocation_outcome_sha256": {
                 "type": "null"
               },
-              "original_run_id": {
-                "type": "string"
+              "retry_cause": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "process_stop_sha256": {
+                "type": "null"
+              },
+              "original_authority": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
+                "type": "null"
+              },
+              "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
+                "type": "null"
+              },
+              "rejected_output": {
+                "type": "null"
               },
               "permitted_resolutions": {
                 "maxItems": 1,
@@ -1644,16 +1717,16 @@
               "disposition": {
                 "properties": {
                   "facts": {
-                    "properties": {
-                      "role": {
-                        "const": "coder"
-                      }
-                    },
                     "required": [
                       "role",
                       "classification",
                       "evidence_ids"
                     ],
+                    "properties": {
+                      "role": {
+                        "const": "coder"
+                      }
+                    },
                     "anyOf": [
                       {
                         "properties": {
@@ -1682,33 +1755,6 @@
                     ]
                   }
                 }
-              },
-              "workspace_inventory_sha256": {
-                "type": "string"
-              },
-              "retry_cause": {
-                "type": "null"
-              },
-              "interruption_receipt_sha256": {
-                "type": "null"
-              },
-              "process_stop_sha256": {
-                "type": "null"
-              },
-              "original_authority": {
-                "type": "null"
-              },
-              "knowledge_preparation": {
-                "type": "null"
-              },
-              "verification_retry": {
-                "type": "null"
-              },
-              "verifier_preparation": {
-                "type": "null"
-              },
-              "rejected_output": {
-                "type": "null"
               }
             }
           }
@@ -1809,13 +1855,13 @@
               "original_run_id"
             ],
             "properties": {
-              "original_run_id": {
-                "type": "string"
-              },
               "invocation_start_sha256": {
                 "type": "string"
               },
               "invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "original_run_id": {
                 "type": "string"
               },
               "permitted_resolutions": {
@@ -1849,14 +1895,14 @@
             }
           },
           "then": {
+            "required": [
+              "rejected_workspace_admission"
+            ],
             "properties": {
               "rejected_workspace_admission": {
                 "type": "object"
               }
-            },
-            "required": [
-              "rejected_workspace_admission"
-            ]
+            }
           }
         },
         {
@@ -1871,11 +1917,38 @@
             }
           },
           "then": {
+            "required": [
+              "original_run_id",
+              "invocation_start_sha256",
+              "invocation_outcome_sha256",
+              "workspace_inventory_sha256"
+            ],
             "properties": {
+              "original_run_id": {
+                "type": "string"
+              },
+              "invocation_start_sha256": {
+                "type": "string"
+              },
+              "invocation_outcome_sha256": {
+                "type": "string"
+              },
+              "workspace_inventory_sha256": {
+                "type": "string"
+              },
               "retry_cause": {
                 "type": "null"
               },
+              "interruption_receipt_sha256": {
+                "type": "null"
+              },
+              "process_stop_sha256": {
+                "type": "null"
+              },
               "original_authority": {
+                "type": "null"
+              },
+              "knowledge_preparation": {
                 "type": "null"
               },
               "verification_retry": {
@@ -1884,25 +1957,10 @@
               "verifier_preparation": {
                 "type": "null"
               },
-              "knowledge_preparation": {
-                "type": "null"
-              },
               "rejected_output": {
                 "type": "null"
               },
               "rejected_knowledge": {
-                "type": "null"
-              },
-              "invocation_start_sha256": {
-                "type": "string"
-              },
-              "invocation_outcome_sha256": {
-                "type": "string"
-              },
-              "interruption_receipt_sha256": {
-                "type": "null"
-              },
-              "process_stop_sha256": {
                 "type": "null"
               },
               "permitted_resolutions": {
@@ -1915,33 +1973,21 @@
                 "properties": {
                   "facts": {
                     "properties": {
+                      "role": {
+                        "const": "coder"
+                      },
                       "classification": {
                         "enum": [
                           "NONTRANSIENT_INFRA",
                           "PLATFORM_BUG",
                           "INVALID_OUTPUT"
                         ]
-                      },
-                      "role": {
-                        "const": "coder"
                       }
                     }
                   }
                 }
-              },
-              "original_run_id": {
-                "type": "string"
-              },
-              "workspace_inventory_sha256": {
-                "type": "string"
               }
-            },
-            "required": [
-              "original_run_id",
-              "invocation_start_sha256",
-              "invocation_outcome_sha256",
-              "workspace_inventory_sha256"
-            ]
+            }
           }
         },
         {
@@ -1995,19 +2041,19 @@
           },
           "then": {
             "properties": {
-              "verifier_preparation": {
-                "type": "null"
-              },
-              "invocation_start_sha256": {
-                "type": "null"
-              },
-              "invocation_outcome_sha256": {
+              "retry_cause": {
                 "type": "null"
               },
               "original_authority": {
                 "type": "null"
               },
+              "verifier_pause": {
+                "type": "null"
+              },
               "verification_retry": {
+                "type": "null"
+              },
+              "verifier_preparation": {
                 "type": "null"
               },
               "knowledge_preparation": {
@@ -2016,7 +2062,19 @@
               "rejected_output": {
                 "type": "null"
               },
-              "retry_cause": {
+              "rejected_knowledge": {
+                "type": "null"
+              },
+              "rejected_workspace_admission": {
+                "type": "null"
+              },
+              "invocation_start_sha256": {
+                "type": "null"
+              },
+              "invocation_outcome_sha256": {
+                "type": "null"
+              },
+              "interruption_receipt_sha256": {
                 "type": "null"
               },
               "process_stop_sha256": {
@@ -2045,18 +2103,6 @@
                     }
                   }
                 }
-              },
-              "verifier_pause": {
-                "type": "null"
-              },
-              "rejected_knowledge": {
-                "type": "null"
-              },
-              "rejected_workspace_admission": {
-                "type": "null"
-              },
-              "interruption_receipt_sha256": {
-                "type": "null"
               }
             }
           }
@@ -2180,52 +2226,6 @@
             "properties": {
               "pre_context_recovery_input": {
                 "type": "null"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "required": [
-              "permitted_resolutions"
-            ],
-            "properties": {
-              "permitted_resolutions": {
-                "contains": {
-                  "const": "RETRY_REJECTED_STATIC_QA_OUTPUT"
-                }
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "rejected_static_qa_output",
-              "original_run_id"
-            ],
-            "properties": {
-              "rejected_static_qa_output": {
-                "type": "object"
-              },
-              "permitted_resolutions": {
-                "minItems": 1,
-                "maxItems": 1,
-                "items": {
-                  "const": "RETRY_REJECTED_STATIC_QA_OUTPUT"
-                }
-              },
-              "disposition": {
-                "properties": {
-                  "facts": {
-                    "properties": {
-                      "role": {
-                        "const": "qa"
-                      },
-                      "classification": {
-                        "const": "PLATFORM_BUG"
-                      }
-                    }
-                  }
-                }
               }
             }
           }

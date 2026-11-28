@@ -587,7 +587,7 @@ def guards(node: dict[str, object]) -> None:
                     },
                 },
                 "else": {"properties": {"local_execution_survey": {"type": "null"}}},
-            }
+            },
         ]
     elif title in {"BaselineOperatorAuthorization", "ExecuteExecutionBaselineIntent"}:
         existing = node.get("allOf", [])

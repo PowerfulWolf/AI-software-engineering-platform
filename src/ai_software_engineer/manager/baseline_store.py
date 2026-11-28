@@ -392,8 +392,7 @@ class FileExecutionBaselineStore:
                 )
                 if binding.purpose is BaselinePurpose.KNOWLEDGE_PREPARATION_ISOLATION
                 else (
-                    stopped_context +
-                    "完整合法草稿仅作为新执行输入; "
+                    stopped_context + "完整合法草稿仅作为新执行输入; "
                     "本次消费普通工作额度, 不补造结果或退款。新Run须独立领取并重新产出, "
                     "独立QA和Review不可跳过。\n"
                 )

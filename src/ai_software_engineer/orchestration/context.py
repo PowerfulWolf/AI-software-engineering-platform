@@ -47,7 +47,8 @@ class FileRunContextBuilder:
         claim_context: Callable[[], ContextSource] | None = None,
         source_selector: Callable[
             [Task, AgentDefinition, int, tuple[Artifact, ...]], tuple[ContextSource, ...]
-        ] | None = None,
+        ]
+        | None = None,
     ) -> None:
         self._repository_root = Path(repository_root)
         self._sources = sources

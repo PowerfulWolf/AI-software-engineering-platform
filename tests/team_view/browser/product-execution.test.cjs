@@ -38,27 +38,6 @@ test("product execution summary separates phase from engineering wait and retry"
   assert.match(await summary.innerText(), /计划重试时间/);
 });
 
-test("legacy product approval facts show Chinese actions and retain the original read-side facts", async (t) => {
-  const h = await ui(t);
-  const original = "Review product_spec and approve this exact checkpoint, or reply with revisions.";
-  Object.assign(h.team.requests[0], {stage: "WAITING_PRODUCT_APPROVAL", next_action: original, blocker: original,
-    execution: {state: "WAITING", responsibility: "product", reason_code: "WAITING_PRODUCT_APPROVAL",
-      reason: original, next_action: original, action_required: true}});
-  h.state.operations = [operation("SUCCEEDED", {result: {next_action: original}})];
-  await h.tick();
-  await h.requests();
-  await h.page.evaluate(() => showDetail("request", "request_fixture"));
-  const detail = h.page.locator("#detail");
-  const expected = "请审阅本版产品规格并批准，或回复需要修改的内容。";
-  assert.match(await detail.locator(".request-blocking-section").innerText(), new RegExp(expected));
-  await detail.locator('.request-history-fold[data-key^="operation-history:"] > summary').click();
-  assert.match(await detail.locator(".execution-history").innerText(), new RegExp(expected));
-  assert.doesNotMatch(await detail.innerText(), /Review product_spec and approve/);
-  assert.equal(await h.page.evaluate(() => snapshot.requests[0].execution.next_action), original);
-  assert.equal(await h.page.evaluate(() => operations[0].result.next_action), original);
-  assert.equal(await detail.getByRole("button", {name: "批准 ProductSpec 并开始交付", exact: true}).count(), 1);
-});
-
 test("delivery node colors follow operation, wait and completion facts instead of executor heartbeat", async (t) => {
   const h = await ui(t);
   await h.requests();

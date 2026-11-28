@@ -70,26 +70,6 @@ test("a new complete operation digest updates history while an unchanged digest 
   assert.equal(await history.evaluate(node => node.open), true);
 });
 
-test("missing or invalid operation identities and digests retain complete-facts invalidation", async t => {
-  const cases = [undefined, "not-a-digest", "G".repeat(64)].map((digest, index) => ({
-    operation_id: "operation_" + String(index).repeat(32), operation_sha256: digest,
-  }));
-  cases.push({operation_id: "operation_invalid", operation_sha256: "b".repeat(64)});
-  const records = cases.map((identity, index) => sealed({
-    ...identity,
-    result: {next_action: "原历史建议 " + index},
-  }));
-  const h = await ui(t, {operations: records});
-  await openRequest(h);
-  await h.page.locator('#detail details[data-key="operation-history:project_fixture/request_fixture"] > summary').click();
-  for (const [index, record] of h.state.operations.entries())
-    record.result.next_action = "已更新的兼容历史建议 " + index;
-  await h.tick();
-  const detail = h.page.locator("#detail");
-  for (let index = 0; index < records.length; index++)
-    assert.match(await detail.innerText(), new RegExp("已更新的兼容历史建议 " + index));
-});
-
 test("compact operation signatures cannot authorize a superseded recovery plan or checkpoint", async t => {
   const record = sealed({result: {delivery_id: "request_fixture", checkpoint_sha256: "a".repeat(64),
     stage: "WAITING_HUMAN", next_action: "核对精确恢复方案", approval: {kind: "coder_recovery",

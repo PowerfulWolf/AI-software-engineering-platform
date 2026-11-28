@@ -338,8 +338,13 @@ def _knowledge_lanes(
 
 
 def require_no_knowledge_claim_activity(
-    *, state: Path, task: Task, item: QueuedWorkItem, scope: EngineeringScope,
-    requirement_id: str, lease_id: str,
+    *,
+    state: Path,
+    task: Task,
+    item: QueuedWorkItem,
+    scope: EngineeringScope,
+    requirement_id: str,
+    lease_id: str,
 ) -> None:
     """A reclaimed claim with no Run must also have no knowledge preparation."""
     for lane in _knowledge_lanes(

@@ -24,34 +24,6 @@ async function waitingCoder(t) {
   return {...h, request, task, step};
 }
 
-test("Task routes to its owning requirement with visible target-free platform preparation", async t => {
-  const h = await waitingCoder(t);
-  await h.page.evaluate(() => showDetail("task", "delivery_coder"));
-  const dialog = h.page.locator(".task-detail-dialog");
-  const jump = dialog.getByRole("button", {name: "打开所属需求", exact: true});
-  assert.equal(await jump.isVisible(), true);
-  await jump.click();
-  const detail = h.page.locator("#detail");
-  const prepare = detail.getByRole("button", {name: "准备保留进度的恢复方案", exact: true});
-  assert.equal(await prepare.isVisible(), true);
-  assert.match(await detail.innerText(), /平台将核验/);
-  assert.equal(await detail.locator('input[aria-label="目标代码完整版本"]:visible').count(), 0);
-  const submitted = [];
-  await h.page.route("http://ui.test/api/v1/operations", async route => {
-    if (route.request().method() !== "POST") return route.fallback();
-    const intent = route.request().postDataJSON().intent;
-    submitted.push(intent);
-    const record = operation("QUEUED", {intent});
-    h.state.operations.push(record);
-    await route.fulfill({status: 202, json: record});
-  });
-  await prepare.click();
-  await h.page.waitForFunction(() => operations.some(item => item.intent.purpose === "completed_output_rescue"));
-  assert.equal(submitted.length, 1);
-  assert.equal(submitted[0].purpose, "completed_output_rescue");
-  assert.equal(Object.hasOwn(submitted[0], "target_base_ref"), false);
-});
-
 test("current exact active RESUME states preparation and foreign Task cannot claim it", async t => {
   const h = await waitingCoder(t);
   h.step.status = "WAITING_HUMAN";

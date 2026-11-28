@@ -19,28 +19,6 @@
     },
     "AgentFailure": {
       "additionalProperties": false,
-      "description": "Typed failure evidence with an explicit retry classification.",
-      "properties": {
-        "code": {
-          "$ref": "#/$defs/AgentErrorCode"
-        },
-        "message": {
-          "minLength": 1,
-          "title": "Message",
-          "type": "string"
-        },
-        "transient": {
-          "title": "Transient",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "code",
-        "message",
-        "transient"
-      ],
-      "title": "AgentFailure",
-      "type": "object",
       "allOf": [
         {
           "if": {
@@ -66,14 +44,14 @@
         },
         {
           "if": {
-            "required": [
-              "code"
-            ],
             "properties": {
               "code": {
                 "const": "SERVICE_PAUSED"
               }
-            }
+            },
+            "required": [
+              "code"
+            ]
           },
           "then": {
             "properties": {
@@ -83,7 +61,29 @@
             }
           }
         }
-      ]
+      ],
+      "description": "Typed failure evidence with an explicit retry classification.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/AgentErrorCode"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "transient": {
+          "title": "Transient",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "transient"
+      ],
+      "title": "AgentFailure",
+      "type": "object"
     },
     "AgentProducer": {
       "additionalProperties": false,

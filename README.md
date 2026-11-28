@@ -2,8 +2,8 @@
 
 一个基于 Trellis 思想与 Multi-Agent 协作的、可审计的通用 AI 软件工程团队平台。
 
-状态更新：**2026-09-28**；最新发布 tag：**`v0.1.2`**（`4d1e799`）。文中的 v0.1 表示当前产品与架构边界，
-不代表所有持久化协议都使用同一版本号。
+状态更新：**2026-11-28**；最新发布 tag：**`v0.1.72`**。服务从固定发布版本运行（见[运行版本](docs/operations/runtime-releases.md)），
+文中的 v0.1 表示当前产品与架构边界，不代表所有持久化协议都使用同一版本号。
 
 团队不绑定某个业务领域或技术栈。你先接入一个 Project，再为 Requirement 选择该 Project
 涉及的一个或多个代码目录；同一支长期 Agent 团队服务所有 Project，而每个 Project 的知识、规范、
@@ -17,16 +17,20 @@ Repository 目录和 Requirement 交付事实保持隔离。
 
 ## 当前能力与边界
 
-已有一次真实需求通过 ASE 正常交付至 `DONE`，独立 QA 四项 PASS、Reviewer APPROVE。
-这证明了一条真实闭环，不代表所有技术栈、恢复路径和部署形态都已验收；其中 Mock UI 证据也不等于真实 OAuth 验收。
-具体候选、平台缺陷及修复证据见 [2026-09-28 交付复盘](docs/archive/2026-09-28-ase-delivery-retrospective.md)。
+ASE 已经能交付对自身仓库的修改：按[自我迭代阶梯](docs/roadmap/self-iteration-ladder.md)，L0（文档）、
+L1（小代码改动 + 单测）和 L3f（修复测试夹具，QA 在受控 MySQL 沙箱中验证）都由团队独立完成
+`Product → Design → Plan → Coder → QA → Reviewer → DONE`，候选分支经人工合并。更早的外部需求闭环见
+[2026-09-28 交付复盘](docs/archive/2026-09-28-ase-delivery-retrospective.md)。这些证明了真实闭环，
+不代表所有技术栈、恢复路径和部署形态都已验收。
 
 | 能力 | 当前已具备 | 尚需补齐 |
 |---|---|---|
 | 独立交付与验收 | Coder/QA/Reviewer 独立身份、Run、Context、worktree；同候选证据校验和受控执行；已接入 Swift/UI 的版本化执行策略 | 更多执行器的统一接入与发布，不是重新建设独立 QA/Review |
-| 审批与中断恢复 | 精确计划审批、候选复核、修复接续；独立 QA PASS 后可在证据匹配且重新批准时仅恢复 Reviewer | 更广的历史数据、重启、多候选组合回归 |
+| 审批与中断恢复 | 精确计划审批、候选复核、修复接续；独立 QA PASS 后可在证据匹配且重新批准时仅恢复 Reviewer；工程等待（调查/处理）与执行基线更新可在网页完成 | 更广的历史数据、重启、多候选组合回归 |
+| 模型路由与额度 | 每个 Agent 主/备模型（Claude CLI、Codex CLI、Responses API）；限流与临时故障在本角色策略内回退；额度用完时暂停并由人选择本需求该角色是否改用备用模型；成员卡片显示当前模型与异常状态 | 按任务难度动态选择成本/能力档位 |
+| 发布与自我迭代 | 固定 tag 运行版本、受控重启与回滚；维护模式与故障替换；ASE 交付自身修改后由人合并、再发版 | 更大的自我迭代需求（L4–L9 自动知识闭环） |
 | Manager 缺口协调 | 候选验证中已接通 incident → 当前前提探测 → 精确方案/审批 → 受控执行 receipt → 独立验收/恢复 | Product/Design/Planning/Coder 等全阶段统一前提协调 |
-| 项目记忆 | 知识/Spec 分离、冻结快照、按角色检索引用；有证据的学习提案、显式收集、审批发布及前端来源展示 | accepted checkpoint 自动收集、上游与 Manager 经验生产者、效果与失效治理 |
+| 项目记忆 | 知识/Spec 分离、冻结快照、按角色检索引用；同一 Task 角色输入不变时复用已封存的知识准备结果；知识缺口解答可显式声明跨修订复用；有证据的学习提案、显式收集、审批发布及前端来源展示 | accepted checkpoint 自动收集、上游与 Manager 经验生产者、效果与失效治理 |
 | 能力演进 | 受控工具与专用执行器；学习结果可发布非执行性的 Skill 设计建议 | 新能力统一描述、验证、注册、按角色启用与版本回退；禁止 Agent 自行扩权 |
 
 下一步优先补齐自动知识闭环，再建设统一的新能力接入、验证与发布流程；Manager 全阶段协调和组合回归作为可靠性工作同步推进。
@@ -153,8 +157,12 @@ flowchart TB
 ```
 
 模型路由由“可用模型目录 + 每个 Agent 的有序策略”组成。Manager、Product、Designer、Planner、
-Coder、QA、Reviewer 可以分别配置主模型和备用顺序；额度、限流或临时故障只会在该 Agent 自己的
-策略内回退。全局启用的模型只是可选模型池；每个 Agent 只会使用自己显式选中的 0–N 个备用模型，
+Coder、QA、Reviewer 可以分别配置主模型和备用顺序；路由类型有 `claude_cli`、`codex_cli` 和
+`responses`（Responses-compatible HTTP）。限流和临时故障只会在该 Agent 自己的策略内自动回退；
+**额度用完不会自动换模型**：该角色的工作项进入等待，需求详情出现“模型额度已用完”卡片，由人选择
+“本需求的该角色改用备用模型”或“额度已恢复，继续用原模型”（只调整已配置路由的顺序，作用于该需求的
+该角色，见[模型额度用完](docs/operations/delivery-recovery.md#模型额度用完)）。知识准备阶段的结构化调用遵循同一规则。
+全局启用的模型只是可选模型池；每个 Agent 只会使用自己显式选中的 0–N 个备用模型，
 并按人工调整后的优先级尝试。同一模型可以用不同 Reasoning 配置成多条独立路由，例如 Product 选择 `medium`、Coder
 选择 `high`；Agent 的选择会同时绑定 provider、model 和 reasoning。旧配置未指定角色策略时，七个成员继续共享全局启用顺序。当前仍未实现根据任务难度
 自动调整成本/能力档位的完整动态策略。
@@ -288,7 +296,10 @@ AI-software-engineering-platform/
 │   ├── learning.py                   # 失败/角色发现/知识解答提案、审批发布；Skill 仅设计建议
 │   └── runtime_workspace.py          # Team/Project/Repository Runtime 组合与校验
 ├── scripts/
-│   └── ase-console-service.sh        # Web Console 后台启动、停止、重启、状态和日志
+│   ├── ase-console-service.sh        # Web Console 后台启动、停止、重启、状态和日志
+│   ├── ase-release.sh                # tag / install / activate / rollback 固定运行版本
+│   ├── run-tests.sh                  # 全量测试：并行部分 + 串行部分
+│   └── sync-*.py generate-*.py       # 从 Python 模型重新生成 schemas/（必须无差异）
 ├── schemas/                          # 所有公开/持久化契约的 JSON Schema
 │   ├── task.schema.json
 │   ├── artifact.schema.json
@@ -412,14 +423,24 @@ v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kube
 - 一个位于所有源码仓库之外的持久 `<platform_root>` 保存唯一 Team、全部 Project/Repository sidecar、
   Requirement、Artifact、Evidence 和 worktree；macOS/Linux 缺省为 `~/.ase`；
 - 目标仓库仍按自身语言和工具构建，平台只要求 Git、干净主 checkout、允许的本地构建/测试命令；
-- Codex CLI 路由推荐以当前账号可用的 `gpt-5.6-terra` 为主；需要时可把 DeepSeek、Qwen 的
-  Responses-compatible endpoint 加入可选模型池，再为具体 Agent 显式选择是否作为备用及其优先级；
+- 模型路由按账号可用额度配置：例如以 Claude CLI（`claude-opus-5-5`）为各角色主模型，
+  Responses-compatible 的 GPT endpoint 为备用；Codex CLI、DeepSeek、Qwen 等也可加入可选模型池，
+  再为具体 Agent 显式选择是否作为备用及其优先级；
 - Coder、QA、Reviewer 使用同一 candidate commit 的独立 worktree，QA/Reviewer 不提交业务代码；
 - Team 通用知识、Project 背景知识和 Spec 的创建/启停由 sidecar 即时提供给之后的新需求，无需重启；已准备
   Requirement 绑定精确版本，不会被静默重解释；运行配置改变仍需重启；
 - SQLite 仅用于底层兼容命令和离线测试，不作为 `ase request` 生产入口的数据库。
 
-推荐用仓库脚本管理后台进程，而不是长期占用一个终端：
+服务应从固定发布版本运行，而不是从正在被修改的开发检出运行（ASE 交付自身时尤其重要）：
+
+```bash
+./scripts/ase-release.sh tag v0.1.72      # 干净 HEAD 打 tag
+./scripts/ase-release.sh install v0.1.72  # 独立 clone + uv sync --frozen
+./scripts/ase-release.sh activate v0.1.72 # 无角色执行时受控重启到该版本
+./scripts/ase-release.sh rollback         # 回到上一个版本
+```
+
+单个服务实例仍用仓库脚本管理后台进程，而不是长期占用一个终端：
 
 ```bash
 ./scripts/ase-console-service.sh start
@@ -535,7 +556,8 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
 4. Designer、Planner 和每个 Repository 的 `Coder → QA → Reviewer` 串行工作。Manager 先执行 PlanningGate：
    SIMPLE 计划不调用 Planner 模型，COMPLEX 才生成有界 Planner 工作包；实际派发仍由 Manager 按当前事实
    重新校验。团队成员页只把当前岗位
-   标成执行中，其他岗位显示已完成或等待；Manager、Product、Designer、Planner 的 Requirement 阶段
+   标成执行中，其他岗位显示已完成或等待；每张成员卡片显示主模型短名（如 `Opus 5.5`），只有额度用完、
+   被限流、最近调用失败或正在用备用模型时才额外显示状态标记，详情面板列出主模型、备用和最近一次调用；Manager、Product、Designer、Planner 的 Requirement 阶段
    也会进入各自任务队列，不再等到 Coder Task 创建后才出现。每列使用紧凑的需求任务概览卡，点击
    整张卡可查看模型、完整目录和执行时间线。需求页同时展示涉及的所有目录和后台操作；交付流程区
    只显示七个节点状态，不重复显示 Manager 运行文案。
@@ -562,6 +584,8 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
   Candidate 会保留，由 Manager 协调验证前提；满足条件后再提出新的精确验证计划。
 - 受控执行器在模型启动前失败，也进入 Manager 的候选验证协调链。桌面仍锁定等前提未解除时，
   页面给出协助方与解除条件，不反复启动明知不可执行的验收；前提变为 READY 后重新提案、批准，旧失败记录仍保留。
+- 某个角色的模型额度用完时，平台不重试同一模型、也不自动换模型；需求详情显示“模型额度已用完”卡片，
+  选择本需求该角色改用备用模型，或额度恢复后继续用原模型。两种选择都以新的执行继续，进度与历史保留。
 - 显式 deny、规范冲突、来源漂移或业务歧义仍会停止并要求人工处理；网页不会偷偷放宽制度。
 - 如果 Host 在操作执行中退出，该 Web Operation 会标记为 `INTERRUPTED`。重新启动服务后打开需求，
   依据当前 Delivery 事实再次点击“继续交付”，不会盲目重放原模型调用。
@@ -775,7 +799,8 @@ break-glass 操作，日常交付不需要手工串这四个命令。
 
 ```bash
 uv sync
-uv run pytest -q -m 'not mysql'
+./scripts/run-tests.sh                 # 全量：并行 pytest → 串行 serial → Node 单测 → 浏览器测试（有 Playwright 时）
+uv run pytest -q -n auto -m "not serial" tests/<改动相关目录>   # 日常改动的快速验证
 node --test tests/team_view/*.test.cjs
 uv run ruff check .
 uv run ruff format --check .
@@ -783,18 +808,27 @@ uv run mypy src tests
 uv build --offline
 ```
 
-MySQL 集成测试另用 `uv run pytest -q -m mysql`，需设置 `ASE_TEST_MYSQL_DSN`，并且必须指向名称为 `test_*`、`*_test` 或
-`*_tests` 的专用测试数据库（例如 `ase_self_iteration_test`）。pytest 会在任何 MySQL fixture
-执行前拒绝生产库名称，并在每个 `mysql` 用例前后统一清理 Task/事件、调度、验证预留和工作队列
-事实；测试或 fixture 失败也会执行清理。表结构、锁行及无关表保留。每个并发 pytest 进程/worker
-必须使用不同的测试数据库，不能共用这个会被清理的 schema。测试使用脚本化模型验证契约，
-不代表真实模型已完成业务验收。
+- 并行执行使用 pytest-xdist 与 pytest-timeout（已在 dev 依赖组中）。会真实收发信号、启停服务进程或依赖
+  墙钟窗口的测试文件在 `tests/conftest.py` 的 `_SERIAL_FILES` 中标记为 `serial`，只在串行阶段运行。
+- MySQL 集成测试（`-m mysql`）需设置 `ASE_TEST_MYSQL_DSN`，并且必须指向名称为 `test_*`、`*_test` 或
+  `*_tests` 的专用测试数据库。pytest 会在任何 MySQL fixture 执行前拒绝生产库名称，并在每个 `mysql`
+  用例前后清理 Task/事件、调度、验证预留和工作队列事实。并行时每个 worker 自动使用独立的
+  `test_ase_<库名>_<worker>` 库（首次使用时创建），测试账号需要对 `test\_ase\_%` 库有建库与读写权限。
+- `schemas/` 由 `scripts/sync-*.py` 从 Python 模型生成；`tests/contracts/test_schema_sync_scripts.py`
+  在临时副本中运行全部生成脚本并要求无差异。修改模型后先运行这些脚本再提交。
+- 真实布局浏览器测试位于 `tests/team_view/browser/`，需要 Playwright 与其自带 Chromium：
 
-真实 CLI 沙箱、Swift/XCTest 和桌面 UI 等 opt-in 测试需要各自的工具链、显式执行开关及可用环境；
-不能把 skipped/deselected 算作通过，也不能用 CoreVerification 替代需求明确要求的 XCTest/UI 验收。
-最新一轮验证范围和未执行项见 [复盘验证口径](docs/archive/2026-09-28-ase-delivery-retrospective.md#当前验证口径与未做事项)。
+  ```bash
+  npm install --prefix /tmp/ase-ui-test-deps playwright
+  /tmp/ase-ui-test-deps/node_modules/.bin/playwright install chromium
+  ASE_UI_BROWSER_CHANNEL=chromium NODE_PATH=/tmp/ase-ui-test-deps/node_modules \
+    node --test tests/team_view/browser/*.test.cjs
+  ```
 
-## 当前进度（2026-09-28）
+- 测试使用脚本化模型验证契约，不代表真实模型已完成业务验收；真实 CLI 沙箱、Swift/XCTest 和桌面 UI 等
+  opt-in 测试需要各自的工具链与显式开关，不能把 skipped/deselected 算作通过。
+
+## 当前进度（2026-11-28）
 
 M0–M25 保留历史阶段编号；近期增量单独列出，不把能力规划计作已完成。
 
@@ -825,6 +859,8 @@ M0–M25 保留历史阶段编号；近期增量单独列出，不把能力规�
 | M25 增量索引（T049） | 上传异步进入 QUEUED/PROCESSING/READY/FAILED/RETIRED 生命周期；增量缓存、原子发布、替换/退休互斥、失败重试和 Web 状态页已覆盖 |
 | 09-25–09-28 可靠交付增量 | 修复审批自失效、Responses 工具多轮、队列等待/续租竞争、历史上下文兼容及执行器/候选身份问题；接通 Manager 候选前提协调、受控 Swift/UI 证据和 Reviewer-only 恢复；真实需求最终 DONE |
 | 09-28 控制台增量 | 项目切换保留最后意图，拒绝旧响应，切换中限制旧项目操作；Knowledge 内容与所接受的项目身份同步更新；已发布 `v0.1.2` |
+| 10–11 月 运行版本与自我迭代 | 固定 tag 运行版本、受控重启/维护模式/故障替换；按自我迭代阶梯由 ASE 交付自身的 L0、L1、L3f；工程等待调查与处理、执行基线更新（含停滞 Coder 的源码重绑）、遗留执行救援 |
+| 11-23–11-28 可靠性与可观测 | 知识准备跨重试复用与 schema 修复轮次准入；跨修订知识解答；QA 错误样本含源位置；角色模型状态展示与额度用完人工批准（`v0.1.71`）；删除需求时清理知识复用索引；测试并行化、MySQL 每 worker 独立库、失效测试清理与 schema 生成对齐（`v0.1.72` 及之后） |
 
 ## TODO 扩展
 

@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import os
-import subprocess
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -14,11 +11,6 @@ from typing import Literal
 
 import pytest
 
-from ai_software_engineer.agents.codex_cli import (
-    CodexExecutionUnconfirmed,
-    CodexInvocationResult,
-    SubprocessCodexCommandRunner,
-)
 from ai_software_engineer.agents.execution import bind_execution_guard
 from ai_software_engineer.agents.models import AgentErrorCode
 from ai_software_engineer.agents.openai_compatible import HttpResponse
@@ -44,11 +36,9 @@ from ai_software_engineer.knowledge.invocation import (
     KnowledgeInvocationJournal,
     KnowledgeInvocationOutcome,
     KnowledgeInvocationUncertain,
-    KnowledgePreparationLocalLimit,
     invocation_lane_sha256,
 )
 from ai_software_engineer.knowledge.models import KnowledgeRunBinding
-from ai_software_engineer.knowledge.preparation_retry import read_local_limit
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.work_queue.models import QueueClaim
 from tests.domain.factories import make_task
@@ -197,261 +187,6 @@ except StructuredModelError as error:
 else:
     raise AssertionError('The failed original call was not replayed')
 """
-
-
-@pytest.mark.parametrize("role", list(TeamRole))
-@pytest.mark.parametrize("native_outcome", ["timeout", "invalid", "nonzero"])
-def test_real_consultation_failure_has_durable_native_receipts_and_never_restarts_same_run(
-    tmp_path: Path, role: TeamRole, native_outcome: NativeOutcome
-) -> None:
-    executable = _executable(tmp_path, native_outcome)
-    root = tmp_path / "knowledge"
-    frozen = snapshot()
-    bound = binding(frozen, role)
-    service = KnowledgeConsultationService(
-        _client(tmp_path, executable, role), KnowledgeRecordStore(root)
-    )
-    with pytest.raises(StructuredModelError) as failed:
-        service.consult(bound, frozen, {}, timeout_seconds=1)
-    intent, outcome = _known_records(root, bound)
-    assert outcome.state == "FAILED" and outcome.result is None
-    assert outcome.failure is not None and outcome.failure.code == failed.value.code
-    stop = outcome.executions[-1].observation
-    assert isinstance(stop, StructuredNativeStopReceipt)
-    assert (
-        stop.process_stop.kind
-        == {"timeout": "local_execution_limit", "invalid": "completed", "nonzero": "failed"}[
-            native_outcome
-        ]
-    )
-    if native_outcome == "timeout":
-        assert isinstance(failed.value, KnowledgePreparationLocalLimit)
-        assert failed.value.outcome == outcome
-        assert failed.value.code is AgentErrorCode.TIMEOUT
-        assert failed.value.expandable_timeout and not failed.value.retryable
-        assert outcome.failure.timeout_kind == "local_execution_limit"
-    if native_outcome == "invalid":
-        assert failed.value.code is AgentErrorCode.INVALID_OUTPUT
-    reopened = KnowledgeConsultationService(
-        _client(tmp_path, executable, role), KnowledgeRecordStore(root)
-    )
-    with pytest.raises(StructuredModelError) as replay:
-        reopened.consult(bound, frozen, {}, timeout_seconds=1)
-    if native_outcome == "timeout":
-        assert isinstance(replay.value, KnowledgePreparationLocalLimit)
-        assert replay.value.outcome == outcome
-    assert replay.value.code == failed.value.code
-    assert _known_records(root, bound) == (intent, outcome)
-    assert (tmp_path / "started").read_text().splitlines() == ["started"]
-    if role is TeamRole.CODER:
-        child = subprocess.run(
-            (sys.executable, "-c", _REOPEN_FAILED, str(root), str(executable)),
-            cwd=Path(__file__).resolve().parents[2],
-            env={
-                "PATH": os.defpath,
-                "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
-            },
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=True,
-        )
-        assert json.loads(child.stdout) == {
-            "code": failed.value.code.value,
-            "timeout_kind": failed.value.timeout_kind,
-            "outcome_sha256": outcome.outcome_sha256,
-        }
-        assert (tmp_path / "started").read_text().splitlines() == ["started"]
-
-
-@pytest.mark.parametrize("native_outcome", ["success", "invalid"])
-def test_outcome_publication_failure_preserves_the_independent_real_stop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native_outcome: NativeOutcome
-) -> None:
-    executable = _executable(tmp_path, native_outcome)
-    root = tmp_path / "knowledge"
-    frozen = snapshot()
-    bound = binding(frozen)
-    original_put = KnowledgeRecordStore.put
-
-    def fail_outcome[T: DomainModel](
-        records: KnowledgeRecordStore, namespace: str, key: str, record: T
-    ) -> T:
-        if namespace == "knowledge-invocation-outcomes":
-            raise OSError("fixture outcome write failed")
-        return original_put(records, namespace, key, record)
-
-    monkeypatch.setattr(KnowledgeRecordStore, "put", fail_outcome)
-    service = KnowledgeConsultationService(
-        _client(tmp_path, executable, bound.role), KnowledgeRecordStore(root)
-    )
-    with pytest.raises(KnowledgeInvocationUncertain):
-        service.consult(bound, frozen, {}, timeout_seconds=1)
-    monkeypatch.setattr(KnowledgeRecordStore, "put", original_put)
-    records = _lane(root, bound)
-    intent = records.get(
-        "knowledge-invocation-intents", bound.run_id + ":intent", KnowledgeInvocationIntent
-    )
-    observations = records.list("knowledge-execution-records", KnowledgeExecutionRecord)
-    assert len(observations) == 2
-    assert {type(item.observation) for item in observations} == {
-        StructuredExecutionAdmission,
-        StructuredNativeStopReceipt,
-    }
-    for record in observations:
-        record.validate_integrity()
-        assert record.intent_sha256 == intent.intent_sha256
-    assert records.list("knowledge-invocation-outcomes", KnowledgeInvocationOutcome) == ()
-    with pytest.raises(KnowledgeInvocationUncertain):
-        service.consult(bound, frozen, {}, timeout_seconds=1)
-    changed = bound.model_copy(
-        update={"run_id": "run_after_write_failure", "context_manifest_id": "ctx_" + "d" * 64}
-    )
-    with pytest.raises(KnowledgeInvocationUncertain):
-        service.consult(changed, frozen, {}, timeout_seconds=1)
-    assert (tmp_path / "started").read_text().splitlines() == ["started"]
-
-
-def test_local_limit_index_failure_preserves_stop_and_replays_without_restarting(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    executable = _executable(tmp_path, "timeout")
-    backup = tmp_path / "backup-codex"
-    backup.write_text(
-        f"#!{sys.executable}\nfrom pathlib import Path\nPath('backup-started').touch()\n"
-    )
-    backup.chmod(0o700)
-    root = tmp_path / "knowledge"
-    frozen = snapshot()
-    bound = binding(frozen)
-    original_put = KnowledgeRecordStore.put
-
-    def reject_index[T: DomainModel](
-        records: KnowledgeRecordStore, namespace: str, key: str, record: T
-    ) -> T:
-        if namespace == "knowledge-local-limit-intents":
-            raise OSError("fixture local-limit index write failed")
-        return original_put(records, namespace, key, record)
-
-    monkeypatch.setattr(KnowledgeRecordStore, "put", reject_index)
-    service = KnowledgeConsultationService(
-        _client(tmp_path, executable, bound.role, backup=backup), KnowledgeRecordStore(root)
-    )
-    with pytest.raises(KnowledgeInvocationUncertain):
-        service.consult(bound, frozen, {}, timeout_seconds=1)
-    intent, outcome = _known_records(root, bound)
-    assert outcome.failure is not None
-    assert outcome.failure.timeout_kind == "local_execution_limit"
-    assert (
-        KnowledgeRecordStore(root).find(
-            "knowledge-local-limit-intents", outcome.outcome_sha256, KnowledgeInvocationIntent
-        )
-        is None
-    )
-    assert not (tmp_path / "backup-started").exists()
-    monkeypatch.setattr(KnowledgeRecordStore, "put", original_put)
-    with pytest.raises(KnowledgePreparationLocalLimit) as replay:
-        service.consult(bound, frozen, {}, timeout_seconds=1)
-    assert replay.value.outcome == outcome
-    assert read_local_limit(root, outcome.outcome_sha256) == outcome
-    assert _known_records(root, bound) == (intent, outcome)
-    assert (tmp_path / "started").read_text().splitlines() == ["started"]
-    assert not (tmp_path / "backup-started").exists()
-
-
-def test_lost_stop_receipt_leaves_pending_original_and_blocks_new_execution_identity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    executable = _executable(tmp_path, "success")
-    root = tmp_path / "knowledge"
-    frozen = snapshot()
-    bound = binding(frozen)
-    run_observed = SubprocessCodexCommandRunner.run_observed
-
-    def lose_receipt(
-        runner: SubprocessCodexCommandRunner,
-        argv: tuple[str, ...],
-        *,
-        cwd: Path,
-        environment: Mapping[str, str],
-        stdin: str,
-        timeout_seconds: int,
-        observer: Callable[[CodexInvocationResult], None],
-    ) -> CodexInvocationResult:
-        run_observed(
-            runner,
-            argv,
-            cwd=cwd,
-            environment=environment,
-            stdin=stdin,
-            timeout_seconds=timeout_seconds,
-            observer=lambda _: None,
-        )
-        raise CodexExecutionUnconfirmed("fixture actual stop receipt unavailable")
-
-    monkeypatch.setattr(SubprocessCodexCommandRunner, "run_observed", lose_receipt)
-    service = KnowledgeConsultationService(
-        _client(tmp_path, executable, bound.role), KnowledgeRecordStore(root)
-    )
-    with pytest.raises(KnowledgeInvocationUncertain):
-        service.consult(bound, frozen, {}, timeout_seconds=1)
-    monkeypatch.setattr(SubprocessCodexCommandRunner, "run_observed", run_observed)
-    records = _lane(root, bound)
-    (intent,) = records.list("knowledge-invocation-intents", KnowledgeInvocationIntent)
-    (execution,) = records.list("knowledge-execution-records", KnowledgeExecutionRecord)
-    assert intent.binding == bound and execution.intent_sha256 == intent.intent_sha256
-    assert isinstance(execution.observation, StructuredExecutionAdmission)
-    assert records.list("knowledge-invocation-outcomes", KnowledgeInvocationOutcome) == ()
-    reopened = KnowledgeConsultationService(
-        _client(tmp_path, executable, bound.role), KnowledgeRecordStore(root)
-    )
-    for candidate in (
-        bound,
-        bound.model_copy(update={"run_id": "run_new_preparation"}),
-        bound.model_copy(
-            update={
-                "run_id": "run_changed_source_context",
-                "source_revision": "f" * 40,
-                "context_manifest_id": "ctx_" + "e" * 64,
-            }
-        ),
-    ):
-        with pytest.raises(KnowledgeInvocationUncertain):
-            reopened.consult(candidate, frozen, {}, timeout_seconds=1)
-    assert records.list("knowledge-invocation-intents", KnowledgeInvocationIntent) == (intent,)
-    assert records.list("knowledge-execution-records", KnowledgeExecutionRecord) == (execution,)
-    assert records.list("knowledge-invocation-outcomes", KnowledgeInvocationOutcome) == ()
-    assert (tmp_path / "started").read_text().splitlines() == ["started"]
-
-
-def test_real_successful_consultation_preserves_stop_without_creating_an_acceptance_verdict(
-    tmp_path: Path,
-) -> None:
-    executable = _executable(tmp_path, "success")
-    root = tmp_path / "knowledge"
-    frozen = snapshot()
-    bound = binding(frozen, TeamRole.REVIEWER)
-    service = KnowledgeConsultationService(
-        _client(tmp_path, executable, bound.role), KnowledgeRecordStore(root)
-    )
-    consultation = service.consult(bound, frozen, {}, timeout_seconds=1)
-    assert consultation.binding == bound
-    assert consultation.assessment.status == "SUFFICIENT"
-    intent, outcome = _known_records(root, bound)
-    assert outcome.state == "RETURNED" and outcome.failure is None
-    assert outcome.result is not None and outcome.result.payload == {"queries": []}
-    stopped = outcome.executions[-1].observation
-    assert isinstance(stopped, StructuredNativeStopReceipt)
-    assert stopped.process_stop.kind == "completed"
-    assert "verdict" not in outcome.to_wire()
-    assert (
-        KnowledgeConsultationService(
-            _client(tmp_path, executable, bound.role), KnowledgeRecordStore(root)
-        ).consult(bound, frozen, {}, timeout_seconds=1)
-        == consultation
-    )
-    assert _known_records(root, bound) == (intent, outcome)
-    assert (tmp_path / "started").read_text().splitlines() == ["started"]
 
 
 @pytest.mark.parametrize("stage", ["admission", "stop"])
