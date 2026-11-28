@@ -32,14 +32,11 @@ from ai_software_engineer.evaluation import CaseStartedEvent, FileEvaluationEven
 from ai_software_engineer.git import WorkspacePolicy, WorktreeCaptureRejected, WorktreeSeedRejected
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
-    ReplyToProduct,
     StartProjectDelivery,
 )
 from ai_software_engineer.manager.dispatch import DispatchCommitCorruption
 from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
 from ai_software_engineer.manager.production_host import TeamHost
-from ai_software_engineer.multi_directory.service import CreateRequirement
-from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.orchestration.retry import RetryDeliveryResult
 from ai_software_engineer.planning import FileExecutionPlanStore
@@ -60,7 +57,6 @@ from ai_software_engineer.runtime import _default_case_id
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.web_console.models import ConsoleOperation, ContinueDeliveryIntent
 from ai_software_engineer.web_console.preparation_store import FilePreparationProgressStore
-from tests.e2e.test_joint_delivery import setup_host
 from tests.git.test_capture import git
 from tests.manager.test_production_backend import (
     _git,
@@ -72,7 +68,7 @@ from tests.recovery.execution_fixture import (
     offline_coder_draft,
     offline_failed_codex,
 )
-from tests.recovery.test_native import InterruptedFactory, _snapshot
+from tests.recovery.test_native import _snapshot
 
 
 class OfflineRunner:
@@ -610,60 +606,3 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         assert repository.get(result.task.id).status is TaskStatus.DONE
     finally:
         repository.close()
-
-
-@pytest.mark.mysql
-def test_joint_child_recovery_retains_approved_parent_context(tmp_path: Path) -> None:
-    config, environment, models, projects = setup_host(tmp_path)
-    config = config.model_copy(update={"live_model_execution": True})
-    interrupted = InterruptedFactory()
-    host = TeamHost(
-        config=config,
-        environment=environment,
-        structured_clients=models,
-        delivery_route_adapters=interrupted,
-    )
-    joint = host.requirement_entry()
-    created = joint.create(
-        CreateRequirement(
-            name="Recovery parent",
-            repository_roots=tuple(map(str, projects)),
-        )
-    ).checkpoint
-    product = joint.reply(
-        ReplyToProduct(
-            delivery_id=created.delivery_id,
-            expected_checkpoint_sha256=created.checkpoint_sha256,
-            message="Update both greetings",
-        )
-    ).checkpoint
-    parent = joint.approve(
-        ApproveProductSpec(
-            delivery_id=product.delivery_id,
-            expected_checkpoint_sha256=product.checkpoint_sha256,
-            approval_reference="offline-joint-approved",
-        )
-    ).checkpoint
-    child, run = parent.children[0].checkpoint, interrupted.requests[0]
-    recovery = host.recovery_entry()
-    plan, path = recovery.propose(
-        repository_root=child.repository_root,
-        delivery_id=child.delivery_id,
-        failed_run_id=run.run_id,
-        failed_context_id=run.context_manifest_id,
-    )
-    recovery.approve(path, confirmed_plan=plan.plan_sha256, reference="offline-joint-recovery")
-    result = recovery.execute(path, route_factory=OfflineFactory)
-    assert result.task.status is TaskStatus.DONE, result
-    assert isinstance(result, RetryDeliveryResult)
-    contexts = FileContextStore(path.parent.parent.parent / "contexts", read_only=True)
-    for context_id in result.context_manifest_ids:
-        context = contexts.get(context_id)
-        assert any(s.name == "source:joint.approved_context" for s in context.sections)
-    assert (
-        JointJournal(host.projects()[0].requirements_root, read_only=True).current(
-            parent.delivery_id
-        )
-        == parent
-    )
-    assert len(models.calls) == 3

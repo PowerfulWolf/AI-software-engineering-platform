@@ -542,9 +542,7 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
                 provider="codex",
                 model="gpt-primary",
                 kind=(
-                    ModelProviderKind.RESPONSES
-                    if responses_route
-                    else ModelProviderKind.CODEX_CLI
+                    ModelProviderKind.RESPONSES if responses_route else ModelProviderKind.CODEX_CLI
                 ),
                 endpoint="https://example.invalid/responses" if responses_route else None,
                 api_key_env="ASE_FIXTURE_API_KEY" if responses_route else None,

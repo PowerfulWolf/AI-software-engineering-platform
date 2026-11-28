@@ -109,6 +109,9 @@ def test_normalized_content_can_be_read_for_human_editing(tmp_path: Path) -> Non
         ("guide.docx", _docx("No self approval."), "No self approval."),
         ("guide.pdf", _pdf("Evidence required"), "Evidence required"),
     ],
+    # Stable ids: the generated .docx embeds a timestamp, and pytest-xdist workers
+    # must collect identical test ids.
+    ids=["txt", "docx", "pdf"],
 )
 def test_supported_documents_are_normalized(
     tmp_path: Path, filename: str, content: bytes, expected: str

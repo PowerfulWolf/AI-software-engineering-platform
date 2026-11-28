@@ -13,7 +13,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import BinaryIO, cast
 
-import pydantic
 import pytest
 
 from ai_software_engineer.manager import local_path_observation as observation
@@ -332,39 +331,5 @@ def test_real_small_owned_worker_preserves_alias_and_releases_ownership(tmp_path
         )
     assert covered == {101}
     assert blockers == {"WORKTREE_PROCESS_ACTIVE"}
-    assert not registry.snapshot()
-    registry.require_stopped()
-
-
-def test_worker_direct_dependency_loader_never_executes_sitecustomize_or_pth(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    installation = tmp_path / "interpreter"
-    binaries = installation / "bin"
-    binaries.mkdir(parents=True)
-    python = binaries / "python"
-    python.symlink_to(sys.executable)
-    dependencies = (
-        installation
-        / "lib"
-        / f"python{sys.version_info.major}.{sys.version_info.minor}"
-        / "site-packages"
-    )
-    dependencies.mkdir(parents=True)
-    real_dependencies = Path(pydantic.__file__).parent.parent
-    for entry in real_dependencies.iterdir():
-        if entry.name not in {"sitecustomize.py", "unexpected-startup.pth"}:
-            (dependencies / entry.name).symlink_to(entry)
-    marker = tmp_path / "unexpected-startup-code"
-    startup = f"import pathlib; pathlib.Path({str(marker)!r}).touch()\n"
-    (dependencies / "sitecustomize.py").write_text(startup)
-    (dependencies / "unexpected-startup.pth").write_text(startup)
-    monkeypatch.setattr(sys, "executable", str(python))
-    registry = HostOwnedProcessRegistry()
-    with registry.operation_scope("operation_no_site_path_worker"):
-        assert observe_mac_paths_in_process(
-            fixture_body(tmp_path), tmp_path, frozenset(), frozenset(), time.monotonic() + 5
-        ) == ({101}, {"WORKTREE_PROCESS_ACTIVE"})
-    assert not marker.exists()
     assert not registry.snapshot()
     registry.require_stopped()

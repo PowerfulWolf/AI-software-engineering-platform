@@ -11,6 +11,7 @@ from ai_software_engineer.knowledge.administration import KnowledgeHumanActionEv
 from ai_software_engineer.knowledge.agents import (
     KnowledgeConsultation,
     KnowledgeConsultationInput,
+    KnowledgeConsultationReuse,
     KnowledgeIntent,
     KnowledgeModelCall,
     consultation_integrity_matches,
@@ -55,6 +56,7 @@ _MODELS: Mapping[str, type[DomainModel]] = {
     "consultation-inputs": KnowledgeConsultationInput,
     "knowledge-intents": KnowledgeIntent,
     "consultations": KnowledgeConsultation,
+    "consultation-reuse": KnowledgeConsultationReuse,
     "model-calls": KnowledgeModelCall,
     "operations": KnowledgeEvidence,
     "evidence": KnowledgeEvidence,
@@ -207,6 +209,10 @@ def select_knowledge(
                 ):
                     raise ValueError("knowledge snapshot owner differs")
                 key = record.snapshot_sha256
+        elif isinstance(record, KnowledgeConsultationReuse):
+            # A reuse index belongs to the consultation run it points at.
+            if record.run_id in bindings:
+                key = record.reuse_key
         elif isinstance(record, KnowledgeIntent):
             for run_id in bindings:
                 if path.name == KnowledgeRecordStore._name(namespace, run_id):

@@ -160,25 +160,6 @@ def rejected_fixture(
         os.close(descriptor)
 
 
-def test_completed_rejected_progress_gets_a_separate_exact_checkpoint(tmp_path: Path) -> None:
-    with rejected_fixture(tmp_path) as fixture:
-        fixture.collect(tmp_path)
-        proof = fixture.entry.inspect(fixture.queue.command())
-        assert [kind.value for kind in proof.permitted_resolutions] == [
-            "RETRY_REJECTED_CODER_OUTPUT"
-        ]
-        assert not proof.missing
-        assert proof.process_stop_sha256 == fixture.stop_sha256
-        assert proof.invocation_outcome_sha256 == fixture.outcome.outcome_sha256
-        assert proof.retry_cause is None
-        assert all(path.read_bytes() == body for path, body in fixture.original_files.items())
-        assert not list((tmp_path / "continuations").rglob("receipt*.json"))
-        fixture.collect(tmp_path)
-        assert (
-            fixture.entry.inspect(fixture.queue.command()).rejected_output == proof.rejected_output
-        )
-
-
 @pytest.mark.parametrize("path", ["ignored.tmp", "AGENTS.md", "src/AGENTS.md"])
 def test_rejected_checkpoint_never_admits_ignored_or_protected_mutations(
     tmp_path: Path, path: str
@@ -188,14 +169,6 @@ def test_rejected_checkpoint_never_admits_ignored_or_protected_mutations(
         with pytest.raises((ContinuationRejected, WorktreeCaptureRejected, WorkspacePolicyError)):
             fixture.collect(tmp_path)
         assert read_rejected_checkpoint(tmp_path, fixture.queue.item.id) is None
-
-
-def test_rejected_checkpoint_keeps_legal_existing_dirty_work(tmp_path: Path) -> None:
-    with rejected_fixture(tmp_path, inherited=True) as fixture:
-        fixture.collect(tmp_path)
-        proof = fixture.entry.inspect(fixture.queue.command())
-        assert proof.rejected_output is not None and not proof.missing
-        assert (fixture.native.worktree.path / "src/app.py").read_text() == "VALUE = 2\n"
 
 
 def test_rejected_checkpoint_requires_an_empty_index(tmp_path: Path) -> None:

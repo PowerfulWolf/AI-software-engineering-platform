@@ -135,7 +135,7 @@ def test_client_parses_a_streamed_reply(monkeypatch: pytest.MonkeyPatch) -> None
     assert result.payload == {"a": 1}
 
 
-def test_quota_exhausted_gateway_falls_back_to_the_next_route(
+def test_quota_exhausted_gateway_waits_for_a_human_model_decision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from collections.abc import Mapping
@@ -186,10 +186,10 @@ def test_quota_exhausted_gateway_falls_back_to_the_next_route(
             StructuredModelRoute(provider="claude", model="opus", client=Local()),
         )
     )
-    result = client.complete(
-        instructions="x", input_payload={}, output_schema={}, timeout_seconds=1
-    )
-    assert result.payload == {"a": 1} and Local.calls == 1
+    # Exhausted quota never switches models silently; a human decides (2026-11-25).
+    with pytest.raises(StructuredModelError) as stopped:
+        client.complete(instructions="x", input_payload={}, output_schema={}, timeout_seconds=1)
+    assert stopped.value.code is AgentErrorCode.QUOTA_EXHAUSTED and Local.calls == 0
 
 
 def test_invalid_output_does_not_fall_back() -> None:

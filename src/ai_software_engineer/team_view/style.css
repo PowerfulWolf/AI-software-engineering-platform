@@ -3910,11 +3910,18 @@ code {
 .doc-value { overflow-wrap: anywhere; white-space: pre-wrap; margin: 0; }
 .approval-spec { margin: 12px 0; padding: 12px 14px; border: 1px solid #dfe6ef; border-radius: 8px;
   background: white; max-height: 480px; overflow: auto; }
-.agent-roster .agent > .agent-model-status { margin-left: 56px; justify-self: start; }
-.agent-model-routes { display: block; }
+.agent-model-chip { display: inline-block; width: fit-content; margin-top: 4px; padding: 1px 8px;
+  border-radius: 999px; background: #eef2f8; color: #4a6185; font-size: 0.75rem; line-height: 1.6; }
+.agent-roster .agent > .agent-status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-left: 56px; }
 .badge.agent-model-status.ok { background: #e3f2ea; color: var(--good); }
 .badge.agent-model-status.info { background: #e9effd; color: #244fa7; }
 .badge.agent-model-status.warning { background: #fff0df; color: var(--warn); }
 .badge.agent-model-status.danger { background: #fdecea; color: #c62828; }
 .agent-model-panel { display: grid; gap: 6px; margin: 8px 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
-.agent-model-panel .row { flex-wrap: wrap; gap: 6px; }
+.agent-model-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.agent-model-table { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; }
+.agent-model-table dt { color: #5b6f8f; font-size: 0.8125rem; }
+.agent-model-table dd { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px;
+  overflow-wrap: anywhere; }
+.agent-model-table dd small { font-size: 0.75rem; }

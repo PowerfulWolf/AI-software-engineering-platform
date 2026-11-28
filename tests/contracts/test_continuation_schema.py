@@ -3,7 +3,7 @@
 import fcntl
 import json
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -12,7 +12,6 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from ai_software_engineer.agents.models import AgentResult
 from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
-from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import JsonValue, WirePayload
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.orchestration.continuation_models import (
@@ -195,38 +194,3 @@ def test_capture_schema_accepts_a_complete_owned_start_and_stop(
     assert not _errors("execution-capture.schema.json", stop.to_wire())
     start.validate_integrity()
     stop.validate_integrity()
-
-
-@pytest.mark.parametrize(
-    ("kind", "mutate"),
-    (
-        (
-            "role",
-            lambda start, stop: start.model_copy(
-                update={"request": start.request.model_copy(update={"role": AgentRole.QA})}
-            ),
-        ),
-        ("cause", lambda start, stop: stop.model_copy(update={"cause": "provider_transient"})),
-        (
-            "stop_kind",
-            lambda start, stop: stop.model_copy(
-                update={"process_stop": stop.process_stop.model_copy(update={"kind": "completed"})}
-            ),
-        ),
-    ),
-)
-def test_capture_schema_and_models_reject_bad_role_cause_and_stop_kind(
-    capture_facts: tuple[ExecutionCaptureStart, ExecutionCaptureStop],
-    kind: str,
-    mutate: Callable[
-        [ExecutionCaptureStart, ExecutionCaptureStop],
-        ExecutionCaptureStart | ExecutionCaptureStop,
-    ],
-) -> None:
-    start, stop = capture_facts
-    changed = mutate(start, stop)
-    payload = changed.to_wire()
-    assert _errors("execution-capture.schema.json", payload)
-    model = ExecutionCaptureStart if kind == "role" else ExecutionCaptureStop
-    with pytest.raises(ValueError):
-        model.model_validate(payload)

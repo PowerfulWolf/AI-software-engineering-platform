@@ -97,9 +97,7 @@ def _claim_coder(queue: MySqlRoleQueue, work_item_id: str) -> QueueClaim:
 
 
 @pytest.fixture
-def real_contained_wait(
-    completed: CompletedFixture, tmp_path: Path
-) -> Iterator[RealContainedWait]:
+def real_contained_wait(completed: CompletedFixture, tmp_path: Path) -> Iterator[RealContainedWait]:
     dsn = os.environ["ASE_TEST_MYSQL_DSN"]
     f = completed
     state = tmp_path / "mysql-contained-state"

@@ -117,3 +117,29 @@ def test_pause_with_no_matching_intent_cannot_be_swept_by_lane_name(
             task_repositories={native.task.id: facts.queue.item.repository_id},
             repository_id=facts.queue.item.repository_id,
         )
+
+
+def test_consultation_reuse_index_is_deleted_with_its_owned_run(
+    native: Fixture, tmp_path: Path
+) -> None:
+    from ai_software_engineer.knowledge.agents import KnowledgeConsultationReuse
+
+    facts = paused_facts(native, tmp_path / "sidecar/state")
+    bound = facts.outcome.intent.binding
+    facts.records.put("bindings", bound.run_id, bound)
+    owned = KnowledgeConsultationReuse(reuse_key="reuse-owned", run_id=bound.run_id)
+    foreign = KnowledgeConsultationReuse(reuse_key="reuse-foreign", run_id="run_foreign")
+    facts.records.put("consultation-reuse", owned.reuse_key, owned)
+    facts.records.put("consultation-reuse", foreign.reuse_key, foreign)
+    selected = select_knowledge(
+        facts.records.root,
+        checkpoint(native),
+        identities={native.task.id},
+        task_repositories={native.task.id: facts.queue.item.repository_id},
+        repository_id=facts.queue.item.repository_id,
+    )
+    root = facts.records.root
+    assert root / KnowledgeRecordStore._name("consultation-reuse", owned.reuse_key) in selected
+    assert (
+        root / KnowledgeRecordStore._name("consultation-reuse", foreign.reuse_key) not in selected
+    )

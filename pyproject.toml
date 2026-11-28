@@ -32,6 +32,8 @@ dev = [
   "jsonschema[format]>=4,<5",
   "mypy>=1.13,<2",
   "pytest>=8,<10",
+  "pytest-timeout>=2,<3",
+  "pytest-xdist>=3,<4",
   "ruff>=0.8,<1",
   "types-jsonschema>=4,<5",
   "types-pymysql>=1.1,<2",
@@ -56,6 +58,7 @@ addopts = ["-ra", "--strict-config", "--strict-markers"]
 testpaths = ["tests"]
 markers = [
   "mysql: integration tests requiring ASE_TEST_MYSQL_DSN",
+  "serial: timing- or process-sensitive tests that must not run under pytest-xdist",
 ]
 
 [tool.ruff]

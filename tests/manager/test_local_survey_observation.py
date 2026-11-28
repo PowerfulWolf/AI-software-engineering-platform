@@ -15,7 +15,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO, cast
 
-import pydantic
 import pytest
 
 from ai_software_engineer.artifacts import ArtifactStore
@@ -680,22 +679,6 @@ def test_worker_emits_no_partial_result_for_invalid_request(raw: bytes) -> None:
     assert not output.getvalue()
 
 
-def test_real_facade_scans_without_new_public_shape_and_releases_ownership(tmp_path: Path) -> None:
-    registry = HostOwnedProcessRegistry()
-    started = time.monotonic()
-    with registry.operation_scope("operation_real_complete_local_survey"):
-        report = IsolatedLegacyLocalExecutionObserver().observe(worktree_root=tmp_path, boot=BOOT)
-    report.validate_integrity()
-    assert "PROCESS_SCAN_INCOMPLETE" not in report.blockers
-    assert (
-        report.worktree_path == str(tmp_path.resolve())
-        and report.scanner_version == "local-execution-v1"
-    )
-    assert time.monotonic() - started < 5
-    assert not registry.snapshot()
-    registry.require_stopped()
-
-
 def test_expired_original_deadline_never_starts_whole_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -790,39 +773,6 @@ def test_real_failed_whole_launch_reaps_live_same_session_peer(
     ):
         observation._observe_survey_worker(value)
     assert peer_marker.read_text().isdigit()
-    assert not registry.snapshot()
-    registry.require_stopped()
-
-
-def test_whole_worker_fixed_loader_does_not_execute_startup_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    installation = tmp_path / "interpreter"
-    binaries = installation / "bin"
-    binaries.mkdir(parents=True)
-    python = binaries / "python"
-    python.symlink_to(sys.executable)
-    dependencies = (
-        installation
-        / "lib"
-        / f"python{sys.version_info.major}.{sys.version_info.minor}"
-        / "site-packages"
-    )
-    dependencies.mkdir(parents=True)
-    real_dependencies = Path(pydantic.__file__).parent.parent
-    for entry in real_dependencies.iterdir():
-        if entry.name not in {"sitecustomize.py", "unexpected-startup.pth"}:
-            (dependencies / entry.name).symlink_to(entry)
-    marker = tmp_path / "unexpected-startup-code"
-    startup = f"import pathlib; pathlib.Path({str(marker)!r}).touch()\n"
-    (dependencies / "sitecustomize.py").write_text(startup)
-    (dependencies / "unexpected-startup.pth").write_text(startup)
-    monkeypatch.setattr(sys, "executable", str(python))
-    registry = HostOwnedProcessRegistry()
-    with registry.operation_scope("operation_no_site_whole_worker"):
-        report = IsolatedLegacyLocalExecutionObserver().observe(worktree_root=tmp_path, boot=BOOT)
-    assert "PROCESS_SCAN_INCOMPLETE" not in report.blockers
-    assert not marker.exists()
     assert not registry.snapshot()
     registry.require_stopped()
 

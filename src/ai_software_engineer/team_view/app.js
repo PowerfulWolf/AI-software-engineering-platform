@@ -5109,56 +5109,80 @@ function shortModelName(model) {
   return String(model || "").replace(/^codex\//, "");
 }
 
-// Configured primary → backup order and the latest recorded call of this Agent's roles.
-function agentModelState(agent) {
-  const routes = agent.model_routes || [];
+// Human-readable model name: claude-opus-5-5 → Opus 5.5, codex/gpt-6.2-sol → GPT-6.2 Sol.
+function friendlyModelName(model) {
+  const name = shortModelName(model);
+  const claude = name.match(/^claude-([a-z]+)-(\d+)-(\d+)$/);
+  if (claude) return `${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2]}.${claude[3]}`;
+  const gpt = name.match(/^gpt-([\d.]+)(?:-([a-z]+))?$/);
+  if (gpt) return `GPT-${gpt[1]}${gpt[2] ? " " + gpt[2][0].toUpperCase() + gpt[2].slice(1) : ""}`;
+  return name;
+}
+
+const modelRouteKindLabels = {claude_cli: "Claude CLI", codex_cli: "Codex CLI", responses: "Responses API"};
+
+function uniqueModelRoutes(agent) {
   const seen = new Set();
-  const names = routes.map(route => shortModelName(route.model)).filter(name => {
-    if (seen.has(name)) return false;
-    seen.add(name);
+  return (agent.model_routes || []).filter(route => {
+    const key = `${route.provider}/${route.model}/${route.route_kind}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
-  const routeText = names.length ? `模型 ${names.join(" → ")}` : "";
+}
+
+function modelCallTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN",
+    {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"});
+}
+
+// Primary model, backup, and the latest recorded call of this Agent's roles.
+function agentModelState(agent) {
+  const routes = uniqueModelRoutes(agent);
+  const primary = routes[0] ? friendlyModelName(routes[0].model) : "";
+  const backup = routes[1] ? friendlyModelName(routes[1].model) : "";
   const call = agent.last_model_call;
-  if (!call) return {routeText, status: "", tone: "", detail: "暂无本角色执行记录。"};
-  const model = shortModelName(call.model);
-  const when = call.completed_at ? new Date(call.completed_at).toLocaleString() : "";
-  let status = `正常 · ${model}`;
-  let tone = "ok";
+  const base = {primary, backup, status: "", tone: "", detail: "还没有执行记录"};
+  if (!call) return base;
+  const model = friendlyModelName(call.model);
+  const when = modelCallTime(call.completed_at);
+  let status = "", tone = "ok", outcome = "成功";
   if (call.error_code === "QUOTA_EXHAUSTED") {
-    status = `额度已用完 · ${model}`;
-    tone = "warning";
+    [status, tone, outcome] = [`${model} 额度已用完`, "warning", "额度已用完"];
   } else if (call.error_code === "RATE_LIMITED") {
-    status = `被限流 · ${model}`;
-    tone = "warning";
+    [status, tone, outcome] = [`${model} 被限流`, "warning", "被限流"];
   } else if (call.outcome !== "SUCCEEDED") {
-    status = `最近失败 · ${model}`;
-    tone = "danger";
+    [status, tone, outcome] = [`${model} 最近调用失败`, "danger", `失败${call.error_code ? "（" + call.error_code + "）" : ""}`];
   } else if (call.route_index > 1) {  // route_index is 1-based: 1 is the primary route
-    status = `使用备用模型 · ${model}`;
-    tone = "info";
+    [status, tone] = [`正在用备用 ${model}`, "info"];
   }
-  const reason = call.error_code ? `（${call.error_code}）` : "";
-  return {
-    routeText,
-    status,
-    tone,
-    detail: `最近一次 ${label(call.role)} 执行：${model}，结果 ${call.outcome}${reason}${when ? "，" + when : ""}。`,
-  };
+  return {...base, status, tone,
+    detail: [outcome, model, label(call.role), when].filter(Boolean).join(" · ")};
 }
 
 function agentModelPanel(agent) {
   const panel = el("div", undefined, "agent-model-panel");
   const state = agentModelState(agent);
-  const routes = agent.model_routes || [];
-  const list = el("div", undefined, "row");
-  if (!routes.length) list.append(el("span", "未读取到模型配置", "muted"));
+  const routes = uniqueModelRoutes(agent);
+  const multiRole = new Set(routes.map(route => route.role)).size > 1;
+  const heading = el("div", undefined, "agent-model-heading");
+  heading.append(el("div", "模型", "section-title"));
+  if (state.status) heading.append(el("span", state.status, `badge agent-model-status ${state.tone}`));
+  panel.append(heading);
+  const table = el("dl", undefined, "agent-model-table");
+  if (!routes.length) table.append(el("dt", "配置"), el("dd", "未读取到模型配置", "muted"));
   routes.forEach((route, index) => {
-    list.append(el("span", `${index === 0 ? "主模型" : "备用"} · ${label(route.role)} · ${shortModelName(route.model)}`,
-      index === 0 ? "badge" : "badge muted"));
+    const value = el("dd");
+    value.append(el("strong", friendlyModelName(route.model)),
+      el("small", [shortModelName(route.model), modelRouteKindLabels[route.route_kind] || route.route_kind,
+        multiRole ? label(route.role) : ""].filter(Boolean).join(" · "), "muted"));
+    value.title = route.model;
+    table.append(el("dt", index === 0 ? "主模型" : index === 1 ? "备用" : `备用 ${index}`), value);
   });
-  panel.append(el("div", "模型", "section-title"), list, el("p", state.detail, "muted"));
-  if (state.status) panel.append(el("span", state.status, `badge agent-model-status ${state.tone}`));
+  table.append(el("dt", "最近调用"), el("dd", state.detail, agent.last_model_call ? "" : "muted"));
+  panel.append(table);
   viewBlock(panel, `agent-model:${agent.id}`, [routes, agent.last_model_call]);
   return panel;
 }
@@ -7342,9 +7366,16 @@ function renderTeam(content) {
     );
     identity.append(el("span", agent.name.slice(0, 1), "avatar"), name);
     const model = agentModelState(agent);
-    if (model.routeText) name.append(el("small", model.routeText, "muted agent-model-routes"));
-    control.append(identity, el("span", memberStatus[0], memberStatus[1]));
-    if (model.status) control.append(el("span", model.status, `badge agent-model-status ${model.tone}`));
+    if (model.primary) {
+      const chip = el("small", model.primary, "agent-model-chip");
+      chip.title = model.backup ? `主模型 ${model.primary}，备用 ${model.backup}` : `主模型 ${model.primary}`;
+      name.append(chip);
+    }
+    const statusRow = el("span", undefined, "agent-status-row");
+    statusRow.append(el("span", memberStatus[0], memberStatus[1]));
+    // Only an abnormal model state needs attention on the roster card.
+    if (model.status) statusRow.append(el("span", model.status, `badge agent-model-status ${model.tone}`));
+    control.append(identity, statusRow);
     viewBlock(control, `agent:${agent.id}`, [agent, queueState, memberStatus, selectedAgentId]);
     roster.append(control);
   }

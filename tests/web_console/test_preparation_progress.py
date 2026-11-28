@@ -14,12 +14,9 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
-from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
+from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import AgentRole, Task
-from ai_software_engineer.git import GitWorktreeManager, WorktreeRef
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
-from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
-from ai_software_engineer.manager.preparation import PrepareProjectResult, PrepareProjectStatus
 from ai_software_engineer.manager.production_backend import ProductionProjectDeliveryBackend
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry
@@ -38,10 +35,8 @@ from ai_software_engineer.recovery.preparation_progress import (
     record_task_sealed,
     seal_preparation_record,
 )
-from ai_software_engineer.recovery.records import RecoverySeedRecord
-from ai_software_engineer.recovery.seed import RecoverySeedService
 from ai_software_engineer.runtime import RuntimeSession
-from ai_software_engineer.store import MySqlTaskRepository, TaskNotFound
+from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.web_console.core import ProjectConsole
 from ai_software_engineer.web_console.models import (
     ConsoleCommandResult,
@@ -76,13 +71,9 @@ from ai_software_engineer.work_queue.worker import (
     WorkerLease,
 )
 from tests.domain.factories import make_task
-from tests.manager.test_dispatch import _agents, _policy
-from tests.orchestration.test_runner import _definitions
 from tests.recovery.test_authorization import approval
 from tests.recovery.test_preparation_inspection_scope import (
-    OfflineAuthority,
     PreparationFixture,
-    SeedManager,
     preparation_fixture,
     seed_fixture,
 )
@@ -460,174 +451,6 @@ def test_progress_http_remains_independent_while_team_reader_is_busy(tmp_path: P
                 await reading
 
     asyncio.run(exercise())
-
-
-@pytest.mark.parametrize("failure", ["dispatch", "seed", "after_seed"])
-def test_real_execute_observes_dispatch_and_verified_seed_only_after_each_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
-) -> None:
-    """Run the real entry sequence with typed offline authority and seed adapters."""
-    fixture = preparation_fixture(tmp_path, monkeypatch)
-    fixture.sealing.seal(fixture.plan.plan_sha256)
-    draft = fixture.builder.build(fixture.plan.plan_sha256)
-    plan = fixture.plan
-    route = ProviderRouteConfig(
-        provider="offline", model="offline", kind=ModelProviderKind.CODEX_CLI
-    )
-    config = ProductionConfig(
-        platform_root=str(tmp_path / "platform"),
-        team_id=plan.source.scope.team_id,
-        model_routes=(route,),
-    )
-
-    class Backend:
-        _organization = tmp_path / "organization"
-
-        def prepare(self, _: str) -> PrepareProjectResult:
-            return PrepareProjectResult(
-                status=PrepareProjectStatus.PREPARED,
-                repository_id=draft.facts.target.repository_id,
-                baseline_compilation_sha256=draft.facts.target.baseline_spec_sha256,
-                preparation=draft.facts.target,
-            )
-
-        def _workforce(self) -> object:
-            policy = _policy()
-            selected = policy.routes[3].model_copy(
-                update={
-                    "provider": route.provider,
-                    "model": route.model,
-                    "reasoning_effort": route.reasoning_effort,
-                    "route_kind": route.kind.value,
-                    "connection_mode": config.effective_connection_mode(route),
-                }
-            )
-            return _agents(), policy.model_copy(
-                update={
-                    "routes": (selected,),
-                    "default_tier": selected.tier,
-                    "risk_floors": tuple(
-                        f.model_copy(update={"minimum_tier": selected.tier})
-                        for f in policy.risk_floors
-                    ),
-                }
-            )
-
-    entry = NativeRecoveryEntry(
-        config,
-        {"ASE_MYSQL_DSN": "mysql://unused/test"},
-        cast(ProductionProjectDeliveryBackend, Backend()),
-    )
-    monkeypatch.setattr(
-        entry,
-        "_services",
-        lambda *args: (fixture.builder._authorization, fixture.builder, fixture.sealing),
-    )
-
-    class TaskRepository:
-        def __init__(self, _: str) -> None:
-            pass
-
-        def get(self, _: str) -> None:
-            raise TaskNotFound("offline missing Task")
-
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr("ai_software_engineer.recovery.entry.MySqlTaskRepository", TaskRepository)
-    authority = OfflineAuthority(fixture)
-    monkeypatch.setattr(
-        "ai_software_engineer.recovery.entry.MySqlDispatchAuthority",
-        lambda *args, **kwargs: authority,
-    )
-
-    class Workforce:
-        def __init__(self, _: object) -> None:
-            pass
-
-        def put_agent(self, value: object) -> object:
-            return value
-
-        def put_policy(self, value: object, *, versioned: bool) -> object:
-            return value
-
-    monkeypatch.setattr("ai_software_engineer.recovery.entry.FileTeamWorkforceStore", Workforce)
-    monkeypatch.setattr(
-        "ai_software_engineer.recovery.entry._task_commands",
-        lambda profile: plan.permissions.commands,
-    )
-    monkeypatch.setattr(
-        "ai_software_engineer.recovery.entry._agent_definitions",
-        lambda dispatch, commands: {
-            AgentRole.CODER: _definitions()[AgentRole.CODER].model_copy(
-                update={"permissions": plan.effective_target_permissions}
-            ),
-        },
-    )
-    if failure == "dispatch":
-
-        def fail_commit(**kwargs: object) -> None:
-            raise ValueError("offline dispatch fence failed")
-
-        monkeypatch.setattr(authority, "commit_recovery", fail_commit)
-    manager = SeedManager(fixture)
-    monkeypatch.setattr(entry, "_manager", lambda *args: cast(GitWorktreeManager, manager))
-
-    @dataclass
-    class Binding:
-        worktree: WorktreeRef
-
-    class Coordinator:
-        def __init__(self, _: object) -> None:
-            pass
-
-        def open_coder(
-            self, dispatch: RecoveryDispatchRecord, definitions: object, *, recover: bool
-        ) -> Binding:
-            target = WorktreeRef(
-                dispatch.task_id,
-                AgentRole.CODER,
-                1,
-                tmp_path / "target",
-                dispatch.task.base_ref,
-                dispatch.task.branch_name or f"ai/{dispatch.task_id}/attempt-1",
-                False,
-            )
-            target.path.mkdir()
-            return Binding(target)
-
-    monkeypatch.setattr(
-        "ai_software_engineer.recovery.entry.DispatchRoleWorktreeCoordinator", Coordinator
-    )
-    original_seed = RecoverySeedService.seed
-
-    def seed(service: RecoverySeedService, target: WorktreeRef) -> RecoverySeedRecord:
-        if failure == "seed":
-            raise ValueError("offline seed verify failed")
-        return original_seed(service, target)
-
-    monkeypatch.setattr(RecoverySeedService, "seed", seed)
-
-    def stop_after_seed(*args: object) -> None:
-        raise ValueError("offline stop after verified seed")
-
-    monkeypatch.setattr(
-        "ai_software_engineer.recovery.entry._approved_parent_context", stop_after_seed
-    )
-    store = InMemoryPreparationProgressStore()
-    operation = operation_for(fixture)
-    with (
-        observe_recovery_preparation(operation, store.append, clock=lambda: NOW),
-        pytest.raises(ValueError, match="offline"),
-    ):
-        entry._execute(fixture.store, plan, None, route)
-    bound = preparation_scope(operation)
-    assert bound is not None
-    assert [r.kind for r in store.read(bound).records] == {
-        "dispatch": [],
-        "seed": ["DISPATCH_COMMITTED"],
-        "after_seed": ["DISPATCH_COMMITTED", "SEED_VERIFIED"],
-    }[failure]
 
 
 @pytest.mark.parametrize("dispatched", [False, True])

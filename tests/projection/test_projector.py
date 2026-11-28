@@ -166,9 +166,7 @@ def test_projection_keeps_qa_review_findings_and_coder_lineage_details() -> None
             "parent_artifact_ids": ("art_plan_001", qa.artifact_id),
             "supersedes": implementation.artifact_id,
             "created_at": NOW.replace(minute=2),
-            "content": implementation.content.model_copy(
-                update={"commit_sha": "c" * 40}
-            ),
+            "content": implementation.content.model_copy(update={"commit_sha": "c" * 40}),
         }
     )
     snapshot = RunProjectionBuilder().build(

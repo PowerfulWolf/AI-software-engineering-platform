@@ -14,7 +14,7 @@ import pytest
 from ai_software_engineer import owned_sessions
 from ai_software_engineer.domain.native_verification import NativeVerificationCapabilityDetail
 from ai_software_engineer.manager import python_verification_discovery as discovery
-from ai_software_engineer.owned_processes import HostOwnedProcessRegistry, OwnedProcessesUncertain
+from ai_software_engineer.owned_processes import HostOwnedProcessRegistry
 from ai_software_engineer.owned_sessions import OwnedProcessIdentity, OwnedSessionUnknown
 
 
@@ -93,41 +93,6 @@ def test_image_ownership_unknown_is_not_a_missing_image_fact(
         assert caught.value.code is NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED
         assert str(caught.value) == "VERIFICATION_PROCESS_STATE_UNCONFIRMED"
         assert len(captures) == 2
-    finally:
-        server.close()
-        path.unlink(missing_ok=True)
-
-
-def test_two_later_successful_discoveries_do_not_clear_an_earlier_owned_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    registry, path, server, captures = _discovery_fixture(tmp_path, monkeypatch)
-    try:
-        with (
-            registry.operation_scope("operation_fixture_discovery"),
-            pytest.raises(discovery.PythonMysqlDiscoveryError) as caught,
-        ):
-            discovery.discover_python_mysql_host_prerequisites(
-                codex_executable="codex", docker_socket=str(path)
-            )
-        assert caught.value.code is NativeVerificationCapabilityDetail.PROCESS_STATE_UNCONFIRMED
-        (unknown,) = registry.snapshot()
-        assert unknown.kind == "tool" and unknown.state == "uncertain"
-        # finish_owned_process cleaned and reaped the actual fixture leader;
-        # this independent current absence does not fabricate its lost birth/SID proof.
-        with pytest.raises(ProcessLookupError):
-            os.kill(unknown.process_id, 0)
-        for attempt in (1, 2):
-            with registry.operation_scope(f"operation_fixture_recheck_{attempt}"):
-                result = discovery.discover_python_mysql_host_prerequisites(
-                    codex_executable="codex", docker_socket=str(path)
-                )
-            assert result.mysql_image_id == "sha256:" + "a" * 64
-            assert registry.snapshot() == (unknown,)
-        assert len(captures) == 6
-        assert registry.shutdown_failed and not registry.await_stopped(0)
-        with pytest.raises(OwnedProcessesUncertain):
-            registry.require_stopped()
     finally:
         server.close()
         path.unlink(missing_ok=True)

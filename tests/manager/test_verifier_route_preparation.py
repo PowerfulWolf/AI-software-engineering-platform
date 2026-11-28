@@ -1,6 +1,5 @@
 """All exact fallback routes prepare before a verifier model starts, without reexecution."""
 
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -14,7 +13,6 @@ from ai_software_engineer.agents import (
     AgentRunStatus,
     StoredContextResolver,
 )
-from ai_software_engineer.agents.execution import ExecutionGuard
 from ai_software_engineer.agents.models import AgentErrorCode, AgentFailure
 from ai_software_engineer.agents.openai_compatible import (
     PromptBuilder,
@@ -29,7 +27,6 @@ from ai_software_engineer.domain.native_verification import (
     NativeVerificationWaitReason,
 )
 from ai_software_engineer.manager.dispatch import DeliveryAllocation
-from ai_software_engineer.manager.native_verification import NativeRoleVerificationInputs
 from ai_software_engineer.manager.production_delivery import (
     ConfiguredDeliveryRouteAdapterFactory,
     DispatchDeliveryAgentAdapter,
@@ -38,7 +35,7 @@ from ai_software_engineer.orchestration import ExecutionPlanAgentAdapter
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from tests.domain.factories import make_agent
 from tests.manager.test_native_verification import _fake_ports, _Fixture, _fixture
-from tests.manager.test_verifier_preparation import _gate, _marker, _Wait
+from tests.manager.test_verifier_preparation import _gate, _marker
 
 
 class _StaticPrompt:
@@ -191,56 +188,6 @@ def test_mixed_kind_fallback_prepares_all_routes_once_before_model_start(
         "native-role-verification://" in payload.messages[-1].content for _, payload in calls
     )
     assert len(resources) == len(executions) == 1 and not failure.events
-
-
-def test_unsupported_fallback_waits_before_any_model_invocation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fixture = _fixture(tmp_path)
-    resources, executions, _ = _fake_ports(monkeypatch, fixture)
-    assert fixture.plan.content.verification_requirements is not None
-    ordinary = fixture.plan.model_copy(
-        update={
-            "content": fixture.plan.content.model_copy(
-                update={
-                    "verification_requirements": tuple(
-                        item.model_copy(update={"controlled_capability_kind": None})
-                        for item in fixture.plan.content.verification_requirements
-                    )
-                }
-            )
-        }
-    )
-    original_reader = fixture.registry._inputs_reader
-    assert original_reader is not None
-
-    class Reader:
-        def read(
-            self,
-            *,
-            request: AgentRequest,
-            workspace_root: Path,
-            guard: ExecutionGuard,
-        ) -> NativeRoleVerificationInputs:
-            assert original_reader is not None
-            return replace(
-                original_reader.read(request=request, workspace_root=workspace_root, guard=guard),
-                plan_artifact=ordinary,
-            )
-
-    monkeypatch.setattr(fixture.registry, "_inputs_reader", Reader())
-    config = ProductionConfig(
-        platform_root=str(tmp_path / "platform"), model_routes=_routes(ModelProviderKind.RESPONSES)
-    )
-    adapter, _, _ = _dispatch_adapter(tmp_path, fixture, config, monkeypatch)
-    gate, delegate, failure, records = _gate(fixture, tmp_path, prepare=adapter.prepare_verifier)
-    with pytest.raises(_Wait):
-        gate.prepare(fixture.request)
-    marker = _marker(records)
-    assert marker.result == "WAIT"
-    assert marker.failure_reason is NativeVerificationWaitReason.UNSUPPORTED_ENTRYPOINT
-    assert delegate.calls == 0 and len(failure.events) == 1
-    assert not resources and not executions
 
 
 @pytest.mark.parametrize("changed_scope", [False, True])

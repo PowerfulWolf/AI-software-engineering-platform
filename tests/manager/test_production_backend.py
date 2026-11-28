@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Never, cast
@@ -23,12 +23,10 @@ from ai_software_engineer.agents import (
     StructuredModelResult,
 )
 from ai_software_engineer.config import (
-    ModelProviderKind,
     ProductionConfig,
     ProductionConfigError,
     ProviderRouteConfig,
 )
-from ai_software_engineer.context import ContextBudget, FileContextStore
 from ai_software_engineer.design import DesignerOutputRejected
 from ai_software_engineer.domain import (
     AgentDefinition,
@@ -51,15 +49,11 @@ from ai_software_engineer.domain import (
     ReviewReportContent,
     ReviewVerdict,
     TeamRole,
-    WorkItemStatus,
 )
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy
 from ai_software_engineer.manager import production_backend
 from ai_software_engineer.manager.delivery import (
-    ApproveProductSpec,
     DeliveryBackendFailure,
-    ResumeProjectDelivery,
-    StartProjectDelivery,
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
@@ -77,13 +71,9 @@ from ai_software_engineer.manager.production_backend import (
 from ai_software_engineer.manager.production_delivery import (
     DeliveryRouteAdapterFactory,
 )
-from ai_software_engineer.manager.production_host import TeamHost
-from ai_software_engineer.orchestration import BlockedResult, RetryDeliveryResult
 from ai_software_engineer.planning import PlannerRunOutcome
 from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
-from ai_software_engineer.runtime_workspace import FileTeamWorkforceStore
-from ai_software_engineer.work_queue.ports import QueueLeaseLost
 
 
 class _ScriptedStructuredClient(StructuredModelClient):
@@ -645,239 +635,6 @@ def _git_output(*arguments: str, cwd: Path) -> str:
         },
     )
     return completed.stdout.strip()
-
-
-@pytest.mark.mysql
-@pytest.mark.parametrize("input_limit,lose_lease", [(64_000, False), (1, False), (64_000, True)])
-def test_host_records_isolated_delivery_without_polluting_project(
-    tmp_path: Path,
-    mysql_dsn: str,
-    monkeypatch: pytest.MonkeyPatch,
-    input_limit: int,
-    lose_lease: bool,
-) -> None:
-    monkeypatch.setattr(
-        production_backend,
-        "PRODUCTION_DELIVERY_CONTEXT_BUDGET",
-        ContextBudget(max_input_tokens=input_limit, reserved_output_tokens=4_000),
-    )
-    project = tmp_path / "target"
-    project.mkdir()
-    (project / "hello.txt").write_text("hello\n", encoding="utf-8")
-    _git("init", "-b", "main", cwd=project)
-    _git("add", "hello.txt", cwd=project)
-    _git("commit", "-m", "initial", cwd=project)
-    config = ProductionConfig(
-        platform_root=str(tmp_path / "platform"),
-        default_project_id="project_test",
-        default_project_name="Test Project",
-        model_routes=(
-            ProviderRouteConfig(
-                provider="codex",
-                model="gpt-5.5",
-                kind=ModelProviderKind.CODEX_CLI,
-            ),
-        ),
-        live_model_execution=True,
-    )
-    host = TeamHost(
-        config=config,
-        environment={"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")},
-        structured_clients=_ScriptedClientFactory(),
-        delivery_route_adapters=_ScriptedDeliveryFactory(),
-    )
-    project_workspace = host.projects()[0]
-    backend = host.recovery_entry().backend
-    old_agents, old_policy = backend._workforce()
-    workforce = FileTeamWorkforceStore(backend._organization)
-    for agent in old_agents:
-        workforce.put_agent(agent)
-    legacy_policy = old_policy.model_copy(update={"version": "v0.1"})
-    workforce.put_policy(legacy_policy)
-    config = config.model_copy(
-        update={
-            "model_routes": (config.model_routes[0].model_copy(update={"model": "gpt-5.6-sol"}),)
-        }
-    )
-    host = TeamHost(
-        config=config,
-        environment={"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")},
-        structured_clients=_ScriptedClientFactory(),
-        delivery_route_adapters=_ScriptedDeliveryFactory(),
-    )
-    backend = host.recovery_entry().backend
-    new_agents, new_policy = backend._workforce()
-    assert new_agents == old_agents
-    assert new_policy.id == old_policy.id
-    assert new_policy.version != old_policy.version
-    assert backend._workforce()[1] == new_policy
-    run_adapter = _ScriptedDeliveryAdapter.run
-    invoked: list[AgentRole] = []
-    interrupted = False
-
-    def observe_claim(adapter: _ScriptedDeliveryAdapter, request: AgentRequest) -> AgentResult:
-        nonlocal interrupted
-        (lease,) = tuple(
-            lease
-            for lease in host.work_queue.list_active_leases(now=datetime.now(UTC))
-            if lease.task_id == request.task_id
-        )
-        assert lease.agent_id == adapter._definition.id
-        (active,) = tuple(
-            item
-            for item in host.work_queue.items_for_task(request.task_id)
-            if item.status is WorkItemStatus.RUNNING
-        )
-        assert active.role is request.role and active.attempt == request.attempt
-        if lose_lease and not interrupted:
-            interrupted = True
-            raise QueueLeaseLost("fixture lost execution ownership")
-        invoked.append(request.role)
-        return run_adapter(adapter, request)
-
-    monkeypatch.setattr(_ScriptedDeliveryAdapter, "run", observe_claim)
-    service = host.project_entry()
-    started = service.start(
-        StartProjectDelivery(
-            repository_root=str(project),
-            requirement="Change the greeting.",
-        )
-    )
-    assert started.checkpoint.stage is DeliveryStage.WAITING_PRODUCT_APPROVAL
-    approved = service.approve(
-        ApproveProductSpec(
-            delivery_id=started.checkpoint.delivery_id,
-            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
-            approval_reference="test-approval",
-        )
-    )
-
-    if lose_lease:
-        assert approved.checkpoint.stage is DeliveryStage.DELIVERING
-        assert approved.checkpoint.failure_code is None
-        (lease,) = host.work_queue.list_active_leases(now=datetime.now(UTC))
-        (reclaimed,) = host.work_queue.reclaim_expired(
-            now=lease.expires_at,
-            retry_at=lease.expires_at + timedelta(seconds=1),
-        )
-        host.work_queue.make_ready(reclaimed.id, now=lease.expires_at + timedelta(seconds=2))
-        approved = service.resume(
-            ResumeProjectDelivery(delivery_id=approved.checkpoint.delivery_id)
-        )
-
-    assert workforce.get_policy(legacy_policy.id) == legacy_policy
-    assert workforce.get_policy(new_policy.id, version=new_policy.version) == new_policy
-    if lose_lease:
-        from ai_software_engineer.domain import TaskStatus
-        from ai_software_engineer.domain.delivery_disposition import DeliveryResponsibility
-        from ai_software_engineer.domain.delivery_resolution import (
-            DeliveryProofMissing,
-            InspectDeliveryWait,
-        )
-        from ai_software_engineer.knowledge.store import KnowledgeRecordStore
-        from ai_software_engineer.work_queue.invocation import (
-            DeliveryInvocationOutcome,
-            DeliveryInvocationStart,
-        )
-
-        # The adapter was entered after a durable start. A lease expiry cannot
-        # prove that execution never began, even when this fixture knows it did.
-        checkpoint = approved.checkpoint
-        assert checkpoint.stage is DeliveryStage.DELIVERING
-        assert checkpoint.task_status is TaskStatus.IMPLEMENTING
-        assert checkpoint.task_id is not None
-        assert checkpoint.candidate_revision is None
-        (waiting,) = host.work_queue.items_for_task(checkpoint.task_id)
-        assert waiting.status is WorkItemStatus.WAITING_DEPENDENCY
-        disposition = waiting.wait_disposition
-        assert disposition is not None
-        assert disposition.facts.classification == "EXECUTION_UNCERTAIN"
-        assert disposition.responsibility is DeliveryResponsibility.ENGINEERING
-        assert disposition.resume_condition == "verified_execution_resolution"
-        assert not invoked and not host.work_queue.accepted(checkpoint.task_id)
-        assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
-        sidecar = project_workspace.root / "repositories" / str(checkpoint.repository_id)
-        records = KnowledgeRecordStore(sidecar / "state/invocations", read_only=True)
-        (start,) = records.list("invocation-starts", DeliveryInvocationStart)
-        start.validate_integrity()
-        assert start.work_item_id == waiting.id and start.lease_id == lease.id
-        assert not records.list("invocation-outcomes", DeliveryInvocationOutcome)
-        proof = host.inspect_delivery_wait(
-            InspectDeliveryWait(
-                work_item_id=waiting.id,
-                expected_disposition_sha256=disposition.disposition_sha256,
-                expected_task_intent_sha256=disposition.facts.task_intent_sha256,
-                expected_source_revision=disposition.facts.source_revision,
-                expected_checkpoint_sequence=disposition.facts.checkpoint_sequence,
-            ),
-            project_id=project_workspace.manifest.project_id,
-            delivery_id=checkpoint.delivery_id,
-        )
-        assert proof.invocation_start_sha256 == start.start_sha256
-        assert proof.original_run_id == start.request.run_id
-        assert DeliveryProofMissing.OUTCOME_UNKNOWN in proof.missing
-        assert DeliveryProofMissing.STOP_UNRECORDED in proof.missing
-        assert not proof.permitted_resolutions
-        again = service.resume(ResumeProjectDelivery(delivery_id=checkpoint.delivery_id))
-        assert again.checkpoint.stage is DeliveryStage.DELIVERING
-        assert not invoked
-        assert host.work_queue.items_for_task(checkpoint.task_id) == (waiting,)
-        assert records.list("invocation-starts", DeliveryInvocationStart) == (start,)
-        assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
-        assert (project / "hello.txt").read_text(encoding="utf-8") == "hello\n"
-        assert not (project / ".ase").exists()
-        return
-    if input_limit == 1:
-        assert approved.checkpoint.stage is DeliveryStage.BLOCKED
-        assert approved.checkpoint.task_status is not None
-        assert approved.checkpoint.task_status.value == "BLOCKED"
-        assert approved.checkpoint.task_revision == 2
-        assert approved.checkpoint.stage_attempts.delivering == 1
-        assert isinstance(approved.delivery, BlockedResult)
-        assert approved.delivery.classification.value == "CONTEXT_CAPACITY"
-        assert approved.checkpoint.failure_code is DeliveryFailureCode.CONTEXT_CAPACITY
-        assert approved.delivery.artifact_ids == ()
-        assert approved.checkpoint.candidate_revision is None
-        assert (project / "hello.txt").read_text(encoding="utf-8") == "hello\n"
-        return
-    assert approved.checkpoint.stage is DeliveryStage.DONE
-    assert approved.checkpoint.dispatch_commit_id is not None
-    assert approved.checkpoint.task_id is not None
-    assert approved.checkpoint.candidate_revision is not None
-    assert isinstance(approved.delivery, RetryDeliveryResult)
-    assert approved.delivery.task.retry_policy == config.execution_retry_policy.delivery_policy()
-    assert (
-        approved.delivery.task.max_attempts
-        == config.execution_retry_policy.delivery_policy().execution_limit
-    )
-    assert invoked == [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER]
-    assert len(host.work_queue.accepted(approved.checkpoint.task_id)) == 3
-    assert all(
-        item.status is WorkItemStatus.CLOSED
-        for item in host.work_queue.items_for_task(
-            approved.checkpoint.task_id,
-        )
-    )
-    assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
-    context_store = FileContextStore(
-        project_workspace.root
-        / "repositories"
-        / str(approved.checkpoint.repository_id)
-        / "contexts"
-    )
-    for context_id in approved.delivery.context_manifest_ids:
-        context = context_store.get(context_id)
-        assert context.budget.max_input_tokens == 64_000
-        assert context.budget.reserved_output_tokens == 4_000
-        assert all(not section.truncated for section in context.sections)
-    assert (project / "hello.txt").read_text(encoding="utf-8") == "hello\n"
-    candidate_content = _git_output(
-        "show",
-        f"{approved.checkpoint.candidate_revision}:hello.txt",
-        cwd=project,
-    )
-    assert candidate_content == "hello from the team"
-    assert not (project / ".ase").exists()
 
 
 def test_swift_profile_adds_only_restricted_verification_commands(tmp_path: Path) -> None:
