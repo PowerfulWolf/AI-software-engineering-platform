@@ -344,3 +344,47 @@ def test_real_darwin_saturated_process_buffer_is_not_complete(
     monkeypatch.setattr("ai_software_engineer.owned_sessions._MAX_PROCESSES", 1)
     with pytest.raises(OwnedSessionUnknown, match="enumeration exceeded bound"):
         _DarwinInspector().members(os.getsid(os.getpid()))
+
+
+def test_leader_mid_exit_is_reread_until_its_zombie_record_settles(monkeypatch) -> None:
+    from ai_software_engineer import owned_sessions
+    from ai_software_engineer.owned_sessions import OwnedProcessIdentity, _spawned_leader
+
+    settled = OwnedProcessIdentity(
+        process_id=4242, group_id=4242, session_id=4242, birth_identity="darwin-time:1:2"
+    )
+
+    class ExitingLeader:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def identity(self, pid: int) -> None:
+            assert pid == 4242
+
+        def exited_leader(self, pid: int) -> OwnedProcessIdentity | None:
+            self.reads += 1
+            return settled if self.reads >= 3 else None
+
+    monkeypatch.setattr(owned_sessions, "_LEADER_SETTLE_SECONDS", 0)
+    inspector = ExitingLeader()
+    assert _spawned_leader(inspector, 4242) == settled  # type: ignore[arg-type]
+    assert inspector.reads == 3
+
+
+def test_leader_that_never_settles_stays_unknown_after_a_bounded_wait(monkeypatch) -> None:
+    from ai_software_engineer import owned_sessions
+    from ai_software_engineer.owned_sessions import _spawned_leader
+
+    class Vanished:
+        reads = 0
+
+        def identity(self, pid: int) -> None:
+            del pid
+
+        def exited_leader(self, pid: int) -> None:
+            del pid
+            Vanished.reads += 1
+
+    monkeypatch.setattr(owned_sessions, "_LEADER_SETTLE_SECONDS", 0)
+    assert _spawned_leader(Vanished(), 7) is None  # type: ignore[arg-type]
+    assert Vanished.reads == owned_sessions._LEADER_SETTLE_ATTEMPTS

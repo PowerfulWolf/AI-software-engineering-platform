@@ -377,7 +377,11 @@ have an empty exemption list. Admission replay never adds later artifacts.
 First gap recovery preserves exact source revision. After that exact recovery is durable,
 `KnowledgeResume.previous_resume_sha256` links later candidates' reuse of Requirement facts to
 the first recovery, while retaining the new revision/run/context. A changed candidate with no
-initial exact recovery still fails closed. See `docs/operations/planning-and-knowledge.md` for human
+initial exact recovery still fails closed. Another role of the same Task receives a resolution only
+at the gap's exact source revision, unless the human marked it `cross_revision=true` (a decision
+about the requirement itself, not a code fact); then it also reaches that Task's other roles
+after the Coder writes a new candidate. The field is omitted when false, so historical
+resolution digests are unchanged. See `docs/operations/planning-and-knowledge.md` for human
 resolution API, existing data handling and rollback.
 
 ## Persistent queue wait boundary

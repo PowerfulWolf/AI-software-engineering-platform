@@ -1499,6 +1499,11 @@
           "title": "Disposition",
           "type": "string"
         },
+        "cross_revision": {
+          "default": false,
+          "title": "Cross Revision",
+          "type": "boolean"
+        },
         "resolution_id": {
           "pattern": "^[a-f0-9]{64}$",
           "title": "Resolution Id",

@@ -11358,6 +11358,11 @@ function knowledgeGapCard(view, index, base, item) {
   const source = el("input");
   source.required = true;
   source.placeholder = "例如：产品负责人确认，或相关文档链接";
+  const crossRevision = el("input");
+  crossRevision.type = "checkbox";
+  const crossRevisionLabel = el("label", undefined, "knowledge-gap-scope");
+  crossRevisionLabel.append(crossRevision,
+    el("span", " 这是关于需求本身的决定（不是代码事实），代码改版后仍对本任务的其他角色生效"));
   const feedback = el("div", undefined, "form-feedback");
   feedback.setAttribute("role", "status");
   feedback.setAttribute("aria-live", "polite");
@@ -11376,7 +11381,8 @@ function knowledgeGapCard(view, index, base, item) {
   actions.append(el("span", "批准仅保存解答，不会自动开始交付。", "muted"), submit);
   card.append(header, el("p", gap.question, "knowledge-gap-question"));
   if (decision) card.append(el("p", decision, "knowledge-gap-hint"));
-  card.append(field("你的解答", answer), field("事实来源 / 决策依据", source), controlStatus, feedback, actions);
+  card.append(field("你的解答", answer), field("事实来源 / 决策依据", source), crossRevisionLabel,
+    controlStatus, feedback, actions);
   let submitting = false;
   card.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -11399,7 +11405,8 @@ function knowledgeGapCard(view, index, base, item) {
       const resolution = await adminFetch(base + "/knowledge-resolutions", {
         method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({gap_id: gap.gap_id, answer: content,
-          sources: [{uri, content, sha256}], approval_reference: "local-console:" + gap.gap_id}),
+          sources: [{uri, content, sha256}], approval_reference: "local-console:" + gap.gap_id,
+          ...(crossRevision.checked ? {cross_revision: true} : {})}),
       });
       const request = snapshot?.requests.find(request => request.id === bound.id && request.project_id === bound.project_id);
       if (request?.stage === "WAITING_HUMAN" && request.checkpoint_sha256 === bound.checkpoint_sha256 &&

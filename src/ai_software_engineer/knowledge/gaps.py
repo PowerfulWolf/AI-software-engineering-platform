@@ -76,6 +76,10 @@ class KnowledgeResolution(DomainModel):
     approval_reference: NonEmptyStr
     approved_by: NonEmptyStr
     disposition: Literal["REQUIREMENT_ONLY", "PROPOSE_LEARNING"] = "REQUIREMENT_ONLY"
+    # A human decision about the requirement itself (not a fact about code) stays valid
+    # when the candidate revision changes, so other roles of the same Task receive it.
+    # Absent when false, so every earlier resolution keeps its digest.
+    cross_revision: bool = Field(default=False, exclude_if=lambda value: value is False)
     resolution_id: Digest
 
     def validate_integrity(self) -> None:

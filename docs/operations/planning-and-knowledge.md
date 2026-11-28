@@ -67,9 +67,14 @@ Console 的需求详情提供“待确认的知识”表单。展开当前事项
      "answer": "人工确认的准确事实",
      "sources": [{"uri": "<可追溯来源>", "content": "来源正文", "sha256": "<正文 SHA-256>"}],
      "approval_reference": "<人工批准依据>",
-     "disposition": "REQUIREMENT_ONLY"
+     "disposition": "REQUIREMENT_ONLY",
+     "cross_revision": false
    }
    ```
+
+   `cross_revision` 默认 false：解答只在提问时的同一代码版本上传给本任务的其他角色（适合“某段代码怎么实现”这类代码事实）。
+   若解答是关于需求本身的决定（例如“删除按物理清除验收”），设为 true（Console 表单里勾选“关于需求本身的决定”），
+   Coder 改出新候选后，QA/Reviewer 仍会收到它，不会就同一问题再问一次。
 
 4. 对当前 exact gap 的批准成功返回 201。点击“继续交付”或执行 `ase request resume <requirement_id>`；
    平台保留旧 Gap、run、Context 和事件，用新 Context/run 恢复，不改变原知识选择或批准。

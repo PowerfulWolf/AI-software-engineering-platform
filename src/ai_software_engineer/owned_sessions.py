@@ -420,6 +420,31 @@ def require_recorded_session_empty(
         boot_continuity.require_current(proof, current_boot)
 
 
+_LEADER_SETTLE_ATTEMPTS = 40
+_LEADER_SETTLE_SECONDS = 0.025
+
+
+def _spawned_leader(inspector: _SessionInspector, pid: int) -> OwnedProcessIdentity | None:
+    """Birth facts of the just-spawned leader, live or already exited.
+
+    A command can finish before its owner inspects it. Its unreaped zombie still pins
+    the PID (Popen has not waited) and start_new_session made it a session leader.
+    While the kernel is still tearing the process down it is neither visible as live
+    nor yet recorded as a zombie; that window closes on its own, so re-read for a
+    bounded time instead of declaring the spawn's ownership unknown.
+    """
+    exited = getattr(inspector, "exited_leader", lambda _pid: None)
+    for attempt in range(_LEADER_SETTLE_ATTEMPTS):
+        leader = inspector.identity(pid)
+        if leader is None:
+            leader = exited(pid)
+        if leader is not None:
+            return leader
+        if attempt + 1 < _LEADER_SETTLE_ATTEMPTS:
+            time.sleep(_LEADER_SETTLE_SECONDS)
+    return None
+
+
 class OwnedSessionController:
     """One trusted Popen capability, never a supplied PID or process selector."""
 
@@ -433,11 +458,7 @@ class OwnedSessionController:
         self._lock = threading.RLock()
         self._inspector = _inspector()
         self._boot = self._inspector.boot_identity()
-        leader = self._inspector.identity(process.pid)
-        if leader is None:
-            # A command can finish before its owner inspects it. Its unreaped
-            # zombie still pins the PID; start_new_session made it a session leader.
-            leader = getattr(self._inspector, "exited_leader", lambda _pid: None)(process.pid)
+        leader = _spawned_leader(self._inspector, process.pid)
         if leader is None or not leader.process_id == leader.group_id == leader.session_id:
             raise OwnedSessionUnknown("spawned leader does not own an isolated session")
         self._leader = leader

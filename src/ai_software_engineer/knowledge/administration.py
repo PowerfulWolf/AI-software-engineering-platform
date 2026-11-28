@@ -32,6 +32,7 @@ class ApproveKnowledgeResolution(DomainModel):
     sources: Annotated[tuple[KnowledgeResolutionSource, ...], Field(min_length=1, max_length=32)]
     approval_reference: NonEmptyStr
     disposition: Literal["REQUIREMENT_ONLY", "PROPOSE_LEARNING"] = "REQUIREMENT_ONLY"
+    cross_revision: bool = False
 
 
 class KnowledgeHumanActionEvent(DomainModel):
@@ -192,6 +193,7 @@ def approve_resolution(
         approval_reference=command.approval_reference,
         approved_by="human:local-console",
         disposition=command.disposition,
+        cross_revision=command.cross_revision,
         resolution_id="0" * 64,
     )
     resolution = provisional.model_copy(

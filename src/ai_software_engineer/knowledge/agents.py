@@ -91,6 +91,18 @@ def _human_gap_question(question: str | None) -> str:
     return _CHINESE_GAP_QUESTION
 
 
+def shared_with_other_role(
+    resolution: KnowledgeResolution, *, gap_revision: str, current_revision: str
+) -> bool:
+    """Whether another role of the same Task may use a resolution of this gap.
+
+    A fact about code holds only for the revision it was verified against. A decision
+    the human marked cross-revision is about the requirement itself, so it still holds
+    after the Coder writes a new candidate.
+    """
+    return gap_revision == current_revision or resolution.cross_revision
+
+
 class RepositoryInspection(DomainModel):
     unit_id: NonEmptyStr
     repository_id: RepositoryId
@@ -326,7 +338,11 @@ class KnowledgeConsultationService:
                     raise KnowledgeError("RESOLUTION_LINEAGE")
                 if gap.binding.role == binding.role:
                     gaps.resume(gap.gap_id, binding)
-                elif gap.binding.source_revision != binding.source_revision:
+                elif not shared_with_other_role(
+                    resolution,
+                    gap_revision=gap.binding.source_revision,
+                    current_revision=binding.source_revision,
+                ):
                     continue
                 resolved.append(resolution)
         consultation_payload = dict(payload)
