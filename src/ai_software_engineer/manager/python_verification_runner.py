@@ -148,7 +148,9 @@ class _SelectionGuard:
             code = re.match(r":\s*\[Errno (\d{1,5})\]", message[match.end() : match.end() + 32])
             if code:
                 numeric = int(code.group(1))
-        self.errors.append([index, phase, category, numeric])
+        # Source-defined class name and source/test frames are attached later by
+        # pytest_exception_interact, from the live exception rather than its text.
+        self.errors.append([index, phase, category, numeric, None, None])
 
     @staticmethod
     def _matches(actual: str, approved: str) -> bool:
@@ -202,6 +204,36 @@ class _SelectionGuard:
         if report.failed:
             self._error(index, report.when, report)
 
+    def pytest_exception_interact(
+        self, node: object, call: pytest.CallInfo[object], report: object
+    ) -> None:
+        """Enrich the just-recorded sample with static source facts only.
+
+        The candidate tree is mounted read-only, so a class name that literally appears
+        as a class statement in its defining source file, and repo-relative frame
+        positions, cannot carry runtime credentials. Messages are still never read.
+        """
+        del node
+        excinfo = call.excinfo
+        if excinfo is None or not self.errors:
+            return
+        sample = self.errors[-1]
+        phase = getattr(report, "when", None) or "collection"
+        if sample[1] != phase or sample[4] is not None or sample[5] is not None:
+            return
+        if sample[2] == "UNKNOWN":
+            sample[2] = _source_class_name(excinfo.type)
+        test_frame = source_frame = None
+        for entry in excinfo.traceback:
+            position = _source_position(Path(str(entry.path)), entry.lineno + 1)
+            if position is None:
+                continue
+            if position.startswith("tests/"):
+                test_frame = position
+            else:
+                source_frame = position
+        sample[4], sample[5] = test_frame, source_frame
+
     def pytest_collectreport(self, report: pytest.CollectReport) -> None:
         if report.failed:
             self.collection_errors += 1
@@ -209,7 +241,15 @@ class _SelectionGuard:
 
     def summary(self, exit_code: int) -> str:
         payload = {
-            "version": 1,
+            "version": 2,
+            "error_columns": [
+                "selector",
+                "phase",
+                "exception",
+                "code",
+                "test_frame",
+                "source_frame",
+            ],
             "pytest_exit": exit_code,
             "columns": [
                 "selector",
@@ -227,9 +267,49 @@ class _SelectionGuard:
             "report_overflow": self.report_overflow,
         }
         encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+        # Frame positions are the optional part: drop them from the newest samples first.
+        for sample in reversed(self.errors):
+            if len(encoded.encode()) <= 3000:
+                break
+            sample[4] = sample[5] = None
+            encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
         if len(encoded.encode()) > 3000:
             raise ValueError("fixed pytest summary exceeds limit")
         return "ASE_PYTEST_SUMMARY=" + encoded
+
+
+_SOURCE_POSITION = re.compile(
+    r"^(?:src|tests)/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*[A-Za-z0-9_.-]+\.py$"
+)
+_CLASS_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+
+def _source_position(path: Path, line: int) -> str | None:
+    """Repo-relative `src/` or `tests/` position of a frame, else None."""
+    try:
+        relative = path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except (OSError, ValueError):
+        return None
+    if not _SOURCE_POSITION.match(relative) or not 0 < line < 1_000_000:
+        return None
+    return f"{relative}:{line}"
+
+
+def _source_class_name(error_type: type[BaseException]) -> str:
+    """A class declared verbatim in a read-only candidate source file, else UNKNOWN."""
+    name = getattr(error_type, "__name__", "")
+    module = sys.modules.get(getattr(error_type, "__module__", "") or "")
+    filename = getattr(module, "__file__", None)
+    if not isinstance(name, str) or not _CLASS_NAME.match(name) or not isinstance(filename, str):
+        return "UNKNOWN"
+    if _source_position(Path(filename), 1) is None:
+        return "UNKNOWN"
+    try:
+        text = Path(filename).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return "UNKNOWN"
+    declared = re.search(rf"^[ \t]*class[ \t]+{re.escape(name)}[ \t]*[(:]", text, re.MULTILINE)
+    return name if declared else "UNKNOWN"
 
 
 def _bind_mysql(config: _ConnectionConfig) -> None:

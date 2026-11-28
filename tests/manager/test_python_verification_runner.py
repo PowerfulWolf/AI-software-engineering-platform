@@ -187,7 +187,7 @@ def test_setup_skip_and_permission_failure_are_explicit_without_exception_text(
     assert "a" * 12 not in result.stdout + result.stderr
     summary = _summary(result)
     assert summary["counts"] == [[0, 1, 0, 0, 1, 0, 0], [1, 1, 0, 0, 0, 1, 0]]
-    assert summary["errors"] == [[1, "setup", "PermissionError", 13]]
+    assert [error[:4] for error in summary["errors"]] == [[1, "setup", "PermissionError", 13]]
 
 
 def test_collection_error_is_counted_without_credential_text(tmp_path: Path) -> None:
@@ -202,7 +202,7 @@ def test_collection_error_is_counted_without_credential_text(tmp_path: Path) -> 
     summary = _summary(result)
     assert summary["collection_errors"] == 1
     assert summary["counts"] == [[0, 0, 0, 0, 0, 0, 0]]
-    assert summary["errors"] == [[-1, "collection", "RuntimeError", None]]
+    assert [error[:4] for error in summary["errors"]] == [[-1, "collection", "RuntimeError", None]]
 
 
 def test_unknown_exception_does_not_infer_permission_failure_from_message(tmp_path: Path) -> None:
@@ -214,7 +214,12 @@ def test_unknown_exception_does_not_infer_permission_failure_from_message(tmp_pa
         ["tests/test_selected.py::test_selected"],
     )
     assert result.returncode == 1
-    assert _summary(result)["errors"] == [[0, "call", "UNKNOWN", None]]
+    # The class is declared verbatim in read-only candidate source, so its name and
+    # repo-relative frame are safe to report; the misleading message is never read.
+    assert _summary(result)["errors"] == [
+        [0, "call", "CustomFailure", None, "tests/test_selected.py:3", None]
+    ]
+    assert "untrusted message" not in result.stdout + result.stderr
 
 
 def test_teardown_failure_keeps_call_pass_separate_from_error(tmp_path: Path) -> None:
@@ -231,7 +236,9 @@ def test_teardown_failure_keeps_call_pass_separate_from_error(tmp_path: Path) ->
     assert result.returncode != 0
     assert "a" * 12 not in result.stdout + result.stderr
     assert _summary(result)["counts"] == [[0, 1, 1, 0, 0, 0, 1]]
-    assert _summary(result)["errors"] == [[0, "teardown", "ValueError", None]]
+    assert [error[:4] for error in _summary(result)["errors"]] == [
+        [0, "teardown", "ValueError", None]
+    ]
 
 
 @pytest.mark.parametrize("skip", [False, True])
@@ -387,7 +394,9 @@ def test_real_sandbox_denies_source_secret_other_sockets_and_tcp(
         )
         if conflicting_tmpdir:
             assert result.returncode != 0
-            assert _summary(result)["errors"] == [[0, "setup", "PermissionError", 1]]
+            assert [error[:4] for error in _summary(result)["errors"]] == [
+                [0, "setup", "PermissionError", 1]
+            ]
             return
         assert result.returncode == 0, result.stdout + result.stderr
         assert "1 passed" in result.stdout
@@ -408,3 +417,21 @@ def test_runner_rejects_65_nodes_before_importing_candidate(tmp_path: Path) -> N
     )
     assert result.returncode == 4
     assert "candidate imported" not in result.stdout + result.stderr
+
+
+def test_dynamic_exception_name_and_frames_outside_the_candidate_stay_unknown(
+    tmp_path: Path,
+) -> None:
+    result = run_fixture(
+        tmp_path,
+        "import os\n"
+        "def test_selected():\n"
+        "    name = 'Leak' + os.environ['ASE_TEST_MYSQL_DSN'].split(':')[0].title()\n"
+        "    raise type(name, (Exception,), {})('x')\n",
+        ["tests/test_selected.py::test_selected"],
+    )
+    assert result.returncode == 1
+    # A runtime-built class is not declared in source, so its name is never echoed.
+    assert _summary(result)["errors"] == [
+        [0, "call", "UNKNOWN", None, "tests/test_selected.py:4", None]
+    ]

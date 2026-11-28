@@ -86,7 +86,7 @@ def test_candidate_conftest_can_spoof_fixed_runner_summary_without_running_test(
     ]
     assert len(summaries) == 1
     summary = cast(dict[str, object], json.loads(summaries[0]))
-    assert summary["version"] == 1
+    assert summary["version"] == 2
     assert summary["pytest_exit"] == 0
     assert summary["columns"] == [
         "selector",

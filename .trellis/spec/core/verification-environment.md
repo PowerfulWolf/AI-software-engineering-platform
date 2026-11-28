@@ -274,9 +274,14 @@ keeping all approvals, resources and command history.
 `_SelectionGuard.summary(exit_code)` emits `ASE_PYTEST_SUMMARY=` followed by compact JSON,
 at most3000 bytes. Fixed columns are selector index, collected, call passed/failed, skipped
 at any phase, setup error and teardown error. Every approved selector retains its counters;
-at most16 error samples retain only index/phase, an anchored allowlisted exception class and
-numeric OS/MySQL code. Unknown types remain UNKNOWN. No exception message, path, argv or
-parametrized node ID is echoed. Samples may be omitted only with an explicit count; they are
+at most16 error samples (summary version 2, `error_columns`) retain only index/phase, an
+exception class, numeric OS/MySQL code and the last repo-relative `tests/` and `src/` frame
+(`path:line`). The class is an anchored allowlisted name parsed from the crash line, or else the
+live exception type's name only when that exact name is declared by a `class` statement in its
+defining read-only candidate source file under `src/` or `tests/`; runtime-built or external types
+remain UNKNOWN. The read-only mount means neither field can carry a runtime credential. Frames
+are dropped newest-first before the size limit is exceeded. No exception message, absolute or
+external path, argv or parametrized node ID is echoed. Samples may be omitted only with an explicit count; they are
 diagnostics, never role verdicts. Collection errors and report overflow are explicit.
 
 Trusted pytest flags suppress tracebacks, summaries, captured streams, color and live logging.
