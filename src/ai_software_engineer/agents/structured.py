@@ -954,9 +954,10 @@ _QUOTA_TEXT = re.compile(r"quota|insufficient|balance|billing|余额|额度", re
 # about the request; another configured route (another provider or a local CLI)
 # should take over instead of the whole stage stopping. Output and policy
 # failures, service pause and a local time limit stay with the original route.
+# Exhausted quota is excluded: switching to another model then needs a human
+# decision, the same as for Agent roles (2026-11-25 decision).
 _ROUTE_FAILURES = frozenset(
     {
-        AgentErrorCode.QUOTA_EXHAUSTED,
         AgentErrorCode.RATE_LIMITED,
         AgentErrorCode.AUTHENTICATION_ERROR,
         AgentErrorCode.PROVIDER_UNAVAILABLE,
@@ -966,6 +967,8 @@ _ROUTE_FAILURES = frozenset(
 
 
 def _allows_fallback(error: StructuredModelError) -> bool:
+    if error.code is AgentErrorCode.QUOTA_EXHAUSTED:
+        return False
     if error.retryable:
         return True
     return error.code in _ROUTE_FAILURES and error.timeout_kind is None

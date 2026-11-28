@@ -875,6 +875,135 @@ class TeamHost:
         )
         return resolution
 
+    def resume_model_quota_wait(
+        self,
+        *,
+        project_id: str,
+        delivery_id: str,
+        work_item_id: str,
+        expected_disposition_sha256: str,
+        use_backup: bool,
+        approval_reference: str,
+    ) -> str:
+        """Record a human model decision for one quota-paused role and resume it.
+
+        Only a wait whose evidence names a sealed QUOTA_EXHAUSTED route attempt of the
+        same Task role qualifies. Approval reorders already configured routes for that
+        Task; it never adds a model or edits the global configuration.
+        """
+        from ai_software_engineer.agents.fallback import (
+            FileModelRouteAttemptStore,
+            RouteAttemptOutcome,
+            model_route_root,
+        )
+        from ai_software_engineer.agents.route_override import (
+            FileModelRouteOverrideStore,
+            ModelRouteOverride,
+            ModelRouteOverrideError,
+            apply_route_override,
+            model_route_override_root,
+        )
+        from ai_software_engineer.domain.enums import TeamRole
+        from ai_software_engineer.orchestration.retry import (
+            MODEL_QUOTA_EVIDENCE_PREFIX,
+            MODEL_QUOTA_KNOWLEDGE_MARKER,
+        )
+
+        self._operator_principal.require_duty(OperatorDuty.ENGINEERING)
+        item = self._work_queue.get(work_item_id)
+        disposition = item.wait_disposition
+        if (
+            item.status not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+            or disposition is None
+            or disposition.disposition_sha256 != expected_disposition_sha256
+            or disposition.facts.classification != "ENGINEERING_AUTHORIZATION"
+            or len(disposition.facts.evidence_ids) != 1
+            or not disposition.facts.evidence_ids[0].startswith(MODEL_QUOTA_EVIDENCE_PREFIX)
+        ):
+            raise ValueError("该等待不是当前的模型额度暂停, 请刷新后重试")
+        native, _ = self._delivery_wait_binding(project_id, delivery_id, item.task_id)
+        if native.repository_id != item.repository_id:
+            raise ValueError("工作项不属于当前 Project Requirement")
+        runtime = self._runtime(project_id)
+        workspace = next(
+            (
+                workspace
+                for workspace in runtime.project.repository_registry().discover()
+                if workspace.manifest.repository_id == item.repository_id
+            ),
+            None,
+        )
+        if workspace is None:
+            raise ValueError("工作项没有注册的 Repository workspace")
+        run_id = disposition.facts.evidence_ids[0].removeprefix(MODEL_QUOTA_EVIDENCE_PREFIX)
+        routes = self._config.routes_for(TeamRole(item.role.value))
+        store = FileModelRouteOverrideStore(model_route_override_root(workspace.root))
+        if run_id.startswith(MODEL_QUOTA_KNOWLEDGE_MARKER):
+            # Knowledge preparation used the role's effective first route.
+            if not run_id.startswith(f"{MODEL_QUOTA_KNOWLEDGE_MARKER}{item.role.value}:"):
+                raise ValueError("额度等待不属于该工作项的角色")
+            try:
+                current_first = apply_route_override(
+                    routes, store.current(item.task_id, item.role)
+                )[0]
+            except (IndexError, ModelRouteOverrideError) as error:
+                raise ValueError("该角色当前没有可用的已配置模型") from error
+            task_id = item.task_id
+            failed_route = (current_first.provider, current_first.model, current_first.kind.value)
+        else:
+            attempts = FileModelRouteAttemptStore(
+                model_route_root(workspace.root), read_only=True
+            ).list_for_run(run_id)
+            failed = attempts[-1] if attempts else None
+            if (
+                failed is None
+                or failed.outcome is not RouteAttemptOutcome.FAILED
+                or failed.error_code is None
+                or failed.error_code.value != "QUOTA_EXHAUSTED"
+                or failed.role is not item.role
+            ):
+                raise ValueError("没有找到与该等待对应的额度用完调用记录")
+            task_id = failed.task_id
+            failed_route = (failed.provider, failed.model, failed.route_kind)
+        if use_backup:
+            backup = next(
+                (
+                    route
+                    for route in routes
+                    if route.enabled
+                    and (route.provider, route.model, route.kind.value) != failed_route
+                ),
+                None,
+            )
+            if backup is None:
+                raise ValueError("该角色没有已配置的备用模型")
+            existing = store.list(task_id, item.role)
+            store.append(
+                ModelRouteOverride.create(
+                    task_id=task_id,
+                    role=item.role,
+                    sequence=len(existing) + 1,
+                    provider=backup.provider,
+                    model=backup.model,
+                    route_kind=backup.kind.value,
+                    reason=f"{failed_route[0]}/{failed_route[1]} quota exhausted in {run_id}",
+                    approval_reference=approval_reference,
+                    approved_at=datetime.now(UTC),
+                )
+            )
+            decision = f"本需求的 {item.role.value} 改用 {backup.model}"
+        else:
+            decision = f"本需求的 {item.role.value} 继续使用 {failed_route[1]}"
+        self._work_queue.make_ready(
+            item.id,
+            now=datetime.now(UTC),
+            expected_disposition_sha256=expected_disposition_sha256,
+        )
+        self._resume_delivery_once(
+            ResumeProjectDelivery(delivery_id=delivery_id), project_id=project_id
+        )
+        return decision
+
     def _active_successor_dispatch(
         self,
         project_id: str,

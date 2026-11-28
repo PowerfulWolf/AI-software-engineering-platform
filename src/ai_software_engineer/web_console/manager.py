@@ -98,6 +98,7 @@ from .models import (
     ResolveDeliveryWaitIntent,
     RestartRequirementIntent,
     ResumeExecutionBaselineIntent,
+    ResumeModelQuotaWaitIntent,
     UpdateRequirementIntent,
 )
 from .store import ConsoleOperationStore
@@ -137,6 +138,17 @@ class TeamConsoleHost(Protocol):
         project_id: str,
         delivery_id: str,
     ) -> DeliveryResolution: ...
+
+    def resume_model_quota_wait(
+        self,
+        *,
+        project_id: str,
+        delivery_id: str,
+        work_item_id: str,
+        expected_disposition_sha256: str,
+        use_backup: bool,
+        approval_reference: str,
+    ) -> str: ...
 
     def propose_execution_baseline(
         self,
@@ -463,6 +475,37 @@ class ManagerConsoleAdapter:
                     ),
                 )
                 return _summarize(continued, project_id=intent.project_id, host=self._host)
+            if isinstance(intent, ResumeModelQuotaWaitIntent):
+                current = (
+                    self._entry(intent.project_id, intent.delivery_id)
+                    .status(intent.delivery_id)
+                    .checkpoint
+                )
+                if current.checkpoint_sha256 != intent.expected_checkpoint_sha256:
+                    raise DeliveryCheckpointStale("displayed model quota checkpoint changed")
+                reference = (
+                    "web-console-operation:" + operation.operation_id
+                    if operation is not None
+                    else "web-console-operation:unrecorded"
+                )
+                try:
+                    decision = self._host.resume_model_quota_wait(
+                        project_id=intent.project_id,
+                        delivery_id=intent.delivery_id,
+                        work_item_id=intent.work_item_id,
+                        expected_disposition_sha256=intent.expected_disposition_sha256,
+                        use_backup=intent.use_backup,
+                        approval_reference=reference,
+                    )
+                except ValueError as error:
+                    raise ConsoleCommandRejected("COMMAND_REJECTED", str(error)) from error
+                return ConsoleCommandResult(
+                    project_id=intent.project_id,
+                    delivery_id=intent.delivery_id,
+                    checkpoint_sha256=current.checkpoint_sha256,
+                    stage="MODEL_QUOTA_DECISION_RECORDED",
+                    next_action=decision + "; 平台已继续原交付。",
+                )
             if isinstance(
                 intent,
                 (InspectDeliveryWaitIntent, ResolveDeliveryWaitIntent, HandleDeliveryWaitIntent),

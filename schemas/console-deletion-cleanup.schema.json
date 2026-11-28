@@ -3001,7 +3001,8 @@
               "RESOLVE_DELIVERY_WAIT": "#/$defs/ResolveDeliveryWaitIntent",
               "RESTART_REQUIREMENT": "#/$defs/RestartRequirementIntent",
               "RESUME_EXECUTION_BASELINE": "#/$defs/ResumeExecutionBaselineIntent",
-              "UPDATE_REQUIREMENT": "#/$defs/UpdateRequirementIntent"
+              "UPDATE_REQUIREMENT": "#/$defs/UpdateRequirementIntent",
+              "RESUME_MODEL_QUOTA_WAIT": "#/$defs/ResumeModelQuotaWaitIntent"
             },
             "propertyName": "action"
           },
@@ -3056,6 +3057,9 @@
             },
             {
               "$ref": "#/$defs/ResumeExecutionBaselineIntent"
+            },
+            {
+              "$ref": "#/$defs/ResumeModelQuotaWaitIntent"
             }
           ],
           "title": "Intent"
@@ -16934,6 +16938,56 @@
         "execution_stop_sha256"
       ],
       "title": "RejectedVerifierOutputEvidence",
+      "type": "object"
+    },
+    "ResumeModelQuotaWaitIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "RESUME_MODEL_QUOTA_WAIT",
+          "default": "RESUME_MODEL_QUOTA_WAIT",
+          "title": "Action",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "delivery_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "expected_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Expected Checkpoint Sha256",
+          "type": "string"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "expected_disposition_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Expected Disposition Sha256",
+          "type": "string"
+        },
+        "use_backup": {
+          "title": "Use Backup",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "project_id",
+        "delivery_id",
+        "expected_checkpoint_sha256",
+        "work_item_id",
+        "expected_disposition_sha256",
+        "use_backup"
+      ],
+      "title": "ResumeModelQuotaWaitIntent",
       "type": "object"
     }
   },

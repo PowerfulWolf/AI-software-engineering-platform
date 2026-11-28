@@ -1077,12 +1077,32 @@ class RetryingOrchestrator(SerialOrchestrator):
                     source_revision=intent.binding.source_revision,
                     artifact_ids=("knowledge-preparation://" + error.outcome.outcome_sha256,),
                 )
+        events = self._repository.list_events(task.id)
+        if (
+            error.code is AgentErrorCode.QUOTA_EXHAUSTED
+            and current.engineering_policy is not None
+            and self._delivery_failure_control is not None
+        ):
+            # Same rule as a role run: no silent model switch and no retry of the
+            # exhausted model; a human chooses the backup model or waits for quota.
+            quota_attempt = self._record_transient(current, role, error.code.value, backoff=False)
+            if quota_attempt is not None:
+                self._delivery_failure_control.wait(
+                    self._repository.get(task.id),
+                    classification="ENGINEERING_AUTHORIZATION",
+                    reason=MODEL_QUOTA_WAIT_REASON,
+                    source_revision=events[-1].source_revision if events else task.base_ref,
+                    artifact_ids=(
+                        MODEL_QUOTA_EVIDENCE_PREFIX
+                        + f"{MODEL_QUOTA_KNOWLEDGE_MARKER}{role.value}:{current.attempts}",
+                    ),
+                )
+                return quota_attempt
         next_attempt = (
             self._record_transient(current, role, error.code.value) if error.retryable else None
         )
         if next_attempt is not None:
             return next_attempt
-        events = self._repository.list_events(task.id)
         classification = (
             # Keep the legacy local-window checkpoint route; current sealed
             # KnowledgePreparationLocalLimit uses its dedicated wait above.
@@ -1122,6 +1142,29 @@ class RetryingOrchestrator(SerialOrchestrator):
             )
         failure = result.error
         if (
+            failure is not None
+            and failure.code is AgentErrorCode.QUOTA_EXHAUSTED
+            and result.role is not AgentRole.ORCHESTRATOR
+            and current.engineering_policy is not None
+            and self._delivery_failure_control is not None
+        ):
+            # Exhausted quota does not recover by retrying the same model, and switching
+            # models needs a human decision. Reserve the next attempt (so a later run is a
+            # fresh Run, not a replay of this failure), then wait for that decision.
+            next_attempt = self._record_transient(
+                current, result.role, failure.code.value, result.run_id, backoff=False
+            )
+            if next_attempt is None:
+                return None
+            self._delivery_failure_control.wait(
+                self._repository.get(task.id),
+                classification="ENGINEERING_AUTHORIZATION",
+                reason=MODEL_QUOTA_WAIT_REASON,
+                source_revision=result.source_revision,
+                artifact_ids=(MODEL_QUOTA_EVIDENCE_PREFIX + result.run_id,),
+            )
+            return next_attempt
+        if (
             failure is None
             or not failure.transient
             or failure.code not in TRANSIENT_CODES
@@ -1131,7 +1174,13 @@ class RetryingOrchestrator(SerialOrchestrator):
         return self._record_transient(current, result.role, failure.code.value, result.run_id)
 
     def _record_transient(
-        self, task: Task, role: AgentRole, code: str, run_id: str | None = None
+        self,
+        task: Task,
+        role: AgentRole,
+        code: str,
+        run_id: str | None = None,
+        *,
+        backoff: bool = True,
     ) -> int | None:
         if task.retry_policy is None or role is AgentRole.ORCHESTRATOR:
             return None
@@ -1150,7 +1199,8 @@ class RetryingOrchestrator(SerialOrchestrator):
         updated = self._repository.get(task.id)
         if updated.attempts <= task.attempts:
             return None
-        transient_backoff(updated.attempts - 1)
+        if backoff:
+            transient_backoff(updated.attempts - 1)
         return updated.attempts
 
     def _record_attempt(self, task: Task, attempt: int) -> None:
@@ -1235,6 +1285,14 @@ CODER_STALL_RUNS = 3
 CODER_STALL_REASON = (
     f"Coder made no plan progress in {CODER_STALL_RUNS} consecutive runs; "
     "stopped before spending the remaining run budget"
+)
+MODEL_QUOTA_EVIDENCE_PREFIX = "model-quota://"
+# Knowledge preparation calls have no Agent route-attempt record; their evidence
+# names the role and attempt instead of a run id.
+MODEL_QUOTA_KNOWLEDGE_MARKER = "knowledge:"
+MODEL_QUOTA_WAIT_REASON = (
+    "当前角色主模型的额度已用完, 交付已暂停。可在需求页面批准本需求的该角色改用已配置的备用模型, "
+    "或等待额度恢复后继续; 平台不会在未经批准时切换模型。"
 )
 CODER_STALL_WAIT_REASON = (
     f"Coder 连续 {CODER_STALL_RUNS} 次运行没有计划进展, 已在消耗剩余额度前暂停; "

@@ -12,6 +12,7 @@ from pydantic import (
     AwareDatetime,
     ConfigDict,
     Field,
+    StrictBool,
     StringConstraints,
     TypeAdapter,
     field_validator,
@@ -88,6 +89,7 @@ class ConsoleAction(StrEnum):
     PROPOSE_EXECUTION_BASELINE = "PROPOSE_EXECUTION_BASELINE"
     EXECUTE_EXECUTION_BASELINE = "EXECUTE_EXECUTION_BASELINE"
     RESUME_EXECUTION_BASELINE = "RESUME_EXECUTION_BASELINE"
+    RESUME_MODEL_QUOTA_WAIT = "RESUME_MODEL_QUOTA_WAIT"
 
 
 class ConsoleOperationStatus(StrEnum):
@@ -296,6 +298,22 @@ class ResolveDeliveryWaitIntent(_DeliveryWaitIntent):
     proof_sha256: CheckpointDigest
 
 
+class ResumeModelQuotaWaitIntent(DomainModel):
+    """Human decision on a role paused because its model quota is exhausted.
+
+    ``use_backup`` runs the next already configured route of that role for this Task
+    only; otherwise the same route is retried (for example after the quota reset).
+    """
+
+    action: Literal[ConsoleAction.RESUME_MODEL_QUOTA_WAIT] = ConsoleAction.RESUME_MODEL_QUOTA_WAIT
+    project_id: ProjectId
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    work_item_id: NonEmptyStr
+    expected_disposition_sha256: CheckpointDigest
+    use_backup: StrictBool
+
+
 class ProposeExecutionBaselineIntent(BaselineProposeCommand):
     action: Literal[ConsoleAction.PROPOSE_EXECUTION_BASELINE] = (
         ConsoleAction.PROPOSE_EXECUTION_BASELINE
@@ -337,7 +355,8 @@ ConsoleIntent = Annotated[
     | ResolveDeliveryWaitIntent
     | ProposeExecutionBaselineIntent
     | ExecuteExecutionBaselineIntent
-    | ResumeExecutionBaselineIntent,
+    | ResumeExecutionBaselineIntent
+    | ResumeModelQuotaWaitIntent,
     Field(discriminator="action"),
 ]
 CONSOLE_INTENT_ADAPTER: TypeAdapter[ConsoleIntent] = TypeAdapter(ConsoleIntent)
@@ -605,5 +624,6 @@ __all__ = [
     "RecoverDesignIntent",
     "ResolveDeliveryWaitIntent",
     "RestartRequirementIntent",
+    "ResumeModelQuotaWaitIntent",
     "UpdateRequirementIntent",
 ]

@@ -20,7 +20,8 @@
         "RESOLVE_DELIVERY_WAIT",
         "PROPOSE_EXECUTION_BASELINE",
         "EXECUTE_EXECUTION_BASELINE",
-        "RESUME_EXECUTION_BASELINE"
+        "RESUME_EXECUTION_BASELINE",
+        "RESUME_MODEL_QUOTA_WAIT"
       ],
       "title": "ConsoleAction",
       "type": "string"

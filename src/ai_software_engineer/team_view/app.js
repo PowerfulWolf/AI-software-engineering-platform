@@ -1226,6 +1226,7 @@ const labels = {
   PROPOSE_EXECUTION_BASELINE: "调查执行基线更新",
   EXECUTE_EXECUTION_BASELINE: "更新原需求执行基线",
   RESUME_EXECUTION_BASELINE: "继续保留进度的原需求",
+  RESUME_MODEL_QUOTA_WAIT: "处理模型额度用完",
   QA_FAILURE: "QA 失败",
   REVIEW_REJECTION: "Review 拒绝",
   APPROVE: "已批准",
@@ -2755,7 +2756,62 @@ async function copyEngineeringWaitReport(request, handling) {
   }
   renderNotification();
 }
+const modelQuotaEvidencePrefix = "model-quota://";
+function modelQuotaWaitRun(step) {
+  const facts = step.wait_disposition?.facts;
+  if (facts?.classification !== "ENGINEERING_AUTHORIZATION" || facts.evidence_ids?.length !== 1) return null;
+  const evidence = facts.evidence_ids[0];
+  return typeof evidence === "string" && evidence.startsWith(modelQuotaEvidencePrefix)
+    ? evidence.slice(modelQuotaEvidencePrefix.length) : null;
+}
+function roleModelRoutes(role) {
+  const routes = [];
+  for (const agent of snapshot?.agents || [])
+    for (const route of agent.model_routes || [])
+      if (route.role === role && !routes.some(known => known.provider === route.provider && known.model === route.model))
+        routes.push(route);
+  return routes;
+}
+function modelQuotaIntent(request, step, useBackup) {
+  return {action: "RESUME_MODEL_QUOTA_WAIT", project_id: request.project_id, delivery_id: request.id,
+    expected_checkpoint_sha256: request.checkpoint_sha256, work_item_id: step.work_item_id,
+    expected_disposition_sha256: step.wait_disposition_sha256, use_backup: useBackup};
+}
+function modelQuotaWaitBox(request, task, step, runId) {
+  const routes = roleModelRoutes(step.role);
+  const primary = routes[0], backup = routes[1];
+  const panel = viewGroup(el("section", undefined, "engineering-wait-panel model-quota-wait"),
+    "model-quota-wait:" + step.work_item_id);
+  panel.dataset.key = "model-quota:" + step.work_item_id;
+  const heading = el("div", undefined, "engineering-wait-heading");
+  heading.append(el("h3", label(step.role) + "的模型额度已用完"), el("span", "需要你决定", "engineering-action-owner"));
+  panel.append(heading, el("p",
+    (primary ? shortModelName(primary.model) : "当前模型") + " 返回额度已用完，平台已暂停这一步，不会自动换模型。" +
+    "请选择：本需求的" + label(step.role) + "改用备用模型继续，或等额度恢复后继续用原模型。原需求和已有进度都保留。"));
+  const active = activeOperation(request.id, request.project_id);
+  const unavailable = deliveryControlUnavailableReason();
+  if (unavailable) panel.append(deliveryControlUnavailableNotice(unavailable));
+  else if (!consoleSupportsOperation("RESUME_MODEL_QUOTA_WAIT"))
+    panel.append(el("p", "当前服务不支持此操作。请在服务空闲时更新并重启，再刷新页面。", "muted"));
+  else if (active) panel.append(engineeringActiveOperationBox(request, active));
+  else if (canControlCurrentTeam()) {
+    const actions = el("div", undefined, "engineering-wait-actions");
+    if (backup) actions.append(deliveryButton("本需求的" + label(step.role) + "改用 " + shortModelName(backup.model),
+      () => submitOperation(modelQuotaIntent(request, step, true)), "primary"));
+    actions.append(deliveryButton("额度已恢复，继续用 " + (primary ? shortModelName(primary.model) : "原模型"),
+      () => submitOperation(modelQuotaIntent(request, step, false)), backup ? "link" : "primary"));
+    panel.append(actions);
+    if (!backup) panel.append(el("p", "这个角色没有配置备用模型；可以在设置中添加后再选择切换。", "muted"));
+  }
+  const detail = engineeringDetails("额度用完详情", step.work_item_id + ":model-quota");
+  detail.append(el("p", "原任务 · " + task.task_id, "paths"), el("p", "失败的执行 · " + runId, "paths"),
+    el("p", "配置的模型 · " + (routes.map(route => shortModelName(route.model)).join(" → ") || "未知"), "paths"));
+  panel.append(detail);
+  return panel;
+}
 function engineeringWaitBox(request, task, step) {
+  const quotaRun = modelQuotaWaitRun(step);
+  if (quotaRun) return modelQuotaWaitBox(request, task, step, quotaRun);
   if (step.wait_disposition?.facts.classification === "EXECUTION_BASELINE_PAUSED")
     return engineeringBaselinePauseBox(request, task, step);
   if (step.role === "coder" && step.wait_disposition?.facts.classification === "CONTEXT_CAPACITY")

@@ -192,6 +192,7 @@ class AgentModelCallView(DomainModel):
     error_code: str | None = None
     completed_at: AwareDatetime
     task_id: str
+    run_id: str
 
 
 class AgentView(DomainModel):

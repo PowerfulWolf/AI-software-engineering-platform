@@ -513,3 +513,24 @@ def test_responses_failure_keeps_http_cause_without_credentials() -> None:
     assert raised.value.code is AgentErrorCode.AUTHENTICATION_ERROR
     assert "HTTP 403" in raised.value.safe_message and "model denied" in raised.value.safe_message
     assert "private-value" not in raised.value.safe_message
+
+
+def test_exhausted_quota_never_switches_structured_model_silently() -> None:
+    class _QuotaClient(_StaticClient):
+        def complete(self, **kwargs: object) -> StructuredModelResult:
+            self.calls += 1
+            raise StructuredModelError(
+                AgentErrorCode.QUOTA_EXHAUSTED, "usage limit reached", transient=True
+            )
+
+    exhausted, backup = _QuotaClient(), _StaticClient()
+    client = FallbackStructuredModelClient(
+        (
+            StructuredModelRoute("claude", "claude-opus-5-5", exhausted),
+            StructuredModelRoute("codex", "gpt-6.2-sol", backup),
+        )
+    )
+    with pytest.raises(StructuredModelError) as raised:
+        client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
+    assert raised.value.code is AgentErrorCode.QUOTA_EXHAUSTED
+    assert (exhausted.calls, backup.calls) == (1, 0)

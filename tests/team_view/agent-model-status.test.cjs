@@ -54,3 +54,21 @@ test("a backup route serving the call and an agent without history", () => {
   assert.equal(none.routeText, "");
   assert.equal(none.status, "");
 });
+
+test("a model quota wait asks the human to pick the backup or the original model", () => {
+  const run = setup();
+  const step = `{role: "qa", work_item_id: "w1", wait_disposition_sha256: "${"a".repeat(64)}",
+    wait_disposition: {responsibility: "engineering", facts: {classification: "ENGINEERING_AUTHORIZATION",
+    evidence_ids: ["model-quota://run_qa_7"], work_item_id: "w1"}}}`;
+  assert.equal(run(`modelQuotaWaitRun(${step})`), "run_qa_7");
+  assert.equal(run(`modelQuotaWaitRun({wait_disposition: {facts: {classification: "ENGINEERING_AUTHORIZATION",
+    evidence_ids: ["other://x"]}}})`), null);
+  run(`snapshot = {agents: [{model_routes: ${routes}}, {model_routes: ${routes}}]}`);
+  assert.deepEqual(JSON.parse(run(`JSON.stringify(roleModelRoutes("qa").map(route => route.model))`)),
+    ["claude-opus-5-5", "codex/gpt-6.2-sol"]);
+  const intent = JSON.parse(run(`JSON.stringify(modelQuotaIntent({project_id: "p", id: "d",
+    checkpoint_sha256: "${"b".repeat(64)}"}, ${step}, true))`));
+  assert.deepEqual(intent, {action: "RESUME_MODEL_QUOTA_WAIT", project_id: "p", delivery_id: "d",
+    expected_checkpoint_sha256: "b".repeat(64), work_item_id: "w1",
+    expected_disposition_sha256: "a".repeat(64), use_backup: true});
+});

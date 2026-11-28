@@ -1039,6 +1039,8 @@ class ProductionTeamReader:
             tasks,
             historical_work_ids=historical_work_ids,
             model_routes=agent_model_route_views(self.config),
+            # Summaries omit per-Task runs; read the same sealed route attempts directly.
+            latest_calls=_latest_model_calls(natives, route_attempts),
         )
 
         def header() -> _TeamReadHeader:
@@ -1294,6 +1296,7 @@ def _agent_views(
     *,
     historical_work_ids: frozenset[str] = frozenset(),
     model_routes: Mapping[TeamRole, tuple[AgentModelRouteView, ...]] | None = None,
+    latest_calls: Mapping[AgentRole, AgentModelCallView] | None = None,
 ) -> tuple[AgentView, ...]:
     """Project Requirement stages and native Task assignments share one Agent queue."""
 
@@ -1354,20 +1357,60 @@ def _agent_views(
                     for role in profile.eligible_roles
                     for route in (model_routes or {}).get(role, ())
                 ),
-                last_model_call=_last_model_call(profile, tasks),
+                last_model_call=_last_model_call(profile, tasks, latest_calls),
             )
         )
     return tuple(views)
 
 
-def _last_model_call(profile: AgentProfile, tasks: list[TaskView]) -> AgentModelCallView | None:
+def _latest_model_calls(
+    natives: tuple[_Native, ...] | list[_Native], route_attempts: _ModelRouteAttemptCache
+) -> dict[AgentRole, AgentModelCallView]:
+    """Newest sealed model-route attempt per role across this Project's native Tasks."""
+    task_ids = {native.checkpoint.task_id for native in natives}
+    latest: dict[AgentRole, AgentModelCallView] = {}
+    for root in sorted({model_route_root(native.sidecar) for native in natives}):
+        for attempt in route_attempts.attempts(root):
+            if attempt.task_id not in task_ids:
+                continue
+            current = latest.get(attempt.role)
+            key = (attempt.completed_at, attempt.run_id, attempt.route_index)
+            if current is not None and key <= (
+                current.completed_at,
+                current.run_id,
+                current.route_index,
+            ):
+                continue
+            latest[attempt.role] = AgentModelCallView(
+                role=attempt.role,
+                provider=_safe(attempt.provider),
+                model=_safe(attempt.model),
+                route_index=attempt.route_index,
+                outcome=attempt.outcome.value,
+                error_code=attempt.error_code.value if attempt.error_code else None,
+                completed_at=attempt.completed_at,
+                task_id=attempt.task_id,
+                run_id=attempt.run_id,
+            )
+    return latest
+
+
+def _last_model_call(
+    profile: AgentProfile,
+    tasks: list[TaskView],
+    latest_calls: Mapping[AgentRole, AgentModelCallView] | None = None,
+) -> AgentModelCallView | None:
     """The newest recorded run of any role this Agent serves."""
     roles = {role.value for role in profile.eligible_roles}
+    known = [call for role, call in (latest_calls or {}).items() if role.value in roles]
+    if known:
+        return max(known, key=lambda call: (call.completed_at, call.run_id, call.route_index))
     candidates = [(run, task.id) for task in tasks for run in task.runs if run.role.value in roles]
     if not candidates:
         return None
     run, task_id = max(candidates, key=lambda item: (item[0].completed_at, item[0].run_id))
     return AgentModelCallView(
+        run_id=run.run_id,
         role=run.role,
         provider=run.provider,
         model=run.model,

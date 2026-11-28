@@ -40,6 +40,10 @@
           "title": "Route Index",
           "type": "integer"
         },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
         "task_id": {
           "title": "Task Id",
           "type": "string"
@@ -52,7 +56,8 @@
         "route_index",
         "outcome",
         "completed_at",
-        "task_id"
+        "task_id",
+        "run_id"
       ],
       "title": "AgentModelCallView",
       "type": "object"

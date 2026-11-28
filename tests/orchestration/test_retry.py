@@ -698,3 +698,104 @@ def test_stalled_coder_with_engineering_policy_waits_at_its_open_checkpoint(
         assert len(evidence) == 1 and evidence[0].startswith("art_progress_")
         coder_runs = [item for item in adapter.requests if item.role is AgentRole.CODER]
         assert len(coder_runs) == CODER_STALL_RUNS + 1
+
+
+def test_quota_exhausted_role_waits_for_a_human_model_decision(tmp_path: Path) -> None:
+    from ai_software_engineer.domain.engineering_authority import (
+        EngineeringPolicy,
+        EngineeringScope,
+        LocalOperatorPrincipal,
+    )
+    from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy
+    from ai_software_engineer.orchestration.retry import MODEL_QUOTA_EVIDENCE_PREFIX
+
+    class Waiting(Exception):
+        pass
+
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    class Control:
+        def wait(
+            self,
+            task: Task,
+            *,
+            classification: str,
+            reason: str,
+            source_revision: str,
+            artifact_ids: tuple[str, ...],
+        ) -> None:
+            del task, reason, source_revision
+            calls.append((classification, artifact_ids))
+            raise Waiting()
+
+    class QuotaQa(ScriptedAdapter):
+        def run(self, request: AgentRequest) -> AgentResult:
+            if request.role is AgentRole.QA:
+                self.requests.append(request)
+                return AgentResult(
+                    run_id=request.run_id,
+                    task_id=request.task_id,
+                    role=request.role,
+                    attempt=request.attempt,
+                    source_revision=request.source_revision,
+                    context_manifest_id=request.context_manifest_id,
+                    status=AgentRunStatus.FAILED,
+                    error=AgentFailure(
+                        code=AgentErrorCode.QUOTA_EXHAUSTED,
+                        message="quota exhausted",
+                        transient=True,
+                    ),
+                )
+            return super().run(request)
+
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root).model_copy(
+        update={
+            "engineering_policy": EngineeringPolicy.bounded_local(
+                scope=EngineeringScope(
+                    team_id="team_quota",
+                    project_id="project_quota",
+                    repository_id="repository_quota",
+                    repository_root=str(repository_root),
+                ),
+                principal=LocalOperatorPrincipal.trusted_local(),
+            ),
+        }
+    )
+    policy = DeliveryRetryPolicy()
+    assert task.constraints is not None
+    task = task.model_copy(
+        update={
+            "retry_policy": policy,
+            "max_attempts": policy.execution_limit,
+            "constraints": task.constraints.model_copy(
+                update={"max_attempts": policy.execution_limit}
+            ),
+        }
+    )
+    adapter = QuotaQa()
+    with SqliteTaskRepository(tmp_path / "state.sqlite3") as repository:
+        repository.create(task)
+        runner = RetryingOrchestrator(
+            repository=repository,
+            artifact_store=FileArtifactStore(tmp_path / "artifacts"),
+            context_builder=FileRunContextBuilder(repository_root),
+            agent_adapter=adapter,
+            agent_definitions=_definitions(),
+            identities=AttemptIdentityFactory(),
+            clock=_clock,
+            delivery_failure_control=Control(),
+        )
+        with pytest.raises(Waiting):
+            runner.run_task(task.id)
+        qa_runs = [request for request in adapter.requests if request.role is AgentRole.QA]
+        # One failed call, then a human decision: no silent retries of the same model.
+        assert len(qa_runs) == 1
+        ((classification, evidence),) = calls
+        assert classification == "ENGINEERING_AUTHORIZATION"
+        assert evidence == (MODEL_QUOTA_EVIDENCE_PREFIX + qa_runs[0].run_id,)
+        current = repository.get(task.id)
+        assert current.status is TaskStatus.QA
+        # The next decision runs as a fresh attempt, never a replay of this failure.
+        assert current.attempts == qa_runs[0].attempt + 1

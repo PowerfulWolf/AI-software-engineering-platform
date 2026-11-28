@@ -23,6 +23,7 @@ from ai_software_engineer.agents import (
     StructuredModelRoute,
 )
 from ai_software_engineer.agents.fallback import model_route_root
+from ai_software_engineer.agents.route_override import model_route_override_root
 from ai_software_engineer.artifacts import ArtifactStore, FileArtifactStore
 from ai_software_engineer.config import (
     ModelProviderKind,
@@ -264,6 +265,12 @@ class MultiRepositoryStructuredClientFactory(Protocol):
     ) -> StructuredModelClient: ...
 
 
+def _with_route_overrides[C](clients: C, root: Path) -> C:
+    """Bind Task-scoped human model decisions when the factory supports them."""
+    bind = getattr(clients, "with_route_overrides", None)
+    return cast(C, bind(root)) if callable(bind) else clients
+
+
 class ConfiguredStructuredClientFactory:
     """Build the configured upstream route chain without persisting credentials."""
 
@@ -271,9 +278,17 @@ class ConfiguredStructuredClientFactory:
         self,
         config: ProductionConfig,
         environment: Mapping[str, str],
+        *,
+        route_override_root: Path | None = None,
     ) -> None:
         self._config = config
         self._environment = dict(environment)
+        self._route_override_root = route_override_root
+
+    def with_route_overrides(self, root: Path) -> ConfiguredStructuredClientFactory:
+        return ConfiguredStructuredClientFactory(
+            self._config, self._environment, route_override_root=root
+        )
 
     def for_project(
         self,
@@ -282,10 +297,39 @@ class ConfiguredStructuredClientFactory:
     ) -> StructuredModelClient:
         return self.for_projects((repository_root,), role)
 
+    def for_task(
+        self,
+        repository_root: Path,
+        role: TeamRole,
+        task_id: str,
+    ) -> StructuredModelClient:
+        """Honor a human-approved model choice recorded for this Task and role."""
+        from ai_software_engineer.agents.route_override import (
+            FileModelRouteOverrideStore,
+            ModelRouteOverrideError,
+            apply_route_override,
+        )
+
+        if self._route_override_root is None or role.value not in {
+            agent_role.value for agent_role in AgentRole
+        }:
+            return self.for_projects((repository_root,), role)
+        configured = self._config.routes_for(role)
+        override = FileModelRouteOverrideStore(self._route_override_root).current(
+            task_id, AgentRole(role.value)
+        )
+        try:
+            ordered = apply_route_override(configured, override)
+        except ModelRouteOverrideError as error:
+            raise ProductionConfigError(str(error)) from error
+        return self.for_projects((repository_root,), role, routes=ordered)
+
     def for_projects(
         self,
         repository_roots: tuple[Path, ...],
         role: TeamRole = TeamRole.PRODUCT,
+        *,
+        routes: tuple[ProviderRouteConfig, ...] | None = None,
     ) -> StructuredModelClient:
         if not repository_roots:
             raise ValueError("structured model execution requires a project root")
@@ -293,8 +337,8 @@ class ConfiguredStructuredClientFactory:
             raise ProductionConfigError(
                 "live_model_execution is disabled in the production configuration"
             )
-        routes: list[StructuredModelRoute] = []
-        for route in self._config.routes_for(role):
+        chain: list[StructuredModelRoute] = []
+        for route in routes if routes is not None else self._config.routes_for(role):
             if route.kind is ModelProviderKind.CODEX_CLI:
                 proxy = self._config.effective_connection_mode(route) == "proxy"
                 if proxy:
@@ -344,7 +388,7 @@ class ConfiguredStructuredClientFactory:
                     model=route.model,
                     reasoning_effort=route.reasoning_effort,
                 )
-            routes.append(
+            chain.append(
                 StructuredModelRoute(
                     provider=route.provider,
                     model=route.model,
@@ -355,7 +399,7 @@ class ConfiguredStructuredClientFactory:
                     connection_mode=self._config.effective_connection_mode(route),
                 )
             )
-        return FallbackStructuredModelClient(tuple(routes), role=role)
+        return FallbackStructuredModelClient(tuple(chain), role=role)
 
 
 _DISPATCH_RETRIES = 3
@@ -2227,7 +2271,10 @@ class ProductionProjectDeliveryBackend:
             KnowledgeRunContextBuilder(
                 baseline_contexts,
                 contexts=contexts,
-                clients=ConfiguredStructuredClientFactory(self._config, self._environment),
+                clients=_with_route_overrides(
+                    ConfiguredStructuredClientFactory(self._config, self._environment),
+                    model_route_override_root(facts.workspace.root),
+                ),
                 repository_root=facts.workspace.repository_root,
                 records=knowledge_records,
                 team_id=self._config.team_id,

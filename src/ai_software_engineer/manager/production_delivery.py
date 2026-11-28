@@ -728,6 +728,9 @@ class DispatchDeliveryAgentAdapter:
         configured = configured or self._ordered_routes(definition)
         if self._route_validator is not None:
             self._route_validator(role, configured)
+        # The frozen policy validates the claimed order; a separately recorded human
+        # decision may then run an already allowed route first for this Task.
+        configured = self._approved_route_order(role, configured)
         routes: list[ProviderAgentRoute] = []
         for route in configured:
             adapter = self._route_adapters.create(
@@ -803,6 +806,30 @@ class DispatchDeliveryAgentAdapter:
             )
         selected = primary[0]
         return (selected, *(route for route in routes if route is not selected))
+
+    def _approved_route_order(
+        self, role: AgentRole, ordered: tuple[ProviderRouteConfig, ...]
+    ) -> tuple[ProviderRouteConfig, ...]:
+        """Move a human-approved, already configured route to the front for this Task."""
+        from ai_software_engineer.agents.route_override import (
+            FileModelRouteOverrideStore,
+            ModelRouteOverrideError,
+            apply_route_override,
+            model_route_override_root,
+        )
+
+        task_id = (
+            self._dispatch.source_task_id
+            if isinstance(self._dispatch, VerificationReservation)
+            else self._dispatch.task_id
+        )
+        override = FileModelRouteOverrideStore(
+            model_route_override_root(self._repository_workspace_root)
+        ).current(task_id, role)
+        try:
+            return apply_route_override(ordered, override)
+        except ModelRouteOverrideError as error:
+            raise ProductionConfigError(str(error)) from error
 
     def _worktree_exists(self, role: AgentRole, *, attempt: int = 1) -> bool:
         root = (

@@ -300,7 +300,12 @@ class KnowledgeRunContextBuilder:
             context_manifest_id=base.context_id,
             snapshot_sha256=snapshot.snapshot_sha256,
         )
-        client = self.clients.for_project(self.repository_root, binding.role)
+        for_task = getattr(self.clients, "for_task", None)
+        client = (
+            for_task(self.repository_root, binding.role, task.id)
+            if callable(for_task)
+            else self.clients.for_project(self.repository_root, binding.role)
+        )
         projection = (
             StaticQaKnowledgeProjection(
                 scope=static_scope, parent_context_manifest_id=base.context_id
