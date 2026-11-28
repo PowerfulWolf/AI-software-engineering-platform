@@ -1,5 +1,97 @@
 {
   "$defs": {
+    "AgentModelCallView": {
+      "additionalProperties": false,
+      "description": "The Agent's latest recorded role execution and the route that served it.",
+      "properties": {
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Code"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "route_index": {
+          "title": "Route Index",
+          "type": "integer"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "provider",
+        "model",
+        "route_index",
+        "outcome",
+        "completed_at",
+        "task_id"
+      ],
+      "title": "AgentModelCallView",
+      "type": "object"
+    },
+    "AgentModelRouteView": {
+      "additionalProperties": false,
+      "description": "One configured model route of an Agent role, in primary-then-backup order.",
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/TeamRole"
+        },
+        "route_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderRouteKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "role",
+        "provider",
+        "model"
+      ],
+      "title": "AgentModelRouteView",
+      "type": "object"
+    },
     "AgentRole": {
       "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
       "enum": [
@@ -59,9 +151,28 @@
           "title": "Id",
           "type": "string"
         },
+        "last_model_call": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentModelCallView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "max_parallel_assignments": {
           "title": "Max Parallel Assignments",
           "type": "integer"
+        },
+        "model_routes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AgentModelRouteView"
+          },
+          "title": "Model Routes",
+          "type": "array"
         },
         "name": {
           "title": "Name",
@@ -891,6 +1002,11 @@
           "title": "Approved By",
           "type": "string"
         },
+        "cross_revision": {
+          "default": false,
+          "title": "Cross Revision",
+          "type": "boolean"
+        },
         "disposition": {
           "default": "REQUIREMENT_ONLY",
           "enum": [
@@ -899,11 +1015,6 @@
           ],
           "title": "Disposition",
           "type": "string"
-        },
-        "cross_revision": {
-          "default": false,
-          "title": "Cross Revision",
-          "type": "boolean"
         },
         "gap_id": {
           "pattern": "^[a-f0-9]{64}$",

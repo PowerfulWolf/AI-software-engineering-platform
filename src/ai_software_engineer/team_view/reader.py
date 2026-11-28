@@ -111,6 +111,8 @@ from .baseline_snapshot import BaselineBindingSnapshot
 from .blocker_text import localize_blocking_text
 from .engineering_history import EngineeringHistorySnapshot
 from .models import (
+    AgentModelCallView,
+    AgentModelRouteView,
     AgentView,
     AssignmentView,
     DeliveryExecutionView,
@@ -1031,7 +1033,13 @@ class ProductionTeamReader:
         known_agents = {p.id for p in profiles}
         if any(a.agent_id not in known_agents for t in tasks for a in t.assignments):
             raise ValueError("assignment references an unknown Team member")
-        agents = _agent_views(profiles, requests, tasks, historical_work_ids=historical_work_ids)
+        agents = _agent_views(
+            profiles,
+            requests,
+            tasks,
+            historical_work_ids=historical_work_ids,
+            model_routes=agent_model_route_views(self.config),
+        )
 
         def header() -> _TeamReadHeader:
             return _TeamReadHeader(
@@ -1285,6 +1293,7 @@ def _agent_views(
     tasks: list[TaskView],
     *,
     historical_work_ids: frozenset[str] = frozenset(),
+    model_routes: Mapping[TeamRole, tuple[AgentModelRouteView, ...]] | None = None,
 ) -> tuple[AgentView, ...]:
     """Project Requirement stages and native Task assignments share one Agent queue."""
 
@@ -1340,9 +1349,57 @@ def _agent_views(
                 assigned_delivery_ids=unique(assigned),
                 current_stage_delivery_ids=unique(current),
                 history_delivery_ids=unique(history),
+                model_routes=tuple(
+                    route
+                    for role in profile.eligible_roles
+                    for route in (model_routes or {}).get(role, ())
+                ),
+                last_model_call=_last_model_call(profile, tasks),
             )
         )
     return tuple(views)
+
+
+def _last_model_call(profile: AgentProfile, tasks: list[TaskView]) -> AgentModelCallView | None:
+    """The newest recorded run of any role this Agent serves."""
+    roles = {role.value for role in profile.eligible_roles}
+    candidates = [(run, task.id) for task in tasks for run in task.runs if run.role.value in roles]
+    if not candidates:
+        return None
+    run, task_id = max(candidates, key=lambda item: (item[0].completed_at, item[0].run_id))
+    return AgentModelCallView(
+        role=run.role,
+        provider=run.provider,
+        model=run.model,
+        route_index=run.route_index,
+        outcome=run.outcome,
+        error_code=run.error_code,
+        completed_at=run.completed_at,
+        task_id=task_id,
+    )
+
+
+def agent_model_route_views(
+    config: ProductionConfig,
+) -> dict[TeamRole, tuple[AgentModelRouteView, ...]]:
+    """Configured primary/backup order per Team role, without endpoints or credentials."""
+    views: dict[TeamRole, tuple[AgentModelRouteView, ...]] = {}
+    for role in TeamRole:
+        try:
+            routes = config.routes_for(role)
+        except (KeyError, ValueError):
+            routes = ()
+        views[role] = tuple(
+            AgentModelRouteView(
+                role=role,
+                provider=_safe(route.provider),
+                model=_safe(route.model),
+                route_kind=route.kind.value,
+            )
+            for route in routes
+            if route.enabled
+        )
+    return views
 
 
 def _retired_requirement_ids(

@@ -5049,6 +5049,64 @@ function designBudgetSummary(request) {
   return `设计尝试 ${budget.design_attempts}/${budget.max_design_attempts}；临时故障 ${budget.transient_failures}/${budget.max_transient_failures}。`;
 }
 
+function shortModelName(model) {
+  return String(model || "").replace(/^codex\//, "");
+}
+
+// Configured primary → backup order and the latest recorded call of this Agent's roles.
+function agentModelState(agent) {
+  const routes = agent.model_routes || [];
+  const seen = new Set();
+  const names = routes.map(route => shortModelName(route.model)).filter(name => {
+    if (seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  });
+  const routeText = names.length ? `模型 ${names.join(" → ")}` : "";
+  const call = agent.last_model_call;
+  if (!call) return {routeText, status: "", tone: "", detail: "暂无本角色执行记录。"};
+  const model = shortModelName(call.model);
+  const when = call.completed_at ? new Date(call.completed_at).toLocaleString() : "";
+  let status = `正常 · ${model}`;
+  let tone = "ok";
+  if (call.error_code === "QUOTA_EXHAUSTED") {
+    status = `额度已用完 · ${model}`;
+    tone = "warning";
+  } else if (call.error_code === "RATE_LIMITED") {
+    status = `被限流 · ${model}`;
+    tone = "warning";
+  } else if (call.outcome !== "SUCCEEDED") {
+    status = `最近失败 · ${model}`;
+    tone = "danger";
+  } else if (call.route_index > 1) {  // route_index is 1-based: 1 is the primary route
+    status = `使用备用模型 · ${model}`;
+    tone = "info";
+  }
+  const reason = call.error_code ? `（${call.error_code}）` : "";
+  return {
+    routeText,
+    status,
+    tone,
+    detail: `最近一次 ${label(call.role)} 执行：${model}，结果 ${call.outcome}${reason}${when ? "，" + when : ""}。`,
+  };
+}
+
+function agentModelPanel(agent) {
+  const panel = el("div", undefined, "agent-model-panel");
+  const state = agentModelState(agent);
+  const routes = agent.model_routes || [];
+  const list = el("div", undefined, "row");
+  if (!routes.length) list.append(el("span", "未读取到模型配置", "muted"));
+  routes.forEach((route, index) => {
+    list.append(el("span", `${index === 0 ? "主模型" : "备用"} · ${label(route.role)} · ${shortModelName(route.model)}`,
+      index === 0 ? "badge" : "badge muted"));
+  });
+  panel.append(el("div", "模型", "section-title"), list, el("p", state.detail, "muted"));
+  if (state.status) panel.append(el("span", state.status, `badge agent-model-status ${state.tone}`));
+  viewBlock(panel, `agent-model:${agent.id}`, [routes, agent.last_model_call]);
+  return panel;
+}
+
 function agentQueueState(agent) {
   return {
     assigned_delivery_ids: [...agent.assigned_delivery_ids],
@@ -7227,7 +7285,10 @@ function renderTeam(content) {
       el("small", agent.roles.map(label).join(" / "), "muted"),
     );
     identity.append(el("span", agent.name.slice(0, 1), "avatar"), name);
+    const model = agentModelState(agent);
+    if (model.routeText) name.append(el("small", model.routeText, "muted agent-model-routes"));
     control.append(identity, el("span", memberStatus[0], memberStatus[1]));
+    if (model.status) control.append(el("span", model.status, `badge agent-model-status ${model.tone}`));
     viewBlock(control, `agent:${agent.id}`, [agent, queueState, memberStatus, selectedAgentId]);
     roster.append(control);
   }
@@ -7240,6 +7301,7 @@ function renderTeam(content) {
   );
   viewBlock(boardHeading, "agent-board-heading", [agent.name, agent.max_parallel_assignments]);
   board.append(boardHeading);
+  board.append(agentModelPanel(agent));
   const queueState = queueStates.get(agent.id);
   let assigned = queueState.assigned_delivery_ids
     .map(agentWorkById)

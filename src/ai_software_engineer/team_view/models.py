@@ -172,6 +172,28 @@ class RequestView(DomainModel):
     coordination: ManagerCoordinationAdvice | None = None
 
 
+class AgentModelRouteView(DomainModel):
+    """One configured model route of an Agent role, in primary-then-backup order."""
+
+    role: TeamRole
+    provider: str
+    model: str
+    route_kind: ProviderRouteKind | None = None
+
+
+class AgentModelCallView(DomainModel):
+    """The Agent's latest recorded role execution and the route that served it."""
+
+    role: AgentRole
+    provider: str
+    model: str
+    route_index: int
+    outcome: str
+    error_code: str | None = None
+    completed_at: AwareDatetime
+    task_id: str
+
+
 class AgentView(DomainModel):
     id: str
     name: str
@@ -183,6 +205,8 @@ class AgentView(DomainModel):
     assigned_delivery_ids: tuple[str, ...] = ()
     current_stage_delivery_ids: tuple[str, ...] = ()
     history_delivery_ids: tuple[str, ...] = ()
+    model_routes: tuple[AgentModelRouteView, ...] = ()
+    last_model_call: AgentModelCallView | None = None
 
 
 class ProjectView(DomainModel):

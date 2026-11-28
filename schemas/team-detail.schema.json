@@ -816,6 +816,11 @@
           "title": "Approved By",
           "type": "string"
         },
+        "cross_revision": {
+          "default": false,
+          "title": "Cross Revision",
+          "type": "boolean"
+        },
         "disposition": {
           "default": "REQUIREMENT_ONLY",
           "enum": [
@@ -824,11 +829,6 @@
           ],
           "title": "Disposition",
           "type": "string"
-        },
-        "cross_revision": {
-          "default": false,
-          "title": "Cross Revision",
-          "type": "boolean"
         },
         "gap_id": {
           "pattern": "^[a-f0-9]{64}$",
