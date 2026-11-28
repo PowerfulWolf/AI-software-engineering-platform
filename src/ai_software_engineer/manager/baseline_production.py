@@ -1352,7 +1352,8 @@ class ProductionBaselineFactCollector:
             task.repository != self.scope.repository_root
             or task.metadata.get("repository_id") != self.scope.repository_id
             or (task.engineering_policy is not None and task.engineering_policy.scope != self.scope)
-            or task.status is not TaskStatus.IMPLEMENTING
+            # A stalled continuation waits at CONTINUE_REQUIRED with its Coder item open.
+            or task.status not in {TaskStatus.IMPLEMENTING, TaskStatus.CONTINUE_REQUIRED}
         ):
             raise ValueError("执行基线调查与原批准范围或当前 Coder checkpoint 不一致")
         admission = self.queue.admission(task.id)

@@ -285,6 +285,20 @@ class RetryingOrchestrator(SerialOrchestrator):
                 ):
                     # Stop before the remaining allowance is spent on a step the Coder
                     # cannot finish (for example a file outside its write scope).
+                    if (
+                        task.engineering_policy is not None
+                        and self._delivery_failure_control is not None
+                    ):
+                        # Keep the open Coder checkpoint: an engineering decision such as
+                        # an execution-baseline rebind can still unblock it. A terminal
+                        # BLOCKED Task would make that decision impossible.
+                        self._delivery_failure_control.wait(
+                            task,
+                            classification="ENGINEERING_AUTHORIZATION",
+                            reason=CODER_STALL_WAIT_REASON,
+                            source_revision=active_progress.source_revision,
+                            artifact_ids=(active_progress.artifact_id,),
+                        )
                     return self._blocked(
                         task,
                         RetryClassification.BUDGET_EXHAUSTED,
@@ -1221,6 +1235,10 @@ CODER_STALL_RUNS = 3
 CODER_STALL_REASON = (
     f"Coder made no plan progress in {CODER_STALL_RUNS} consecutive runs; "
     "stopped before spending the remaining run budget"
+)
+CODER_STALL_WAIT_REASON = (
+    f"Coder 连续 {CODER_STALL_RUNS} 次运行没有计划进展, 已在消耗剩余额度前暂停; "
+    "进度记录说明了缺少的前提(例如需要更新执行基线或超出写入范围的改动), 工程核验后可继续。"
 )
 
 

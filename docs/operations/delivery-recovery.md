@@ -169,3 +169,12 @@ Product/Planner 耗尽同样先核对错误，再提高该角色对应上限、�
 
 - 契约见 [交付恢复规范](../../.trellis/spec/core/delivery-recovery.md)，
   启动与设置见 [生产部署](production-setup.md)。
+
+## Coder 连续无进展时保留检查点
+
+带工程策略的生产交付里，Coder 连续 3 次运行没有计划进展时，平台不再把 Task 变成终止的 BLOCKED，
+而是在 `CONTINUE_REQUIRED` 检查点上登记 `ENGINEERING_AUTHORIZATION` 等待（证据为最新进度记录），
+Coder 工作项保持未结束。常见原因是候选基于缺少平台修复的旧主线、或所需改动超出写入范围。
+此时可直接对原需求“更新执行基线”（SOURCE_REBIND 现接受 `IMPLEMENTING` 与 `CONTINUE_REQUIRED`
+两种 Coder 检查点）；基线更新后旧进度记录被新基线取代，不会立刻再次判定为无进展。
+没有工程策略的本地运行仍按原规则以 BUDGET_EXHAUSTED 停止。

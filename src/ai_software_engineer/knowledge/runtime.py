@@ -12,6 +12,7 @@ from ai_software_engineer.context import ContextBundle, ContextSection, ContextS
 from ai_software_engineer.context.ports import ContextBudgetExceeded
 from ai_software_engineer.domain import AgentDefinition, AgentRole, Task
 from ai_software_engineer.domain.artifact import Artifact
+from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.knowledge.agents import (
     KnowledgeAwareStructuredClient,
@@ -335,6 +336,22 @@ class KnowledgeRunContextBuilder:
             ),
             timeout_seconds=timeout,
             static_qa_projection=projection,
+            # Later attempts of the same Task role reuse the sealed intent/verdict while
+            # the approved intent, resolutions and knowledge snapshot are unchanged.
+            reuse_key=digest(
+                (
+                    "knowledge-consultation-reuse-v1",
+                    self.team_id,
+                    self.project_id,
+                    requirement_id,
+                    task.id,
+                    task_intent_sha256(task),
+                    binding.role.value,
+                    snapshot.snapshot_sha256,
+                    static_scope.to_wire() if static_scope is not None else None,
+                    sorted(item.resolution_id for item in resolutions),
+                )
+            ),
         )
         if requires_frozen_reads(base):
             reads = retrieved_context_section(consultation, self.records)

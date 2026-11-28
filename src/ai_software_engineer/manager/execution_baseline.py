@@ -410,7 +410,10 @@ class ExecutionBaselineService:
     @staticmethod
     def _require_facts(facts: BaselineExecutionFacts) -> None:
         facts.validate_integrity()
-        if facts.task.status is not TaskStatus.IMPLEMENTING or facts.task.branch_name is None:
+        if (
+            facts.task.status not in {TaskStatus.IMPLEMENTING, TaskStatus.CONTINUE_REQUIRED}
+            or facts.task.branch_name is None
+        ):
             raise ValueError(
                 "baseline migration requires the same nonterminal named Coder checkpoint"
             )

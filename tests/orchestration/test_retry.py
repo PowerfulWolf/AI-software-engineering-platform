@@ -616,3 +616,85 @@ def test_restart_after_rejecting_a_superseding_candidate_runs_the_coder_again(
             event.reason for event in repository.list_events(task.id)
         }
         del result
+
+
+def test_stalled_coder_with_engineering_policy_waits_at_its_open_checkpoint(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.domain.engineering_authority import (
+        EngineeringPolicy,
+        EngineeringScope,
+        LocalOperatorPrincipal,
+    )
+    from ai_software_engineer.orchestration.retry import CODER_STALL_RUNS
+
+    class Waiting(Exception):
+        pass
+
+    calls: list[tuple[TaskStatus, str, str, tuple[str, ...]]] = []
+
+    class Control:
+        def wait(
+            self,
+            task: Task,
+            *,
+            classification: str,
+            reason: str,
+            source_revision: str,
+            artifact_ids: tuple[str, ...],
+        ) -> None:
+            del reason
+            calls.append((task.status, classification, source_revision, artifact_ids))
+            raise Waiting()
+
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root).model_copy(
+        update={
+            "max_attempts": 8,
+            "engineering_policy": EngineeringPolicy.bounded_local(
+                scope=EngineeringScope(
+                    team_id="team_stall",
+                    project_id="project_stall",
+                    repository_id="repository_stall",
+                    repository_root=str(repository_root),
+                ),
+                principal=LocalOperatorPrincipal.trusted_local(),
+            ),
+        }
+    )
+    task = task.model_copy(
+        update={
+            "constraints": task.constraints.model_copy(update={"max_attempts": 8})
+            if task.constraints is not None
+            else None
+        }
+    )
+    adapter = ScriptedAdapter(coder_progress=tuple(range(1, 9)))
+    with SqliteTaskRepository(tmp_path / "state.sqlite3") as repository:
+        repository.create(task)
+        runner = RetryingOrchestrator(
+            repository=repository,
+            artifact_store=FileArtifactStore(tmp_path / "artifacts"),
+            context_builder=FileRunContextBuilder(repository_root),
+            agent_adapter=adapter,
+            agent_definitions=_definitions(),
+            identities=AttemptIdentityFactory(),
+            clock=_clock,
+            delivery_failure_control=Control(),
+        )
+        with pytest.raises(Waiting):
+            runner.run_task(task.id)
+        current = repository.get(task.id)
+        # The Coder checkpoint stays open for an engineering decision (e.g. a baseline
+        # rebind); it is not turned into a terminal BLOCKED Task.
+        assert current.status is TaskStatus.CONTINUE_REQUIRED
+        assert all(
+            event.to_status is not TaskStatus.BLOCKED for event in repository.list_events(task.id)
+        )
+        ((status, classification, _source, evidence),) = calls
+        assert status is TaskStatus.CONTINUE_REQUIRED
+        assert classification == "ENGINEERING_AUTHORIZATION"
+        assert len(evidence) == 1 and evidence[0].startswith("art_progress_")
+        coder_runs = [item for item in adapter.requests if item.role is AgentRole.CODER]
+        assert len(coder_runs) == CODER_STALL_RUNS + 1

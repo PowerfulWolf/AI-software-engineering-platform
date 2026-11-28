@@ -129,6 +129,13 @@ class KnowledgeConsultation(DomainModel):
     consultation_sha256: Digest
 
 
+class KnowledgeConsultationReuse(DomainModel):
+    """First sealed consultation for one exact (Task, role, approved inputs, snapshot) key."""
+
+    reuse_key: NonEmptyStr
+    run_id: NonEmptyStr
+
+
 def repository_inspection_gap(consultation: KnowledgeConsultation) -> bool:
     """Return whether a sealed consultation delegates missing facts to the repository."""
 
@@ -255,6 +262,7 @@ class KnowledgeConsultationService:
         *,
         timeout_seconds: int,
         static_qa_projection: StaticQaKnowledgeProjection | None = None,
+        reuse_key: str | None = None,
     ) -> KnowledgeConsultation:
         if static_qa_projection is not None:
             scope = static_qa_projection.scope
@@ -351,6 +359,13 @@ class KnowledgeConsultationService:
             item.to_wire() for item in resolved
         ]
         intent_record = self.records.find("knowledge-intents", binding.run_id, KnowledgeIntent)
+        reused = (
+            self._reusable(binding, reuse_key, resolved)
+            if reuse_key is not None and intent_record is None
+            else None
+        )
+        if reused is not None:
+            intent_record = reused.intent
         intent = intent_record or KnowledgeIntent.model_validate(
             self._call(
                 binding,
@@ -391,7 +406,15 @@ class KnowledgeConsultationService:
                     ).to_wire()
                 )
         manifest = skills.manifest()
-        if intent.queries:
+        if (
+            reused is not None
+            and intent.queries
+            and assessment_rejection_reason(reused.assessment, manifest) is None
+        ):
+            # Same Task, role, approved inputs and snapshot: the earlier sufficiency
+            # verdict still cites only evidence this run re-read and verified.
+            assessment = reused.assessment
+        elif intent.queries:
             assessment = KnowledgeAssessment.model_validate(
                 self._call(
                     binding,
@@ -489,7 +512,58 @@ class KnowledgeConsultationService:
             )
             self.records.put("consultations", binding.run_id, sealed)
             raise KnowledgeGapRaised(gap)
-        return self.records.put("consultations", binding.run_id, sealed)
+        stored = self.records.put("consultations", binding.run_id, sealed)
+        if (
+            reuse_key is not None
+            and self.records.find("consultation-reuse", reuse_key, KnowledgeConsultationReuse)
+            is None
+        ):
+            self.records.put(
+                "consultation-reuse",
+                reuse_key,
+                KnowledgeConsultationReuse(reuse_key=reuse_key, run_id=binding.run_id),
+            )
+        return stored
+
+    def _reusable(
+        self,
+        binding: KnowledgeRunBinding,
+        reuse_key: str,
+        resolved: list[KnowledgeResolution],
+    ) -> KnowledgeConsultation | None:
+        """An earlier sealed consultation of the same Task role with unchanged inputs."""
+        index = self.records.find("consultation-reuse", reuse_key, KnowledgeConsultationReuse)
+        if index is None or index.reuse_key != reuse_key or index.run_id == binding.run_id:
+            return None
+        prior = self.records.find("consultations", index.run_id, KnowledgeConsultation)
+        if prior is None or not consultation_integrity_matches(prior):
+            return None
+        same_scope = (
+            prior.binding.team_id,
+            prior.binding.project_id,
+            prior.binding.requirement_id,
+            prior.binding.task_id,
+            prior.binding.role,
+            prior.binding.repository_ids,
+            prior.binding.snapshot_sha256,
+        ) == (
+            binding.team_id,
+            binding.project_id,
+            binding.requirement_id,
+            binding.task_id,
+            binding.role,
+            binding.repository_ids,
+            binding.snapshot_sha256,
+        )
+        if (
+            not same_scope
+            or binding.task_id is None
+            or {item.resolution_id for item in prior.resolutions}
+            != {item.resolution_id for item in resolved}
+            or not (prior.assessment.status == "SUFFICIENT" or repository_inspection_gap(prior))
+        ):
+            return None
+        return prior
 
     def _wait_again(self, gap: KnowledgeGap) -> None:
         if self.wait_port is not None:
